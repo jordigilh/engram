@@ -272,7 +272,7 @@ def reflect() -> dict[str, Any]:
 
 
 RECALL_SIGNALS_PATH = LOG_DIR / "recall-signals.jsonl"
-BANKS = ["cursor-memory", "kubernaut-docs"]
+BANKS = ["cursor-memory", "kubernaut-docs", "kubernaut-issues"]
 
 
 def api_get(path: str) -> dict:
@@ -350,6 +350,8 @@ def run_observability_probes():
         ("cursor-memory", "Go testing conventions and patterns"),
         ("kubernaut-docs", "signal processing architecture and data flow"),
         ("kubernaut-docs", "remediation orchestrator CRD spec"),
+        ("kubernaut-issues", "rate limiter design decisions and requirements"),
+        ("kubernaut-issues", "A2A streaming event structure"),
     ]
     results = []
     for bank, query in probes:

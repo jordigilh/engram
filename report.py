@@ -16,15 +16,32 @@ Usage:
 
 import argparse
 import json
+import os
+import re
 import sys
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+from glob import glob
 from pathlib import Path
 
 LOG_DIR = Path.home() / ".hindsight" / "logs"
 MCP_CALLS_LOG = LOG_DIR / "mcp-calls.jsonl"
 EFFECTIVENESS_LOG = LOG_DIR / "effectiveness-report.jsonl"
 RECALL_SIGNALS_LOG = LOG_DIR / "recall-signals.jsonl"
+TRANSCRIPTS_GLOB = os.path.expanduser("~/.cursor/projects/*/agent-transcripts/**/*.jsonl")
+
+CORRECTION_PATTERNS = [
+    re.compile(r"\bno[,.]?\s+that'?s\s+(not|wrong|incorrect)", re.I),
+    re.compile(r"\bdon'?t\s+do\s+that", re.I),
+    re.compile(r"\bI\s+(said|meant)\s+", re.I),
+    re.compile(r"\bwrong\s+(file|path|dir|approach|method|function|model|endpoint)", re.I),
+    re.compile(r"\bthat\s+broke", re.I),
+    re.compile(r"\bundo\s+(that|this|it)", re.I),
+    re.compile(r"\bthat'?s\s+not\s+what\s+I", re.I),
+    re.compile(r"\byou\s+(shouldn'?t|should\s+not)\s+have", re.I),
+    re.compile(r"\bdo\s+not\s+use\b", re.I),
+    re.compile(r"\bwe\s+don'?t\s+use\b", re.I),
+]
 
 
 def load_jsonl(path: Path, days: int = 7) -> list[dict]:
@@ -150,7 +167,158 @@ def aggregate_recall_probes(entries: list[dict]) -> dict:
     return dict(by_bank)
 
 
-def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict, days: int) -> str:
+def analyze_token_consumption(days: int = 7) -> dict:
+    """Analyze token consumption from transcripts, grouped by recall usage.
+
+    Scans recent transcripts to compute tokens/request, tool_calls/request,
+    and correction cost — the key metrics for measuring whether the MCP
+    services reduce overall token spend.
+    """
+    cutoff = datetime.now().timestamp() - (days * 86400)
+    paths = []
+    for path_str in glob(TRANSCRIPTS_GLOB, recursive=True):
+        p = Path(path_str)
+        if p.stat().st_mtime >= cutoff:
+            paths.append(p)
+
+    with_recall = []
+    without_recall = []
+
+    for path in paths:
+        total_chars = 0
+        user_msgs = 0
+        assistant_msgs = 0
+        tool_calls = 0
+        has_recall = False
+        corrections = 0
+        correction_cost_chars = 0
+        prev_assistant_chars = 0
+
+        try:
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                        role = obj.get("role", "")
+                        msg = obj.get("message", {})
+                        content = msg.get("content", [])
+                        msg_chars = 0
+                        msg_text = ""
+
+                        if isinstance(content, str):
+                            msg_chars = len(content)
+                            msg_text = content
+                        elif isinstance(content, list):
+                            for block in content:
+                                if not isinstance(block, dict):
+                                    continue
+                                btype = block.get("type", "")
+                                if btype == "text":
+                                    t = block.get("text", "")
+                                    msg_chars += len(t)
+                                    msg_text += t
+                                elif btype == "tool_use":
+                                    tool_calls += 1
+                                    if block.get("name") == "CallMcpTool":
+                                        inp = block.get("input", {})
+                                        if "recall" in inp.get("toolName", "").lower():
+                                            has_recall = True
+
+                        total_chars += msg_chars
+
+                        if role == "user":
+                            user_msgs += 1
+                            user_text = msg_text[:500]
+                            is_correction = any(
+                                p.search(user_text) for p in CORRECTION_PATTERNS
+                            )
+                            if is_correction:
+                                corrections += 1
+                                correction_cost_chars += prev_assistant_chars + msg_chars
+                            prev_assistant_chars = 0
+                        elif role == "assistant":
+                            assistant_msgs += 1
+                            prev_assistant_chars = msg_chars
+                    except json.JSONDecodeError:
+                        continue
+        except (OSError, IOError):
+            continue
+
+        if user_msgs < 2:
+            continue
+
+        approx_tokens = total_chars // 4
+        entry = {
+            "tokens": approx_tokens,
+            "user_msgs": user_msgs,
+            "assistant_msgs": assistant_msgs,
+            "tool_calls": tool_calls,
+            "corrections": corrections,
+            "correction_cost_tokens": correction_cost_chars // 4,
+            "tokens_per_request": approx_tokens // max(user_msgs, 1),
+            "tool_calls_per_request": round(tool_calls / max(user_msgs, 1), 1),
+        }
+
+        if has_recall:
+            with_recall.append(entry)
+        else:
+            without_recall.append(entry)
+
+    def _avg(items, key):
+        if not items:
+            return 0
+        return sum(e[key] for e in items) / len(items)
+
+    result = {
+        "sessions_analyzed": len(with_recall) + len(without_recall),
+        "with_recall": {
+            "sessions": len(with_recall),
+            "avg_tokens_per_request": round(_avg(with_recall, "tokens_per_request")),
+            "avg_tool_calls_per_request": round(_avg(with_recall, "tool_calls_per_request"), 1),
+            "avg_corrections_per_session": round(_avg(with_recall, "corrections"), 2),
+            "avg_correction_cost_tokens": round(_avg(with_recall, "correction_cost_tokens")),
+            "avg_total_tokens": round(_avg(with_recall, "tokens")),
+        },
+        "without_recall": {
+            "sessions": len(without_recall),
+            "avg_tokens_per_request": round(_avg(without_recall, "tokens_per_request")),
+            "avg_tool_calls_per_request": round(_avg(without_recall, "tool_calls_per_request"), 1),
+            "avg_corrections_per_session": round(_avg(without_recall, "corrections"), 2),
+            "avg_correction_cost_tokens": round(_avg(without_recall, "correction_cost_tokens")),
+            "avg_total_tokens": round(_avg(without_recall, "tokens")),
+        },
+    }
+
+    wr = result["with_recall"]
+    wor = result["without_recall"]
+    if wor["avg_tokens_per_request"] > 0 and wr["sessions"] > 0:
+        diff = wor["avg_tokens_per_request"] - wr["avg_tokens_per_request"]
+        result["token_efficiency_delta"] = diff
+        result["token_efficiency_pct"] = round(diff / wor["avg_tokens_per_request"] * 100, 1)
+    else:
+        result["token_efficiency_delta"] = None
+        result["token_efficiency_pct"] = None
+
+    if wor["avg_tool_calls_per_request"] > 0 and wr["sessions"] > 0:
+        diff = wor["avg_tool_calls_per_request"] - wr["avg_tool_calls_per_request"]
+        result["tool_call_efficiency_pct"] = round(diff / wor["avg_tool_calls_per_request"] * 100, 1)
+    else:
+        result["tool_call_efficiency_pct"] = None
+
+    total_correction_cost = (
+        sum(e["correction_cost_tokens"] for e in with_recall) +
+        sum(e["correction_cost_tokens"] for e in without_recall)
+    )
+    result["total_correction_cost_tokens"] = total_correction_cost
+
+    return result
+
+
+def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
+                  token_stats: dict, days: int) -> str:
     """Format a human-readable report."""
     lines = []
     lines.append("=" * 70)
@@ -215,6 +383,47 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict, days:
     else:
         lines.append("  No probe data yet.")
 
+    # Token Cost Analysis
+    lines.append("")
+    lines.append("  TOKEN COST ANALYSIS")
+    lines.append("  " + "-" * 66)
+    if token_stats and token_stats.get("sessions_analyzed", 0) > 0:
+        wr = token_stats["with_recall"]
+        wor = token_stats["without_recall"]
+
+        lines.append(f"  {'Metric':<35} {'With Recall':>14} {'Without':>14}")
+        lines.append("  " + "-" * 66)
+        lines.append(f"  {'Sessions analyzed':<35} {wr['sessions']:>14} {wor['sessions']:>14}")
+        lines.append(f"  {'Avg tokens/user request':<35} {wr['avg_tokens_per_request']:>13,} {wor['avg_tokens_per_request']:>13,}")
+        lines.append(f"  {'Avg tool calls/user request':<35} {wr['avg_tool_calls_per_request']:>14.1f} {wor['avg_tool_calls_per_request']:>14.1f}")
+        lines.append(f"  {'Avg corrections/session':<35} {wr['avg_corrections_per_session']:>14.2f} {wor['avg_corrections_per_session']:>14.2f}")
+        lines.append(f"  {'Avg correction cost (tokens)':<35} {wr['avg_correction_cost_tokens']:>13,} {wor['avg_correction_cost_tokens']:>13,}")
+        lines.append(f"  {'Avg total tokens/session':<35} {wr['avg_total_tokens']:>13,} {wor['avg_total_tokens']:>13,}")
+        lines.append("  " + "-" * 66)
+
+        if token_stats.get("token_efficiency_pct") is not None:
+            pct = token_stats["token_efficiency_pct"]
+            delta = token_stats["token_efficiency_delta"]
+            direction = "fewer" if delta > 0 else "more"
+            lines.append(f"  Token efficiency: {abs(delta):,} {direction} tokens/request ({abs(pct):.1f}% {'saving' if pct > 0 else 'increase'})")
+
+        if token_stats.get("tool_call_efficiency_pct") is not None:
+            tc_pct = token_stats["tool_call_efficiency_pct"]
+            lines.append(f"  Tool call efficiency: {abs(tc_pct):.1f}% {'fewer' if tc_pct > 0 else 'more'} tool calls with recall")
+
+        total_waste = token_stats.get("total_correction_cost_tokens", 0)
+        if total_waste > 0:
+            lines.append(f"  Total wasted on corrections: {total_waste:,} tokens")
+            cost_usd = total_waste * 3 / 1_000_000
+            lines.append(f"    (est. ${cost_usd:.3f} at Sonnet 4.6 input rates)")
+
+        lines.append("")
+        if wr["sessions"] < 5:
+            lines.append("  Note: Small sample size for recall sessions. Metrics will stabilize")
+            lines.append("  after 20+ sessions with recall active (~1 week of normal use).")
+    else:
+        lines.append("  No transcript data available for token analysis.")
+
     # Daily trend
     by_day = mcp_stats.get("by_day", {})
     if by_day:
@@ -262,6 +471,7 @@ def main():
     mcp_stats = aggregate_mcp_calls(mcp_calls)
     effectiveness = aggregate_effectiveness(effectiveness_entries)
     probe_stats = aggregate_recall_probes(recall_signals)
+    token_stats = analyze_token_consumption(days=args.days)
 
     if args.json:
         output = {
@@ -271,12 +481,13 @@ def main():
             "daily_trend": mcp_stats["by_day"],
             "effectiveness": effectiveness,
             "recall_probes": probe_stats,
+            "token_consumption": token_stats,
         }
         print(json.dumps(output, indent=2))
     elif args.csv:
         print(export_csv(mcp_stats, effectiveness))
     else:
-        print(format_report(mcp_stats, effectiveness, probe_stats, args.days))
+        print(format_report(mcp_stats, effectiveness, probe_stats, token_stats, args.days))
 
 
 if __name__ == "__main__":

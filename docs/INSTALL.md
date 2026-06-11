@@ -137,13 +137,27 @@ The `gopls` entry is already in `cursor/mcp.json`. It provides type-aware Go
 intelligence (implementations, references, definitions) directly in Cursor without
 ingesting source code.
 
-## 13. Restart Cursor
+## 13. Install the observability hook
 
-Reload the Cursor window (or restart the app) so it picks up the new MCP config and rule.
+This hook logs every MCP call (hindsight, hindsight-docs, gopls) for effectiveness
+monitoring:
+
+```bash
+cp cursor/hooks.json ~/.cursor/hooks.json
+mkdir -p ~/.cursor/hooks
+cp cursor/hooks/log-mcp-calls.sh ~/.cursor/hooks/
+chmod +x ~/.cursor/hooks/log-mcp-calls.sh
+```
+
+## 14. Restart Cursor
+
+Reload the Cursor window (or restart the app) so it picks up the new MCP config,
+rule, and hook.
 
 ## Verification
 
-After restarting Cursor, open a new chat. The agent should now call `recall_memory` before responding. You can verify in the Hindsight control plane at http://localhost:9999.
+After restarting Cursor, open a new chat. The agent should now call `recall_memory`
+before responding. You can verify in the Hindsight control plane at http://localhost:9999.
 
 To manually test the nightly pipeline:
 
@@ -156,6 +170,17 @@ Check results:
 ```bash
 cat ~/.hindsight/logs/$(date +%Y-%m-%d).json | python3 -m json.tool
 ```
+
+Generate an effectiveness report:
+
+```bash
+python3 report.py          # last 7 days
+python3 report.py --days 30  # last 30 days
+python3 report.py --json     # machine-readable
+```
+
+See [METRICS.md](METRICS.md) for full details on what's tracked and how to
+interpret the results.
 
 ---
 

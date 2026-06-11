@@ -127,7 +127,31 @@ python3 ingest-docs.py --docs-dir ~/go/src/github.com/jordigilh/kubernaut-docs/d
 The script creates the bank, configures `chunks` extraction mode, and ingests all
 markdown files. This only needs to be run once (or re-run when docs are updated).
 
-## 12. Install gopls MCP for Go code intelligence
+## 12. Ingest GitHub issues (Knowledge RAG)
+
+This creates a `kubernaut-issues` knowledge bank and ingests open issues plus
+recently closed issues from the kubernaut repository:
+
+```bash
+python3 ingest-issues.py
+```
+
+Options:
+- `--open-only` — skip closed issues
+- `--days 180` — include closed issues from last 180 days (default: 90)
+- `--repo org/other-repo` — target a different repository
+
+Re-run periodically to pick up new issues. The script uses `document_id` per
+issue, so re-ingestion is idempotent. To schedule weekly (Mondays at 1 AM):
+
+```bash
+sed "s|__HOME__|$HOME|g" launchd/io.vectorize.hindsight.issues.plist \
+  > ~/Library/LaunchAgents/io.vectorize.hindsight.issues.plist
+
+launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.issues.plist
+```
+
+## 13. Install gopls MCP for Go code intelligence
 
 ```bash
 go install golang.org/x/tools/gopls@latest
@@ -137,7 +161,7 @@ The `gopls` entry is already in `cursor/mcp.json`. It provides type-aware Go
 intelligence (implementations, references, definitions) directly in Cursor without
 ingesting source code.
 
-## 13. Install the observability hook
+## 14. Install the observability hook
 
 This hook logs every MCP call (hindsight, hindsight-docs, gopls) for effectiveness
 monitoring:
@@ -149,7 +173,7 @@ cp cursor/hooks/log-mcp-calls.sh ~/.cursor/hooks/
 chmod +x ~/.cursor/hooks/log-mcp-calls.sh
 ```
 
-## 14. Restart Cursor
+## 15. Restart Cursor
 
 Reload the Cursor window (or restart the app) so it picks up the new MCP config,
 rule, and hook.

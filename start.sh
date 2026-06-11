@@ -26,6 +26,7 @@ mkdir -p "$DATA_DIR"
 
 /opt/podman/bin/podman run -d --name hindsight \
   --restart unless-stopped \
+  --shm-size=1g \
   -p 8888:8888 -p 9999:9999 \
   --env-file "$CONFIG" \
   -v "${ADC_PATH}":/tmp/keys/adc.json:ro \

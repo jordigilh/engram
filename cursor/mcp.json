@@ -8,6 +8,10 @@
       "type": "http",
       "url": "http://localhost:8888/mcp/kubernaut-docs/"
     },
+    "hindsight-issues": {
+      "type": "http",
+      "url": "http://localhost:8888/mcp/kubernaut-issues/"
+    },
     "gopls": {
       "command": "gopls",
       "args": ["mcp"],

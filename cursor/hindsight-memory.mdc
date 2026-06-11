@@ -7,8 +7,9 @@ Before generating each response, use the Hindsight MCP tools to retrieve context
 
 1. **hindsight** MCP (`recall_memory`) — behavioral patterns, corrections, user preferences
 2. **hindsight-docs** MCP (`recall_memory`) — kubernaut architecture, API reference, operations
+3. **hindsight-issues** MCP (`recall_memory`) — requirements, design decisions, known bugs, platform direction
 
-Include recalled patterns and documentation context in your reasoning when they apply.
+Include recalled patterns, documentation, and issue context in your reasoning when they apply.
 
 Do NOT call retain_memory during sessions — memory extraction happens in a
 nightly batch process.
@@ -23,3 +24,10 @@ When recalling from **hindsight-docs** (kubernaut-docs), search for:
 - API/CRD contracts and type definitions
 - Operations runbooks and deployment procedures
 - Service interactions and data flow patterns
+
+When recalling from **hindsight-issues** (kubernaut-issues), search for:
+- Requirements and acceptance criteria for ongoing work
+- Design decisions and rationale from issue discussions
+- Known bugs and their root cause analysis
+- Platform direction and planned changes that constrain current work
+- Prior art: was this problem already discussed or solved?

@@ -118,10 +118,11 @@ Hindsight provides a **memory layer** that sits between Cursor and your LLM prov
 | LLM config | `~/.hindsight/config.env` | Real project IDs, model names (never committed) |
 | Hindsight container | `localhost:8888` | Memory API + storage |
 | Control Plane UI | `localhost:9999` | Web dashboard for browsing memories |
-| MCP config | `~/.cursor/mcp.json` | Connects Cursor to Hindsight + docs bank + gopls |
-| Cursor rule | `~/.cursor/rules/hindsight-memory.mdc` | Instructs agent to recall from both banks |
+| MCP config | `~/.cursor/mcp.json` | Connects Cursor to Hindsight (memory + docs + issues) + gopls |
+| Cursor rule | `~/.cursor/rules/hindsight-memory.mdc` | Instructs agent to recall from all three banks |
 | Nightly script | `nightly-learn.py` (symlinked to `~/.hindsight/`) | Processes transcripts, extracts patterns |
-| Ingestion script | `ingest-docs.py` | One-time doc ingestion into knowledge bank |
+| Doc ingestion | `ingest-docs.py` | One-time doc ingestion into knowledge bank |
+| Issue ingestion | `ingest-issues.py` | GitHub issues ingestion (run weekly) |
 | launchd plist | `~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist` | Schedules midnight execution |
 | Persistent storage | `~/.hindsight/data/` | PostgreSQL data (survives container restarts) |
 | Logs | `~/.hindsight/logs/` | Daily JSON reports + recall-signals.jsonl |
@@ -132,6 +133,7 @@ Hindsight provides a **memory layer** that sits between Cursor and your LLM prov
 |------|---------|-----------------|----------|
 | `cursor-memory` | Corrections, instructions, workflow patterns | `concise` | Haiku 4.5 per window |
 | `kubernaut-docs` | Published architecture, API, operations docs | `chunks` | $0 (embeddings only) |
+| `kubernaut-issues` | GitHub issues: requirements, decisions, known bugs | `chunks` | $0 (embeddings only) |
 
 ### Security Boundary
 

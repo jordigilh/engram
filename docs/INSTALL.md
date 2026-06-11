@@ -84,94 +84,34 @@ curl -s -X POST http://localhost:8888/v1/default/banks/cursor-memory/memories/re
 
 ## 7. Configure Cursor MCP
 
-Create or edit `~/.cursor/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "hindsight": {
-      "type": "http",
-      "url": "http://localhost:8888/mcp/cursor-memory/"
-    }
-  }
-}
+```bash
+cp cursor/mcp.json ~/.cursor/mcp.json
 ```
 
-## 8. Create Cursor rule
+> If you already have an `~/.cursor/mcp.json`, merge the `hindsight` entry into
+> your existing `mcpServers` object.
 
-Create `~/.cursor/rules/hindsight-memory.mdc`:
+## 8. Install Cursor rule
 
-```markdown
----
-description: Recall relevant patterns from Hindsight memory before responding
-alwaysApply: true
----
-
-Before generating each response, use the Hindsight MCP `recall_memory` tool to
-retrieve relevant patterns and learned context. Include recalled patterns in your
-reasoning when they apply.
-
-Do NOT call retain_memory during sessions — memory extraction happens in a
-nightly batch process.
-
-When recalling, search for:
-- Patterns related to the current task or technology
-- User preferences and coding conventions
-- Past mistakes and their corrections for similar work
-- Architecture decisions relevant to this codebase
+```bash
+mkdir -p ~/.cursor/rules
+cp cursor/hindsight-memory.mdc ~/.cursor/rules/
 ```
 
-## 9. Schedule the nightly learning script
-
-The script `nightly-learn.py` scans Cursor transcripts for corrections and
-feeds them to Hindsight. Install it:
+## 9. Install the nightly learning script
 
 ```bash
 ln -sf "$(pwd)/nightly-learn.py" ~/.hindsight/nightly-learn.py
-chmod +x nightly-learn.py
 ```
 
 ## 10. Schedule with launchd
 
-Create `~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>io.vectorize.hindsight.nightly</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/bin/python3</string>
-        <string>/Users/YOUR_USERNAME/.hindsight/nightly-learn.py</string>
-    </array>
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>0</integer>
-        <key>Minute</key>
-        <integer>0</integer>
-    </dict>
-    <key>StandardOutPath</key>
-    <string>/Users/YOUR_USERNAME/.hindsight/logs/launchd-stdout.log</string>
-    <key>StandardErrorPath</key>
-    <string>/Users/YOUR_USERNAME/.hindsight/logs/launchd-stderr.log</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin</string>
-    </dict>
-</dict>
-</plist>
-```
-
-> Replace `YOUR_USERNAME` with your macOS username.
-
-Load it:
+Install the plist (replacing `__HOME__` with your home directory):
 
 ```bash
+sed "s|__HOME__|$HOME|g" launchd/io.vectorize.hindsight.nightly.plist \
+  > ~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist
+
 launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist
 ```
 

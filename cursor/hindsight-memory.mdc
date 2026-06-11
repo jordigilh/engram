@@ -1,0 +1,17 @@
+---
+description: Recall relevant patterns from Hindsight memory before responding
+alwaysApply: true
+---
+
+Before generating each response, use the Hindsight MCP `recall_memory` tool to
+retrieve relevant patterns and learned context. Include recalled patterns in your
+reasoning when they apply.
+
+Do NOT call retain_memory during sessions — memory extraction happens in a
+nightly batch process.
+
+When recalling, search for:
+- Patterns related to the current task or technology
+- User preferences and coding conventions
+- Past mistakes and their corrections for similar work
+- Architecture decisions relevant to this codebase

@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Pre-commit hook: prevent leaking LLM configuration secrets.
+# Two-pass: match secret patterns, then exclude placeholders.
+# Skips its own file and binary files.
+
+set -euo pipefail
+
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$STAGED_FILES" ] && exit 0
+
+FOUND=0
+
+report() {
+    local file="$1" rule="$2" line="$3"
+    [ $FOUND -eq 0 ] && printf '❌ SECRET LEAK DETECTED — commit blocked\n\n'
+    FOUND=1
+    printf '  File: %s\n  Rule: %s\n  Line: %s\n\n' "$file" "$rule" "$line"
+}
+
+for file in $STAGED_FILES; do
+    [[ "$file" == *".githooks/"* ]] && continue
+    file "$file" 2>/dev/null | grep -q "binary" && continue
+
+    DIFF=$(git diff --cached -- "$file" | grep '^+' | grep -v '^+++' || true)
+    [ -z "$DIFF" ] && continue
+
+    # GCP project IDs
+    HITS=$(echo "$DIFF" | grep -iE '(VERTEXAI_PROJECT|GOOGLE_CLOUD_PROJECT|VERTEX_PROJECT)=' || true)
+    REAL=$(echo "$HITS" | grep -ivE '(your-|<your|example|TODO|placeholder)' || true)
+    [ -n "$REAL" ] && report "$file" "GCP project ID" "$(echo "$REAL" | head -1 | sed 's/^+//')"
+
+    # API keys with values
+    HITS=$(echo "$DIFF" | grep -iE '(ANTHROPIC_API_KEY|OPENAI_API_KEY)=.+' || true)
+    REAL=$(echo "$HITS" | grep -ivE '(your-|<your|example|TODO|placeholder)' || true)
+    [ -n "$REAL" ] && report "$file" "API key with value" "$(echo "$REAL" | head -1 | sed 's/^+//')"
+
+    # GCP access tokens (ya29.*)
+    HITS=$(echo "$DIFF" | grep -E 'ya29\.[A-Za-z0-9_-]+' || true)
+    [ -n "$HITS" ] && report "$file" "GCP access token" "$(echo "$HITS" | head -1 | sed 's/^+//' | cut -c1-60)..."
+
+    # Service account private key
+    HITS=$(echo "$DIFF" | grep -E '"private_key".*BEGIN' || true)
+    [ -n "$HITS" ] && report "$file" "Service account private key" "(redacted)"
+
+    # Service account email
+    HITS=$(echo "$DIFF" | grep -E '"client_email".*iam\.gserviceaccount\.com' || true)
+    [ -n "$HITS" ] && report "$file" "Service account email" "$(echo "$HITS" | head -1 | sed 's/^+//')"
+
+    # Service account JSON type marker
+    HITS=$(echo "$DIFF" | grep -E '"type".*"service_account"' || true)
+    [ -n "$HITS" ] && report "$file" "Service account JSON blob" "$(echo "$HITS" | head -1 | sed 's/^+//')"
+done
+
+if [ $FOUND -ne 0 ]; then
+    echo "──────────────────────────────────────────────"
+    echo "Remove secrets from staged changes before committing."
+    echo "If this is intentional, use: git commit --no-verify"
+    echo "──────────────────────────────────────────────"
+    exit 1
+fi
+
+exit 0

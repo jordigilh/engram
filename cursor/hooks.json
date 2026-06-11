@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "hooks": {
+    "afterMCPExecution": [
+      {
+        "command": "./hooks/log-mcp-calls.sh",
+        "timeout": 5
+      }
+    ]
+  }
+}

@@ -364,6 +364,130 @@ def run_observability_probes():
     return results
 
 
+MCP_CALLS_LOG = LOG_DIR / "mcp-calls.jsonl"
+EFFECTIVENESS_LOG = LOG_DIR / "effectiveness-report.jsonl"
+
+
+def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
+    """Analyze MCP usage from hook logs and correlate with correction rates.
+
+    Reads mcp-calls.jsonl (written by afterMCPExecution hook) and correlates
+    with per-session correction counts to measure effectiveness.
+    """
+    cutoff = datetime.now().timestamp() - (hours * 3600)
+
+    # Phase 1: Aggregate MCP call stats from hook log
+    mcp_usage: dict[str, dict] = {}
+    if MCP_CALLS_LOG.exists():
+        with open(MCP_CALLS_LOG) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    ts_str = entry.get("ts", "")
+                    try:
+                        entry_ts = datetime.fromisoformat(ts_str).timestamp()
+                    except ValueError:
+                        continue
+                    if entry_ts < cutoff:
+                        continue
+                    server = entry.get("server", "unknown")
+                    if server not in mcp_usage:
+                        mcp_usage[server] = {"calls": 0, "hits": 0, "misses": 0}
+                    mcp_usage[server]["calls"] += 1
+                    if entry.get("hit"):
+                        mcp_usage[server]["hits"] += 1
+                    else:
+                        mcp_usage[server]["misses"] += 1
+                except json.JSONDecodeError:
+                    continue
+
+    for server, stats in mcp_usage.items():
+        total = stats["calls"]
+        stats["hit_rate"] = round(stats["hits"] / total, 3) if total > 0 else 0.0
+
+    # Phase 2: Per-session analysis from transcripts
+    # Identify which sessions had MCP recall calls vs. which didn't
+    sessions_with_recall = []
+    sessions_without_recall = []
+
+    for transcript_path in transcripts:
+        messages = parse_transcript(transcript_path)
+        if len(messages) < 4:
+            continue
+
+        # Check if this session had any MCP recall calls
+        has_recall = False
+        for msg in messages:
+            content = msg.get("message", {}).get("content", [])
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        name = block.get("name", "")
+                        if name == "CallMcpTool":
+                            inp = block.get("input", {})
+                            tool = inp.get("toolName", "")
+                            if "recall" in tool.lower():
+                                has_recall = True
+                                break
+                if has_recall:
+                    break
+
+        corrections, _ = extract_learning_windows(messages)
+        correction_count = len(corrections)
+
+        session_info = {
+            "transcript_id": transcript_path.stem,
+            "corrections": correction_count,
+            "messages": len(messages),
+        }
+
+        if has_recall:
+            sessions_with_recall.append(session_info)
+        else:
+            sessions_without_recall.append(session_info)
+
+    # Phase 3: Compute effectiveness metrics
+    def _avg(items, key):
+        if not items:
+            return 0.0
+        return round(sum(s[key] for s in items) / len(items), 2)
+
+    report = {
+        "date": date.today().isoformat(),
+        "period_hours": hours,
+        "mcp_usage": mcp_usage,
+        "effectiveness": {
+            "sessions_with_recall": len(sessions_with_recall),
+            "sessions_without_recall": len(sessions_without_recall),
+            "corrections_per_session_with_recall": _avg(sessions_with_recall, "corrections"),
+            "corrections_per_session_without_recall": _avg(sessions_without_recall, "corrections"),
+        },
+        "token_signals": {
+            "avg_session_messages_with_recall": _avg(sessions_with_recall, "messages"),
+            "avg_session_messages_without_recall": _avg(sessions_without_recall, "messages"),
+        },
+    }
+
+    # Compute estimated reduction percentage
+    with_rate = report["effectiveness"]["corrections_per_session_with_recall"]
+    without_rate = report["effectiveness"]["corrections_per_session_without_recall"]
+    if without_rate > 0:
+        reduction = round((1 - with_rate / without_rate) * 100, 1)
+        report["effectiveness"]["estimated_reduction_pct"] = reduction
+    else:
+        report["effectiveness"]["estimated_reduction_pct"] = None
+
+    # Write effectiveness report
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(EFFECTIVENESS_LOG, "a") as f:
+        f.write(json.dumps(report) + "\n")
+
+    return report
+
+
 def main():
     log.info("=== Hindsight nightly learning started ===")
 
@@ -442,6 +566,28 @@ def main():
     # Phase: Observability probes
     log.info("Running recall observability probes...")
     results["observability_probes"] = run_observability_probes()
+
+    # Phase: MCP effectiveness analysis
+    log.info("Analyzing MCP effectiveness...")
+    effectiveness = analyze_mcp_effectiveness(transcripts)
+    results["effectiveness"] = effectiveness
+    if effectiveness["mcp_usage"]:
+        for server, stats in effectiveness["mcp_usage"].items():
+            log.info(
+                "  %s: %d calls, %d hits, %d misses (%.0f%% hit rate)",
+                server, stats["calls"], stats["hits"], stats["misses"],
+                stats["hit_rate"] * 100,
+            )
+    eff = effectiveness["effectiveness"]
+    log.info(
+        "  Sessions with recall: %d (avg %.1f corrections), without: %d (avg %.1f corrections)",
+        eff["sessions_with_recall"],
+        eff["corrections_per_session_with_recall"],
+        eff["sessions_without_recall"],
+        eff["corrections_per_session_without_recall"],
+    )
+    if eff.get("estimated_reduction_pct") is not None:
+        log.info("  Estimated correction reduction: %.1f%%", eff["estimated_reduction_pct"])
 
     # Write daily log
     LOG_DIR.mkdir(parents=True, exist_ok=True)

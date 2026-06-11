@@ -42,6 +42,19 @@ STRUCTURAL_CORRECTION_PATTERNS = [
     re.compile(r"^(no|nope|wrong|incorrect)\s*[.!]?\s*$", re.I | re.M),
 ]
 
+# Patterns that indicate the user is establishing methodology, process, or requirements.
+# These are instructional — not corrections, but equally valuable for memory.
+INSTRUCTION_PATTERNS = [
+    re.compile(r"\balways\s+(use|follow|run|start\s+with|ensure)", re.I),
+    re.compile(r"\bnever\s+(skip|push|commit|deploy|use)", re.I),
+    re.compile(r"\bmandatory\b", re.I),
+    re.compile(r"\bour\s+(workflow|process|methodology|convention|standard)", re.I),
+    re.compile(r"\bthe\s+rule\s+is\b", re.I),
+    re.compile(r"\bfor\s+this\s+(project|repo|team)\s+we\b", re.I),
+    re.compile(r"\bwe\s+(always|never|require|must)\b", re.I),
+    re.compile(r"\bbefore\s+(implementing|proceeding|starting\s+any)", re.I),
+]
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
@@ -137,12 +150,22 @@ def is_correction(text: str) -> bool:
     return False
 
 
-def extract_correction_windows(messages: list[dict], window: int = 2) -> list[str]:
-    """Extract only the messages around corrections (not full transcript).
+def is_instruction(text: str) -> bool:
+    """Detect if a user message establishes methodology, process, or requirements."""
+    if not text or len(text) < 20 or len(text) > 2000:
+        return False
+    for pat in INSTRUCTION_PATTERNS:
+        if pat.search(text):
+            return True
+    return False
 
-    Returns a list of correction "windows" - each containing context
-    before the correction, the correction itself, and what follows.
-    This dramatically reduces token usage vs sending full transcripts.
+
+def extract_learning_windows(messages: list[dict], window: int = 2) -> tuple[list[str], list[str]]:
+    """Extract messages around corrections AND instructions.
+
+    Returns two lists:
+      - correction_windows: context around user corrections
+      - instruction_windows: context around methodology/process statements
     """
     parsed = []
     for msg in messages:
@@ -150,33 +173,49 @@ def extract_correction_windows(messages: list[dict], window: int = 2) -> list[st
         if role == "user":
             text = extract_user_text(msg)
             if text:
-                parsed.append({"role": "user", "text": text, "is_correction": is_correction(text)})
+                parsed.append({
+                    "role": "user",
+                    "text": text,
+                    "is_correction": is_correction(text),
+                    "is_instruction": is_instruction(text),
+                })
         elif role == "assistant":
             text = extract_assistant_text(msg)
             if text:
-                parsed.append({"role": "assistant", "text": text[:400], "is_correction": False})
+                parsed.append({
+                    "role": "assistant",
+                    "text": text[:400],
+                    "is_correction": False,
+                    "is_instruction": False,
+                })
+
+    def _build_windows(indices: list[int], tag: str) -> list[str]:
+        windows = []
+        used = set()
+        for idx in indices:
+            if idx in used:
+                continue
+            used.add(idx)
+            start = max(0, idx - window)
+            end = min(len(parsed), idx + window + 1)
+            lines = []
+            for i in range(start, end):
+                m = parsed[i]
+                prefix = f"[{tag}] " if i == idx else ""
+                lines.append(f"{prefix}{m['role'].title()}: {m['text'][:300]}")
+            windows.append("\n\n".join(lines))
+        return windows
 
     correction_indices = [i for i, m in enumerate(parsed) if m["is_correction"]]
-    if not correction_indices:
-        return []
+    instruction_indices = [
+        i for i, m in enumerate(parsed)
+        if m["is_instruction"] and not m["is_correction"]
+    ]
 
-    windows = []
-    used = set()
-    for idx in correction_indices:
-        start = max(0, idx - window)
-        end = min(len(parsed), idx + window + 1)
-        if idx in used:
-            continue
-        used.add(idx)
-
-        lines = []
-        for i in range(start, end):
-            m = parsed[i]
-            prefix = "[CORRECTION] " if m["is_correction"] else ""
-            lines.append(f"{prefix}{m['role'].title()}: {m['text'][:300]}")
-        windows.append("\n\n".join(lines))
-
-    return windows
+    return (
+        _build_windows(correction_indices, "CORRECTION"),
+        _build_windows(instruction_indices, "INSTRUCTION"),
+    )
 
 
 def retain_windows(windows: list[str], transcript_id: str) -> dict[str, Any]:
@@ -244,8 +283,9 @@ def main():
     results = {
         "date": date.today().isoformat(),
         "transcripts_found": len(transcripts),
-        "transcripts_with_corrections": 0,
+        "transcripts_with_learnings": 0,
         "corrections_detected": 0,
+        "instructions_detected": 0,
         "windows_retained": 0,
         "total_retain_usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
         "reflect_result": None,
@@ -261,17 +301,23 @@ def main():
             log.info("  Skipping (too short: %d messages)", len(messages))
             continue
 
-        windows = extract_correction_windows(messages)
-        if not windows:
-            log.info("  No corrections found, skipping")
+        corrections, instructions = extract_learning_windows(messages)
+        all_windows = corrections + instructions
+
+        if not all_windows:
+            log.info("  No learnings found, skipping")
             continue
 
-        results["corrections_detected"] += len(windows)
-        results["transcripts_with_corrections"] += 1
-        log.info("  Found %d correction windows", len(windows))
+        results["corrections_detected"] += len(corrections)
+        results["instructions_detected"] += len(instructions)
+        results["transcripts_with_learnings"] += 1
+        log.info(
+            "  Found %d corrections, %d instructions",
+            len(corrections), len(instructions),
+        )
 
         try:
-            retain_result = retain_windows(windows, transcript_id)
+            retain_result = retain_windows(all_windows, transcript_id)
             results["windows_retained"] += retain_result["items_retained"]
             for k in results["total_retain_usage"]:
                 results["total_retain_usage"][k] += retain_result["usage"].get(k, 0)
@@ -297,9 +343,10 @@ def main():
     log.info("Results saved to %s", log_path)
 
     log.info(
-        "=== Done: %d transcripts w/corrections, %d windows, %d tokens ===",
-        results["transcripts_with_corrections"],
+        "=== Done: %d transcripts, %d corrections, %d instructions, %d tokens ===",
+        results["transcripts_with_learnings"],
         results["corrections_detected"],
+        results["instructions_detected"],
         results["total_retain_usage"]["total_tokens"],
     )
 

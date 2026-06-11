@@ -3,15 +3,23 @@ description: Recall relevant patterns from Hindsight memory before responding
 alwaysApply: true
 ---
 
-Before generating each response, use the Hindsight MCP `recall_memory` tool to
-retrieve relevant patterns and learned context. Include recalled patterns in your
-reasoning when they apply.
+Before generating each response, use the Hindsight MCP tools to retrieve context:
+
+1. **hindsight** MCP (`recall_memory`) — behavioral patterns, corrections, user preferences
+2. **hindsight-docs** MCP (`recall_memory`) — kubernaut architecture, API reference, operations
+
+Include recalled patterns and documentation context in your reasoning when they apply.
 
 Do NOT call retain_memory during sessions — memory extraction happens in a
 nightly batch process.
 
-When recalling, search for:
+When recalling from **hindsight** (cursor-memory), search for:
 - Patterns related to the current task or technology
 - User preferences and coding conventions
 - Past mistakes and their corrections for similar work
-- Architecture decisions relevant to this codebase
+
+When recalling from **hindsight-docs** (kubernaut-docs), search for:
+- Architecture and design decisions relevant to the current work
+- API/CRD contracts and type definitions
+- Operations runbooks and deployment procedures
+- Service interactions and data flow patterns

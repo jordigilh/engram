@@ -115,7 +115,29 @@ sed "s|__HOME__|$HOME|g" launchd/io.vectorize.hindsight.nightly.plist \
 launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist
 ```
 
-## 11. Restart Cursor
+## 11. Ingest project documentation (Knowledge RAG)
+
+This creates a `kubernaut-docs` knowledge bank and ingests the published documentation
+for embedding-based recall (zero LLM cost):
+
+```bash
+python3 ingest-docs.py --docs-dir ~/go/src/github.com/jordigilh/kubernaut-docs/docs
+```
+
+The script creates the bank, configures `chunks` extraction mode, and ingests all
+markdown files. This only needs to be run once (or re-run when docs are updated).
+
+## 12. Install gopls MCP for Go code intelligence
+
+```bash
+go install golang.org/x/tools/gopls@latest
+```
+
+The `gopls` entry is already in `cursor/mcp.json`. It provides type-aware Go
+intelligence (implementations, references, definitions) directly in Cursor without
+ingesting source code.
+
+## 13. Restart Cursor
 
 Reload the Cursor window (or restart the app) so it picks up the new MCP config and rule.
 

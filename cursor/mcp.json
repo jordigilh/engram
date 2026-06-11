@@ -3,6 +3,15 @@
     "hindsight": {
       "type": "http",
       "url": "http://localhost:8888/mcp/cursor-memory/"
+    },
+    "hindsight-docs": {
+      "type": "http",
+      "url": "http://localhost:8888/mcp/kubernaut-docs/"
+    },
+    "gopls": {
+      "command": "gopls",
+      "args": ["mcp"],
+      "type": "stdio"
     }
   }
 }

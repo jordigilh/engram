@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import sys
+import time
 from datetime import date, datetime
 from glob import glob
 from pathlib import Path
@@ -270,14 +271,115 @@ def reflect() -> dict[str, Any]:
         return {"error": str(e)}
 
 
+RECALL_SIGNALS_PATH = LOG_DIR / "recall-signals.jsonl"
+BANKS = ["cursor-memory", "kubernaut-docs"]
+
+
+def api_get(path: str) -> dict:
+    """GET from Hindsight API."""
+    url = f"{HINDSIGHT_URL}{path}"
+    req = Request(url, headers={"Accept": "application/json"})
+    try:
+        with urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except (HTTPError, URLError) as e:
+        log.warning("GET %s failed: %s", url, e)
+        return {}
+
+
+def collect_bank_stats() -> dict:
+    """Collect stats from all configured banks and write to recall-signals.jsonl."""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    stats = {}
+    for bank in BANKS:
+        bank_stats = api_get(f"/v1/default/banks/{bank}/stats")
+        if bank_stats:
+            stats[bank] = {
+                "total_nodes": bank_stats.get("total_nodes", 0),
+                "total_documents": bank_stats.get("total_documents", 0),
+                "total_links": bank_stats.get("total_links", 0),
+                "pending_operations": bank_stats.get("pending_operations", 0),
+                "pending_consolidation": bank_stats.get("pending_consolidation", 0),
+            }
+    signal = {
+        "ts": datetime.now().isoformat(),
+        "type": "bank_stats",
+        "banks": stats,
+    }
+    with open(RECALL_SIGNALS_PATH, "a") as f:
+        f.write(json.dumps(signal) + "\n")
+    return stats
+
+
+def measure_recall_quality(bank: str, query: str) -> dict:
+    """Run a recall and measure latency/results for observability."""
+    payload = {"query": query, "max_tokens": 2048, "include": {"chunks": {}}}
+    start = time.time()
+    try:
+        result = api_post(f"/v1/default/banks/{bank}/memories/recall", payload)
+        latency_ms = int((time.time() - start) * 1000)
+        results_list = result.get("results", [])
+        chunks = result.get("chunks", {})
+        num_chunks = len(chunks) if isinstance(chunks, dict) else 0
+        approx_tokens = sum(
+            len(c.get("text", "")) // 4
+            for c in (chunks.values() if isinstance(chunks, dict) else [])
+            if isinstance(c, dict)
+        )
+        signal = {
+            "ts": datetime.now().isoformat(),
+            "type": "recall_probe",
+            "query": query,
+            "bank": bank,
+            "latency_ms": latency_ms,
+            "results": len(results_list),
+            "chunks": num_chunks,
+            "approx_tokens": approx_tokens,
+        }
+        with open(RECALL_SIGNALS_PATH, "a") as f:
+            f.write(json.dumps(signal) + "\n")
+        return signal
+    except Exception as e:
+        log.warning("Recall probe failed for %s: %s", bank, e)
+        return {"error": str(e)}
+
+
+def run_observability_probes():
+    """Run a set of recall probes to measure system health and quality."""
+    probes = [
+        ("cursor-memory", "Go testing conventions and patterns"),
+        ("kubernaut-docs", "signal processing architecture and data flow"),
+        ("kubernaut-docs", "remediation orchestrator CRD spec"),
+    ]
+    results = []
+    for bank, query in probes:
+        r = measure_recall_quality(bank, query)
+        results.append(r)
+        if "error" not in r:
+            log.info(
+                "  Probe [%s] %s: %dms, %d results, %d chunks, ~%d tokens",
+                bank, query[:40], r["latency_ms"], r["results"],
+                r.get("chunks", 0), r.get("approx_tokens", 0),
+            )
+    return results
+
+
 def main():
     log.info("=== Hindsight nightly learning started ===")
+
+    # Collect bank stats for observability
+    log.info("Collecting bank stats...")
+    bank_stats = collect_bank_stats()
+    for bank, s in bank_stats.items():
+        log.info("  %s: %d nodes, %d docs", bank, s["total_nodes"], s["total_documents"])
 
     transcripts = find_recent_transcripts(hours=24)
     log.info("Found %d transcripts from last 24h", len(transcripts))
 
     if not transcripts:
-        log.info("No transcripts to process. Exiting.")
+        log.info("No transcripts to process. Running probes only.")
+        run_observability_probes()
+        log.info("=== Done (no transcripts) ===")
         sys.exit(0)
 
     results = {
@@ -289,6 +391,8 @@ def main():
         "windows_retained": 0,
         "total_retain_usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
         "reflect_result": None,
+        "bank_stats": bank_stats,
+        "observability_probes": [],
         "errors": [],
     }
 
@@ -334,6 +438,10 @@ def main():
     if results["windows_retained"] > 0:
         log.info("Running reflect...")
         results["reflect_result"] = reflect()
+
+    # Phase: Observability probes
+    log.info("Running recall observability probes...")
+    results["observability_probes"] = run_observability_probes()
 
     # Write daily log
     LOG_DIR.mkdir(parents=True, exist_ok=True)

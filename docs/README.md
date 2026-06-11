@@ -62,6 +62,8 @@ Hindsight provides a **memory layer** that sits between Cursor and your LLM prov
 3. **Zero-cost recall** — no LLM tokens consumed during active work
 4. **Automatic** — no manual tagging or bookmarking needed
 5. **Self-evaluating** — nightly reflect identifies which patterns are most impactful
+6. **Knowledge RAG** — project documentation recalled alongside behavioral memory
+7. **Go code intelligence** — type-aware navigation via gopls MCP (no source ingestion)
 
 ### Cost Profile
 
@@ -116,12 +118,20 @@ Hindsight provides a **memory layer** that sits between Cursor and your LLM prov
 | LLM config | `~/.hindsight/config.env` | Real project IDs, model names (never committed) |
 | Hindsight container | `localhost:8888` | Memory API + storage |
 | Control Plane UI | `localhost:9999` | Web dashboard for browsing memories |
-| MCP config | `~/.cursor/mcp.json` | Connects Cursor to Hindsight |
-| Cursor rule | `~/.cursor/rules/hindsight-memory.mdc` | Instructs agent to recall before responding |
+| MCP config | `~/.cursor/mcp.json` | Connects Cursor to Hindsight + docs bank + gopls |
+| Cursor rule | `~/.cursor/rules/hindsight-memory.mdc` | Instructs agent to recall from both banks |
 | Nightly script | `nightly-learn.py` (symlinked to `~/.hindsight/`) | Processes transcripts, extracts patterns |
+| Ingestion script | `ingest-docs.py` | One-time doc ingestion into knowledge bank |
 | launchd plist | `~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist` | Schedules midnight execution |
 | Persistent storage | `~/.hindsight/data/` | PostgreSQL data (survives container restarts) |
-| Logs | `~/.hindsight/logs/` | Daily JSON reports |
+| Logs | `~/.hindsight/logs/` | Daily JSON reports + recall-signals.jsonl |
+
+### Memory Banks
+
+| Bank | Content | Extraction Mode | LLM Cost |
+|------|---------|-----------------|----------|
+| `cursor-memory` | Corrections, instructions, workflow patterns | `concise` | Haiku 4.5 per window |
+| `kubernaut-docs` | Published architecture, API, operations docs | `chunks` | $0 (embeddings only) |
 
 ### Security Boundary
 

@@ -80,15 +80,15 @@ Hindsight provides a **memory layer** that sits between Cursor and your LLM prov
 ## Architecture
 
 ```
-┌──────────────┐     MCP (HTTP)      ┌──────────────────────┐
-│  Cursor IDE  │◀───────────────────▶│  Hindsight Container │
-│              │   recall_memory()    │                      │
-│  mcp.json   │                      │  - FastAPI server    │
-│  rule .mdc  │                      │  - Embedded Postgres │
-└──────────────┘                      │  - ONNX embeddings  │
-                                      │  - ONNX reranker    │
-                                      │  - LiteLLM → Vertex │
-                                      └──────────┬───────────┘
+┌──────────────┐     MCP (HTTP)      ┌──────────────────────────┐
+│  Cursor IDE  │◀───────────────────▶│  Hindsight (native macOS)│
+│              │   recall_memory()    │                          │
+│  mcp.json   │                      │  - FastAPI server        │
+│  rule .mdc  │                      │  - Embedded Postgres(pg0)│
+└──────────────┘                      │  - MPS/ONNX embeddings  │
+                                      │  - Local reranker        │
+                                      │  - LiteLLM → Vertex AI  │
+                                      └──────────┬───────────────┘
                                                   │
                                                   │ retain / reflect
                                                   ▼
@@ -99,15 +99,14 @@ Hindsight provides a **memory layer** that sits between Cursor and your LLM prov
                                       │  - Sonnet 4.6(reflect│
                                       └──────────────────────┘
 
-┌──────────────┐     Nightly job      ┌──────────────────────┐
-│   launchd    │────────────────────▶│  nightly-learn.py    │
-│  (midnight)  │                      │                      │
-└──────────────┘                      │  1. Scan transcripts │
-                                      │  2. Detect corrections│
-                                      │  3. Retain patterns  │
-                                      │  4. Reflect          │
-                                      │  5. Log results      │
-                                      └──────────────────────┘
+┌──────────────────────────────┐      ┌──────────────────────┐
+│  launchd (service manager)   │─────▶│  hindsight-api       │
+│                              │      │  (KeepAlive, auto-   │
+│  io.vectorize.hindsight.     │      │   restart on crash)  │
+│    service.plist             │      └──────────────────────┘
+│    nightly.plist             │─────▶ nightly-learn.py (midnight)
+│    issues.plist              │─────▶ ingest-issues.py (weekly)
+└──────────────────────────────┘
 ```
 
 ### Components
@@ -116,15 +115,15 @@ Hindsight provides a **memory layer** that sits between Cursor and your LLM prov
 |-----------|----------|---------|
 | Project source | `~/go/src/github.com/jordigilh/recollect/` | Code pushed to GitHub |
 | LLM config | `~/.hindsight/config.env` | Real project IDs, model names (never committed) |
-| Hindsight container | `localhost:8888` | Memory API + storage |
-| Control Plane UI | `localhost:9999` | Web dashboard for browsing memories |
+| Hindsight process | `~/.hindsight/venv/bin/hindsight-api` | Native macOS service (launchd managed) |
 | MCP config | `~/.cursor/mcp.json` | Connects Cursor to Hindsight (memory + docs + issues) + gopls |
 | Cursor rule | `~/.cursor/rules/hindsight-memory.mdc` | Instructs agent to recall from all three banks |
 | Nightly script | `nightly-learn.py` (symlinked to `~/.hindsight/`) | Processes transcripts, extracts patterns |
 | Doc ingestion | `ingest-docs.py` | One-time doc ingestion into knowledge bank |
 | Issue ingestion | `ingest-issues.py` | GitHub issues ingestion (run weekly) |
-| launchd plist | `~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist` | Schedules midnight execution |
-| Persistent storage | `~/.hindsight/data/` | PostgreSQL data (survives container restarts) |
+| Service plist | `~/Library/LaunchAgents/io.vectorize.hindsight.service.plist` | KeepAlive + RunAtLoad |
+| Nightly plist | `~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist` | Midnight execution |
+| Persistent storage | `~/.pg0/instances/hindsight/data/` | PostgreSQL data (survives reboots) |
 | Logs | `~/.hindsight/logs/` | Daily JSON reports + recall-signals.jsonl |
 
 ### Memory Banks
@@ -138,13 +137,12 @@ Hindsight provides a **memory layer** that sits between Cursor and your LLM prov
 ### Security Boundary
 
 ```
-GitHub (public)                    Local only (~/.hindsight/)
-─────────────────                  ────────────────────────────
-Dockerfile                         config.env (project IDs, model config)
-start.sh (reads config.env)        data/ (PostgreSQL)
-nightly-learn.py                   logs/ (daily reports)
-docs/                              application_default_credentials.json
-config.env.example (placeholders)
+GitHub (public)                    Local only (~/.hindsight/, ~/.pg0/)
+─────────────────                  ──────────────────────────────────────
+start.sh (reads config.env)        config.env (project IDs, model config)
+nightly-learn.py                   ~/.pg0/instances/ (PostgreSQL data)
+docs/                              logs/ (daily reports)
+config.env.example (placeholders)  application_default_credentials.json
 .githooks/pre-commit (blocks leaks)
 ```
 

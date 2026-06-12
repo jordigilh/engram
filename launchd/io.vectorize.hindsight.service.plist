@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.vectorize.hindsight.service</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.hindsight/venv/bin/hindsight-api</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HINDSIGHT_API_PORT</key>
+        <string>8888</string>
+        <key>HINDSIGHT_API_LLM_PROVIDER</key>
+        <string>litellm</string>
+        <key>HINDSIGHT_API_LLM_MODEL</key>
+        <string>vertex_ai/claude-sonnet-4-6</string>
+        <key>HINDSIGHT_API_RETAIN_LLM_PROVIDER</key>
+        <string>litellm</string>
+        <key>HINDSIGHT_API_RETAIN_LLM_MODEL</key>
+        <string>vertex_ai/claude-haiku-4-5@20251001</string>
+        <key>HINDSIGHT_API_EMBEDDINGS_PROVIDER</key>
+        <string>local</string>
+        <key>HINDSIGHT_API_RERANKER_PROVIDER</key>
+        <string>local</string>
+        <key>VERTEXAI_PROJECT</key>
+        <string>__VERTEXAI_PROJECT__</string>
+        <key>VERTEXAI_LOCATION</key>
+        <string>global</string>
+        <key>GOOGLE_CLOUD_PROJECT</key>
+        <string>__VERTEXAI_PROJECT__</string>
+        <key>GOOGLE_APPLICATION_CREDENTIALS</key>
+        <string>__HOME__/.config/gcloud/application_default_credentials.json</string>
+        <key>PATH</key>
+        <string>__HOME__/.hindsight/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>__HOME__/.hindsight</string>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.hindsight/logs/hindsight-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.hindsight/logs/hindsight-stderr.log</string>
+</dict>
+</plist>

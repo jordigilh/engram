@@ -3,7 +3,8 @@
 ## Prerequisites
 
 - macOS (tested on Mac Studio M2 Max, 32GB RAM)
-- [Podman](https://podman.io/) or Docker
+- Python 3.11+ (Homebrew recommended)
+- [uv](https://docs.astral.sh/uv/) — fast Python package manager
 - Google Cloud SDK (`gcloud`) with Application Default Credentials configured
 - Vertex AI API enabled on your GCP project
 - Claude models enabled on Vertex AI (Haiku 4.5 + Sonnet 4.6)
@@ -26,7 +27,7 @@ gcloud auth application-default login
 ## 3. Create the runtime directory and config
 
 ```bash
-mkdir -p ~/.hindsight/data ~/.hindsight/logs
+mkdir -p ~/.hindsight/logs
 cp config.env.example ~/.hindsight/config.env
 ```
 
@@ -40,23 +41,37 @@ $EDITOR ~/.hindsight/config.env
 > local. It is never committed to this repo. The pre-commit hook will block any
 > attempt to commit actual project IDs.
 
-## 4. Build the custom image
+## 4. Install Hindsight (native)
 
 ```bash
-podman build -t hindsight-vertexai .
+uv venv ~/.hindsight/venv --python 3.14
+uv pip install --python ~/.hindsight/venv/bin/python \
+  'hindsight-api[all]' 'google-cloud-aiplatform>=1.38'
 ```
 
-> The official Hindsight image doesn't include `google-cloud-aiplatform` needed
-> for Vertex AI. The Dockerfile in this repo adds it.
+This installs Hindsight with embedded PostgreSQL (pg0), local ONNX embeddings,
+and local reranker — all running natively on macOS with no container or VM
+dependency. Data persists at `~/.pg0/instances/hindsight/data/`.
 
-## 5. Start the container
+## 5. Start the service
 
 ```bash
 ./start.sh
 ```
 
-This reads `~/.hindsight/config.env` and passes it to podman via `--env-file`.
-No secrets ever appear in command history or process listings.
+This sources `~/.hindsight/config.env` and runs the native `hindsight-api` binary.
+
+For production, install as a launchd service (auto-start on login, auto-restart
+on crash):
+
+```bash
+sed -e "s|__HOME__|$HOME|g" \
+    -e "s|__VERTEXAI_PROJECT__|$(grep VERTEXAI_PROJECT ~/.hindsight/config.env | cut -d= -f2)|g" \
+    launchd/io.vectorize.hindsight.service.plist \
+    > ~/Library/LaunchAgents/io.vectorize.hindsight.service.plist
+
+launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.service.plist
+```
 
 > **Note on model names**: Sonnet 4.6 must be specified WITHOUT a version suffix on the
 > global endpoint. Haiku 4.5 works with `@20251001`.
@@ -210,23 +225,17 @@ interpret the results.
 
 ## Troubleshooting
 
-### Container won't start
+### Service won't start
 ```bash
-podman logs hindsight
+launchctl list | grep hindsight
+tail -50 ~/.hindsight/logs/hindsight-stderr.log
 ```
 
 ### Recall returns empty results
 The memory bank needs at least one retained item. Run the nightly script manually or retain a test memory.
 
-### Retain fails with "No module named vertexai"
-The custom image wasn't built correctly. Rebuild:
-```bash
-podman build --no-cache -t hindsight-vertexai ~/.hindsight/
-podman rm -f hindsight && # re-run the podman run command
-```
-
 ### Retain fails with "Could not resolve project_id"
-Ensure `VERTEXAI_PROJECT` and `GOOGLE_CLOUD_PROJECT` are set in the container environment.
+Ensure `VERTEXAI_PROJECT` and `GOOGLE_CLOUD_PROJECT` are set in `~/.hindsight/config.env`.
 
 ### Reflect returns 404
 Sonnet 4.6 on the global endpoint requires the model name WITHOUT a version suffix. Use `vertex_ai/claude-sonnet-4-6`, not `vertex_ai/claude-sonnet-4-6@20250929`.
@@ -234,7 +243,12 @@ Sonnet 4.6 on the global endpoint requires the model name WITHOUT a version suff
 ### ADC token expired
 ```bash
 gcloud auth application-default login
-podman restart hindsight
+launchctl kickstart -k gui/$(id -u)/io.vectorize.hindsight.service
+```
+
+### Manually restart the service
+```bash
+launchctl kickstart -k gui/$(id -u)/io.vectorize.hindsight.service
 ```
 
 ---
@@ -242,11 +256,10 @@ podman restart hindsight
 ## Uninstall
 
 ```bash
+launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.service.plist
 launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist
-rm ~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist
-podman rm -f hindsight
-podman rmi hindsight-vertexai
-rm -rf ~/.hindsight
+rm ~/Library/LaunchAgents/io.vectorize.hindsight.*.plist
+rm -rf ~/.hindsight ~/.pg0
 rm ~/.cursor/rules/hindsight-memory.mdc
-# Remove "hindsight" entry from ~/.cursor/mcp.json
+# Remove hindsight entries from ~/.cursor/mcp.json
 ```

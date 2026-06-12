@@ -9,7 +9,11 @@ Before generating each response, use the Hindsight MCP tools to retrieve context
 2. **hindsight-docs** MCP (`recall_memory`) — kubernaut architecture, API reference, operations
 3. **hindsight-issues** MCP (`recall_memory`) — requirements, design decisions, known bugs, platform direction
 
-Include recalled patterns, documentation, and issue context in your reasoning when they apply.
+Recall returns two types of content — prioritize accordingly:
+
+- **Mental models** (synthesized documents): coherent, pre-digested context on a topic.
+  Use these directly without further synthesis.
+- **Individual facts**: scattered observations that may need reasoning to connect.
 
 Do NOT call retain_memory during sessions — memory extraction happens in a
 nightly batch process.

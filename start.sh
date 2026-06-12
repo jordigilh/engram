@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Start the Hindsight container.
+# Start Hindsight as a native macOS process.
 # LLM configuration lives in ~/.hindsight/config.env (outside this repo).
 
 set -euo pipefail
 
 CONFIG="${HOME}/.hindsight/config.env"
-DATA_DIR="${HOME}/.hindsight/data"
 ADC_PATH="${HOME}/.config/gcloud/application_default_credentials.json"
+VENV="${HOME}/.hindsight/venv"
 
 if [ ! -f "$CONFIG" ]; then
     echo "Error: ${CONFIG} not found."
@@ -20,17 +20,17 @@ if [ ! -f "$ADC_PATH" ]; then
     exit 1
 fi
 
-mkdir -p "$DATA_DIR"
+if [ ! -f "$VENV/bin/hindsight-api" ]; then
+    echo "Error: Hindsight not installed in $VENV"
+    echo "Run: uv pip install --python $VENV/bin/python 'hindsight-api[all]' 'google-cloud-aiplatform>=1.38'"
+    exit 1
+fi
 
-/opt/podman/bin/podman rm -f hindsight 2>/dev/null || true
+mkdir -p "$HOME/.hindsight/logs"
 
-/opt/podman/bin/podman run -d --name hindsight \
-  --restart unless-stopped \
-  --shm-size=1g \
-  -p 8888:8888 -p 9999:9999 \
-  --env-file "$CONFIG" \
-  -v "${ADC_PATH}":/tmp/keys/adc.json:ro \
-  -v "${DATA_DIR}":/home/hindsight/.pg0 \
-  hindsight-vertexai
+set -a
+source "$CONFIG"
+export GOOGLE_APPLICATION_CREDENTIALS="$ADC_PATH"
+set +a
 
-echo "Hindsight started. API: http://localhost:8888 | UI: http://localhost:9999"
+exec "$VENV/bin/hindsight-api"

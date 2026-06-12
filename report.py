@@ -145,6 +145,30 @@ def aggregate_effectiveness(entries: list[dict]) -> dict:
     }
 
 
+def collect_mental_model_stats() -> list[dict]:
+    """Collect mental model status from Hindsight API."""
+    import urllib.request
+    banks = ["cursor-memory", "kubernaut-docs", "kubernaut-issues"]
+    results = []
+    for bank in banks:
+        try:
+            url = f"http://localhost:8888/v1/default/banks/{bank}/mental-models"
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                data = json.loads(resp.read())
+            for m in data.get("items", []):
+                content_len = len(m.get("content", "") or "")
+                refreshed = m.get("last_refreshed_at", "")[:10] if m.get("last_refreshed_at") else "never"
+                results.append({
+                    "bank": bank,
+                    "id": m.get("id", "?"),
+                    "content_len": content_len,
+                    "refreshed": refreshed,
+                })
+        except Exception:
+            pass
+    return results
+
+
 def aggregate_recall_probes(entries: list[dict]) -> dict:
     """Aggregate recall probe latency and quality stats."""
     by_bank = defaultdict(lambda: {"probes": 0, "avg_latency_ms": 0, "avg_results": 0, "total_latency": 0, "total_results": 0})
@@ -383,6 +407,24 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
     else:
         lines.append("  No probe data yet.")
 
+    # Mental Models
+    lines.append("")
+    lines.append("  MENTAL MODELS")
+    lines.append("  " + "-" * 66)
+    mm_stats = collect_mental_model_stats()
+    if mm_stats:
+        lines.append(f"  {'Bank':<25} {'Model':<25} {'Content':>8} {'Refreshed':>12}")
+        lines.append("  " + "-" * 66)
+        for mm in mm_stats:
+            lines.append(
+                f"  {mm['bank']:<25} {mm['id']:<25} {mm['content_len']:>6} ch {mm['refreshed']:>12}"
+            )
+        total_content = sum(m["content_len"] for m in mm_stats)
+        lines.append("  " + "-" * 66)
+        lines.append(f"  Total synthesized knowledge: {total_content:,} characters across {len(mm_stats)} models")
+    else:
+        lines.append("  No mental models configured. Run create-mental-models.py to set up.")
+
     # Token Cost Analysis
     lines.append("")
     lines.append("  TOKEN COST ANALYSIS")
@@ -482,6 +524,7 @@ def main():
             "effectiveness": effectiveness,
             "recall_probes": probe_stats,
             "token_consumption": token_stats,
+            "mental_models": collect_mental_model_stats(),
         }
         print(json.dumps(output, indent=2))
     elif args.csv:

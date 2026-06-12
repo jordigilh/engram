@@ -591,6 +591,20 @@ def main():
     if eff.get("estimated_reduction_pct") is not None:
         log.info("  Estimated correction reduction: %.1f%%", eff["estimated_reduction_pct"])
 
+    # Phase: Refresh issues-bank mental models (weekly, on Mondays)
+    if date.today().weekday() == 0:  # Monday
+        log.info("Weekly mental model refresh (issues bank)...")
+        for model_id in ("active-priorities", "known-bugs"):
+            resp = api_post(
+                f"/v1/default/banks/kubernaut-issues/mental-models/{model_id}/refresh",
+                {},
+            )
+            if resp and "error" not in resp:
+                log.info("  %s: refresh triggered", model_id)
+            else:
+                log.warning("  %s: refresh failed", model_id)
+        results["mental_model_refresh"] = "triggered"
+
     # Write daily log
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / f"{date.today().isoformat()}.json"

@@ -121,6 +121,7 @@ Hindsight provides a **memory layer** that sits between Cursor and your LLM prov
 | Nightly script | `nightly-learn.py` (symlinked to `~/.hindsight/`) | Processes transcripts, extracts patterns |
 | Doc ingestion | `ingest-docs.py` | One-time doc ingestion into knowledge bank |
 | Issue ingestion | `ingest-issues.py` | GitHub issues ingestion (run weekly) |
+| Mental models | `create-mental-models.py` | Create/refresh mental models across all banks |
 | Service plist | `~/Library/LaunchAgents/io.vectorize.hindsight.service.plist` | KeepAlive + RunAtLoad |
 | Nightly plist | `~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist` | Midnight execution |
 | Persistent storage | `~/.pg0/instances/hindsight/data/` | PostgreSQL data (survives reboots) |
@@ -145,6 +146,69 @@ docs/                              logs/ (daily reports)
 config.env.example (placeholders)  application_default_credentials.json
 .githooks/pre-commit (blocks leaks)
 ```
+
+---
+
+## Knowledge Graph and Mental Models
+
+### 3-Tier Recall Hierarchy
+
+Hindsight uses a three-tier system for serving context during recall:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Tier 1: Mental Models (synthesized documents)              │
+│  Pre-digested, coherent context blocks. Checked first.      │
+│  If a model matches the query, it's returned directly.      │
+├─────────────────────────────────────────────────────────────┤
+│  Tier 2: Entity Graph (link expansion)                      │
+│  Co-occurrence relationships between entities.              │
+│  Expands recall to related concepts (600 candidates/query). │
+├─────────────────────────────────────────────────────────────┤
+│  Tier 3: Raw Facts (semantic + BM25 + temporal retrieval)   │
+│  Individual memories, scored and fused via RRF + reranker.  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Entity Graph
+
+Hindsight automatically builds a knowledge graph through entity extraction on every `retain` call. Entities (services, concepts, patterns) are tracked with co-occurrence edges. During recall, the `link_expansion` retriever traverses these edges to find related facts that wouldn't match the query directly.
+
+### Mental Models
+
+Mental models are persistent, LLM-synthesized documents that sit above raw facts. They solve the problem of scattered individual memories — instead of returning 15 separate facts about "KA rate limiting" that the agent must synthesize mid-response, a mental model provides a pre-built document like:
+
+> "KA Architecture: rate limiting uses per-IP sliding window with Redis, denials emit audit events, correlation_id is generated at ingress..."
+
+#### Configured Models
+
+| Bank | Model ID | Purpose | Refresh |
+|------|----------|---------|---------|
+| `cursor-memory` | `coding-conventions` | Naming, style, structure preferences | After consolidation |
+| `cursor-memory` | `testing-methodology` | Test frameworks, patterns, coverage expectations | After consolidation |
+| `cursor-memory` | `workflow-preferences` | Dev workflow, review process, tooling choices | After consolidation |
+| `cursor-memory` | `architecture-decisions` | Design patterns, tech choices | Manual |
+| `kubernaut-docs` | `ka-architecture` | KA service components, data flow, integration | Manual |
+| `kubernaut-docs` | `af-pipeline` | AF pipeline stages, events, decisions | Manual |
+| `kubernaut-docs` | `platform-topology` | Service interactions, infrastructure | Manual |
+| `kubernaut-issues` | `active-priorities` | Open issues, priorities, platform direction | Weekly |
+| `kubernaut-issues` | `known-bugs` | Known bugs, root causes, workarounds | Weekly |
+
+#### Cross-Bank Association
+
+True cross-bank entity linking is not natively supported (entities are per-bank). Mental models provide an effective workaround:
+
+- The **same entity names** (e.g., "KA", "rate limiter") appear across all three banks
+- When the agent recalls a topic, it hits mental models in multiple banks simultaneously
+- The Cursor rule instructs recall from all three banks in parallel
+
+The entity graph within each bank handles intra-bank association. Mental models lift this into cross-bank coherence by synthesizing the same topic from different angles (behavior vs. docs vs. issues).
+
+#### Cost
+
+- **Creation**: ~$0.50 one-time (9 models × Sonnet 4.6 reflect call)
+- **Delta refresh**: ~$0.02 per refresh (only new facts since last refresh)
+- **Recall benefit**: one coherent block replaces many scattered facts → fewer total tokens in agent context
 
 ---
 

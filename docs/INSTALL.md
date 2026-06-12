@@ -166,7 +166,32 @@ sed "s|__HOME__|$HOME|g" launchd/io.vectorize.hindsight.issues.plist \
 launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.issues.plist
 ```
 
-## 13. Install gopls MCP for Go code intelligence
+## 13. Create mental models (Knowledge Graph)
+
+Mental models are LLM-synthesized documents that sit above raw facts in the recall
+hierarchy. They provide pre-digested, coherent context blocks — reducing the need
+for the agent to synthesize scattered individual facts at query time.
+
+```bash
+python3 create-mental-models.py
+```
+
+This creates 9 mental models across all three banks and triggers initial refresh
+(~$0.50 total, one-time Sonnet 4.6 cost). To check status:
+
+```bash
+python3 create-mental-models.py --list
+```
+
+Behavioral models (in `cursor-memory`) auto-refresh after nightly consolidation.
+Issues-bank models refresh weekly via the nightly script. Docs-bank models refresh
+manually when documentation is updated:
+
+```bash
+python3 create-mental-models.py --refresh
+```
+
+## 14. Install gopls MCP for Go code intelligence
 
 ```bash
 go install golang.org/x/tools/gopls@latest
@@ -176,7 +201,7 @@ The `gopls` entry is already in `cursor/mcp.json`. It provides type-aware Go
 intelligence (implementations, references, definitions) directly in Cursor without
 ingesting source code.
 
-## 14. Install the observability hook
+## 15. Install the observability hook
 
 This hook logs every MCP call (hindsight, hindsight-docs, gopls) for effectiveness
 monitoring:
@@ -188,7 +213,7 @@ cp cursor/hooks/log-mcp-calls.sh ~/.cursor/hooks/
 chmod +x ~/.cursor/hooks/log-mcp-calls.sh
 ```
 
-## 15. Restart Cursor
+## 16. Restart Cursor
 
 Reload the Cursor window (or restart the app) so it picks up the new MCP config,
 rule, and hook.

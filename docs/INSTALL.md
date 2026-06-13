@@ -3,8 +3,10 @@
 ## Prerequisites
 
 - macOS (tested on Mac Studio M2 Max, 32GB RAM)
-- Python 3.11+ (Homebrew recommended)
-- [uv](https://docs.astral.sh/uv/) — fast Python package manager
+- Python 3.14 (`uv` manages this automatically, or `brew install python@3.14`)
+- [uv](https://docs.astral.sh/uv/) — fast Python package manager (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- [gh](https://cli.github.com/) — GitHub CLI for issues ingestion (`brew install gh && gh auth login`)
+- [jq](https://jqlang.github.io/jq/) — JSON processor for MCP hook (`brew install jq`)
 - Google Cloud SDK (`gcloud`) with Application Default Credentials configured
 - Vertex AI API enabled on your GCP project
 - Claude models enabled on Vertex AI (Haiku 4.5 + Sonnet 4.6)
@@ -13,8 +15,8 @@
 ## 1. Clone the project
 
 ```bash
-git clone https://github.com/jordigilh/recollect.git
-cd recollect
+git clone https://github.com/jordigilh/engram.git
+cd engram
 git config core.hooksPath .githooks
 ```
 
@@ -60,6 +62,9 @@ dependency. Data persists at `~/.pg0/instances/hindsight/data/`.
 ```
 
 This sources `~/.hindsight/config.env` and runs the native `hindsight-api` binary.
+
+> **Important**: Use `./start.sh` for development OR launchd for production.
+> Do not run both simultaneously — they bind the same port (8888).
 
 For production, install as a launchd service (auto-start on login, auto-restart
 on crash):
@@ -113,10 +118,11 @@ mkdir -p ~/.cursor/rules
 cp cursor/hindsight-memory.mdc ~/.cursor/rules/
 ```
 
-## 9. Install the nightly learning script
+## 9. Install the nightly learning and ingestion scripts
 
 ```bash
 ln -sf "$(pwd)/nightly-learn.py" ~/.hindsight/nightly-learn.py
+ln -sf "$(pwd)/ingest-issues.py" ~/.hindsight/ingest-issues.py
 ```
 
 ## 10. Schedule with launchd
@@ -157,7 +163,7 @@ Options:
 - `--repo org/other-repo` — target a different repository
 
 Re-run periodically to pick up new issues. The script uses `document_id` per
-issue, so re-ingestion is idempotent. To schedule weekly (Mondays at 1 AM):
+issue, so re-ingestion is idempotent. To schedule nightly (daily at 1:00 AM):
 
 ```bash
 sed "s|__HOME__|$HOME|g" launchd/io.vectorize.hindsight.issues.plist \
@@ -184,8 +190,8 @@ python3 create-mental-models.py --list
 ```
 
 Behavioral models (in `cursor-memory`) auto-refresh after nightly consolidation.
-Issues-bank models refresh weekly via the nightly script. Docs-bank models refresh
-manually when documentation is updated:
+Issues-bank models refresh nightly (after issue ingestion at 1:00 AM). Docs-bank
+models refresh manually when documentation is updated:
 
 ```bash
 python3 create-mental-models.py --refresh
@@ -203,14 +209,14 @@ ingesting source code.
 
 ## 15. Install the observability hook
 
-This hook logs every MCP call (hindsight, hindsight-docs, gopls) for effectiveness
-monitoring:
+This hook logs every MCP call (hindsight, hindsight-docs, hindsight-issues, gopls)
+for effectiveness monitoring:
 
 ```bash
-cp cursor/hooks.json ~/.cursor/hooks.json
 mkdir -p ~/.cursor/hooks
 cp cursor/hooks/log-mcp-calls.sh ~/.cursor/hooks/
 chmod +x ~/.cursor/hooks/log-mcp-calls.sh
+sed "s|__HOME__|$HOME|g" cursor/hooks.json > ~/.cursor/hooks.json
 ```
 
 ## 16. Restart Cursor
@@ -221,7 +227,7 @@ rule, and hook.
 ## Verification
 
 After restarting Cursor, open a new chat. The agent should now call `recall_memory`
-before responding. You can verify in the Hindsight control plane at http://localhost:9999.
+before responding.
 
 To manually test the nightly pipeline:
 
@@ -278,13 +284,38 @@ launchctl kickstart -k gui/$(id -u)/io.vectorize.hindsight.service
 
 ---
 
+## Upgrading
+
+```bash
+uv pip install --python ~/.hindsight/venv/bin/python -U 'hindsight-api[all]'
+launchctl kickstart -k gui/$(id -u)/io.vectorize.hindsight.service
+```
+
+Verify after upgrade:
+
+```bash
+curl -s http://localhost:8888/health | python3 -m json.tool
+```
+
+---
+
 ## Uninstall
 
 ```bash
+# Stop and remove all launchd services
 launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.service.plist
 launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist
+launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.issues.plist
 rm ~/Library/LaunchAgents/io.vectorize.hindsight.*.plist
+
+# Remove data and runtime
 rm -rf ~/.hindsight ~/.pg0
+
+# Remove Cursor integration
 rm ~/.cursor/rules/hindsight-memory.mdc
-# Remove hindsight entries from ~/.cursor/mcp.json
+rm ~/.cursor/hooks.json
+rm -rf ~/.cursor/hooks/log-mcp-calls.sh
+
+# Remove MCP entries: delete hindsight, hindsight-docs, hindsight-issues,
+# and gopls from ~/.cursor/mcp.json (or restore your previous mcp.json)
 ```

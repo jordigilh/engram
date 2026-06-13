@@ -2,7 +2,7 @@
 
 ## Overview
 
-Recollect tracks three categories of metrics to evaluate whether the memory system
+Engram tracks three categories of metrics to evaluate whether the memory system
 reduces mistakes and improves productivity:
 
 1. **MCP Usage** — How often each tool is called and whether it returns useful results
@@ -23,10 +23,11 @@ Each line contains:
 ```json
 {
   "ts": "2026-06-11T15:30:00",
-  "server": "user-hindsight",
-  "tool": "recall_memory",
+  "server": "hindsight",
+  "tool": "recall",
   "hit": true,
   "result_chars": 1200,
+  "duration_ms": 850,
   "is_error": false
 }
 ```
@@ -88,7 +89,7 @@ python3 report.py --csv
 
 ```
 ======================================================================
-  RECOLLECT EFFECTIVENESS REPORT — Last 7 days
+  ENGRAM EFFECTIVENESS REPORT — Last 7 days
   Generated: 2026-06-11 18:51
 ======================================================================
 
@@ -96,11 +97,12 @@ python3 report.py --csv
   ------------------------------------------------------------------
   Server                           Calls    Hits  Misses  Hit Rate
   ------------------------------------------------------------------
-  user-hindsight                      45      38       7     84.4%
-  user-hindsight-docs                 32      28       4     87.5%
-  user-gopls                          67      63       4     94.0%
+  hindsight                           45      38       7     84.4%
+  hindsight-docs                      32      28       4     87.5%
+  hindsight-issues                    18      14       4     77.8%
+  gopls                               67      63       4     94.0%
   ------------------------------------------------------------------
-  TOTAL                              144     129      15     89.6%
+  TOTAL                              162     143      19     88.3%
 
   EFFECTIVENESS (Corrections Reduction)
   ------------------------------------------------------------------
@@ -114,6 +116,18 @@ python3 report.py --csv
   ------------------------------------------------------------------
   cursor-memory                        7      850ms         22.3
   kubernaut-docs                      14      1200ms        31.5
+  kubernaut-issues                     7      1900ms         9.0
+
+  MENTAL MODELS
+  ------------------------------------------------------------------
+  Bank                      Model                      Content    Refreshed
+  ------------------------------------------------------------------
+  cursor-memory             coding-conventions          5838 ch   2026-06-12
+  cursor-memory             testing-methodology         8236 ch   2026-06-12
+  kubernaut-docs            ka-architecture             9937 ch   2026-06-12
+  kubernaut-issues          active-priorities           8501 ch   2026-06-13
+  ------------------------------------------------------------------
+  Total synthesized knowledge: 94,174 characters across 9 models
 ======================================================================
 ```
 
@@ -136,7 +150,9 @@ python3 report.py --csv
 ### Actions
 
 - **Low hit rate on hindsight-docs**: Re-run `ingest-docs.py` after doc updates
+- **Low hit rate on hindsight-issues**: Re-run `ingest-issues.py` or check `gh auth status`
 - **High corrections with recall active**: Retained patterns may be outdated — run reflect manually
+- **Mental models stale**: Run `python3 create-mental-models.py --refresh` to force refresh
 - **gopls not being used**: Verify `~/.cursor/mcp.json` has the gopls entry and restart Cursor
 
 ## Log File Locations
@@ -150,13 +166,14 @@ python3 report.py --csv
 
 ## Setup
 
-The monitoring hook is installed automatically when you copy the Cursor config:
+Install the monitoring hook (the `hooks.json` template uses `__HOME__` which gets
+resolved to your home directory):
 
 ```bash
-cp cursor/hooks.json ~/.cursor/hooks.json
 mkdir -p ~/.cursor/hooks
 cp cursor/hooks/log-mcp-calls.sh ~/.cursor/hooks/
 chmod +x ~/.cursor/hooks/log-mcp-calls.sh
+sed "s|__HOME__|$HOME|g" cursor/hooks.json > ~/.cursor/hooks.json
 ```
 
 Restart Cursor to activate the hook.

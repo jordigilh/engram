@@ -31,6 +31,7 @@ mkdir -p "$HOME/.hindsight/logs"
 set -a
 source "$CONFIG"
 export GOOGLE_APPLICATION_CREDENTIALS="$ADC_PATH"
+export HINDSIGHT_API_PORT="${HINDSIGHT_API_PORT:-8888}"
 set +a
 
 exec "$VENV/bin/hindsight-api"

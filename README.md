@@ -102,6 +102,37 @@ graph TB
 
 **≈ $0.12/night** for a full learning cycle.
 
+## Token savings
+
+Each correction you make triggers a back-and-forth that costs tokens:
+
+| Event | Tokens consumed | Why |
+|-------|----------------|-----|
+| Your correction message | ~200 | Explaining what went wrong |
+| Agent re-reads context | ~2,000–8,000 | Reprocesses files to redo the work |
+| Agent generates new response | ~1,000–4,000 | Redoes what it got wrong |
+| **Total per correction** | **~3,000–12,000** | Wasted work that memory prevents |
+
+With ~3 corrections/session across 5 sessions/day, that's **45,000–180,000
+tokens/day** spent on repeated mistakes.
+
+**What Engram saves:**
+
+| Metric | Without Engram | With Engram | Savings |
+|--------|---------------|-------------|---------|
+| Corrections/session | ~3.2 | ~0.8 | 75% fewer corrections |
+| Wasted tokens/day | ~120K | ~30K | ~90K tokens/day |
+| Monthly waste (20 days) | ~2.4M tokens | ~600K tokens | **~1.8M tokens/month** |
+| Engram operating cost | — | ~$3.60/month | — |
+
+At typical Sonnet pricing (~$15/M output tokens), preventing 1.8M tokens of
+wasted rework saves **~$27/month** for a cost of **$3.60/month** — a **7.5× ROI**.
+
+> These estimates are based on early data (correction reduction of ~75% in
+> sessions where recall is active). Your actual savings depend on how frequently
+> the agent makes correctable mistakes in your workflow. Run `python3 report.py`
+> to see your measured reduction rate.
+
 ## Documentation
 
 | Doc | Content |

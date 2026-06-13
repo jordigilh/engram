@@ -1,8 +1,35 @@
-# Hindsight: Agent Memory for Cursor IDE
+# Engram: Agent Memory for Cursor IDE
+
+## Contents
+
+- [Overview](#overview)
+- [Why Engram?](#why-engram)
+- [Key Design Decisions](#key-design-decisions)
+- [Architecture](#architecture)
+- [Knowledge Graph and Mental Models](#knowledge-graph-and-mental-models)
+- [How Correction Detection Works](#how-correction-detection-works)
+- [Backup and Restore](#backup-and-restore)
+
+See also: [Installation Guide](INSTALL.md) | [Metrics and Monitoring](METRICS.md)
+
+---
 
 ## Overview
 
-Hindsight is an agent memory system that enables Cursor to **learn from past mistakes** and **recall relevant patterns** across sessions. Instead of every conversation starting from zero, the AI assistant recalls what worked, what didn't, and what you've corrected before.
+Engram gives AI coding assistants persistent memory that improves over time:
+
+- Solves "every session starts with amnesia"
+- Learns from corrections and instructions (never repeats the same mistake)
+- Builds a knowledge graph connecting entities across sessions
+- Synthesizes mental models (accumulated wisdom, not just raw facts)
+- Tracks whether memory actually reduces mistakes
+- Wraps the Hindsight API with deployment config, ingestion, and observability
+
+### Why Engram?
+
+In neuroscience, an **engram** is the physical substrate of a memory — the specific pattern of neural connections that encodes a learned experience. When you learn not to touch a hot stove, the correction is encoded as an engram: a persistent trace that automatically influences future behavior without conscious effort.
+
+This project works the same way. Each time you correct the AI assistant, that correction is encoded as a persistent computational trace — stored in a knowledge graph, synthesized into mental models, and automatically surfaced in future sessions. The assistant doesn't "remember" in the conversational sense; it has been physically changed by the experience, just as a biological engram physically alters neural tissue.
 
 ### The Problem
 
@@ -51,7 +78,7 @@ Hindsight provides a **memory layer** that sits between Cursor and your LLM prov
 | **Retain in nightly batch** | Avoids hitting token quotas during work hours |
 | **Haiku 4.5 for extraction** | 10x cheaper than Sonnet for structured pattern extraction |
 | **Sonnet 4.6 for reflection** | Complex reasoning about what patterns are effective |
-| **Correction-focused learning** | Only learns from moments you corrected the assistant |
+| **Correction and instruction-focused** | Learns from corrections and explicit instructions |
 | **Global endpoint** | Single Vertex AI endpoint, no region-specific routing |
 | **Local embeddings + reranker** | No network calls for recall; runs on-device |
 
@@ -80,32 +107,32 @@ Hindsight provides a **memory layer** that sits between Cursor and your LLM prov
 ## Architecture
 
 ```
-┌──────────────┐     MCP (HTTP)      ┌──────────────────────────┐
-│  Cursor IDE  │◀───────────────────▶│  Hindsight (native macOS)│
-│              │   recall_memory()    │                          │
-│  mcp.json   │                      │  - FastAPI server        │
-│  rule .mdc  │                      │  - Embedded Postgres(pg0)│
-└──────────────┘                      │  - MPS/ONNX embeddings  │
-                                      │  - Local reranker        │
-                                      │  - LiteLLM → Vertex AI  │
-                                      └──────────┬───────────────┘
-                                                  │
-                                                  │ retain / reflect
-                                                  ▼
-                                      ┌──────────────────────┐
-                                      │  Vertex AI (global)  │
-                                      │                      │
-                                      │  - Haiku 4.5 (retain)│
-                                      │  - Sonnet 4.6(reflect│
-                                      └──────────────────────┘
+┌──────────────────┐  MCP (HTTP ×3)   ┌──────────────────────────┐
+│  Cursor IDE      │◀────────────────▶│  Hindsight (native macOS)│
+│                  │  cursor-memory    │                          │
+│  mcp.json        │  kubernaut-docs   │  - FastAPI server        │
+│  rule .mdc       │  kubernaut-issues │  - Embedded Postgres(pg0)│
+│  hooks.json      │                   │  - MPS/ONNX embeddings  │
+│                  │  MCP (stdio)      │  - Local reranker        │
+│  gopls ◀─────────│──────────────────│  - LiteLLM → Vertex AI  │
+└──────────────────┘                   └──────────┬───────────────┘
+                                                   │
+                                                   │ retain / reflect
+                                                   ▼
+                                       ┌──────────────────────────┐
+                                       │  Vertex AI (global)      │
+                                       │                          │
+                                       │  - Haiku 4.5 (retain)    │
+                                       │  - Sonnet 4.6 (reflect)  │
+                                       └──────────────────────────┘
 
-┌──────────────────────────────┐      ┌──────────────────────┐
-│  launchd (service manager)   │─────▶│  hindsight-api       │
-│                              │      │  (KeepAlive, auto-   │
-│  io.vectorize.hindsight.     │      │   restart on crash)  │
-│    service.plist             │      └──────────────────────┘
-│    nightly.plist             │─────▶ nightly-learn.py (midnight)
-│    issues.plist              │─────▶ ingest-issues.py (weekly)
+┌──────────────────────────────┐       ┌──────────────────────┐
+│  launchd (service manager)   │──────▶│  hindsight-api       │
+│                              │       │  (KeepAlive, auto-   │
+│  io.vectorize.hindsight.     │       │   restart on crash)  │
+│    service.plist             │       └──────────────────────┘
+│    nightly.plist             │──────▶ nightly-learn.py (2 AM)
+│    issues.plist              │──────▶ ingest-issues.py (1 AM)
 └──────────────────────────────┘
 ```
 
@@ -120,8 +147,10 @@ Hindsight provides a **memory layer** that sits between Cursor and your LLM prov
 | Cursor rule | `~/.cursor/rules/hindsight-memory.mdc` | Instructs agent to recall from all three banks |
 | Nightly script | `nightly-learn.py` (symlinked to `~/.hindsight/`) | Processes transcripts, extracts patterns |
 | Doc ingestion | `ingest-docs.py` | One-time doc ingestion into knowledge bank |
-| Issue ingestion | `ingest-issues.py` | GitHub issues ingestion (run weekly) |
+| Issue ingestion | `ingest-issues.py` | GitHub issues ingestion (nightly) |
 | Mental models | `create-mental-models.py` | Create/refresh mental models across all banks |
+| Effectiveness report | `report.py` | Metrics aggregation, token analysis, mental model stats |
+| MCP hook | `cursor/hooks.json` + `hooks/log-mcp-calls.sh` | Real-time MCP call logging with hit/miss |
 | Service plist | `~/Library/LaunchAgents/io.vectorize.hindsight.service.plist` | KeepAlive + RunAtLoad |
 | Nightly plist | `~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist` | Midnight execution |
 | Persistent storage | `~/.pg0/instances/hindsight/data/` | PostgreSQL data (survives reboots) |
@@ -191,8 +220,8 @@ Mental models are persistent, LLM-synthesized documents that sit above raw facts
 | `kubernaut-docs` | `ka-architecture` | KA service components, data flow, integration | Manual |
 | `kubernaut-docs` | `af-pipeline` | AF pipeline stages, events, decisions | Manual |
 | `kubernaut-docs` | `platform-topology` | Service interactions, infrastructure | Manual |
-| `kubernaut-issues` | `active-priorities` | Open issues, priorities, platform direction | Weekly |
-| `kubernaut-issues` | `known-bugs` | Known bugs, root causes, workarounds | Weekly |
+| `kubernaut-issues` | `active-priorities` | Open issues, priorities, platform direction | Nightly |
+| `kubernaut-issues` | `known-bugs` | Known bugs, root causes, workarounds | Nightly |
 
 #### Cross-Bank Association
 
@@ -242,3 +271,27 @@ For each correction, a **window** of surrounding context is extracted (2 message
 Hindsight extracts: *"Build architecture must be linux/amd64 for staging deployments. Container registry is quay.io, not ghcr.io."*
 
 Next session, when the user asks to deploy, recall surfaces this pattern.
+
+---
+
+## Backup and Restore
+
+All persistent data lives in `~/.pg0/instances/hindsight/data/` (PostgreSQL).
+
+```bash
+# Backup
+tar czf ~/engram-backup-$(date +%F).tar.gz ~/.pg0/instances/hindsight/data/
+
+# Restore
+launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.service.plist
+rm -rf ~/.pg0/instances/hindsight/data/
+tar xzf ~/engram-backup-YYYY-MM-DD.tar.gz -C /
+launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.service.plist
+```
+
+---
+
+## See Also
+
+- **[Installation Guide](INSTALL.md)** — full setup from prerequisites to verification
+- **[Metrics and Monitoring](METRICS.md)** — observability, effectiveness tracking, report interpretation

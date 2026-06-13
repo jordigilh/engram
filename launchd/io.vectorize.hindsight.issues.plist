@@ -7,7 +7,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/python3</string>
-        <string>__HOME__/go/src/github.com/jordigilh/recollect/ingest-issues.py</string>
+        <string>__HOME__/.hindsight/ingest-issues.py</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>

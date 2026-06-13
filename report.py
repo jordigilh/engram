@@ -346,7 +346,7 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
     """Format a human-readable report."""
     lines = []
     lines.append("=" * 70)
-    lines.append(f"  RECOLLECT EFFECTIVENESS REPORT — Last {days} days")
+    lines.append(f"  ENGRAM EFFECTIVENESS REPORT — Last {days} days")
     lines.append(f"  Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     lines.append("=" * 70)
 

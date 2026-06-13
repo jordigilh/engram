@@ -3,7 +3,7 @@
   "hooks": {
     "afterMCPExecution": [
       {
-        "command": "/Users/jgil/.cursor/hooks/log-mcp-calls.sh",
+        "command": "__HOME__/.cursor/hooks/log-mcp-calls.sh",
         "timeout": 5
       }
     ]

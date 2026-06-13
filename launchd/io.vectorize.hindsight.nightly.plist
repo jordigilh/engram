@@ -12,7 +12,7 @@
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>
-        <integer>0</integer>
+        <integer>2</integer>
         <key>Minute</key>
         <integer>0</integer>
     </dict>
@@ -23,7 +23,7 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
     </dict>
 </dict>
 </plist>

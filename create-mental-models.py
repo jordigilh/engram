@@ -81,7 +81,7 @@ MENTAL_MODELS = [
         "max_tokens": 4096,
         "trigger": {"mode": "full", "refresh_after_consolidation": False},
     },
-    # kubernaut-issues: requirements/direction (delta, weekly manual refresh)
+    # kubernaut-issues: requirements/direction (delta, nightly refresh)
     {
         "bank": "kubernaut-issues",
         "id": "active-priorities",

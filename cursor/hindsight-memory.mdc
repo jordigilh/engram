@@ -35,3 +35,11 @@ When recalling from **hindsight-issues** (kubernaut-issues), search for:
 - Known bugs and their root cause analysis
 - Platform direction and planned changes that constrain current work
 - Prior art: was this problem already discussed or solved?
+
+When working on Go code, use **gopls** MCP for type-aware operations:
+- `go_symbol_references` for finding usages
+- `go_file_context` for understanding file structure
+- `go_package_api` for interface/type exploration
+- `go_diagnostics` for build errors
+
+Prefer gopls over memory recall for current code state.

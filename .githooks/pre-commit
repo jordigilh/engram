@@ -49,6 +49,12 @@ for file in $STAGED_FILES; do
     # Service account JSON type marker
     HITS=$(echo "$DIFF" | grep -E '"type".*"service_account"' || true)
     [ -n "$HITS" ] && report "$file" "Service account JSON blob" "$(echo "$HITS" | head -1 | sed 's/^+//')"
+
+    # GitHub Personal Access Tokens
+    HITS=$(echo "$DIFF" | grep -E 'ghp_[A-Za-z0-9]{36}' || true)
+    [ -n "$HITS" ] && report "$file" "GitHub classic PAT" "$(echo "$HITS" | head -1 | sed 's/^+//' | cut -c1-60)..."
+    HITS=$(echo "$DIFF" | grep -E 'github_pat_[A-Za-z0-9_]{82}' || true)
+    [ -n "$HITS" ] && report "$file" "GitHub fine-grained PAT" "$(echo "$HITS" | head -1 | sed 's/^+//' | cut -c1-60)..."
 done
 
 if [ $FOUND -ne 0 ]; then

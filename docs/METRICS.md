@@ -66,7 +66,9 @@ The nightly script (`nightly-learn.py`) produces two outputs:
 | **Recall Adoption %** | sessions_with_recall / total_sessions | What fraction of sessions use memory at all |
 | **Proactive Recall %** | proactive_sessions / total_sessions | Sessions where agent recalled without user mentioning memory |
 | **Per-turn Recall %** | turns_with_recall / total_turns | Density of recall usage within sessions |
-| **Avg Session Length** | messages / sessions | Proxy for token cost — shorter sessions = fewer tokens |
+| **Context Loading Cost** | chars_before_first_productive_action / 4 | Tokens consumed to orient the agent before real work starts |
+| **Effectiveness Ratio** | productive_actions / (total_tokens / 1000) | Productive actions per 1K tokens — how hard each token works |
+| **K-score** | eff_ratio_with / eff_ratio_without | Token efficiency multiplier: >1 = recall makes tokens work harder |
 | **Recall Latency** | ms per recall call | Performance health — should be <2s for good UX |
 | **Result Count** | chunks returned per recall | Coverage — more results = richer context |
 
@@ -124,6 +126,18 @@ python3 report.py --csv
 
   Healthy: Agent is proactively recalling in most sessions.
 
+  K-CURVE (Token efficiency divergence)
+  ------------------------------------------------------------------
+                          With Recall    Without Recall     Delta
+  ------------------------------------------------------------------
+  Context loading cost:       200 tok        8,400 tok      -97%
+  Productive actions:            14.0            11.0       +27%
+  Corrections:                    0.8             3.2       -75%
+  Total session tokens:     45,000 tok      62,000 tok      -27%
+  Effectiveness ratio:          0.310           0.180       +72%
+  ------------------------------------------------------------------
+  K-score: 1.72x (recall sessions are 1.72x more token-efficient)
+
   RECALL PROBE QUALITY (Nightly Health Check)
   ------------------------------------------------------------------
   Bank                            Probes  Avg Latency  Avg Results
@@ -154,6 +168,8 @@ python3 report.py --csv
 - **Correction reduction > 30%** after 2+ weeks of data
 - **Recall adoption > 50%**: The agent is using memory in most sessions
 - **Proactive recall > 30%**: The agent initiates recall without user prompting
+- **K-score > 1.5**: Recall sessions are significantly more token-efficient
+- **Context loading reduction > 50%**: Recall is eliminating the education phase
 - **Recall latency < 2000ms** (local embeddings should be fast)
 
 ### Warning signs
@@ -162,6 +178,8 @@ python3 report.py --csv
 - **Correction rate increasing**: New patterns not being captured — check nightly logs
 - **Recall adoption < 30%**: The Cursor rule may not be triggering — check `alwaysApply` is set
 - **Proactive recall 0%**: Agent only recalls when user explicitly asks — rule wording may need strengthening
+- **K-score < 1.0**: Recall is not improving token efficiency — content may not be relevant enough
+- **K-score near 1.0**: Marginal value — mental models may need refresh or better query matching
 - **Latency > 5000ms**: Database may need optimization or bank is too large
 - **Zero gopls calls**: Agent may not be using code intelligence — check rule
 

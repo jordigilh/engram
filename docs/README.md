@@ -94,7 +94,7 @@ graph TB
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| Project source | `~/go/src/github.com/jordigilh/recollect/` | Code pushed to GitHub |
+| Project source | `<your-clone>/engram/` | Code pushed to GitHub |
 | LLM config | `~/.hindsight/config.env` | Real project IDs, model names (never committed) |
 | Hindsight process | `~/.hindsight/venv/bin/hindsight-api` | Native macOS service (launchd managed) |
 | MCP config | `~/.cursor/mcp.json` | Connects Cursor to Hindsight (memory + docs + issues) + gopls |

@@ -1,9 +1,11 @@
-# Engram: Agent Memory for Cursor IDE
+# Architecture & Internals
+
+Detailed design documentation for Engram. For an overview of what this project
+does and why, see the [root README](../README.md).
 
 ## Contents
 
-- [Overview](#overview)
-- [Why Engram?](#why-engram)
+- [How It Works](#how-it-works)
 - [Key Design Decisions](#key-design-decisions)
 - [Architecture](#architecture)
 - [Knowledge Graph and Mental Models](#knowledge-graph-and-mental-models)
@@ -14,60 +16,22 @@ See also: [Installation Guide](INSTALL.md) | [Metrics and Monitoring](METRICS.md
 
 ---
 
-## Overview
+## How It Works
 
-Engram gives AI coding assistants persistent memory that improves over time:
+```mermaid
+flowchart LR
+    subgraph session["During Sessions (zero LLM cost)"]
+        A[Cursor Agent] -->|recall ~600ms| B[Hindsight]
+        B -->|"corrections + mental models"| A
+        B --- emb[Local embeddings]
+        B --- rnk[Local reranker]
+    end
 
-- Solves "every session starts with amnesia"
-- Learns from corrections and instructions (never repeats the same mistake)
-- Builds a knowledge graph connecting entities across sessions
-- Synthesizes mental models (accumulated wisdom, not just raw facts)
-- Tracks whether memory actually reduces mistakes
-- Wraps the Hindsight API with deployment config, ingestion, and observability
-
-### Why Engram?
-
-In neuroscience, an **engram** is the physical substrate of a memory — the specific pattern of neural connections that encodes a learned experience. When you learn not to touch a hot stove, the correction is encoded as an engram: a persistent trace that automatically influences future behavior without conscious effort.
-
-This project works the same way. Each time you correct the AI assistant, that correction is encoded as a persistent computational trace — stored in a knowledge graph, synthesized into mental models, and automatically surfaced in future sessions. The assistant doesn't "remember" in the conversational sense; it has been physically changed by the experience, just as a biological engram physically alters neural tissue.
-
-### The Problem
-
-Every Cursor session starts with amnesia. The assistant makes the same mistakes repeatedly:
-- Writes implementation before tests (TDD violations)
-- Uses wrong naming conventions (snake_case vs camelCase)
-- Targets wrong build architectures
-- Assumes credentials flow instead of reading the code
-
-You correct it. Next session, it forgets. You correct it again.
-
-### The Solution
-
-Hindsight provides a **memory layer** that sits between Cursor and your LLM provider:
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    During Sessions                        │
-│                                                          │
-│   Cursor Agent ──recall──▶ Hindsight (local, ~600ms)    │
-│       │                        │                         │
-│       │                   Local embeddings               │
-│       │                   Local reranker                 │
-│       ▼                   No LLM call needed             │
-│   Response informed by past corrections                  │
-└─────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────┐
-│                   Nightly (midnight)                      │
-│                                                          │
-│   Transcripts ──scan──▶ Detect corrections               │
-│       │                                                  │
-│       ▼                                                  │
-│   Correction windows ──retain──▶ Haiku 4.5 (extract)    │
-│       │                                                  │
-│       ▼                                                  │
-│   Patterns ──reflect──▶ Sonnet 4.6 (synthesize)         │
-└─────────────────────────────────────────────────────────┘
+    subgraph nightly["Nightly Batch (2 AM)"]
+        C[Transcripts] -->|scan| D[Correction windows]
+        D -->|retain| E["Haiku 4.5 (extract patterns)"]
+        E -->|reflect| F["Sonnet 4.6 (synthesize models)"]
+    end
 ```
 
 ### Key Design Decisions
@@ -82,58 +46,48 @@ Hindsight provides a **memory layer** that sits between Cursor and your LLM prov
 | **Global endpoint** | Single Vertex AI endpoint, no region-specific routing |
 | **Local embeddings + reranker** | No network calls for recall; runs on-device |
 
-### What It Improves
-
-1. **Reduces repeated mistakes** — corrections are remembered across sessions
-2. **Learns coding conventions** — naming, architecture, workflow preferences
-3. **Zero-cost recall** — no LLM tokens consumed during active work
-4. **Automatic** — no manual tagging or bookmarking needed
-5. **Self-evaluating** — nightly reflect identifies which patterns are most impactful
-6. **Knowledge RAG** — project documentation recalled alongside behavioral memory
-7. **Go code intelligence** — type-aware navigation via gopls MCP (no source ingestion)
-
-### Cost Profile
-
-| Operation | Model | Tokens/call | Frequency |
-|-----------|-------|-------------|-----------|
-| Recall | Local (no LLM) | 0 | Every response |
-| Retain | Haiku 4.5 | ~4,500 | ~23 windows/night |
-| Reflect | Sonnet 4.6 | ~64,000 | Once/night |
-
-**Estimated nightly cost**: ~100K Haiku tokens + ~64K Sonnet tokens ≈ **$0.12/night**
-
 ---
 
 ## Architecture
 
-```
-┌──────────────────┐  MCP (HTTP ×3)   ┌──────────────────────────┐
-│  Cursor IDE      │◀────────────────▶│  Hindsight (native macOS)│
-│                  │  cursor-memory    │                          │
-│  mcp.json        │  kubernaut-docs   │  - FastAPI server        │
-│  rule .mdc       │  kubernaut-issues │  - Embedded Postgres(pg0)│
-│  hooks.json      │                   │  - MPS/ONNX embeddings  │
-│                  │  MCP (stdio)      │  - Local reranker        │
-│  gopls ◀─────────│──────────────────│  - LiteLLM → Vertex AI  │
-└──────────────────┘                   └──────────┬───────────────┘
-                                                   │
-                                                   │ retain / reflect
-                                                   ▼
-                                       ┌──────────────────────────┐
-                                       │  Vertex AI (global)      │
-                                       │                          │
-                                       │  - Haiku 4.5 (retain)    │
-                                       │  - Sonnet 4.6 (reflect)  │
-                                       └──────────────────────────┘
+```mermaid
+graph TB
+    subgraph cursor["Cursor IDE"]
+        mcp_cfg["mcp.json"]
+        rule["hindsight-memory.mdc"]
+        hooks["hooks.json"]
+        gopls["gopls (stdio)"]
+    end
 
-┌──────────────────────────────┐       ┌──────────────────────┐
-│  launchd (service manager)   │──────▶│  hindsight-api       │
-│                              │       │  (KeepAlive, auto-   │
-│  io.vectorize.hindsight.     │       │   restart on crash)  │
-│    service.plist             │       └──────────────────────┘
-│    nightly.plist             │──────▶ nightly-learn.py (2 AM)
-│    issues.plist              │──────▶ ingest-issues.py (1 AM)
-└──────────────────────────────┘
+    subgraph engram["Hindsight (native macOS :8888)"]
+        api["FastAPI server"]
+        pg["Embedded Postgres (pg0)"]
+        emb["MPS/ONNX embeddings"]
+        rerank["Local reranker"]
+        litellm["LiteLLM"]
+    end
+
+    subgraph vertex["Vertex AI (global)"]
+        haiku["Haiku 4.5 (retain)"]
+        sonnet["Sonnet 4.6 (reflect)"]
+    end
+
+    subgraph launchd["launchd (service manager)"]
+        svc["service.plist (KeepAlive)"]
+        nightly_plist["nightly.plist (2 AM)"]
+        issues_plist["issues.plist (1 AM)"]
+    end
+
+    cursor -->|"MCP HTTP ×3 banks"| api
+    api --> pg
+    api --> emb
+    api --> rerank
+    litellm -->|"retain / reflect"| vertex
+    svc --> api
+    nightly_plist --> nightly_script["nightly-learn.py"]
+    issues_plist --> issues_script["ingest-issues.py"]
+    nightly_script --> api
+    issues_script --> api
 ```
 
 ### Components
@@ -166,14 +120,25 @@ Hindsight provides a **memory layer** that sits between Cursor and your LLM prov
 
 ### Security Boundary
 
-```
-GitHub (public)                    Local only (~/.hindsight/, ~/.pg0/)
-─────────────────                  ──────────────────────────────────────
-start.sh (reads config.env)        config.env (project IDs, model config)
-nightly-learn.py                   ~/.pg0/instances/ (PostgreSQL data)
-docs/                              logs/ (daily reports)
-config.env.example (placeholders)  application_default_credentials.json
-.githooks/pre-commit (blocks leaks)
+```mermaid
+flowchart LR
+    subgraph public["GitHub (public)"]
+        start["start.sh"]
+        nightly["nightly-learn.py"]
+        docs["docs/"]
+        example["config.env.example"]
+        hook[".githooks/pre-commit"]
+    end
+
+    subgraph local["Local only (~/.hindsight/, ~/.pg0/)"]
+        config["config.env (project IDs)"]
+        pgdata["PostgreSQL data"]
+        logs["logs/ (daily reports)"]
+        adc["application_default_credentials.json"]
+    end
+
+    hook -.->|"blocks secrets"| public
+    start -->|"reads"| config
 ```
 
 ---
@@ -184,19 +149,13 @@ config.env.example (placeholders)  application_default_credentials.json
 
 Hindsight uses a three-tier system for serving context during recall:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Tier 1: Mental Models (synthesized documents)              │
-│  Pre-digested, coherent context blocks. Checked first.      │
-│  If a model matches the query, it's returned directly.      │
-├─────────────────────────────────────────────────────────────┤
-│  Tier 2: Entity Graph (link expansion)                      │
-│  Co-occurrence relationships between entities.              │
-│  Expands recall to related concepts (600 candidates/query). │
-├─────────────────────────────────────────────────────────────┤
-│  Tier 3: Raw Facts (semantic + BM25 + temporal retrieval)   │
-│  Individual memories, scored and fused via RRF + reranker.  │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    T1["Tier 1 — Mental Models\nSynthesized documents · Checked first · Returned directly if matched"]
+    T2["Tier 2 — Entity Graph\nCo-occurrence link expansion · 600 candidates/query · Related concepts"]
+    T3["Tier 3 — Raw Facts\nSemantic + BM25 + temporal retrieval · RRF fusion + reranker"]
+
+    T1 -->|"no match"| T2 -->|"expand"| T3
 ```
 
 ### Entity Graph
@@ -293,6 +252,7 @@ launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.service.plist
 
 ## See Also
 
+- **[Project Overview](../README.md)** — what Engram is, quick start, cost summary
 - **[Installation Guide](INSTALL.md)** — full setup from prerequisites to verification
 - **[Customizing the Rule](INSTALL.md#customizing-the-rule)** — adapt the Cursor rule for your project (Python, Rust, etc.)
 - **[Metrics and Monitoring](METRICS.md)** — observability, effectiveness tracking, report interpretation

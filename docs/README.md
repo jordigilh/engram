@@ -294,4 +294,5 @@ launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.service.plist
 ## See Also
 
 - **[Installation Guide](INSTALL.md)** — full setup from prerequisites to verification
+- **[Customizing the Rule](INSTALL.md#customizing-the-rule)** — adapt the Cursor rule for your project (Python, Rust, etc.)
 - **[Metrics and Monitoring](METRICS.md)** — observability, effectiveness tracking, report interpretation

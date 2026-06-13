@@ -3,43 +3,41 @@ description: Recall relevant patterns from Hindsight memory before responding
 alwaysApply: true
 ---
 
-Before generating each response, use the Hindsight MCP tools to retrieve context:
+## When to recall (MUST)
 
-1. **hindsight** MCP (`recall_memory`) — behavioral patterns, corrections, user preferences
-2. **hindsight-docs** MCP (`recall_memory`) — kubernaut architecture, API reference, operations
-3. **hindsight-issues** MCP (`recall_memory`) — requirements, design decisions, known bugs, platform direction
+You MUST call `recall_memory` on your **first turn** when the task involves:
+- Go code, kubernaut, or any operator/controller work
+- Architecture, API design, or CRD changes
+- Debugging, troubleshooting, or root-cause analysis
+- Anything the user has corrected you on before
 
-Recall returns two types of content — prioritize accordingly:
+Use the appropriate bank(s):
+- **hindsight** — corrections, coding conventions, user preferences
+- **hindsight-docs** — kubernaut architecture, API/CRD contracts, operations
+- **hindsight-issues** — requirements, known bugs, design decisions, priorities
 
-- **Mental models** (synthesized documents): coherent, pre-digested context on a topic.
-  Use these directly without further synthesis.
-- **Individual facts**: scattered observations that may need reasoning to connect.
+Call one or more banks depending on what the task touches. A single recall to
+**hindsight** with a query summarizing the task intent is sufficient for most work.
 
-Do NOT call retain_memory during sessions — memory extraction happens in a
-nightly batch process.
+## When to skip (OK)
 
-When recalling from **hindsight** (cursor-memory), search for:
-- Patterns related to the current task or technology
-- User preferences and coding conventions
-- Past mistakes and their corrections for similar work
+- Trivial follow-ups ("yes", "do it", "commit")
+- Pure file reads or terminal commands with no design decisions
+- You already recalled earlier in this session for the same topic
 
-When recalling from **hindsight-docs** (kubernaut-docs), search for:
-- Architecture and design decisions relevant to the current work
-- API/CRD contracts and type definitions
-- Operations runbooks and deployment procedures
-- Service interactions and data flow patterns
+## How to use results
 
-When recalling from **hindsight-issues** (kubernaut-issues), search for:
-- Requirements and acceptance criteria for ongoing work
-- Design decisions and rationale from issue discussions
-- Known bugs and their root cause analysis
-- Platform direction and planned changes that constrain current work
-- Prior art: was this problem already discussed or solved?
+- **Mental models** (long synthesized documents): use directly as authoritative context
+- **Individual facts**: reason over them to identify relevant patterns
 
-When working on Go code, use **gopls** MCP for type-aware operations:
-- `go_symbol_references` for finding usages
-- `go_file_context` for understanding file structure
-- `go_package_api` for interface/type exploration
-- `go_diagnostics` for build errors
+## Go code: use gopls first
 
-Prefer gopls over memory recall for current code state.
+When working on Go code, ALWAYS use **gopls** MCP for current code state:
+- `go_symbol_references`, `go_file_context`, `go_package_api`, `go_diagnostics`
+
+Recall from hindsight supplements gopls — it provides conventions and past
+mistakes, not current types.
+
+## Do NOT retain
+
+Never call `retain_memory` during sessions. Memory extraction runs nightly.

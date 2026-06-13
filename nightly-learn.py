@@ -412,30 +412,66 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
 
     # Phase 2: Per-session analysis from transcripts
     # Identify which sessions had MCP recall calls vs. which didn't
+    # Also measure proactive recall: recall in an agent turn before any user mention of "recall"/"memory"
     sessions_with_recall = []
     sessions_without_recall = []
+
+    proactive_recall_sessions = 0
+    total_agent_turns = 0
+    agent_turns_with_recall = 0
 
     for transcript_path in transcripts:
         messages = parse_transcript(transcript_path)
         if len(messages) < 4:
             continue
 
-        # Check if this session had any MCP recall calls
         has_recall = False
+        first_recall_turn = None
+        user_requested_recall = False
+        turn_idx = 0
+
         for msg in messages:
+            role = msg.get("role") or msg.get("message", {}).get("role", "")
             content = msg.get("message", {}).get("content", [])
-            if isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "tool_use":
-                        name = block.get("name", "")
-                        if name == "CallMcpTool":
-                            inp = block.get("input", {})
-                            tool = inp.get("toolName", "")
-                            if "recall" in tool.lower():
-                                has_recall = True
-                                break
-                if has_recall:
-                    break
+
+            if role == "user":
+                if isinstance(content, str):
+                    text = content
+                elif isinstance(content, list):
+                    text = " ".join(
+                        b.get("text", "") for b in content if isinstance(b, dict)
+                    )
+                else:
+                    text = ""
+                if re.search(r"\b(recall|memory|hindsight|remember)\b", text, re.IGNORECASE):
+                    user_requested_recall = True
+
+            if role == "assistant":
+                turn_idx += 1
+                total_agent_turns += 1
+                turn_has_recall = False
+
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                            name = block.get("name", "")
+                            if name == "CallMcpTool":
+                                inp = block.get("input", {})
+                                tool = inp.get("toolName", "")
+                                if "recall" in tool.lower():
+                                    has_recall = True
+                                    turn_has_recall = True
+                                    if first_recall_turn is None:
+                                        first_recall_turn = turn_idx
+
+                if turn_has_recall:
+                    agent_turns_with_recall += 1
+
+        # Proactive = recall happened before user mentioned memory-related keywords
+        if has_recall and not user_requested_recall:
+            proactive_recall_sessions += 1
+        elif has_recall and first_recall_turn == 1:
+            proactive_recall_sessions += 1
 
         corrections, _ = extract_learning_windows(messages)
         correction_count = len(corrections)
@@ -457,6 +493,17 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
             return 0.0
         return round(sum(s[key] for s in items) / len(items), 2)
 
+    total_sessions = len(sessions_with_recall) + len(sessions_without_recall)
+    recall_adoption_pct = round(
+        len(sessions_with_recall) / total_sessions * 100, 1
+    ) if total_sessions > 0 else 0.0
+    proactive_pct = round(
+        proactive_recall_sessions / total_sessions * 100, 1
+    ) if total_sessions > 0 else 0.0
+    turn_recall_pct = round(
+        agent_turns_with_recall / total_agent_turns * 100, 1
+    ) if total_agent_turns > 0 else 0.0
+
     report = {
         "date": date.today().isoformat(),
         "period_hours": hours,
@@ -466,6 +513,16 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
             "sessions_without_recall": len(sessions_without_recall),
             "corrections_per_session_with_recall": _avg(sessions_with_recall, "corrections"),
             "corrections_per_session_without_recall": _avg(sessions_without_recall, "corrections"),
+        },
+        "proactive_recall": {
+            "total_sessions": total_sessions,
+            "sessions_with_any_recall": len(sessions_with_recall),
+            "sessions_with_proactive_recall": proactive_recall_sessions,
+            "recall_adoption_pct": recall_adoption_pct,
+            "proactive_pct": proactive_pct,
+            "total_agent_turns": total_agent_turns,
+            "agent_turns_with_recall": agent_turns_with_recall,
+            "turn_recall_pct": turn_recall_pct,
         },
         "token_signals": {
             "avg_session_messages_with_recall": _avg(sessions_with_recall, "messages"),
@@ -590,6 +647,17 @@ def main():
     )
     if eff.get("estimated_reduction_pct") is not None:
         log.info("  Estimated correction reduction: %.1f%%", eff["estimated_reduction_pct"])
+    proactive = effectiveness.get("proactive_recall", {})
+    if proactive:
+        log.info(
+            "  Proactive recall: %d/%d sessions (%.1f%%), %d/%d agent turns (%.1f%%)",
+            proactive["sessions_with_proactive_recall"],
+            proactive["total_sessions"],
+            proactive["proactive_pct"],
+            proactive["agent_turns_with_recall"],
+            proactive["total_agent_turns"],
+            proactive["turn_recall_pct"],
+        )
 
     # Phase: Refresh issues-bank mental models (nightly, after issue ingestion)
     log.info("Refreshing issues-bank mental models...")

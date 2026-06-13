@@ -2,12 +2,13 @@
 
 ## Overview
 
-Engram tracks three categories of metrics to evaluate whether the memory system
+Engram tracks four categories of metrics to evaluate whether the memory system
 reduces mistakes and improves productivity:
 
 1. **MCP Usage** — How often each tool is called and whether it returns useful results
 2. **Effectiveness** — Correlation between recall usage and correction rates
-3. **Recall Quality** — Latency and result counts from nightly health probes
+3. **Proactive Recall** — Whether the agent uses memory autonomously without user prompting
+4. **Recall Quality** — Latency and result counts from nightly health probes
 
 ## Data Collection
 
@@ -51,6 +52,8 @@ The nightly script (`nightly-learn.py`) produces two outputs:
 - Per-server call counts and hit rates
 - Correction rate comparison (sessions with recall vs. without)
 - Estimated correction reduction percentage
+- Proactive recall rate (sessions where agent recalls without user prompting)
+- Per-turn recall density
 - Session length proxy (message count)
 
 ## Metrics Definitions
@@ -60,6 +63,9 @@ The nightly script (`nightly-learn.py`) produces two outputs:
 | **Hit Rate** | hits / total_calls | Retrieval quality — are queries returning relevant content? |
 | **Correction Rate** | corrections / sessions | How often you need to correct the assistant |
 | **Reduction %** | 1 - (rate_with / rate_without) | Improvement from memory: fewer corrections when recall is active |
+| **Recall Adoption %** | sessions_with_recall / total_sessions | What fraction of sessions use memory at all |
+| **Proactive Recall %** | proactive_sessions / total_sessions | Sessions where agent recalled without user mentioning memory |
+| **Per-turn Recall %** | turns_with_recall / total_turns | Density of recall usage within sessions |
 | **Avg Session Length** | messages / sessions | Proxy for token cost — shorter sessions = fewer tokens |
 | **Recall Latency** | ms per recall call | Performance health — should be <2s for good UX |
 | **Result Count** | chunks returned per recall | Coverage — more results = richer context |
@@ -110,6 +116,14 @@ python3 report.py --csv
   Sessions without recall:     8  (avg 3.25 corrections/session)
   Estimated correction reduction: 74.5%
 
+  PROACTIVE RECALL (Is the agent using memory without being asked?)
+  ------------------------------------------------------------------
+  Recall adoption:     60.0% of sessions use recall
+  Proactive recall:    45.0% of sessions recall without user prompting
+  Per-turn recall:      1.2% of agent turns include a recall call
+
+  Healthy: Agent is proactively recalling in most sessions.
+
   RECALL PROBE QUALITY (Nightly Health Check)
   ------------------------------------------------------------------
   Bank                            Probes  Avg Latency  Avg Results
@@ -138,12 +152,16 @@ python3 report.py --csv
 - **Hit rate > 70%** for hindsight banks (recall is finding relevant memories)
 - **Hit rate > 90%** for gopls (type queries should almost always succeed)
 - **Correction reduction > 30%** after 2+ weeks of data
+- **Recall adoption > 50%**: The agent is using memory in most sessions
+- **Proactive recall > 30%**: The agent initiates recall without user prompting
 - **Recall latency < 2000ms** (local embeddings should be fast)
 
 ### Warning signs
 
 - **Hit rate < 50%**: Queries may be too broad or bank content is stale
 - **Correction rate increasing**: New patterns not being captured — check nightly logs
+- **Recall adoption < 30%**: The Cursor rule may not be triggering — check `alwaysApply` is set
+- **Proactive recall 0%**: Agent only recalls when user explicitly asks — rule wording may need strengthening
 - **Latency > 5000ms**: Database may need optimization or bank is too large
 - **Zero gopls calls**: Agent may not be using code intelligence — check rule
 
@@ -153,6 +171,7 @@ python3 report.py --csv
 - **Low hit rate on hindsight-issues**: Re-run `ingest-issues.py` or check `gh auth status`
 - **High corrections with recall active**: Retained patterns may be outdated — run reflect manually
 - **Mental models stale**: Run `python3 create-mental-models.py --refresh` to force refresh
+- **Low proactive recall**: Strengthen the `alwaysApply` rule wording, ensure it says "ALWAYS recall before starting work"
 - **gopls not being used**: Verify `~/.cursor/mcp.json` has the gopls entry and restart Cursor
 
 ## Log File Locations

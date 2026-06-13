@@ -25,8 +25,8 @@ if [ -n "$result_raw" ] && [ "$result_raw" != "{}" ]; then
   is_error=$(echo "$result_raw" | jq -r '.isError // false' 2>/dev/null)
   [ "$is_error" != "true" ] && is_error="false"
 
-  # Cursor truncates content text in hook payloads, so we infer hit from
-  # structure: if content array exists with a text entry and no error, it's a hit
+  # Cursor omits content text from afterMCPExecution payloads (text is always "")
+  # despite docs claiming "full JSON result". Infer hit from structure presence.
   has_content=$(echo "$result_raw" | jq -r '.content[0].type // empty' 2>/dev/null)
   if [ "$has_content" = "text" ] && [ "$is_error" != "true" ]; then
     hit="true"

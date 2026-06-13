@@ -118,6 +118,9 @@ mkdir -p ~/.cursor/rules
 cp cursor/hindsight-memory.mdc ~/.cursor/rules/
 ```
 
+The included rule is tuned for kubernaut/Go development. For other projects,
+customize it — see [Customizing the Rule](#customizing-the-rule) below.
+
 ## 9. Install the nightly learning and ingestion scripts
 
 ```bash
@@ -296,6 +299,93 @@ Verify after upgrade:
 ```bash
 curl -s http://localhost:8888/health | python3 -m json.tool
 ```
+
+---
+
+## Customizing the Rule
+
+The included `hindsight-memory.mdc` rule is tailored for kubernaut (a Go operator
+project). Adapt it for your own project by changing:
+
+1. **When to recall** — replace the domain triggers with your project's domain
+2. **Banks** — rename or remove banks that don't apply
+3. **Language tooling** — replace `gopls` with your language's MCP (if any)
+
+### Example: Python web app
+
+```markdown
+---
+description: Recall patterns from Engram memory before responding
+alwaysApply: true
+---
+
+## When to recall (MUST)
+
+You MUST call `recall_memory` on your **first turn** when the task involves:
+- Python code, Django, or database migrations
+- API endpoint design or authentication changes
+- Debugging, troubleshooting, or production incidents
+- Anything the user has corrected you on before
+
+Use the appropriate bank(s):
+- **hindsight** — corrections, coding conventions, user preferences
+- **hindsight-docs** — project architecture, API contracts, deployment runbooks
+
+Call **hindsight** with a query summarizing the task intent.
+
+## When to skip (OK)
+
+- Trivial follow-ups ("yes", "do it", "commit")
+- Pure file reads or terminal commands with no design decisions
+- You already recalled earlier in this session for the same topic
+
+## How to use results
+
+- **Mental models**: use directly as authoritative context
+- **Individual facts**: reason over them to identify relevant patterns
+
+## Do NOT retain
+
+Never call `retain_memory` during sessions. Memory extraction runs nightly.
+```
+
+### Example: Rust systems project
+
+```markdown
+---
+description: Recall patterns from Engram memory before responding
+alwaysApply: true
+---
+
+## When to recall (MUST)
+
+You MUST call `recall_memory` on your **first turn** when the task involves:
+- Rust code, unsafe blocks, or trait implementations
+- Concurrency, memory management, or performance work
+- API surface changes or breaking changes
+- Anything the user has corrected you on before
+
+Use the **hindsight** bank with a query summarizing the task intent.
+
+## When to skip (OK)
+
+- Trivial follow-ups or simple cargo commands
+- Pure file reads with no design decisions
+- You already recalled earlier in this session for the same topic
+
+## Do NOT retain
+
+Never call `retain_memory` during sessions. Memory extraction runs nightly.
+```
+
+### Key principles
+
+- **Be specific about triggers** — generic rules get ignored; domain-specific
+  triggers (language, framework, problem type) get followed
+- **Keep it short** — rules over ~50 lines lose effectiveness
+- **Include skip criteria** — prevents recall spam on trivial interactions
+- **One rule file** — don't split across multiple `.mdc` files; `alwaysApply: true`
+  means it's always loaded
 
 ---
 

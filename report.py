@@ -136,12 +136,28 @@ def aggregate_effectiveness(entries: list[dict]) -> dict:
     avg_corr_without = round(total_corr_without / total_without, 2) if total_without > 0 else 0.0
     avg_reduction = round(sum(reductions) / len(reductions), 1) if reductions else None
 
+    # Aggregate proactive recall stats
+    total_proactive = 0
+    total_sessions = 0
+    total_turns = 0
+    total_turns_with_recall = 0
+    for entry in entries:
+        pr = entry.get("proactive_recall", {})
+        total_proactive += pr.get("sessions_with_proactive_recall", 0)
+        total_sessions += pr.get("total_sessions", 0)
+        total_turns += pr.get("total_agent_turns", 0)
+        total_turns_with_recall += pr.get("agent_turns_with_recall", 0)
+
     return {
         "total_sessions_with_recall": total_with,
         "total_sessions_without_recall": total_without,
         "avg_corrections_with_recall": avg_corr_with,
         "avg_corrections_without_recall": avg_corr_without,
         "avg_reduction_pct": avg_reduction,
+        "proactive_recall_sessions": total_proactive,
+        "proactive_recall_pct": round(total_proactive / total_sessions * 100, 1) if total_sessions > 0 else None,
+        "recall_adoption_pct": round(total_with / (total_with + total_without) * 100, 1) if (total_with + total_without) > 0 else None,
+        "turn_recall_pct": round(total_turns_with_recall / total_turns * 100, 1) if total_turns > 0 else None,
     }
 
 
@@ -392,6 +408,26 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
             lines.append("  statistical significance (recommend 20+ sessions in each group).")
     else:
         lines.append("  No effectiveness data yet. Run the nightly script to generate.")
+
+    # Proactive Recall
+    lines.append("")
+    lines.append("  PROACTIVE RECALL (Is the agent using memory without being asked?)")
+    lines.append("  " + "-" * 66)
+    if effectiveness and effectiveness.get("recall_adoption_pct") is not None:
+        lines.append(f"  Recall adoption:     {effectiveness['recall_adoption_pct']:.1f}% of sessions use recall")
+        if effectiveness.get("proactive_recall_pct") is not None:
+            lines.append(f"  Proactive recall:    {effectiveness['proactive_recall_pct']:.1f}% of sessions recall without user prompting")
+        if effectiveness.get("turn_recall_pct") is not None:
+            lines.append(f"  Per-turn recall:     {effectiveness['turn_recall_pct']:.1f}% of agent turns include a recall call")
+        lines.append("")
+        adoption = effectiveness.get("recall_adoption_pct", 0) or 0
+        if adoption < 50:
+            lines.append("  Warning: Agent is not recalling in most sessions. The alwaysApply")
+            lines.append("  rule may not be triggering. Check ~/.cursor/rules/hindsight-memory.mdc")
+        elif adoption >= 80:
+            lines.append("  Healthy: Agent is proactively recalling in most sessions.")
+    else:
+        lines.append("  No proactive recall data yet (requires nightly analysis with fixed hook).")
 
     # Recall Probe Quality
     lines.append("")

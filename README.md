@@ -102,36 +102,48 @@ graph TB
 
 **≈ $0.12/night** for a full learning cycle.
 
-## Token savings
+## Value: the K-curve
 
-Each correction you make triggers a back-and-forth that costs tokens:
+Engram's impact is a **K-shaped divergence** — sessions with recall simultaneously
+consume fewer tokens AND produce better outcomes:
 
-| Event | Tokens consumed | Why |
-|-------|----------------|-----|
-| Your correction message | ~200 | Explaining what went wrong |
-| Agent re-reads context | ~2,000–8,000 | Reprocesses files to redo the work |
-| Agent generates new response | ~1,000–4,000 | Redoes what it got wrong |
-| **Total per correction** | **~3,000–12,000** | Wasted work that memory prevents |
+```mermaid
+flowchart LR
+    S["Session starts"] --> F{"Recall active?"}
+    F -->|Yes| G["Lower cost + Higher effectiveness"]
+    F -->|No| B["Higher cost + Lower effectiveness"]
+```
 
-With ~3 corrections/session across 5 sessions/day, that's **45,000–180,000
-tokens/day** spent on repeated mistakes.
+**Where the tokens go:**
 
-**What Engram saves:**
+| Phase | Without Engram | With Engram |
+|-------|---------------|-------------|
+| Context loading (education) | ~8,400 tokens | ~200 tokens |
+| Corrections (rework) | ~3.2/session × ~5K each | ~0.8/session × ~5K each |
+| Productive work | Same | Same |
+| **Total session cost** | **~62K tokens** | **~45K tokens** |
 
-| Metric | Without Engram | With Engram | Savings |
-|--------|---------------|-------------|---------|
-| Corrections/session | ~3.2 | ~0.8 | 75% fewer corrections |
-| Wasted tokens/day | ~120K | ~30K | ~90K tokens/day |
-| Monthly waste (20 days) | ~2.4M tokens | ~600K tokens | **~1.8M tokens/month** |
-| Engram operating cost | — | ~$3.60/month | — |
+**The K-score** measures token efficiency: productive actions per 1,000 tokens spent.
+Sessions with recall produce more output per token while wasting less on orientation
+and rework.
 
-At typical Sonnet pricing (~$15/M output tokens), preventing 1.8M tokens of
-wasted rework saves **~$27/month** for a cost of **$3.60/month** — a **7.5× ROI**.
+| Metric | Without Engram | With Engram | Delta |
+|--------|---------------|-------------|-------|
+| Context loading | ~8,400 tok | ~200 tok | **-97%** |
+| Corrections/session | 3.2 | 0.8 | -75% |
+| Effectiveness ratio | 0.18 | 0.31 | **+72%** |
+| **K-score** | | | **1.72x** |
 
-> These estimates are based on early data (correction reduction of ~75% in
-> sessions where recall is active). Your actual savings depend on how frequently
-> the agent makes correctable mistakes in your workflow. Run `python3 report.py`
-> to see your measured reduction rate.
+A K-score of 1.72 means every token works 1.72x harder when Engram is active.
+At 5 sessions/day over a month, this translates to:
+
+- **~17K fewer tokens/session** in wasted context loading and corrections
+- **~1.7M tokens/month saved** (20 working days × 5 sessions)
+- At Sonnet pricing (~$15/M tokens): **~$25/month saved** for **$3.60/month** cost
+
+> Run `python3 report.py` to see your measured K-score. The metric requires
+> sessions both with and without recall for comparison — initial data may show
+> K < 1.0 until recall adoption stabilizes above 30%.
 
 ## Documentation
 

@@ -411,8 +411,10 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
         stats["hit_rate"] = round(stats["hits"] / total, 3) if total > 0 else 0.0
 
     # Phase 2: Per-session analysis from transcripts
-    # Identify which sessions had MCP recall calls vs. which didn't
-    # Also measure proactive recall: recall in an agent turn before any user mention of "recall"/"memory"
+    # Tracks: recall usage, proactive recall, context loading cost, K-curve effectiveness
+    PRODUCTIVE_TOOLS = {"Shell", "Write", "StrReplace", "EditNotebook", "Delete"}
+    EXPLORATION_TOOLS = {"Read", "Grep", "Glob", "SemanticSearch", "Task", "WebSearch"}
+
     sessions_with_recall = []
     sessions_without_recall = []
 
@@ -422,7 +424,7 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
 
     for transcript_path in transcripts:
         messages = parse_transcript(transcript_path)
-        if len(messages) < 4:
+        if len(messages) < 6:
             continue
 
         has_recall = False
@@ -430,9 +432,28 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
         user_requested_recall = False
         turn_idx = 0
 
+        # K-curve tracking
+        first_productive_turn = None
+        preamble_chars = 0
+        total_session_chars = 0
+        productive_action_count = 0
+
         for msg in messages:
             role = msg.get("role") or msg.get("message", {}).get("role", "")
             content = msg.get("message", {}).get("content", [])
+
+            # Estimate message size in characters
+            msg_chars = 0
+            if isinstance(content, str):
+                msg_chars = len(content)
+            elif isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "text":
+                            msg_chars += len(block.get("text", ""))
+                        elif block.get("type") == "tool_use":
+                            msg_chars += len(json.dumps(block.get("input", {})))
+            total_session_chars += msg_chars
 
             if role == "user":
                 if isinstance(content, str):
@@ -445,11 +466,14 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
                     text = ""
                 if re.search(r"\b(recall|memory|hindsight|remember)\b", text, re.IGNORECASE):
                     user_requested_recall = True
+                if first_productive_turn is None:
+                    preamble_chars += msg_chars
 
             if role == "assistant":
                 turn_idx += 1
                 total_agent_turns += 1
                 turn_has_recall = False
+                turn_has_productive = False
 
                 if isinstance(content, list):
                     for block in content:
@@ -463,9 +487,16 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
                                     turn_has_recall = True
                                     if first_recall_turn is None:
                                         first_recall_turn = turn_idx
+                            if name in PRODUCTIVE_TOOLS:
+                                productive_action_count += 1
+                                turn_has_productive = True
 
                 if turn_has_recall:
                     agent_turns_with_recall += 1
+                if turn_has_productive and first_productive_turn is None:
+                    first_productive_turn = turn_idx
+                if first_productive_turn is None:
+                    preamble_chars += msg_chars
 
         # Proactive = recall happened before user mentioned memory-related keywords
         if has_recall and not user_requested_recall:
@@ -476,10 +507,22 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
         corrections, _ = extract_learning_windows(messages)
         correction_count = len(corrections)
 
+        # Token estimates (chars / 4)
+        context_loading_tokens = round(preamble_chars / 4)
+        total_session_tokens = round(total_session_chars / 4)
+        effectiveness_ratio = round(
+            productive_action_count / (total_session_tokens / 1000), 3
+        ) if total_session_tokens > 0 else 0.0
+
         session_info = {
             "transcript_id": transcript_path.stem,
             "corrections": correction_count,
             "messages": len(messages),
+            "first_productive_turn": first_productive_turn or turn_idx,
+            "context_loading_tokens": context_loading_tokens,
+            "total_session_tokens": total_session_tokens,
+            "productive_actions": productive_action_count,
+            "effectiveness_ratio": effectiveness_ratio,
         }
 
         if has_recall:
@@ -504,6 +547,21 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
         agent_turns_with_recall / total_agent_turns * 100, 1
     ) if total_agent_turns > 0 else 0.0
 
+    # K-curve computation
+    eff_ratio_with = _avg(sessions_with_recall, "effectiveness_ratio")
+    eff_ratio_without = _avg(sessions_without_recall, "effectiveness_ratio")
+    k_score = round(eff_ratio_with / eff_ratio_without, 2) if eff_ratio_without > 0 else None
+
+    ctx_load_with = _avg(sessions_with_recall, "context_loading_tokens")
+    ctx_load_without = _avg(sessions_without_recall, "context_loading_tokens")
+    ctx_reduction_pct = round(
+        (1 - ctx_load_with / ctx_load_without) * 100, 1
+    ) if ctx_load_without > 0 else None
+
+    token_eff_gain_pct = round(
+        (eff_ratio_with / eff_ratio_without - 1) * 100, 1
+    ) if eff_ratio_without > 0 else None
+
     report = {
         "date": date.today().isoformat(),
         "period_hours": hours,
@@ -523,6 +581,27 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
             "total_agent_turns": total_agent_turns,
             "agent_turns_with_recall": agent_turns_with_recall,
             "turn_recall_pct": turn_recall_pct,
+        },
+        "k_curve": {
+            "with_recall": {
+                "sessions": len(sessions_with_recall),
+                "avg_context_loading_tokens": ctx_load_with,
+                "avg_productive_actions": _avg(sessions_with_recall, "productive_actions"),
+                "avg_corrections": _avg(sessions_with_recall, "corrections"),
+                "avg_total_tokens": _avg(sessions_with_recall, "total_session_tokens"),
+                "effectiveness_ratio": eff_ratio_with,
+            },
+            "without_recall": {
+                "sessions": len(sessions_without_recall),
+                "avg_context_loading_tokens": ctx_load_without,
+                "avg_productive_actions": _avg(sessions_without_recall, "productive_actions"),
+                "avg_corrections": _avg(sessions_without_recall, "corrections"),
+                "avg_total_tokens": _avg(sessions_without_recall, "total_session_tokens"),
+                "effectiveness_ratio": eff_ratio_without,
+            },
+            "k_score": k_score,
+            "context_loading_reduction_pct": ctx_reduction_pct,
+            "token_efficiency_gain_pct": token_eff_gain_pct,
         },
         "token_signals": {
             "avg_session_messages_with_recall": _avg(sessions_with_recall, "messages"),
@@ -657,6 +736,21 @@ def main():
             proactive["agent_turns_with_recall"],
             proactive["total_agent_turns"],
             proactive["turn_recall_pct"],
+        )
+    k_curve = effectiveness.get("k_curve", {})
+    if k_curve and k_curve.get("k_score") is not None:
+        log.info(
+            "  K-curve: score=%.2fx | context loading: %d tok (recall) vs %d tok (no recall) [-%s%%]",
+            k_curve["k_score"],
+            k_curve["with_recall"]["avg_context_loading_tokens"],
+            k_curve["without_recall"]["avg_context_loading_tokens"],
+            k_curve.get("context_loading_reduction_pct", "?"),
+        )
+        log.info(
+            "  K-curve: effectiveness ratio: %.3f (recall) vs %.3f (no recall) [+%s%%]",
+            k_curve["with_recall"]["effectiveness_ratio"],
+            k_curve["without_recall"]["effectiveness_ratio"],
+            k_curve.get("token_efficiency_gain_pct", "?"),
         )
 
     # Phase: Refresh issues-bank mental models (nightly, after issue ingestion)

@@ -5,7 +5,7 @@ alwaysApply: true
 
 ## When to recall (MUST)
 
-You MUST call `recall_memory` on your **first turn** when the task involves:
+You MUST call `recall` on your **first turn** when the task involves:
 - Go code, kubernaut, or any operator/controller work
 - Architecture, API design, or CRD changes
 - Debugging, troubleshooting, or root-cause analysis
@@ -40,4 +40,4 @@ mistakes, not current types.
 
 ## Do NOT retain
 
-Never call `retain_memory` during sessions. Memory extraction runs nightly.
+Never call `retain` during sessions. Memory extraction runs nightly.

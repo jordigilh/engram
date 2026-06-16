@@ -19,11 +19,20 @@ Use the appropriate bank(s):
 Call one or more banks depending on what the task touches. A single recall to
 **hindsight** with a query summarizing the task intent is sufficient for most work.
 
+## When to recall again (mid-session)
+
+Call `recall` again if:
+- The task shifts to a different subsystem, file area, or domain
+- You are about to attempt something with <90% confidence
+- The user corrects you — check if this correction already exists in memory
+- You've made 2+ failed attempts at the same problem
+- A new entity (CRD, service, package) enters the conversation that wasn't part of the original recall
+
 ## When to skip (OK)
 
 - Trivial follow-ups ("yes", "do it", "commit")
 - Pure file reads or terminal commands with no design decisions
-- You already recalled earlier in this session for the same topic
+- You already recalled this exact topic earlier in the session and nothing has changed
 
 ## How to use results
 

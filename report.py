@@ -194,6 +194,16 @@ def aggregate_effectiveness(entries: list[dict]) -> dict:
     ctx_reduction = round((1 - avg_ctx_with / avg_ctx_without) * 100, 1) if avg_ctx_with is not None and avg_ctx_without and avg_ctx_without > 0 else None
     eff_gain = round((avg_eff_with / avg_eff_without - 1) * 100, 1) if avg_eff_with is not None and avg_eff_without and avg_eff_without > 0 else None
 
+    # Aggregate per-bucket K-scores from the most recent entry that has them
+    k_score_normalized = None
+    by_bucket = {}
+    for entry in reversed(entries):
+        kc = entry.get("k_curve", {})
+        if kc.get("by_bucket"):
+            by_bucket = kc["by_bucket"]
+            k_score_normalized = kc.get("k_score_normalized")
+            break
+
     return {
         "total_sessions_with_recall": total_with,
         "total_sessions_without_recall": total_without,
@@ -206,6 +216,8 @@ def aggregate_effectiveness(entries: list[dict]) -> dict:
         "turn_recall_pct": round(total_turns_with_recall / total_turns * 100, 1) if total_turns > 0 else None,
         "k_curve": {
             "k_score": avg_k_score,
+            "k_score_normalized": k_score_normalized,
+            "by_bucket": by_bucket,
             "context_loading_with_recall": avg_ctx_with,
             "context_loading_without_recall": avg_ctx_without,
             "context_loading_reduction_pct": ctx_reduction,
@@ -527,6 +539,30 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
         lines.append(f"  {'Effectiveness ratio:':<26}{er_w:>14.3f}{er_wo:>16.3f}{eff_delta:>10}")
         lines.append("  " + "-" * 66)
         lines.append(f"  K-score: {kc['k_score']:.2f}x (recall sessions are {kc['k_score']:.2f}x more token-efficient)")
+        # Per-bucket breakdown
+        by_bucket = kc.get("by_bucket", {})
+        if by_bucket:
+            lines.append("")
+            lines.append("  K-SCORE BY SESSION SIZE (normalized)")
+            lines.append("  " + "-" * 66)
+            lines.append(f"  {'Bucket':<20}{'With':>8}{'Without':>10}{'K-score':>10}")
+            lines.append("  " + "-" * 66)
+            bucket_labels = {
+                "small": "Small (<50K)",
+                "medium": "Medium (50-500K)",
+                "large": "Large (>500K)",
+            }
+            for bucket in ("small", "medium", "large"):
+                if bucket in by_bucket:
+                    bk = by_bucket[bucket]
+                    score_str = f"{bk['k_score']:.2f}x" if bk.get("k_score") is not None else "n/a"
+                    lines.append(
+                        f"  {bucket_labels[bucket]:<20}{bk['with_recall']:>8}{bk['without_recall']:>10}{score_str:>10}"
+                    )
+            lines.append("  " + "-" * 66)
+            k_norm = kc.get("k_score_normalized")
+            if k_norm is not None:
+                lines.append(f"  Normalized K-score: {k_norm:.2f}x (weighted by bucket size)")
     else:
         lines.append("  No K-curve data yet. Requires sessions both with and without recall.")
 

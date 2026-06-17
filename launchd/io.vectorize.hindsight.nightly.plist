@@ -8,6 +8,8 @@
     <array>
         <string>/usr/bin/python3</string>
         <string>__HOME__/.hindsight/nightly-learn.py</string>
+        <string>--mode</string>
+        <string>nightly</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>

@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
-"""Hindsight nightly learning script.
+"""Hindsight learning script (hourly retain + nightly reflect).
 
-Scans today's Cursor agent transcripts, detects corrections, and feeds
+Scans Cursor agent transcripts, detects corrections, and feeds
 annotated sessions to Hindsight for pattern extraction and reflection.
+
+Modes:
+  --mode hourly   Retain only (watermark filter + hash dedup). Run by hourly launchd job.
+  --mode nightly  Catch-all retain + reflect + probes + metrics. Run by 2am launchd job.
+  --mode both     Run hourly then nightly (default, backward compat for manual runs).
 """
 
+import argparse
+import hashlib
 import json
 import logging
 import os
 import re
 import sys
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from glob import glob
 from pathlib import Path
 from typing import Any
@@ -56,12 +63,64 @@ INSTRUCTION_PATTERNS = [
     re.compile(r"\bbefore\s+(implementing|proceeding|starting\s+any)", re.I),
 ]
 
+STATE_DIR = Path.home() / ".hindsight"
+WATERMARKS_PATH = STATE_DIR / "watermarks.json"
+RETAINED_HASHES_PATH = STATE_DIR / "retained-hashes.json"
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
     handlers=[logging.StreamHandler()],
 )
 log = logging.getLogger(__name__)
+
+
+# --- State file helpers ---
+
+def load_watermarks() -> dict:
+    """Load transcript processing watermarks from disk."""
+    if WATERMARKS_PATH.exists():
+        try:
+            return json.loads(WATERMARKS_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            log.warning("Corrupt watermarks.json, starting fresh")
+    return {}
+
+
+def save_watermarks(watermarks: dict) -> None:
+    """Atomically save watermarks to disk."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = WATERMARKS_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(watermarks, indent=2))
+    tmp.rename(WATERMARKS_PATH)
+
+
+def load_retained_hashes() -> set:
+    """Load set of already-retained content hashes."""
+    if RETAINED_HASHES_PATH.exists():
+        try:
+            data = json.loads(RETAINED_HASHES_PATH.read_text())
+            return set(data.get("hashes", []))
+        except (json.JSONDecodeError, OSError):
+            log.warning("Corrupt retained-hashes.json, starting fresh")
+    return set()
+
+
+def save_retained_hashes(hashes: set) -> None:
+    """Atomically save retained hashes to disk."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = RETAINED_HASHES_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"hashes": sorted(hashes)}))
+    tmp.rename(RETAINED_HASHES_PATH)
+
+
+def prune_watermarks(watermarks: dict, max_age_days: int = 7) -> dict:
+    """Remove watermark entries not seen in max_age_days."""
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    return {
+        tid: wm for tid, wm in watermarks.items()
+        if wm.get("last_processed", "") >= cutoff
+    }
 
 
 def api_post(path: str, payload: dict) -> dict:
@@ -161,33 +220,47 @@ def is_instruction(text: str) -> bool:
     return False
 
 
-def extract_learning_windows(messages: list[dict], window: int = 2) -> tuple[list[str], list[str]]:
+def extract_learning_windows(
+    messages: list[dict], window: int = 2, start_index: int = 0
+) -> tuple[list[str], list[str]]:
     """Extract messages around corrections AND instructions.
+
+    Args:
+        messages: Full message list (used for context windows).
+        window: Number of surrounding messages to include.
+        start_index: Only generate windows for corrections/instructions at raw
+                     message indices >= start_index. Context still drawn from
+                     the full list.
 
     Returns two lists:
       - correction_windows: context around user corrections
       - instruction_windows: context around methodology/process statements
     """
     parsed = []
-    for msg in messages:
+    raw_to_parsed = {}  # maps raw message index -> parsed index
+    for raw_idx, msg in enumerate(messages):
         role = msg.get("role", "")
         if role == "user":
             text = extract_user_text(msg)
             if text:
+                raw_to_parsed[raw_idx] = len(parsed)
                 parsed.append({
                     "role": "user",
                     "text": text,
                     "is_correction": is_correction(text),
                     "is_instruction": is_instruction(text),
+                    "raw_idx": raw_idx,
                 })
         elif role == "assistant":
             text = extract_assistant_text(msg)
             if text:
+                raw_to_parsed[raw_idx] = len(parsed)
                 parsed.append({
                     "role": "assistant",
                     "text": text[:400],
                     "is_correction": False,
                     "is_instruction": False,
+                    "raw_idx": raw_idx,
                 })
 
     def _build_windows(indices: list[int], tag: str) -> list[str]:
@@ -207,10 +280,13 @@ def extract_learning_windows(messages: list[dict], window: int = 2) -> tuple[lis
             windows.append("\n\n".join(lines))
         return windows
 
-    correction_indices = [i for i, m in enumerate(parsed) if m["is_correction"]]
+    correction_indices = [
+        i for i, m in enumerate(parsed)
+        if m["is_correction"] and m["raw_idx"] >= start_index
+    ]
     instruction_indices = [
         i for i, m in enumerate(parsed)
-        if m["is_instruction"] and not m["is_correction"]
+        if m["is_instruction"] and not m["is_correction"] and m["raw_idx"] >= start_index
     ]
 
     return (
@@ -250,6 +326,84 @@ def retain_windows(windows: list[str], transcript_id: str) -> dict[str, Any]:
             log.warning("Retain failed for window %d of %s: %s", i, transcript_id, e)
 
     return {"items_retained": items_retained, "usage": total_usage}
+
+
+def filter_and_scan(
+    transcripts: list[Path], watermarks: dict
+) -> list[tuple[Path, list[dict], int]]:
+    """Return transcripts with new learning signals past their watermark.
+
+    Returns list of (path, full_messages, start_index) tuples.
+    Updates watermarks dict in place for all scanned transcripts.
+    """
+    candidates = []
+    for path in transcripts:
+        stat = path.stat()
+        tid = path.stem
+        wm = watermarks.get(tid, {})
+
+        # Layer 1: size gate — skip unchanged files
+        if stat.st_size <= wm.get("size", 0):
+            continue
+
+        messages = parse_transcript(path)
+        prev_count = wm.get("message_count", 0)
+        new_messages = messages[prev_count:]
+
+        if not new_messages:
+            # File grew (maybe trailing newline) but no new parseable messages
+            watermarks[tid] = {
+                "size": stat.st_size,
+                "message_count": len(messages),
+                "last_processed": datetime.now().isoformat(),
+            }
+            continue
+
+        # Layer 2: regex pre-filter on new messages only
+        has_signal = False
+        for m in new_messages:
+            if m.get("role") != "user":
+                continue
+            text = extract_user_text(m)
+            if is_correction(text) or is_instruction(text):
+                has_signal = True
+                break
+
+        # Update watermark regardless (we've scanned these messages)
+        watermarks[tid] = {
+            "size": stat.st_size,
+            "message_count": len(messages),
+            "last_processed": datetime.now().isoformat(),
+        }
+
+        if has_signal:
+            candidates.append((path, messages, prev_count))
+
+    return candidates
+
+
+def retain_windows_deduped(
+    windows: list[str], transcript_id: str, seen_hashes: set
+) -> dict[str, Any]:
+    """Retain only windows whose content hasn't been retained before."""
+    new_windows = []
+    for w in windows:
+        h = hashlib.sha256(w.encode()).hexdigest()
+        if h not in seen_hashes:
+            new_windows.append(w)
+            seen_hashes.add(h)
+
+    skipped = len(windows) - len(new_windows)
+    if not new_windows:
+        return {
+            "items_retained": 0,
+            "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+            "skipped_duplicates": skipped,
+        }
+
+    result = retain_windows(new_windows, transcript_id)
+    result["skipped_duplicates"] = skipped
+    return result
 
 
 def reflect() -> dict[str, Any]:
@@ -514,6 +668,11 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
             productive_action_count / (total_session_tokens / 1000), 3
         ) if total_session_tokens > 0 else 0.0
 
+        bucket = (
+            "small" if total_session_tokens < 50000
+            else "medium" if total_session_tokens < 500000
+            else "large"
+        )
         session_info = {
             "transcript_id": transcript_path.stem,
             "corrections": correction_count,
@@ -523,6 +682,7 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
             "total_session_tokens": total_session_tokens,
             "productive_actions": productive_action_count,
             "effectiveness_ratio": effectiveness_ratio,
+            "size_bucket": bucket,
         }
 
         if has_recall:
@@ -562,6 +722,31 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
         (eff_ratio_with / eff_ratio_without - 1) * 100, 1
     ) if eff_ratio_without > 0 else None
 
+    # Per-bucket K-scores for normalized comparison
+    k_curve_by_bucket = {}
+    weighted_scores = []
+    for bucket in ("small", "medium", "large"):
+        with_b = [s for s in sessions_with_recall if s["size_bucket"] == bucket]
+        without_b = [s for s in sessions_without_recall if s["size_bucket"] == bucket]
+        if with_b and without_b:
+            eff_w = _avg(with_b, "effectiveness_ratio")
+            eff_wo = _avg(without_b, "effectiveness_ratio")
+            bucket_k = round(eff_w / eff_wo, 2) if eff_wo > 0 else None
+            k_curve_by_bucket[bucket] = {
+                "with_recall": len(with_b),
+                "without_recall": len(without_b),
+                "k_score": bucket_k,
+            }
+            if bucket_k is not None:
+                weighted_scores.append((bucket_k, len(with_b) + len(without_b)))
+
+    k_score_normalized = None
+    if weighted_scores:
+        total_weight = sum(w for _, w in weighted_scores)
+        k_score_normalized = round(
+            sum(score * w for score, w in weighted_scores) / total_weight, 2
+        )
+
     report = {
         "date": date.today().isoformat(),
         "period_hours": hours,
@@ -600,6 +785,8 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
                 "effectiveness_ratio": eff_ratio_without,
             },
             "k_score": k_score,
+            "k_score_normalized": k_score_normalized,
+            "by_bucket": k_curve_by_bucket,
             "context_loading_reduction_pct": ctx_reduction_pct,
             "token_efficiency_gain_pct": token_eff_gain_pct,
         },
@@ -626,52 +813,44 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
     return report
 
 
-def main():
-    log.info("=== Hindsight nightly learning started ===")
+def run_hourly(watermarks: dict, seen_hashes: set) -> dict:
+    """Hourly mode: retain new corrections/instructions with watermark + hash dedup."""
+    log.info("=== Hourly retain started ===")
 
-    # Collect bank stats for observability
-    log.info("Collecting bank stats...")
-    bank_stats = collect_bank_stats()
-    for bank, s in bank_stats.items():
-        log.info("  %s: %d nodes, %d docs", bank, s["total_nodes"], s["total_documents"])
-
-    transcripts = find_recent_transcripts(hours=24)
-    log.info("Found %d transcripts from last 24h", len(transcripts))
-
-    if not transcripts:
-        log.info("No transcripts to process. Running probes only.")
-        run_observability_probes()
-        log.info("=== Done (no transcripts) ===")
-        sys.exit(0)
+    transcripts = find_recent_transcripts(hours=2)
+    log.info("Found %d transcripts from last 2h", len(transcripts))
 
     results = {
+        "mode": "hourly",
         "date": date.today().isoformat(),
-        "transcripts_found": len(transcripts),
+        "transcripts_scanned": len(transcripts),
         "transcripts_with_learnings": 0,
         "corrections_detected": 0,
         "instructions_detected": 0,
         "windows_retained": 0,
+        "skipped_duplicates": 0,
         "total_retain_usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
-        "reflect_result": None,
-        "bank_stats": bank_stats,
-        "observability_probes": [],
         "errors": [],
     }
 
-    for transcript_path in transcripts:
-        transcript_id = transcript_path.stem
-        log.info("Processing: %s", transcript_id)
+    if not transcripts:
+        log.info("No recent transcripts. Done.")
+        return results
 
-        messages = parse_transcript(transcript_path)
-        if len(messages) < 4:
-            log.info("  Skipping (too short: %d messages)", len(messages))
-            continue
+    candidates = filter_and_scan(transcripts, watermarks)
+    log.info("After filter: %d candidates with learning signals", len(candidates))
 
-        corrections, instructions = extract_learning_windows(messages)
+    for path, messages, start_index in candidates:
+        transcript_id = path.stem
+        log.info("Processing: %s (from message %d)", transcript_id, start_index)
+
+        corrections, instructions = extract_learning_windows(
+            messages, start_index=start_index
+        )
         all_windows = corrections + instructions
 
         if not all_windows:
-            log.info("  No learnings found, skipping")
+            log.info("  No extractable windows, skipping")
             continue
 
         results["corrections_detected"] += len(corrections)
@@ -683,21 +862,122 @@ def main():
         )
 
         try:
-            retain_result = retain_windows(all_windows, transcript_id)
+            retain_result = retain_windows_deduped(
+                all_windows, transcript_id, seen_hashes
+            )
             results["windows_retained"] += retain_result["items_retained"]
+            results["skipped_duplicates"] += retain_result.get("skipped_duplicates", 0)
             for k in results["total_retain_usage"]:
                 results["total_retain_usage"][k] += retain_result["usage"].get(k, 0)
             log.info(
-                "  Retained: %d items, %d tokens",
+                "  Retained: %d items (%d duplicates skipped), %d tokens",
                 retain_result["items_retained"],
-                retain_result["usage"]["total_tokens"],
+                retain_result.get("skipped_duplicates", 0),
+                retain_result["usage"].get("total_tokens", 0),
             )
         except Exception as e:
             results["errors"].append({"transcript": transcript_id, "error": str(e)})
             log.error("  Failed: %s", e)
 
+    log.info(
+        "=== Hourly done: %d retained, %d duplicates skipped, %d tokens ===",
+        results["windows_retained"],
+        results["skipped_duplicates"],
+        results["total_retain_usage"]["total_tokens"],
+    )
+    return results
+
+
+def run_nightly(watermarks: dict, seen_hashes: set) -> dict:
+    """Nightly mode: catch-all retain + reflect + probes + metrics + mental models."""
+    log.info("=== Nightly processing started ===")
+
+    # Collect bank stats for observability
+    log.info("Collecting bank stats...")
+    bank_stats = collect_bank_stats()
+    for bank, s in bank_stats.items():
+        log.info("  %s: %d nodes, %d docs", bank, s["total_nodes"], s["total_documents"])
+
+    transcripts = find_recent_transcripts(hours=24)
+    log.info("Found %d transcripts from last 24h", len(transcripts))
+
+    results = {
+        "mode": "nightly",
+        "date": date.today().isoformat(),
+        "transcripts_found": len(transcripts),
+        "transcripts_with_learnings": 0,
+        "corrections_detected": 0,
+        "instructions_detected": 0,
+        "windows_retained": 0,
+        "skipped_duplicates": 0,
+        "total_retain_usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        "reflect_result": None,
+        "bank_stats": bank_stats,
+        "observability_probes": [],
+        "errors": [],
+    }
+
+    if not transcripts:
+        log.info("No transcripts to process. Running probes only.")
+        run_observability_probes()
+        return results
+
+    # Catch-all: process transcripts not yet handled by hourly runs
+    missed = []
+    for path in transcripts:
+        tid = path.stem
+        wm = watermarks.get(tid, {})
+        stat = path.stat()
+        if stat.st_size > wm.get("size", 0):
+            missed.append(path)
+
+    if missed:
+        log.info("Catch-all: %d transcripts have new content since last hourly", len(missed))
+        candidates = filter_and_scan(missed, watermarks)
+        for path, messages, start_index in candidates:
+            transcript_id = path.stem
+            log.info("Processing: %s (from message %d)", transcript_id, start_index)
+
+            corrections, instructions = extract_learning_windows(
+                messages, start_index=start_index
+            )
+            all_windows = corrections + instructions
+
+            if not all_windows:
+                continue
+
+            results["corrections_detected"] += len(corrections)
+            results["instructions_detected"] += len(instructions)
+            results["transcripts_with_learnings"] += 1
+            log.info(
+                "  Found %d corrections, %d instructions",
+                len(corrections), len(instructions),
+            )
+
+            try:
+                retain_result = retain_windows_deduped(
+                    all_windows, transcript_id, seen_hashes
+                )
+                results["windows_retained"] += retain_result["items_retained"]
+                results["skipped_duplicates"] += retain_result.get("skipped_duplicates", 0)
+                for k in results["total_retain_usage"]:
+                    results["total_retain_usage"][k] += retain_result["usage"].get(k, 0)
+                log.info(
+                    "  Retained: %d items (%d skipped), %d tokens",
+                    retain_result["items_retained"],
+                    retain_result.get("skipped_duplicates", 0),
+                    retain_result["usage"].get("total_tokens", 0),
+                )
+            except Exception as e:
+                results["errors"].append({"transcript": transcript_id, "error": str(e)})
+                log.error("  Failed: %s", e)
+    else:
+        log.info("All transcripts already processed by hourly runs")
+
     # Phase: Reflect on accumulated patterns
-    if results["windows_retained"] > 0:
+    if results["windows_retained"] > 0 or any(
+        watermarks.get(t.stem, {}).get("message_count", 0) > 0 for t in transcripts
+    ):
         log.info("Running reflect...")
         results["reflect_result"] = reflect()
 
@@ -752,18 +1032,33 @@ def main():
             k_curve["without_recall"]["effectiveness_ratio"],
             k_curve.get("token_efficiency_gain_pct", "?"),
         )
+        by_bucket = k_curve.get("by_bucket", {})
+        for bucket, bk in by_bucket.items():
+            if bk.get("k_score") is not None:
+                log.info(
+                    "  K-curve [%s]: %d vs %d sessions, score=%.2fx",
+                    bucket, bk["with_recall"], bk["without_recall"], bk["k_score"],
+                )
+        if k_curve.get("k_score_normalized") is not None:
+            log.info("  K-curve normalized: %.2fx", k_curve["k_score_normalized"])
 
-    # Phase: Refresh issues-bank mental models (nightly, after issue ingestion)
-    log.info("Refreshing issues-bank mental models...")
-    for model_id in ("active-priorities", "known-bugs"):
-        resp = api_post(
-            f"/v1/default/banks/kubernaut-issues/mental-models/{model_id}/refresh",
-            {},
-        )
-        if resp and "error" not in resp:
-            log.info("  %s: refresh triggered", model_id)
-        else:
-            log.warning("  %s: refresh failed", model_id)
+    # Phase: Refresh all mental models
+    log.info("Refreshing mental models...")
+    models_to_refresh = {
+        "kubernaut-issues": ("active-priorities", "known-bugs"),
+        "cursor-memory": ("workflow-preferences", "architecture-decisions", "testing-methodology", "coding-conventions"),
+        "kubernaut-docs": ("af-pipeline", "platform-topology", "ka-architecture"),
+    }
+    for bank, model_ids in models_to_refresh.items():
+        for model_id in model_ids:
+            resp = api_post(
+                f"/v1/default/banks/{bank}/mental-models/{model_id}/refresh",
+                {},
+            )
+            if resp and "error" not in resp:
+                log.info("  %s/%s: refresh triggered", bank, model_id)
+            else:
+                log.warning("  %s/%s: refresh failed", bank, model_id)
     results["mental_model_refresh"] = "triggered"
 
     # Write daily log
@@ -773,13 +1068,44 @@ def main():
         json.dump(results, f, indent=2)
     log.info("Results saved to %s", log_path)
 
+    # Clear retained hashes (start fresh for tomorrow), prune old watermarks
+    seen_hashes.clear()
+    pruned = prune_watermarks(watermarks)
+    watermarks.clear()
+    watermarks.update(pruned)
+
     log.info(
-        "=== Done: %d transcripts, %d corrections, %d instructions, %d tokens ===",
+        "=== Nightly done: %d transcripts, %d corrections, %d instructions, %d tokens ===",
         results["transcripts_with_learnings"],
         results["corrections_detected"],
         results["instructions_detected"],
         results["total_retain_usage"]["total_tokens"],
     )
+    return results
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Hindsight learning pipeline")
+    parser.add_argument(
+        "--mode",
+        choices=["hourly", "nightly", "both"],
+        default="both",
+        help="Run mode: hourly (retain only), nightly (reflect+probes), both (default)",
+    )
+    args = parser.parse_args()
+
+    watermarks = load_watermarks()
+    seen_hashes = load_retained_hashes()
+
+    try:
+        if args.mode in ("hourly", "both"):
+            run_hourly(watermarks, seen_hashes)
+
+        if args.mode in ("nightly", "both"):
+            run_nightly(watermarks, seen_hashes)
+    finally:
+        save_watermarks(watermarks)
+        save_retained_hashes(seen_hashes)
 
 
 if __name__ == "__main__":

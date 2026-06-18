@@ -23,10 +23,22 @@ Call one or more banks depending on what the task touches. A single recall to
 
 Call `recall` again if:
 - The task shifts to a different subsystem, file area, or domain
-- You are about to attempt something with <90% confidence
 - The user corrects you — check if this correction already exists in memory
 - You've made 2+ failed attempts at the same problem
 - A new entity (CRD, service, package) enters the conversation that wasn't part of the original recall
+
+### Phase-based triggers (MUST recall when entering these phases)
+
+| Phase | Bank | Query focus |
+|-------|------|-------------|
+| Implementation planning | hindsight | testing methodology, TDD, pyramid invariant, FedRAMP business outcome tests |
+| Writing/designing tests | hindsight | test conventions, table-driven tests, assertion patterns |
+| Designing APIs or CRDs | hindsight-docs | API contracts, CRD conventions, architecture decisions |
+| PR/commit workflow | hindsight | commit conventions, PR structure, review expectations |
+| Debugging/troubleshooting | hindsight-issues | known bugs, past failures, related issues |
+
+These are NOT optional. When you transition into one of these phases, recall
+the indicated bank with the query focus BEFORE writing code or proposing a plan.
 
 ## When to skip (OK)
 

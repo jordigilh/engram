@@ -406,6 +406,57 @@ def retain_windows_deduped(
     return result
 
 
+def dedup_graph(bank_id: str) -> int:
+    """Remove exact-duplicate documents from a bank by content_hash.
+
+    Keeps the newest document for each hash. Returns count of deleted docs.
+    """
+    from collections import defaultdict
+
+    all_docs = []
+    offset = 0
+    while True:
+        resp = api_get(f"/v1/default/banks/{bank_id}/documents?limit=100&offset={offset}")
+        if not resp:
+            break
+        docs = resp.get("documents", resp.get("items", []))
+        if not docs:
+            break
+        all_docs.extend(docs)
+        offset += len(docs)
+        if len(docs) < 100:
+            break
+
+    by_hash = defaultdict(list)
+    for doc in all_docs:
+        by_hash[doc.get("content_hash", "")].append(doc)
+
+    to_delete = []
+    for docs in by_hash.values():
+        if len(docs) <= 1:
+            continue
+        docs_sorted = sorted(docs, key=lambda d: d.get("created_at", ""), reverse=True)
+        to_delete.extend(docs_sorted[1:])
+
+    if not to_delete:
+        return 0
+
+    deleted = 0
+    for doc in to_delete:
+        try:
+            url = f"{HINDSIGHT_URL}/v1/default/banks/{bank_id}/documents/{doc['id']}"
+            req = Request(url, method="DELETE")
+            urlopen(req, timeout=10)
+            deleted += 1
+        except Exception:
+            pass
+
+    if deleted:
+        log.info("  Dedup: removed %d duplicate documents (%d memory units) from %s",
+                 deleted, sum(d.get("memory_unit_count", 0) for d in to_delete), bank_id)
+    return deleted
+
+
 def reflect() -> dict[str, Any]:
     """Use reflect to evaluate accumulated correction patterns."""
     payload = {
@@ -1067,6 +1118,9 @@ def run_nightly(watermarks: dict, seen_hashes: set) -> dict:
     with open(log_path, "w") as f:
         json.dump(results, f, indent=2)
     log.info("Results saved to %s", log_path)
+
+    # Phase: Deduplicate graph (remove exact content-hash duplicates)
+    dedup_graph(BANK_ID)
 
     # Clear retained hashes (start fresh for tomorrow), prune old watermarks
     seen_hashes.clear()

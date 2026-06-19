@@ -548,7 +548,7 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
             lines.append(f"  {'Bucket':<20}{'With':>8}{'Without':>10}{'K-score':>10}")
             lines.append("  " + "-" * 66)
             bucket_labels = {
-                "small": "Small (<50K)",
+                "small": "Small (10-50K)",
                 "medium": "Medium (50-500K)",
                 "large": "Large (>500K)",
             }

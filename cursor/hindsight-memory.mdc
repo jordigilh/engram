@@ -36,6 +36,8 @@ Call `recall` again if:
 | Designing APIs or CRDs | hindsight-docs | API contracts, CRD conventions, architecture decisions |
 | PR/commit workflow | hindsight | commit conventions, PR structure, review expectations |
 | Debugging/troubleshooting | hindsight-issues | known bugs, past failures, related issues |
+| Pipeline monitoring | hindsight | pipeline monitoring protocol, must-gather RCA, confidence gates |
+| Implementation complete (final gate) | hindsight | GA readiness audit, multi-dimensional review, authoritative validation |
 
 These are NOT optional. When you transition into one of these phases, recall
 the indicated bank with the query focus BEFORE writing code or proposing a plan.

@@ -774,11 +774,15 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
     ) if eff_ratio_without > 0 else None
 
     # Per-bucket K-scores for normalized comparison
+    # Exclude sessions <10K tokens where recall overhead dominates
+    K_SCORE_MIN_TOKENS = 10000
     k_curve_by_bucket = {}
     weighted_scores = []
     for bucket in ("small", "medium", "large"):
-        with_b = [s for s in sessions_with_recall if s["size_bucket"] == bucket]
-        without_b = [s for s in sessions_without_recall if s["size_bucket"] == bucket]
+        with_b = [s for s in sessions_with_recall
+                  if s["size_bucket"] == bucket and s["total_session_tokens"] >= K_SCORE_MIN_TOKENS]
+        without_b = [s for s in sessions_without_recall
+                     if s["size_bucket"] == bucket and s["total_session_tokens"] >= K_SCORE_MIN_TOKENS]
         if with_b and without_b:
             eff_w = _avg(with_b, "effectiveness_ratio")
             eff_wo = _avg(without_b, "effectiveness_ratio")

@@ -642,6 +642,7 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
         preamble_chars = 0
         total_session_chars = 0
         productive_action_count = 0
+        correction_char_positions = []
 
         for msg in messages:
             role = msg.get("role") or msg.get("message", {}).get("role", "")
@@ -673,6 +674,8 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
                     user_requested_recall = True
                 if first_productive_turn is None:
                     preamble_chars += msg_chars
+                if is_correction(text):
+                    correction_char_positions.append(total_session_chars)
 
             if role == "assistant":
                 turn_idx += 1
@@ -719,6 +722,20 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
             productive_action_count / (total_session_tokens / 1000), 3
         ) if total_session_tokens > 0 else 0.0
 
+        # Rework tokens: for each correction, the segment between it and the next
+        # correction (or session end) is partially rework. We estimate half of each
+        # post-correction segment as rework tokens.
+        rework_chars = 0
+        for i, pos in enumerate(correction_char_positions):
+            next_boundary = (
+                correction_char_positions[i + 1]
+                if i + 1 < len(correction_char_positions)
+                else total_session_chars
+            )
+            segment = next_boundary - pos
+            rework_chars += segment // 2
+        rework_tokens = round(rework_chars / 4)
+
         bucket = (
             "small" if total_session_tokens < 50000
             else "medium" if total_session_tokens < 500000
@@ -733,6 +750,7 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
             "total_session_tokens": total_session_tokens,
             "productive_actions": productive_action_count,
             "effectiveness_ratio": effectiveness_ratio,
+            "rework_tokens": rework_tokens,
             "size_bucket": bucket,
         }
 
@@ -802,6 +820,47 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
             sum(score * w for score, w in weighted_scores) / total_weight, 2
         )
 
+    # Net Efficiency Score (NES): rework-aware metric
+    # NES = (total_tokens - rework_tokens) / total_tokens
+    # Higher NES means fewer tokens wasted on correction loops
+    avg_rework_with = _avg(sessions_with_recall, "rework_tokens")
+    avg_rework_without = _avg(sessions_without_recall, "rework_tokens")
+    avg_total_with = _avg(sessions_with_recall, "total_session_tokens")
+    avg_total_without = _avg(sessions_without_recall, "total_session_tokens")
+
+    nes_with = round(
+        (avg_total_with - avg_rework_with) / avg_total_with, 3
+    ) if avg_total_with > 0 else None
+    nes_without = round(
+        (avg_total_without - avg_rework_without) / avg_total_without, 3
+    ) if avg_total_without > 0 else None
+    nes_ratio = round(nes_with / nes_without, 2) if (nes_with and nes_without) else None
+
+    # Per-bucket NES for session-length strategy analysis
+    nes_by_bucket = {}
+    for bucket in ("small", "medium", "large"):
+        with_b = [s for s in sessions_with_recall
+                  if s["size_bucket"] == bucket and s["total_session_tokens"] >= K_SCORE_MIN_TOKENS]
+        without_b = [s for s in sessions_without_recall
+                     if s["size_bucket"] == bucket and s["total_session_tokens"] >= K_SCORE_MIN_TOKENS]
+        if with_b and without_b:
+            rw_w = _avg(with_b, "rework_tokens")
+            rw_wo = _avg(without_b, "rework_tokens")
+            tot_w = _avg(with_b, "total_session_tokens")
+            tot_wo = _avg(without_b, "total_session_tokens")
+            b_nes_w = round((tot_w - rw_w) / tot_w, 3) if tot_w > 0 else None
+            b_nes_wo = round((tot_wo - rw_wo) / tot_wo, 3) if tot_wo > 0 else None
+            b_ratio = round(b_nes_w / b_nes_wo, 2) if (b_nes_w and b_nes_wo) else None
+            nes_by_bucket[bucket] = {
+                "with_recall": len(with_b),
+                "without_recall": len(without_b),
+                "nes_with": b_nes_w,
+                "nes_without": b_nes_wo,
+                "nes_ratio": b_ratio,
+                "avg_rework_pct_with": round(rw_w / tot_w * 100, 1) if tot_w > 0 else None,
+                "avg_rework_pct_without": round(rw_wo / tot_wo * 100, 1) if tot_wo > 0 else None,
+            }
+
     report = {
         "date": date.today().isoformat(),
         "period_hours": hours,
@@ -844,6 +903,20 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
             "by_bucket": k_curve_by_bucket,
             "context_loading_reduction_pct": ctx_reduction_pct,
             "token_efficiency_gain_pct": token_eff_gain_pct,
+        },
+        "net_efficiency_score": {
+            "with_recall": {
+                "nes": nes_with,
+                "avg_rework_tokens": avg_rework_with,
+                "avg_total_tokens": avg_total_with,
+            },
+            "without_recall": {
+                "nes": nes_without,
+                "avg_rework_tokens": avg_rework_without,
+                "avg_total_tokens": avg_total_without,
+            },
+            "nes_ratio": nes_ratio,
+            "by_bucket": nes_by_bucket,
         },
         "token_signals": {
             "avg_session_messages_with_recall": _avg(sessions_with_recall, "messages"),
@@ -1096,6 +1169,27 @@ def run_nightly(watermarks: dict, seen_hashes: set) -> dict:
                 )
         if k_curve.get("k_score_normalized") is not None:
             log.info("  K-curve normalized: %.2fx", k_curve["k_score_normalized"])
+    nes = effectiveness.get("net_efficiency_score", {})
+    if nes.get("nes_ratio") is not None:
+        log.info(
+            "  NES: %.3f (recall) vs %.3f (no recall), ratio=%.2fx",
+            nes["with_recall"]["nes"],
+            nes["without_recall"]["nes"],
+            nes["nes_ratio"],
+        )
+        log.info(
+            "  NES rework tokens: %d avg (recall) vs %d avg (no recall)",
+            nes["with_recall"]["avg_rework_tokens"],
+            nes["without_recall"]["avg_rework_tokens"],
+        )
+        nes_buckets = nes.get("by_bucket", {})
+        for bucket, bd in nes_buckets.items():
+            if bd.get("nes_ratio") is not None:
+                log.info(
+                    "  NES [%s]: %.3f vs %.3f, ratio=%.2fx (rework: %.1f%% vs %.1f%%)",
+                    bucket, bd["nes_with"], bd["nes_without"], bd["nes_ratio"],
+                    bd["avg_rework_pct_with"], bd["avg_rework_pct_without"],
+                )
 
     # Phase: Refresh all mental models
     log.info("Refreshing mental models...")

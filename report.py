@@ -204,6 +204,16 @@ def aggregate_effectiveness(entries: list[dict]) -> dict:
             k_score_normalized = kc.get("k_score_normalized")
             break
 
+    # Aggregate NES from the most recent entry that has it
+    nes_data = {}
+    for entry in reversed(entries):
+        nd = entry.get("net_efficiency_score", {})
+        if nd.get("nes_ratio") is not None:
+            nes_data = nd
+            break
+    if not nes_data:
+        nes_data = {}
+
     return {
         "total_sessions_with_recall": total_with,
         "total_sessions_without_recall": total_without,
@@ -231,6 +241,7 @@ def aggregate_effectiveness(entries: list[dict]) -> dict:
             "avg_corrections_with": _safe_avg(corr_with_all),
             "avg_corrections_without": _safe_avg(corr_without_all),
         },
+        "net_efficiency_score": nes_data,
     }
 
 
@@ -565,6 +576,56 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
                 lines.append(f"  Normalized K-score: {k_norm:.2f}x (weighted by bucket size)")
     else:
         lines.append("  No K-curve data yet. Requires sessions both with and without recall.")
+
+    # Net Efficiency Score
+    lines.append("")
+    lines.append("  NET EFFICIENCY SCORE (Rework-aware token efficiency)")
+    lines.append("  " + "-" * 66)
+    nes = effectiveness.get("net_efficiency_score", {}) if effectiveness else {}
+    if nes and nes.get("nes_ratio") is not None:
+        nes_w = nes["with_recall"]
+        nes_wo = nes["without_recall"]
+        lines.append(f"  {'':26}{'With Recall':>14}{'Without Recall':>16}{'Delta':>10}")
+        lines.append("  " + "-" * 66)
+        nes_delta = f"+{round((nes_w['nes'] / nes_wo['nes'] - 1) * 100)}%" if nes_wo['nes'] else "n/a"
+        lines.append(f"  {'NES:':<26}{nes_w['nes']:>14.3f}{nes_wo['nes']:>16.3f}{nes_delta:>10}")
+        lines.append(f"  {'Avg rework tokens:':<26}{nes_w['avg_rework_tokens']:>10,.0f} tok{nes_wo['avg_rework_tokens']:>12,.0f} tok")
+        lines.append(f"  {'Avg total tokens:':<26}{nes_w['avg_total_tokens']:>10,.0f} tok{nes_wo['avg_total_tokens']:>12,.0f} tok")
+        lines.append("  " + "-" * 66)
+        lines.append(f"  NES ratio: {nes['nes_ratio']:.2f}x (recall sessions waste {nes['nes_ratio']:.2f}x fewer tokens on rework)")
+        lines.append("")
+        lines.append("  NES = (total_tokens - rework_tokens) / total_tokens")
+        lines.append("  Higher NES = more tokens spent on productive work, less on correction loops")
+
+        # Per-bucket NES breakdown — answers "which session length benefits most?"
+        nes_buckets = nes.get("by_bucket", {})
+        if nes_buckets:
+            lines.append("")
+            lines.append("  NES BY SESSION SIZE (which session length benefits most from Engram?)")
+            lines.append("  " + "-" * 66)
+            lines.append(f"  {'Bucket':<20}{'With':>6}{'W/o':>6}{'NES(R)':>9}{'NES(no R)':>10}{'Ratio':>8}{'Rework%R':>10}{'Rework%':>9}")
+            lines.append("  " + "-" * 66)
+            bucket_labels = {
+                "small": "Small (10-50K)",
+                "medium": "Medium (50-500K)",
+                "large": "Large (>500K)",
+            }
+            for bucket in ("small", "medium", "large"):
+                if bucket in nes_buckets:
+                    bd = nes_buckets[bucket]
+                    ratio_str = f"{bd['nes_ratio']:.2f}x" if bd.get("nes_ratio") is not None else "n/a"
+                    rw_w = f"{bd['avg_rework_pct_with']:.1f}%" if bd.get("avg_rework_pct_with") is not None else "n/a"
+                    rw_wo = f"{bd['avg_rework_pct_without']:.1f}%" if bd.get("avg_rework_pct_without") is not None else "n/a"
+                    lines.append(
+                        f"  {bucket_labels[bucket]:<20}{bd['with_recall']:>6}{bd['without_recall']:>6}"
+                        f"{bd['nes_with']:>9.3f}{bd['nes_without']:>10.3f}{ratio_str:>8}"
+                        f"{rw_w:>10}{rw_wo:>9}"
+                    )
+            lines.append("  " + "-" * 66)
+            lines.append("  Rework%R = % of tokens wasted on rework (with recall)")
+            lines.append("  Rework%  = % of tokens wasted on rework (without recall)")
+    else:
+        lines.append("  No NES data yet. Requires nightly analysis with correction position tracking.")
 
     # Recall Probe Quality
     lines.append("")

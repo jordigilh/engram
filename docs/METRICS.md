@@ -69,6 +69,9 @@ The nightly script (`nightly-learn.py`) produces two outputs:
 | **Context Loading Cost** | chars_before_first_productive_action / 4 | Tokens consumed to orient the agent before real work starts |
 | **Effectiveness Ratio** | productive_actions / (total_tokens / 1000) | Productive actions per 1K tokens — how hard each token works |
 | **K-score** | eff_ratio_with / eff_ratio_without | Token efficiency multiplier: >1 = recall makes tokens work harder |
+| **NES** | (total_tokens - rework_tokens) / total_tokens | Net Efficiency Score: fraction of tokens spent on productive work vs rework |
+| **NES Ratio** | NES_with / NES_without | Rework avoidance multiplier: >1 = recall prevents correction cascades |
+| **Rework Tokens** | Σ(post-correction segment / 2) | Estimated tokens wasted redoing work after each user correction |
 | **Recall Latency** | ms per recall call | Performance health — should be <2s for good UX |
 | **Result Count** | chunks returned per recall | Coverage — more results = richer context |
 
@@ -169,6 +172,8 @@ python3 report.py --csv
 - **Recall adoption > 50%**: The agent is using memory in most sessions
 - **Proactive recall > 30%**: The agent initiates recall without user prompting
 - **K-score > 1.5**: Recall sessions are significantly more token-efficient
+- **NES > 0.9**: Less than 10% of tokens are wasted on rework
+- **NES ratio > 1.2**: Recall meaningfully reduces rework compared to no-recall sessions
 - **Context loading reduction > 50%**: Recall is eliminating the education phase
 - **Recall latency < 2000ms** (local embeddings should be fast)
 
@@ -180,6 +185,8 @@ python3 report.py --csv
 - **Proactive recall 0%**: Agent only recalls when user explicitly asks — rule wording may need strengthening
 - **K-score < 1.0**: Recall is not improving token efficiency — content may not be relevant enough
 - **K-score near 1.0**: Marginal value — mental models may need refresh or better query matching
+- **NES < 0.7**: More than 30% of tokens are going to rework — high correction rate
+- **NES ratio < 1.0**: Recall sessions have *more* rework than non-recall — investigate content quality
 - **Latency > 5000ms**: Database may need optimization or bank is too large
 - **Zero gopls calls**: Agent may not be using code intelligence — check rule
 

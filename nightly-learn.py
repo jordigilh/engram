@@ -1220,6 +1220,29 @@ def run_nightly(watermarks: dict, seen_hashes: set) -> dict:
     # Phase: Deduplicate graph (remove exact content-hash duplicates)
     dedup_graph(BANK_ID)
 
+    # Phase: Triage memories (remove ephemeral, stale, duplicate content)
+    log.info("Running memory triage...")
+    try:
+        import importlib.util
+        _spec = importlib.util.spec_from_file_location(
+            "triage_memories",
+            Path(__file__).parent / "triage-memories.py",
+        )
+        _mod = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        triage_result = _mod.triage(bank_id=BANK_ID, stale_days=14, apply=True)
+        results["triage"] = triage_result
+        log.info(
+            "  Triage: %d/%d flagged (%.1f%%), %d documents deleted",
+            triage_result.get("total_flagged", 0),
+            triage_result.get("total_memories", 0),
+            triage_result.get("flagged_pct", 0),
+            triage_result.get("docs_deleted", 0),
+        )
+    except Exception as e:
+        log.warning("Memory triage failed: %s", e)
+        results["triage"] = {"error": str(e)}
+
     # Clear retained hashes (start fresh for tomorrow), prune old watermarks
     seen_hashes.clear()
     pruned = prune_watermarks(watermarks)

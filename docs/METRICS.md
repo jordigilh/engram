@@ -74,6 +74,8 @@ The nightly script (`nightly-learn.py`) produces two outputs:
 | **Rework Tokens** | Σ(post-correction segment / 2) | Estimated tokens wasted redoing work after each user correction |
 | **Recall Latency** | ms per recall call | Performance health — should be <2s for good UX |
 | **Result Count** | chunks returned per recall | Coverage — more results = richer context |
+| **Triage Flagged %** | flagged / total_memories | Memory hygiene: what fraction of stored memories is noise |
+| **Triage Deletable** | documents where all memories are flagged | Cleanup yield: documents safe to remove entirely |
 
 ## Generating Reports
 
@@ -199,6 +201,91 @@ python3 report.py --csv
 - **Low proactive recall**: Strengthen the `alwaysApply` rule wording, ensure it says "ALWAYS recall before starting work"
 - **gopls not being used**: Verify `~/.cursor/mcp.json` has the gopls entry and restart Cursor
 
+## Memory Triage
+
+The nightly pipeline includes a triage phase that identifies and removes low-value
+memories to keep the knowledge graph clean and retrieval relevant.
+
+### What gets flagged
+
+| Category | Description |
+|----------|-------------|
+| **Ephemeral** | Assistant/user action narration, CI status, build results — transient facts with no lasting value |
+| **Snapshot** | Point-in-time state ("running v1.4.0-rc3", "waiting for X") that becomes stale |
+| **Short** | Memories under 80 characters that lack sufficient context |
+| **Near-duplicate** | Memories with >85% text similarity (keeps the newer one) |
+| **Repeated-fact** | The same factual claim restated 3+ times (keeps the most recent) |
+| **Stale** | Flagged memories older than 14 days |
+
+Memories containing valuable patterns (architecture decisions, ADRs, conventions,
+root-cause explanations) are protected from classification even if they match
+ephemeral patterns.
+
+### Rearrange strategy
+
+Hindsight stores memories grouped under documents. The triage script handles
+both fully-flagged and mixed documents:
+
+- **Fully flagged documents** (all memories are noise): deleted outright.
+- **Mixed documents** (some flagged, some valuable): *rearranged* — the
+  original document is deleted and only the valuable memories are re-retained
+  using `strategy: 'exact'` (verbatim storage, no LLM re-extraction cost).
+  Each re-retained memory gets a unique `document_id` to satisfy the batch API
+  constraint (no duplicate `document_id` values per batch).
+
+### Running manually
+
+```bash
+# Dry-run (report only)
+python3 triage-memories.py
+
+# Apply deletions
+python3 triage-memories.py --apply
+
+# JSON output for scripting
+python3 triage-memories.py --json
+
+# Adjust stale threshold
+python3 triage-memories.py --stale-days 7
+```
+
+### Recovery after data loss
+
+If triage (or any operation) causes unexpected memory loss, use the recovery
+script to rebuild the bank from transcripts:
+
+```bash
+# Dry-run: show how many windows would be re-extracted
+python3 recover-memories.py
+
+# Apply: reset watermarks, reprocess all transcripts
+python3 recover-memories.py --apply
+
+# Limit to last N days of transcripts
+python3 recover-memories.py --apply --max-age 30
+```
+
+The recovery script backs up `watermarks.json` and `retained-hashes.json`
+before resetting them, then re-extracts all corrections and instructions via
+the normal Haiku pipeline. Watermarks are restored after recovery so the
+nightly pipeline doesn't double-process.
+
+### Healthy indicators
+
+- **Flagged % decreasing over time**: The retain pipeline is producing cleaner content
+- **Deletable docs per run < 5**: Most noise is mixed with valuable content (expected)
+- **Ephemeral count stable or declining**: The LLM extraction is learning to skip narration
+- **Re-retained count matches kept count**: All valuable memories survived rearrange
+
+### Warning signs
+
+- **Re-retained < kept**: Some re-retain batches failed — check for API errors in logs
+- **Memory count drops sharply after triage**: Rearrange may have failed — run `recover-memories.py`
+
+### Triage log
+
+Results are appended to `~/.hindsight/logs/triage-report.jsonl` with per-run breakdowns.
+
 ## Log File Locations
 
 | File | Content | Written by |
@@ -206,6 +293,7 @@ python3 report.py --csv
 | `~/.hindsight/logs/mcp-calls.jsonl` | Real-time MCP call log | Cursor hook |
 | `~/.hindsight/logs/effectiveness-report.jsonl` | Daily effectiveness metrics | Nightly script |
 | `~/.hindsight/logs/recall-signals.jsonl` | Bank stats + recall probes | Nightly script |
+| `~/.hindsight/logs/triage-report.jsonl` | Memory triage results | Nightly script |
 | `~/.hindsight/logs/YYYY-MM-DD.json` | Full daily report | Nightly script |
 
 ## Setup

@@ -2,6 +2,64 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-06-20: Memory Triage Incident — Batch document_id Bug
+
+**Context**: Implemented a memory triage system to automatically clean low-value
+memories (ephemeral narration, stale snapshots, near-duplicates) from the
+knowledge graph as part of the nightly pipeline.
+
+The triage uses a "rearrange" strategy for mixed documents (containing both
+valuable and flagged memories): delete the original document, then re-retain
+only the valuable memories using `strategy: 'exact'` (verbatim storage, no LLM
+re-extraction cost).
+
+**Bug**: The `rearrange_document` function assigned the same `document_id` to
+every item in a re-retain batch. The Hindsight API rejects batches with
+duplicate `document_id` values to prevent race conditions. This caused all
+multi-item re-retain batches to fail with HTTP 400.
+
+**Impact**:
+- Pre-triage: 2,620 memories
+- Expected post-triage: ~2,138 (removing 482 flagged)
+- Actual post-triage: **420 memories** (1,718 valuable memories lost)
+- The 148 mixed documents were deleted successfully, but their valuable memories
+  were not re-retained due to the batch failures
+- 80 clean documents (untouched) and 36 single-item re-retains survived
+
+**Root cause**: Each item in a batch must have a unique `document_id`. The code
+used a single UUID for the entire document rather than per-item UUIDs.
+
+**Fix**: Changed `rearrange_document` to generate a unique `document_id` per
+item using `f"{doc_prefix}-{uuid.uuid4().hex[:8]}"`.
+
+**Recovery**: Created `recover-memories.py` to reprocess all 343 transcripts:
+1. Reset watermarks.json and retained-hashes.json (with backups)
+2. Scanned all 343 transcripts — 87 had learning signals
+3. Re-extracted 475 learning windows (175 corrections + 300 instructions)
+4. Retained 394 windows (81 skipped as duplicates), zero errors
+5. Memory count recovered from **420 → 1,625** (~62% of original 2,620)
+6. Recovery took ~29 minutes (Haiku extraction via Vertex AI)
+7. Watermarks restored after recovery to prevent nightly double-processing
+
+The 38% gap (2,620 → 1,625) is expected: many of the original 2,620 memories
+were the flagged noise (482) plus memories from older transcripts that aged
+out of the scan window or from reflect/consolidation operations that aren't
+re-triggered by transcript reprocessing alone. The mental model refresh in the
+next nightly run will synthesize the recovered facts into coherent documents.
+
+**Lessons**:
+1. **Always dry-run destructive operations end-to-end** — the dry-run correctly
+   identified flagged memories but didn't exercise the re-retain path.
+2. **Delete after re-retain, not before** — the rearrange should verify
+   re-retain success before deleting the original document. Future improvement.
+3. **The recovery pipeline is a key safety net** — because transcripts are the
+   source of truth and are retained on disk, memory banks can always be rebuilt
+   from scratch. This is an inherent advantage of the architecture.
+4. **Batch API constraints must be tested with real payloads** — the
+   `strategy: 'exact'` API was untested before the live run.
+
+---
+
 ## 2026-06-20: Net Efficiency Score and Session Length Strategy
 
 **Context**: After implementing K-score normalization by session size, we needed a

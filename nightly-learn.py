@@ -1226,7 +1226,7 @@ def run_nightly(watermarks: dict, seen_hashes: set) -> dict:
         import importlib.util
         _spec = importlib.util.spec_from_file_location(
             "triage_memories",
-            Path(__file__).parent / "triage-memories.py",
+            Path(__file__).resolve().parent / "triage-memories.py",
         )
         _mod = importlib.util.module_from_spec(_spec)
         _spec.loader.exec_module(_mod)

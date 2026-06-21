@@ -20,6 +20,7 @@ flowchart LR
         C[Transcripts] -->|scan| D[Detect corrections]
         D -->|retain| E["Haiku 4.5 (extract)"]
         E -->|reflect| F["Sonnet 4.6 (synthesize)"]
+        F -->|triage| G["Prune noise"]
     end
 ```
 
@@ -42,7 +43,9 @@ LLM calls only happen overnight for pattern extraction.
 - **Knowledge graph** — entities link across sessions for richer retrieval
 - **Mental models** — pre-synthesized documents (not scattered facts)
 - **Multi-bank architecture** — behavioral memory + project docs + GitHub issues
+- **Self-cleaning** — nightly triage removes ephemeral, stale, and duplicate memories
 - **Self-evaluating** — proactive recall rate, correction reduction %, hit rates
+- **Recoverable** — transcripts are source of truth; `recover-memories.py` rebuilds the bank
 - **Runs as macOS service** — launchd-managed, survives reboots, auto-restarts
 
 ## Quick start
@@ -152,7 +155,8 @@ At 5 sessions/day over a month, this translates to:
 | [Installation Guide](docs/INSTALL.md) | Full setup, prerequisites, verification |
 | [Customizing the Rule](docs/INSTALL.md#customizing-the-rule) | Adapt for your project (Python, Rust, etc.) |
 | [Architecture & Internals](docs/README.md) | Design decisions, knowledge graph, correction detection |
-| [Metrics & Monitoring](docs/METRICS.md) | Effectiveness tracking, proactive recall, report interpretation |
+| [Metrics & Monitoring](docs/METRICS.md) | Effectiveness tracking, proactive recall, triage, report interpretation |
+| [Research Findings](docs/FINDINGS.md) | Empirical results, incidents, and lessons learned |
 
 ## License
 

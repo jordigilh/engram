@@ -31,6 +31,7 @@ flowchart LR
         C[Transcripts] -->|scan| D[Correction windows]
         D -->|retain| E["Haiku 4.5 (extract patterns)"]
         E -->|reflect| F["Sonnet 4.6 (synthesize models)"]
+        F -->|triage| G["Remove noise (ephemeral, stale, dupes)"]
     end
 ```
 
@@ -103,6 +104,8 @@ graph TB
 | Doc ingestion | `ingest-docs.py` | One-time doc ingestion into knowledge bank |
 | Issue ingestion | `ingest-issues.py` | GitHub issues ingestion (nightly) |
 | Mental models | `create-mental-models.py` | Create/refresh mental models across all banks |
+| Memory triage | `triage-memories.py` | Nightly cleanup of low-value memories (ephemeral, stale, duplicate) |
+| Memory recovery | `recover-memories.py` | One-time full reprocessing of all transcripts to rebuild the bank |
 | Effectiveness report | `report.py` | Metrics aggregation, token analysis, mental model stats |
 | MCP hook | `cursor/hooks.json` + `hooks/log-mcp-calls.sh` | Real-time MCP call logging with hit/miss |
 | Service plist | `~/Library/LaunchAgents/io.vectorize.hindsight.service.plist` | KeepAlive + RunAtLoad |
@@ -233,7 +236,9 @@ Next session, when the user asks to deploy, recall surfaces this pattern.
 
 ---
 
-## Backup and Restore
+## Backup, Restore, and Recovery
+
+### Database backup (full state)
 
 All persistent data lives in `~/.pg0/instances/hindsight/data/` (PostgreSQL).
 
@@ -248,6 +253,39 @@ tar xzf ~/engram-backup-YYYY-MM-DD.tar.gz -C /
 launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.service.plist
 ```
 
+### Transcript-based recovery (rebuild from source)
+
+If the memory bank is corrupted or suffers data loss, it can be rebuilt from
+agent transcripts — the authoritative source of truth:
+
+```bash
+# Dry-run: show how many learning windows would be recovered
+python3 recover-memories.py
+
+# Full recovery: reprocess all transcripts
+python3 recover-memories.py --apply
+
+# Limit to last 30 days
+python3 recover-memories.py --apply --max-age 30
+```
+
+The recovery script:
+1. Backs up existing `watermarks.json` and `retained-hashes.json`
+2. Resets both to force full reprocessing
+3. Scans all transcripts for corrections and instructions
+4. Re-extracts learning windows via Haiku extraction
+5. Restores watermarks so the nightly pipeline resumes normally
+
+This is slower than a database restore (each window goes through LLM extraction)
+but works even when no database backup exists. The cost is approximately the
+same as a fresh install's first nightly run (~$0.02 per window via Haiku 4.5).
+
+### Memory triage (nightly cleanup)
+
+The nightly pipeline includes a triage phase that removes low-value memories
+(ephemeral narration, stale snapshots, near-duplicates) to keep retrieval
+relevant. See [Metrics — Memory Triage](METRICS.md#memory-triage) for details.
+
 ---
 
 ## See Also
@@ -256,3 +294,4 @@ launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.service.plist
 - **[Installation Guide](INSTALL.md)** — full setup from prerequisites to verification
 - **[Customizing the Rule](INSTALL.md#customizing-the-rule)** — adapt the Cursor rule for your project (Python, Rust, etc.)
 - **[Metrics and Monitoring](METRICS.md)** — observability, effectiveness tracking, report interpretation
+- **[Research Findings](FINDINGS.md)** — empirical results, incidents, and lessons learned

@@ -1210,13 +1210,6 @@ def run_nightly(watermarks: dict, seen_hashes: set) -> dict:
                 log.warning("  %s/%s: refresh failed", bank, model_id)
     results["mental_model_refresh"] = "triggered"
 
-    # Write daily log
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / f"{date.today().isoformat()}.json"
-    with open(log_path, "w") as f:
-        json.dump(results, f, indent=2)
-    log.info("Results saved to %s", log_path)
-
     # Phase: Deduplicate graph (remove exact content-hash duplicates)
     dedup_graph(BANK_ID)
 
@@ -1242,6 +1235,13 @@ def run_nightly(watermarks: dict, seen_hashes: set) -> dict:
     except Exception as e:
         log.warning("Memory triage failed: %s", e)
         results["triage"] = {"error": str(e)}
+
+    # Write daily log (after all phases so triage results are included)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = LOG_DIR / f"{date.today().isoformat()}.json"
+    with open(log_path, "w") as f:
+        json.dump(results, f, indent=2)
+    log.info("Results saved to %s", log_path)
 
     # Clear retained hashes (start fresh for tomorrow), prune old watermarks
     seen_hashes.clear()

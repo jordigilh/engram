@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.vectorize.cocoindex.search</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.hindsight/venv/bin/python3</string>
+        <string>__HOME__/.hindsight/cocoindex-search.py</string>
+        <string>--port</string>
+        <string>8889</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>COCOINDEX_PG_URL</key>
+        <string>postgresql://hindsight:hindsight@localhost:5432/hindsight</string>
+        <key>PATH</key>
+        <string>__HOME__/.hindsight/venv/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>__HOME__/.hindsight</string>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.hindsight/logs/cocoindex-search-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.hindsight/logs/cocoindex-search-stderr.log</string>
+</dict>
+</plist>

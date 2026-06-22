@@ -185,29 +185,19 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
     )
 
     @mcp.tool()
-    def cocoindex_search(
-        query: str,
-        limit: int = 10,
-        mode: str = "hybrid",
-    ) -> str:
+    def cocoindex_search(query: str, limit: int = 10) -> str:
         """Hybrid code search over the kubernaut codebase.
 
         Combines dense vector similarity and BM25 keyword matching via
-        Reciprocal Rank Fusion for best results.  Use for questions like:
-        - "where do we handle rate limiting?"  (semantic → dense)
-        - "ParseConfig"                        (exact identifier → BM25)
-        - "how does the remediation pipeline work?"  (hybrid shines)
-
-        Args:
-            mode: "hybrid" (default), "dense", or "bm25".
+        Reciprocal Rank Fusion for best results.  Works equally well for:
+        - conceptual queries: "how does the remediation pipeline work?"
+        - exact identifiers: "ParseConfig"
 
         Returns ranked code snippets with file paths and relevance scores.
         Prefer this over Grep when searching by concept rather than exact text.
         """
-        if mode not in ("hybrid", "dense", "bm25"):
-            mode = "hybrid"
-        results = search_code(query, limit=min(limit, 20), mode=mode)
-        return _format_results(query, results, mode=mode)
+        results = search_code(query, limit=min(limit, 20))
+        return _format_results(query, results)
 
     if transport == "stdio":
         log.info("Starting cocoindex-code MCP server (stdio)")

@@ -194,8 +194,8 @@ python3 report.py --csv
 
 ### Actions
 
-- **Low hit rate on hindsight-docs**: Re-run `ingest-docs.py` after doc updates
-- **Low hit rate on hindsight-issues**: Re-run `ingest-issues.py` or check `gh auth status`
+- **Low hit rate on hindsight-docs**: Check CocoIndex flow status; for manual recovery, run `ingest-docs.py`
+- **Low hit rate on hindsight-issues**: Check CocoIndex flow status; for manual recovery, run `ingest-issues.py` or check `gh auth status`
 - **High corrections with recall active**: Retained patterns may be outdated — run reflect manually
 - **Mental models stale**: Run `python3 create-mental-models.py --refresh` to force refresh
 - **Low proactive recall**: Strengthen the `alwaysApply` rule wording, ensure it says "ALWAYS recall before starting work"

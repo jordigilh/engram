@@ -126,8 +126,8 @@ graph TB
 | MCP config | `~/.cursor/mcp.json` | Connects Cursor to Hindsight (memory + docs + issues) + gopls |
 | Cursor rule | `~/.cursor/rules/hindsight-memory.mdc` | Instructs agent to recall from all three banks |
 | Nightly script | `nightly-learn.py` (symlinked to `~/.hindsight/`) | Processes transcripts, extracts patterns |
-| Doc ingestion | `ingest-docs.py` | One-time doc ingestion into knowledge bank |
-| Issue ingestion | `ingest-issues.py` | GitHub issues ingestion (nightly) |
+| Doc ingestion | `ingest-docs.py` | One-time doc ingestion (deprecated — use CocoIndex) |
+| Issue ingestion | `ingest-issues.py` | Manual issues ingestion (deprecated — use CocoIndex) |
 | Mental models | `create-mental-models.py` | Create/refresh mental models across all banks |
 | Memory triage | `triage-memories.py` | Nightly cleanup of low-value memories (ephemeral, stale, duplicate) |
 | Memory recovery | `recover-memories.py` | One-time full reprocessing of all transcripts to rebuild the bank |

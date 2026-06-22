@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """CocoIndex code search MCP server.
 
-Provides semantic code search over the cocoindex.code_embeddings pgvector table
-as an MCP tool that Cursor can call during sessions.
+Provides hybrid code search (dense vectors + BM25) over the
+cocoindex.code_embeddings table. Results are fused using Reciprocal Rank
+Fusion (RRF) so both semantic similarity and exact keyword matches
+contribute to ranking.
 
 Usage:
-    python3 cocoindex-search.py                    # Start MCP server on :8889
-    python3 cocoindex-search.py --port 9000        # Custom port
+    python3 cocoindex-search.py                    # Start MCP server (stdio)
     python3 cocoindex-search.py --query "how does the reconciler handle errors"
+    python3 cocoindex-search.py --query "ParseConfig" --mode dense   # dense only
+    python3 cocoindex-search.py --query "ParseConfig" --mode bm25    # BM25 only
 """
 
 import argparse
@@ -27,6 +30,7 @@ PG_URL = os.environ.get(
     "postgresql://hindsight:hindsight@localhost:5432/hindsight",
 )
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+RRF_K = 60  # RRF constant — standard value from the original paper
 
 _model = None
 
@@ -46,54 +50,122 @@ def _embed_query(query: str) -> list[float]:
     return model.encode(query, normalize_embeddings=True).tolist()
 
 
-def search_code(query: str, limit: int = 10) -> list[dict[str, Any]]:
-    """Search the code_embeddings table using cosine similarity."""
+def _rrf_fuse(
+    dense_results: list[dict],
+    bm25_results: list[dict],
+    limit: int,
+) -> list[dict]:
+    """Fuse two ranked lists using Reciprocal Rank Fusion.
+
+    RRF score = sum(1 / (k + rank_i)) for each list the item appears in.
+    """
+    scores: dict[str, float] = {}
+    items: dict[str, dict] = {}
+
+    for rank, r in enumerate(dense_results):
+        key = r["id"]
+        scores[key] = scores.get(key, 0) + 1 / (RRF_K + rank + 1)
+        if key not in items:
+            items[key] = r
+
+    for rank, r in enumerate(bm25_results):
+        key = r["id"]
+        scores[key] = scores.get(key, 0) + 1 / (RRF_K + rank + 1)
+        if key not in items:
+            items[key] = r
+
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]
+    return [{**items[key], "rrf_score": round(score, 6)} for key, score in ranked]
+
+
+def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[str, Any]]:
+    """Search the code_embeddings table using hybrid dense + BM25 retrieval."""
     import psycopg2
 
-    embedding = _embed_query(query)
-    embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+    candidate_pool = limit * 3
 
     conn = psycopg2.connect(PG_URL)
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT filepath, chunk_index, code,
-                       1 - (embedding <=> %s::vector) AS score
-                FROM cocoindex.code_embeddings
-                ORDER BY embedding <=> %s::vector
-                LIMIT %s
-                """,
-                (embedding_str, embedding_str, limit),
-            )
-            rows = cur.fetchall()
+            dense_results = []
+            bm25_results = []
+
+            if mode in ("hybrid", "dense"):
+                embedding = _embed_query(query)
+                embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+                cur.execute(
+                    """
+                    SELECT id, filepath, chunk_index, code,
+                           1 - (embedding <=> %s::vector) AS score
+                    FROM cocoindex.code_embeddings
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s
+                    """,
+                    (embedding_str, embedding_str, candidate_pool),
+                )
+                dense_results = [
+                    {"id": r[0], "filepath": r[1], "chunk_index": r[2],
+                     "code": r[3], "dense_score": round(float(r[4]), 4)}
+                    for r in cur.fetchall()
+                ]
+
+            if mode in ("hybrid", "bm25"):
+                tsquery = " & ".join(
+                    t + ":*" for t in query.split() if t.strip()
+                )
+                if tsquery:
+                    cur.execute(
+                        """
+                        SELECT id, filepath, chunk_index, code,
+                               ts_rank_cd(search_vector, to_tsquery('simple', %s)) AS score
+                        FROM cocoindex.code_embeddings
+                        WHERE search_vector @@ to_tsquery('simple', %s)
+                        ORDER BY score DESC
+                        LIMIT %s
+                        """,
+                        (tsquery, tsquery, candidate_pool),
+                    )
+                    bm25_results = [
+                        {"id": r[0], "filepath": r[1], "chunk_index": r[2],
+                         "code": r[3], "bm25_score": round(float(r[4]), 4)}
+                        for r in cur.fetchall()
+                    ]
     finally:
         conn.close()
 
-    return [
-        {
-            "filepath": row[0],
-            "chunk_index": row[1],
-            "code": row[2],
-            "score": round(float(row[3]), 4),
-        }
-        for row in rows
-    ]
+    if mode == "dense":
+        return [
+            {**r, "score": r["dense_score"]} for r in dense_results[:limit]
+        ]
+    if mode == "bm25":
+        return [
+            {**r, "score": r["bm25_score"]} for r in bm25_results[:limit]
+        ]
+
+    fused = _rrf_fuse(dense_results, bm25_results, limit)
+    return [{**r, "score": r["rrf_score"]} for r in fused]
 
 
-def _format_results(query: str, results: list[dict]) -> str:
+def _format_results(query: str, results: list[dict], mode: str = "hybrid") -> str:
     """Format search results as readable text for the agent."""
     if not results:
         return f"No code results found for: {query}"
 
-    lines = [f"Code search: {len(results)} results for \"{query}\"\n"]
+    label = {"hybrid": "hybrid (dense+BM25)", "dense": "dense only", "bm25": "BM25 only"}
+    lines = [f"Code search [{label.get(mode, mode)}]: {len(results)} results for \"{query}\"\n"]
     for i, r in enumerate(results, 1):
         filepath = r["filepath"]
         score = r["score"]
+        sources = []
+        if r.get("dense_score") is not None:
+            sources.append(f"dense:{r['dense_score']}")
+        if r.get("bm25_score") is not None:
+            sources.append(f"bm25:{r['bm25_score']}")
+        source_info = f" [{', '.join(sources)}]" if sources else ""
         code = r["code"]
         if len(code) > 500:
             code = code[:500] + f"\n... ({len(code)} chars total)"
-        lines.append(f"[{i}] {filepath} (score: {score})")
+        lines.append(f"[{i}] {filepath} (score: {score}{source_info})")
         lines.append(code)
         lines.append("")
     return "\n".join(lines)
@@ -113,20 +185,29 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
     )
 
     @mcp.tool()
-    def cocoindex_search(query: str, limit: int = 10) -> str:
-        """Semantic code search over the kubernaut codebase.
+    def cocoindex_search(
+        query: str,
+        limit: int = 10,
+        mode: str = "hybrid",
+    ) -> str:
+        """Hybrid code search over the kubernaut codebase.
 
-        Searches 17,000+ embedded Go code chunks using cosine similarity.
-        Use for questions like:
-        - "where do we handle rate limiting?"
-        - "how does the remediation pipeline work?"
-        - "what functions touch RemediationRequest status?"
+        Combines dense vector similarity and BM25 keyword matching via
+        Reciprocal Rank Fusion for best results.  Use for questions like:
+        - "where do we handle rate limiting?"  (semantic → dense)
+        - "ParseConfig"                        (exact identifier → BM25)
+        - "how does the remediation pipeline work?"  (hybrid shines)
+
+        Args:
+            mode: "hybrid" (default), "dense", or "bm25".
 
         Returns ranked code snippets with file paths and relevance scores.
         Prefer this over Grep when searching by concept rather than exact text.
         """
-        results = search_code(query, limit=min(limit, 20))
-        return _format_results(query, results)
+        if mode not in ("hybrid", "dense", "bm25"):
+            mode = "hybrid"
+        results = search_code(query, limit=min(limit, 20), mode=mode)
+        return _format_results(query, results, mode=mode)
 
     if transport == "stdio":
         log.info("Starting cocoindex-code MCP server (stdio)")
@@ -140,9 +221,9 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
 # CLI query mode
 # ---------------------------------------------------------------------------
 
-def _run_cli_query(query: str, limit: int = 10) -> None:
-    results = search_code(query, limit=limit)
-    print(_format_results(query, results))
+def _run_cli_query(query: str, limit: int = 10, mode: str = "hybrid") -> None:
+    results = search_code(query, limit=limit, mode=mode)
+    print(_format_results(query, results, mode=mode))
 
 
 def main():
@@ -151,12 +232,14 @@ def main():
     )
     parser.add_argument("--query", "-q", help="Run a single query and exit")
     parser.add_argument("--limit", "-n", type=int, default=10, help="Max results (default: 10)")
+    parser.add_argument("--mode", "-m", default="hybrid", choices=["hybrid", "dense", "bm25"],
+                        help="Search mode (default: hybrid)")
     parser.add_argument("--port", "-p", type=int, default=8889, help="MCP server port (default: 8889)")
     parser.add_argument("--host", default="127.0.0.1", help="MCP server bind address")
     args = parser.parse_args()
 
     if args.query:
-        _run_cli_query(args.query, limit=args.limit)
+        _run_cli_query(args.query, limit=args.limit, mode=args.mode)
     else:
         _run_mcp_server(host=args.host, port=args.port)
 

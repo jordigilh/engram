@@ -7,6 +7,8 @@
 - [uv](https://docs.astral.sh/uv/) — fast Python package manager (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
 - [gh](https://cli.github.com/) — GitHub CLI for issues ingestion (`brew install gh && gh auth login`)
 - [jq](https://jqlang.github.io/jq/) — JSON processor for MCP hook (`brew install jq`)
+- `pip install cocoindex` (or `uv pip install cocoindex`) — incremental ingestion engine
+- For code indexing: `pip install tree-sitter tree-sitter-go` (optional, for custom symbol extraction)
 - Google Cloud SDK (`gcloud`) with Application Default Credentials configured
 - Vertex AI API enabled on your GCP project
 - Claude models enabled on Vertex AI (Haiku 4.5 + Sonnet 4.6)
@@ -222,7 +224,85 @@ chmod +x ~/.cursor/hooks/log-mcp-calls.sh
 sed "s|__HOME__|$HOME|g" cursor/hooks.json > ~/.cursor/hooks.json
 ```
 
-## 16. Restart Cursor
+## 16. CocoIndex Setup
+
+CocoIndex replaces the batch ingestion scripts (`ingest-docs.py`, `ingest-issues.py`)
+with continuous, incremental sync for docs, issues, code, and transcripts.
+
+### Install CocoIndex into the Hindsight venv
+
+```bash
+uv pip install --python ~/.hindsight/venv/bin/python cocoindex
+```
+
+### Symlink flow and search scripts
+
+```bash
+ln -sf "$(pwd)/cocoindex-flows.py" ~/.hindsight/cocoindex-flows.py
+ln -sf "$(pwd)/cocoindex-search.py" ~/.hindsight/cocoindex-search.py
+```
+
+### Configure source directories
+
+Add the following to `~/.hindsight/config.env`:
+
+```bash
+ENGRAM_DOCS_DIR=~/go/src/github.com/jordigilh/kubernaut-docs/docs
+ENGRAM_CODE_DIR=~/go/src/github.com/jordigilh/kubernaut
+# Optional: issues poll interval in seconds (default: 300 = 5 min)
+# ENGRAM_ISSUES_POLL_SECONDS=300
+```
+
+### Run initial backfill
+
+```bash
+python3 cocoindex-flows.py --mode backfill
+```
+
+This processes all existing docs, issues, code, and transcripts. Subsequent runs
+use delta processing (only changed content is re-ingested).
+
+### Install launchd plist (continuous sync)
+
+```bash
+sed "s|__HOME__|$HOME|g" launchd/io.vectorize.cocoindex.service.plist \
+  > ~/Library/LaunchAgents/io.vectorize.cocoindex.service.plist
+
+launchctl load ~/Library/LaunchAgents/io.vectorize.cocoindex.service.plist
+```
+
+### Verify
+
+```bash
+# Check all four flows started
+grep "Starting\|Fetched\|poll:" ~/.hindsight/logs/cocoindex-stderr.log | tail -10
+
+# Check issues + PRs are fully indexed
+grep "Fetched.*from" ~/.hindsight/logs/cocoindex-stderr.log | tail -5
+```
+
+You should see all four apps starting (docs, code, transcripts, issues) and
+issue poll cycles completing with the full count of issues + PRs. See
+[CocoIndex Operations](COCOINDEX.md) for monitoring and troubleshooting details.
+
+## 17. Migration from Old Scripts
+
+After verifying CocoIndex is syncing successfully, the old batch ingestion
+scripts are no longer needed:
+
+```bash
+# Unload the old issues ingestion plist
+launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.issues.plist
+rm ~/Library/LaunchAgents/io.vectorize.hindsight.issues.plist
+```
+
+The old scripts (`ingest-docs.py` and `ingest-issues.py`) remain in the repo
+for reference but are superseded by CocoIndex flows. You can verify data parity
+by comparing recall results before and after migration — CocoIndex ingests the
+same content through the Hindsight retain API, so recall quality should be
+identical or better (due to continuous freshness).
+
+## 18. Restart Cursor
 
 Reload the Cursor window (or restart the app) so it picks up the new MCP config,
 rule, and hook.
@@ -396,7 +476,9 @@ Never call `retain_memory` during sessions. Memory extraction runs nightly.
 launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.service.plist
 launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist
 launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.issues.plist
+launchctl unload ~/Library/LaunchAgents/io.vectorize.cocoindex.service.plist
 rm ~/Library/LaunchAgents/io.vectorize.hindsight.*.plist
+rm ~/Library/LaunchAgents/io.vectorize.cocoindex.*.plist
 
 # Remove data and runtime
 rm -rf ~/.hindsight ~/.pg0

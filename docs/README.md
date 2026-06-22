@@ -47,6 +47,22 @@ flowchart LR
 | **Global endpoint** | Single Vertex AI endpoint, no region-specific routing |
 | **Local embeddings + reranker** | No network calls for recall; runs on-device |
 
+### Data Freshness
+
+With CocoIndex integration, `kubernaut-docs` and `kubernaut-issues` banks are
+now continuously fresh — CocoIndex runs as a KeepAlive launchd service, detects
+source changes via delta processing, and re-ingests only the modified content.
+This replaces the previous batch ingestion model (nightly `ingest-issues.py`,
+manual `ingest-docs.py`) with sub-hour staleness for docs/issues and sub-minute
+freshness for code.
+
+| Source | Previous Model | CocoIndex Model | Target Freshness |
+|--------|---------------|-----------------|------------------|
+| Docs | Manual `ingest-docs.py` | File-watching (instant) | < 1 hour |
+| Issues + PRs | Nightly `ingest-issues.py` (500 cap) | Polling every 5 min (all items) | < 5 minutes |
+| Code | Not indexed | File-watching (instant) | < 5 minutes |
+| Transcripts | Nightly batch | File-watching (instant) | < 1 hour |
+
 ---
 
 ## Architecture
@@ -58,6 +74,7 @@ graph TB
         rule["hindsight-memory.mdc"]
         hooks["hooks.json"]
         gopls["gopls (stdio)"]
+        code_mcp["code-index MCP"]
     end
 
     subgraph engram["Hindsight (native macOS :8888)"]
@@ -68,6 +85,11 @@ graph TB
         litellm["LiteLLM"]
     end
 
+    subgraph cocoindex_engine["CocoIndex"]
+        coco_flows["cocoindex-flows.py"]
+        coco_search["cocoindex-search.py"]
+    end
+
     subgraph vertex["Vertex AI (global)"]
         haiku["Haiku 4.5 (retain)"]
         sonnet["Sonnet 4.6 (reflect)"]
@@ -76,19 +98,22 @@ graph TB
     subgraph launchd["launchd (service manager)"]
         svc["service.plist (KeepAlive)"]
         nightly_plist["nightly.plist (2 AM)"]
-        issues_plist["issues.plist (1 AM)"]
+        coco_plist["cocoindex.plist (KeepAlive)"]
     end
 
     cursor -->|"MCP HTTP ×3 banks"| api
+    cursor -->|"semantic code search"| coco_search
     api --> pg
     api --> emb
     api --> rerank
     litellm -->|"retain / reflect"| vertex
     svc --> api
     nightly_plist --> nightly_script["nightly-learn.py"]
-    issues_plist --> issues_script["ingest-issues.py"]
+    coco_plist --> coco_flows
     nightly_script --> api
-    issues_script --> api
+    coco_flows --> pg
+    coco_flows -->|"retain API"| api
+    coco_search --> pg
 ```
 
 ### Components
@@ -108,8 +133,11 @@ graph TB
 | Memory recovery | `recover-memories.py` | One-time full reprocessing of all transcripts to rebuild the bank |
 | Effectiveness report | `report.py` | Metrics aggregation, token analysis, mental model stats |
 | MCP hook | `cursor/hooks.json` + `hooks/log-mcp-calls.sh` | Real-time MCP call logging with hit/miss |
+| CocoIndex flows | `cocoindex-flows.py` (symlinked to `~/.hindsight/`) | Incremental ingestion for docs, issues, code, transcripts |
+| Code search | `cocoindex-search.py` | MCP-compatible semantic code search endpoint |
 | Service plist | `~/Library/LaunchAgents/io.vectorize.hindsight.service.plist` | KeepAlive + RunAtLoad |
 | Nightly plist | `~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist` | Midnight execution |
+| CocoIndex plist | `~/Library/LaunchAgents/io.vectorize.cocoindex.service.plist` | KeepAlive continuous sync |
 | Persistent storage | `~/.pg0/instances/hindsight/data/` | PostgreSQL data (survives reboots) |
 | Logs | `~/.hindsight/logs/` | Daily JSON reports + recall-signals.jsonl |
 
@@ -119,7 +147,8 @@ graph TB
 |------|---------|-----------------|----------|
 | `cursor-memory` | Corrections, instructions, workflow patterns | `concise` | Haiku 4.5 per window |
 | `kubernaut-docs` | Published architecture, API, operations docs | `chunks` | $0 (embeddings only) |
-| `kubernaut-issues` | GitHub issues: requirements, decisions, known bugs | `chunks` | $0 (embeddings only) |
+| `kubernaut-issues` | GitHub issues + PRs: requirements, decisions, known bugs, design reviews | `chunks` | $0 (embeddings only) |
+| `code-index` | Codebase semantic chunks (Go functions, types, blocks) | `tree-sitter + embed` | $0 (local embeddings) |
 
 ### Security Boundary
 
@@ -160,6 +189,11 @@ flowchart TB
 
     T1 -->|"no match"| T2 -->|"expand"| T3
 ```
+
+> **Note:** Code search (`code-index`) runs as a parallel MCP tool
+> (`cocoindex-search.py`), not through Hindsight's recall pipeline. It queries
+> a separate pgvector table maintained by CocoIndex and is invoked directly by
+> the Cursor agent alongside — not instead of — the 3-tier recall hierarchy.
 
 ### Entity Graph
 
@@ -293,5 +327,6 @@ relevant. See [Metrics — Memory Triage](METRICS.md#memory-triage) for details.
 - **[Project Overview](../README.md)** — what Engram is, quick start, cost summary
 - **[Installation Guide](INSTALL.md)** — full setup from prerequisites to verification
 - **[Customizing the Rule](INSTALL.md#customizing-the-rule)** — adapt the Cursor rule for your project (Python, Rust, etc.)
+- **[CocoIndex Operations](COCOINDEX.md)** — flow catalog, running modes, monitoring, troubleshooting
 - **[Metrics and Monitoring](METRICS.md)** — observability, effectiveness tracking, report interpretation
 - **[Research Findings](FINDINGS.md)** — empirical results, incidents, and lessons learned

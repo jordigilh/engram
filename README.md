@@ -14,6 +14,7 @@ flowchart LR
     subgraph session["During Sessions (zero LLM cost)"]
         A[Cursor Agent] -->|recall| B[Engram / Hindsight]
         B -->|"mental models + facts"| A
+        A -->|code search| CI_MCP[Code Index MCP]
     end
 
     subgraph nightly["Nightly Batch"]
@@ -21,6 +22,15 @@ flowchart LR
         D -->|retain| E["Haiku 4.5 (extract)"]
         E -->|reflect| F["Sonnet 4.6 (synthesize)"]
         F -->|triage| G["Prune noise"]
+    end
+
+    subgraph cocoindex["CocoIndex (live sync)"]
+        docs_src[Docs] --> CI[CocoIndex Engine]
+        issues_src[Issues] --> CI
+        code_src[Code] --> CI
+        transcripts_src[Transcripts] --> CI
+        CI -->|"retain API"| B
+        CI -->|"pgvector"| CI_MCP
     end
 ```
 
@@ -33,8 +43,9 @@ LLM calls only happen overnight for pattern extraction.
 |---------|-------------------|
 | Every session starts with amnesia | Recall surfaces past corrections automatically |
 | Repeating the same mistakes | Corrections are stored as persistent patterns |
-| Scattered knowledge across docs/issues | Mental models synthesize coherent context |
-| No way to know if memory helps | Nightly metrics track correction reduction rate |
+| Scattered knowledge across docs/issues/PRs | Mental models synthesize coherent context |
+| Agent wastes tokens exploring the codebase | CocoIndex front-loads semantic code context via recall |
+| No way to know if memory helps | Metrics track correction reduction, exploration efficiency, per-bank K-score |
 
 ## Key features
 
@@ -42,9 +53,11 @@ LLM calls only happen overnight for pattern extraction.
 - **Learns from corrections** — detects when you correct the agent, extracts the lesson
 - **Knowledge graph** — entities link across sessions for richer retrieval
 - **Mental models** — pre-synthesized documents (not scattered facts)
-- **Multi-bank architecture** — behavioral memory + project docs + GitHub issues
+- **Multi-bank architecture** — behavioral memory + project docs + GitHub issues/PRs + code index
+- **CocoIndex live sync** — docs, code, and transcripts watch for filesystem changes in real time; issues and PRs poll GitHub every 5 minutes. All four flows run concurrently as threads in a single launchd service
+- **Semantic code search** — tree-sitter AST parsing extracts functions, types, and methods into pgvector embeddings, searchable via MCP
 - **Self-cleaning** — nightly triage removes ephemeral, stale, and duplicate memories
-- **Self-evaluating** — proactive recall rate, correction reduction %, hit rates
+- **Self-evaluating** — exploration efficiency, per-bank K-score, correction reduction %, ingestion coverage, data freshness, baseline comparison
 - **Recoverable** — transcripts are source of truth; `recover-memories.py` rebuilds the bank
 - **Runs as macOS service** — launchd-managed, survives reboots, auto-restarts
 
@@ -65,13 +78,21 @@ graph TB
         rule["Rule (.mdc)"]
         hook["MCP Hook"]
         gopls["gopls MCP"]
+        code_mcp["code-index MCP"]
     end
 
     subgraph engram["Engram (native macOS)"]
         api["Hindsight API :8888"]
-        pg["Embedded Postgres"]
+        pg["Embedded Postgres (pg0)"]
         emb["Local Embeddings"]
         rerank["Local Reranker"]
+    end
+
+    subgraph cocoindex_engine["CocoIndex"]
+        coco["cocoindex-flows.py"]
+        coco_search["cocoindex-search.py"]
+        coco --> pg
+        coco_search --> pg
     end
 
     subgraph vertex["Vertex AI"]
@@ -82,17 +103,19 @@ graph TB
     subgraph launchd["launchd"]
         svc["service (KeepAlive)"]
         nightly["nightly-learn (2 AM)"]
-        issues["ingest-issues (1 AM)"]
+        coco_svc["cocoindex (KeepAlive)"]
     end
 
     cursor -->|"MCP ×3 banks"| api
+    cursor -->|"semantic code search"| coco_search
     api --> pg
     api --> emb
     api --> rerank
     api -->|"retain / reflect"| vertex
     launchd --> api
     nightly --> api
-    issues --> api
+    coco_svc --> coco
+    coco -->|"retain API"| api
 ```
 
 ## Cost
@@ -102,6 +125,7 @@ graph TB
 | Recall | Local (no LLM) | Every response | $0 |
 | Retain | Haiku 4.5 | ~23 windows/night | ~$0.02 |
 | Reflect | Sonnet 4.6 | Once/night | ~$0.10 |
+| CocoIndex sync | Local (no LLM) | Continuous | $0 |
 
 **≈ $0.12/night** for a full learning cycle.
 
@@ -148,6 +172,40 @@ At 5 sessions/day over a month, this translates to:
 > sessions both with and without recall for comparison — initial data may show
 > K < 1.0 until recall adoption stabilizes above 30%.
 
+## Expected benefits from CocoIndex integration
+
+CocoIndex replaces batch scripts with continuous, incremental ingestion across
+four source types. The expected improvements:
+
+| Dimension | Before (batch scripts) | After (CocoIndex live sync) |
+|-----------|----------------------|----------------------------|
+| **Issues coverage** | 500 items (hardcoded cap) | All issues + PRs (~1,471 items) |
+| **Issues freshness** | ~24 hours (nightly batch) | < 5 minutes (polling every 300s) |
+| **Docs freshness** | Manual re-run | Instant (filesystem watching) |
+| **Code search** | Not available | Semantic search via pgvector + tree-sitter |
+| **Transcript learning** | Nightly only | Continuous detection + nightly extraction |
+| **Exploration overhead** | Agent greps/globs for context | Recall front-loads synthesized knowledge |
+
+**How to measure whether it's working:**
+
+```bash
+# Full effectiveness report with all metrics
+python3 report.py
+
+# Take a baseline snapshot before changes
+python3 report.py --snapshot
+
+# Compare against a previous baseline
+python3 report.py --compare ~/.hindsight/logs/baseline-2026-06-22.json
+```
+
+Key metrics to watch:
+- **Exploration efficiency** — are recall sessions needing fewer grep/glob calls?
+- **Correction reduction %** — are corrections declining with recall active?
+- **Per-bank K-score** — which knowledge sources contribute most?
+- **Ingestion coverage** — is everything indexed?
+- **Data freshness** — is the data current?
+
 ## Documentation
 
 | Doc | Content |
@@ -155,6 +213,7 @@ At 5 sessions/day over a month, this translates to:
 | [Installation Guide](docs/INSTALL.md) | Full setup, prerequisites, verification |
 | [Customizing the Rule](docs/INSTALL.md#customizing-the-rule) | Adapt for your project (Python, Rust, etc.) |
 | [Architecture & Internals](docs/README.md) | Design decisions, knowledge graph, correction detection |
+| [CocoIndex Operations](docs/COCOINDEX.md) | Flow catalog, running modes, monitoring, troubleshooting |
 | [Metrics & Monitoring](docs/METRICS.md) | Effectiveness tracking, proactive recall, triage, report interpretation |
 | [Research Findings](docs/FINDINGS.md) | Empirical results, incidents, and lessons learned |
 

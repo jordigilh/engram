@@ -296,6 +296,129 @@ Results are appended to `~/.hindsight/logs/triage-report.jsonl` with per-run bre
 | `~/.hindsight/logs/triage-report.jsonl` | Memory triage results | Nightly script |
 | `~/.hindsight/logs/YYYY-MM-DD.json` | Full daily report | Nightly script |
 
+## CocoIndex-Aware Metrics
+
+With CocoIndex integration, three additional metric dimensions become available.
+
+### Per-Bank K-Score
+
+The K-score can be broken down per bank to identify which knowledge source
+contributes most to token efficiency. A per-bank K-score compares sessions
+where a specific bank was recalled vs. sessions where it was not.
+
+| Bank | What it measures | Healthy target |
+|------|-----------------|----------------|
+| `cursor-memory` | Behavioral pattern value | > 1.5x |
+| `kubernaut-docs` | Documentation recall value | > 1.3x |
+| `kubernaut-issues` | Issue context value | > 1.2x |
+| `code-index` | Code search value | > 1.2x |
+
+A bank with K-score near 1.0 is not contributing meaningfully — its content
+may need refresh or its recall triggers may be too broad.
+
+### Freshness-at-Recall
+
+`avg_staleness_hours` measures the average age of content at the time it is
+recalled. With CocoIndex continuously syncing sources, staleness should be
+significantly lower than with batch ingestion.
+
+| Source | Target Staleness | Previous (batch) |
+|--------|-----------------|------------------|
+| Docs | < 1 hour | Manual (unbounded) |
+| Issues + PRs | < 5 minutes | ~24 hours (nightly, 500 cap) |
+| Code | < 5 minutes | Not indexed |
+| Transcripts | < 1 hour | ~24 hours (nightly) |
+
+**Warning signs:**
+- `avg_staleness_hours` > 24 for docs/issues: CocoIndex may not be running — check `launchctl list | grep cocoindex`
+- `avg_staleness_hours` > 1 for code: delta processing may be stalled — check `~/.hindsight/logs/cocoindex-stdout.log`
+
+### Exploration Efficiency
+
+Measures how quickly the agent finds relevant code context. Without code
+indexing, the agent relies on `gopls` symbol lookups and `SemanticSearch` — both
+effective but limited to known entry points. The code index provides semantic
+search across the full codebase, reducing the number of tool calls needed to
+locate unfamiliar code.
+
+| Metric | Formula | What it measures |
+|--------|---------|-----------------|
+| **Exploration calls/task** | search_tool_calls / tasks | How many lookups to find relevant code |
+| **First-hit depth** | turns_before_first_relevant_code | How quickly the agent reaches useful code |
+
+**Healthy indicators:**
+- Exploration calls/task decreasing over time (code index is covering more queries)
+- First-hit depth < 2 turns (code index returns relevant results on first query)
+
+**Warning signs:**
+- Exploration calls/task increasing: code index may not be covering the queried area — check if the source directory is configured
+- Code index hit rate < 50%: embeddings may need reprocessing — run `python3 cocoindex-flows.py --mode backfill`
+
+## Exploration Efficiency
+
+Measures whether recall replaces grep/glob/SemanticSearch exploration calls.
+Computed per session in the nightly pipeline and surfaced in `report.py`.
+
+| Metric | Formula | What it measures |
+|--------|---------|-----------------|
+| **Exploration calls before productive** | grep/glob/SemanticSearch calls before first Write/Shell | How many search operations to reach useful work |
+| **Exploration delta** | 1 - (with_recall / without_recall) | % reduction in exploration from recall |
+| **CocoIndex code search impact** | with_cocoindex vs without_cocoindex | Whether semantic code search reduces exploration further |
+
+**Healthy indicators:**
+- Exploration calls before productive < 2 with recall (recall front-loads context)
+- Exploration delta > 50% (recall halves the search overhead)
+- CocoIndex sessions show fewer exploration calls than non-CocoIndex sessions
+
+**Warning signs:**
+- Exploration calls increasing with recall: content may not match query patterns
+- No difference between CocoIndex/non-CocoIndex: code index may not cover queried areas
+
+## Per-Bank Effectiveness
+
+Breaks down K-score by memory bank to identify which knowledge source drives the
+most improvement.
+
+| Bank | What it measures | Healthy K-score |
+|------|-----------------|-----------------|
+| `hindsight` | Behavioral corrections and conventions | > 1.5x |
+| `hindsight-docs` | Published documentation recall | > 1.3x |
+| `hindsight-issues` | Issues + PRs context | > 1.2x |
+| `cocoindex-code` | Semantic code search | > 1.2x |
+
+A bank with K-score near 1.0 is not contributing meaningfully — its content may
+need refresh, more coverage, or better recall triggers.
+
+## Ingestion Coverage
+
+Tracks what percentage of each source is actually indexed. Computed live by
+`report.py` by comparing GitHub CLI counts with Hindsight bank document counts.
+
+**Healthy indicators:**
+- Issues + PRs coverage at 100% (all items indexed)
+- Docs coverage matching file count on disk
+
+**Warning signs:**
+- Coverage < 100%: the `--limit` cap may be too low, or ingestion errors are
+  silently dropping items
+
+## Baseline Comparison
+
+Use `report.py --snapshot` to capture a baseline, and `report.py --compare <file>`
+to see deltas over time. Key metrics to watch:
+
+- Exploration calls delta (are we needing fewer searches?)
+- Correction rate delta (are corrections declining?)
+- Per-bank K-score trends (which banks are improving/declining?)
+
+```bash
+# Take a baseline before making changes
+python3 report.py --snapshot
+
+# Compare after a week
+python3 report.py --compare ~/.hindsight/logs/baseline-2026-06-22.json
+```
+
 ## Setup
 
 Install the monitoring hook (the `hooks.json` template uses `__HOME__` which gets

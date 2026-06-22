@@ -88,8 +88,9 @@ def load_daily_logs(days: int = 7) -> list[dict]:
 
 
 def aggregate_mcp_calls(entries: list[dict]) -> dict:
-    """Aggregate MCP call stats by server."""
+    """Aggregate MCP call stats by server and by bank."""
     by_server = defaultdict(lambda: {"calls": 0, "hits": 0, "misses": 0})
+    by_bank = defaultdict(lambda: {"calls": 0, "hits": 0, "misses": 0})
     by_day = defaultdict(lambda: defaultdict(int))
 
     for entry in entries:
@@ -100,6 +101,14 @@ def aggregate_mcp_calls(entries: list[dict]) -> dict:
         else:
             by_server[server]["misses"] += 1
 
+        bank = entry.get("bank")
+        if bank:
+            by_bank[bank]["calls"] += 1
+            if entry.get("hit"):
+                by_bank[bank]["hits"] += 1
+            else:
+                by_bank[bank]["misses"] += 1
+
         day = entry.get("ts", "")[:10]
         by_day[day][server] += 1
 
@@ -107,7 +116,11 @@ def aggregate_mcp_calls(entries: list[dict]) -> dict:
         total = stats["calls"]
         stats["hit_rate"] = round(stats["hits"] / total, 3) if total > 0 else 0.0
 
-    return {"by_server": dict(by_server), "by_day": dict(by_day)}
+    for stats in by_bank.values():
+        total = stats["calls"]
+        stats["hit_rate"] = round(stats["hits"] / total, 3) if total > 0 else 0.0
+
+    return {"by_server": dict(by_server), "by_bank": dict(by_bank), "by_day": dict(by_day)}
 
 
 def aggregate_effectiveness(entries: list[dict]) -> dict:
@@ -214,6 +227,22 @@ def aggregate_effectiveness(entries: list[dict]) -> dict:
     if not nes_data:
         nes_data = {}
 
+    # Aggregate exploration efficiency from the most recent entry
+    exploration_data = {}
+    for entry in reversed(entries):
+        ee = entry.get("exploration_efficiency", {})
+        if ee.get("with_recall", {}).get("sessions", 0) > 0:
+            exploration_data = ee
+            break
+
+    # Aggregate per-bank K-score from the most recent entry
+    k_score_by_bank = {}
+    for entry in reversed(entries):
+        kc = entry.get("k_curve", {})
+        if kc.get("k_score_by_bank"):
+            k_score_by_bank = kc["k_score_by_bank"]
+            break
+
     return {
         "total_sessions_with_recall": total_with,
         "total_sessions_without_recall": total_without,
@@ -242,6 +271,8 @@ def aggregate_effectiveness(entries: list[dict]) -> dict:
             "avg_corrections_without": _safe_avg(corr_without_all),
         },
         "net_efficiency_score": nes_data,
+        "exploration_efficiency": exploration_data,
+        "k_score_by_bank": k_score_by_bank,
     }
 
 
@@ -267,6 +298,120 @@ def collect_mental_model_stats() -> list[dict]:
         except Exception:
             pass
     return results
+
+
+def collect_ingestion_coverage() -> dict:
+    """Check how much of each source is actually indexed."""
+    import subprocess
+    import urllib.request
+
+    coverage = {}
+
+    # Issues + PRs: compare gh CLI counts with bank document count
+    for kind, cmd in [("issues", ["gh", "issue", "list"]), ("prs", ["gh", "pr", "list"])]:
+        try:
+            result = subprocess.run(
+                cmd + ["--repo", "jordigilh/kubernaut", "--state", "all", "--limit", "10000",
+                       "--json", "number", "--jq", "length"],
+                capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode == 0:
+                coverage[kind] = {"total": int(result.stdout.strip())}
+        except Exception:
+            pass
+
+    # Bank document counts from Hindsight API
+    for bank_id, cov_key in [("kubernaut-issues", "issues_indexed"), ("kubernaut-docs", "docs_indexed")]:
+        try:
+            url = f"http://localhost:8888/v1/default/banks/{bank_id}"
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                data = json.loads(resp.read())
+            coverage[cov_key] = data.get("total_documents", 0)
+        except Exception:
+            pass
+
+    # Docs: count markdown files on disk
+    docs_dir = os.environ.get("ENGRAM_DOCS_DIR", os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-docs/docs"))
+    code_docs_dir = os.environ.get("ENGRAM_CODE_DOCS_DIR", os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut/docs"))
+    try:
+        published = len(list(Path(docs_dir).rglob("*.md")))
+        coverage["docs_published"] = {"total": published}
+    except Exception:
+        pass
+    try:
+        repo_docs = len(list(Path(code_docs_dir).rglob("*.md")))
+        coverage["docs_repo"] = {"total": repo_docs}
+    except Exception:
+        pass
+
+    # Code index: row count from pgvector table
+    try:
+        result = subprocess.run(
+            ["psql", "-h", "localhost", "-p", "5432", "-U", "hindsight", "-d", "hindsight",
+             "-t", "-c", "SELECT count(*) FROM code_embeddings;"],
+            capture_output=True, text=True, timeout=10,
+            env={**os.environ, "PGPASSWORD": "hindsight"},
+        )
+        if result.returncode == 0:
+            coverage["code_chunks"] = int(result.stdout.strip())
+    except Exception:
+        pass
+
+    return coverage
+
+
+def collect_freshness_stats() -> dict:
+    """Compute data freshness by checking CocoIndex logs for last successful sync."""
+    freshness = {}
+    stderr_log = Path.home() / ".hindsight" / "logs" / "cocoindex-stderr.log"
+
+    if not stderr_log.exists():
+        return freshness
+
+    now = datetime.now()
+
+    # Parse the log for last successful completion timestamps per flow
+    last_timestamps = {}
+    try:
+        with open(stderr_log) as f:
+            for line in f:
+                if "Issues poll: complete" in line:
+                    ts_str = line[:23]
+                    try:
+                        last_timestamps["issues"] = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S,%f")
+                    except ValueError:
+                        pass
+                elif "docs-app" in line and ("watching" in line or "complete" in line or "file-watching" in line):
+                    ts_str = line[:23]
+                    try:
+                        last_timestamps["docs"] = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S,%f")
+                    except ValueError:
+                        pass
+                elif "code-app" in line and ("watching" in line or "complete" in line or "file-watching" in line):
+                    ts_str = line[:23]
+                    try:
+                        last_timestamps["code"] = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S,%f")
+                    except ValueError:
+                        pass
+                elif "transcript" in line.lower() and ("watching" in line or "complete" in line or "file-watching" in line):
+                    ts_str = line[:23]
+                    try:
+                        last_timestamps["transcripts"] = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S,%f")
+                    except ValueError:
+                        pass
+    except Exception:
+        pass
+
+    for source, ts in last_timestamps.items():
+        delta = now - ts
+        hours = delta.total_seconds() / 3600
+        freshness[source] = {
+            "last_sync": ts.isoformat(),
+            "staleness_hours": round(hours, 2),
+            "staleness_minutes": round(delta.total_seconds() / 60, 1),
+        }
+
+    return freshness
 
 
 def aggregate_recall_probes(entries: list[dict]) -> dict:
@@ -442,7 +587,8 @@ def analyze_token_consumption(days: int = 7) -> dict:
 
 
 def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
-                  token_stats: dict, days: int) -> str:
+                  token_stats: dict, days: int,
+                  coverage: dict | None = None, freshness: dict | None = None) -> str:
     """Format a human-readable report."""
     lines = []
     lines.append("=" * 70)
@@ -627,6 +773,89 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
     else:
         lines.append("  No NES data yet. Requires nightly analysis with correction position tracking.")
 
+    # Exploration Efficiency
+    lines.append("")
+    lines.append("  EXPLORATION EFFICIENCY (Does recall replace grep/glob searches?)")
+    lines.append("  " + "-" * 66)
+    ee = effectiveness.get("exploration_efficiency", {}) if effectiveness else {}
+    ee_wr = ee.get("with_recall", {})
+    ee_wor = ee.get("without_recall", {})
+    if ee_wr.get("sessions", 0) > 0 and ee_wor.get("sessions", 0) > 0:
+        exp_w = ee_wr.get("avg_exploration_before_productive", 0) or 0
+        exp_wo = ee_wor.get("avg_exploration_before_productive", 0) or 0
+        exp_delta = round((1 - exp_w / exp_wo) * 100) if exp_wo > 0 else 0
+        lines.append(f"  {'':34}{'With Recall':>14}{'Without Recall':>16}{'Delta':>10}")
+        lines.append("  " + "-" * 66)
+        lines.append(
+            f"  {'Avg exploration calls before':<34}{exp_w:>14.1f}{exp_wo:>16.1f}"
+            f"{f'-{exp_delta}%' if exp_delta > 0 else f'+{abs(exp_delta)}%':>10}"
+        )
+        lines.append(f"  {'first productive action':<34}")
+        lines.append(f"  {'Sessions':<34}{ee_wr['sessions']:>14}{ee_wor['sessions']:>16}")
+        lines.append("  " + "-" * 66)
+
+        ee_coco = ee.get("with_cocoindex", {})
+        ee_nococo = ee.get("without_cocoindex", {})
+        if ee_coco.get("sessions", 0) > 0:
+            coco_exp = ee_coco.get("avg_exploration_before_productive", 0) or 0
+            nococo_exp = ee_nococo.get("avg_exploration_before_productive", 0) or 0
+            coco_delta = round((1 - coco_exp / nococo_exp) * 100) if nococo_exp > 0 else 0
+            lines.append(f"  With CocoIndex code search:{coco_exp:>14.1f}  ({ee_coco['sessions']} sessions)")
+            lines.append(f"  Without CocoIndex code search:{nococo_exp:>11.1f}  ({ee_nococo['sessions']} sessions)")
+            if nococo_exp > 0:
+                saved = nococo_exp - coco_exp
+                lines.append(f"  Code search saves ~{saved:.1f} exploration calls/session ({coco_delta}% fewer)")
+            lines.append("  " + "-" * 66)
+
+        if exp_wo > 0 and exp_delta > 0:
+            saved = exp_wo - exp_w
+            lines.append(f"  Verdict: Recall front-loads context, saving ~{saved:.1f} exploration")
+            lines.append(f"  calls per session ({exp_delta}% fewer search operations).")
+        elif exp_delta <= 0:
+            lines.append("  Note: Recall is not yet reducing exploration calls. Content may")
+            lines.append("  need more coverage or exploration patterns may differ.")
+    elif ee_wr.get("sessions", 0) > 0:
+        lines.append("  No sessions without recall for comparison (all sessions use recall).")
+        exp_w = ee_wr.get("avg_exploration_before_productive", 0) or 0
+        lines.append(f"  Avg exploration calls before first productive action: {exp_w:.1f}")
+    else:
+        lines.append("  No exploration efficiency data yet. Requires nightly analysis.")
+
+    # Per-Bank Effectiveness
+    lines.append("")
+    lines.append("  PER-BANK EFFECTIVENESS (Which knowledge sources drive improvement?)")
+    lines.append("  " + "-" * 66)
+    k_by_bank = effectiveness.get("k_score_by_bank", {}) if effectiveness else {}
+    if k_by_bank:
+        lines.append(f"  {'Bank':<25}{'Sessions':>9}{'Eff Ratio':>11}{'K-score':>9}{'Verdict':>10}")
+        lines.append("  " + "-" * 66)
+        for bank in ("hindsight", "hindsight-docs", "hindsight-issues", "cocoindex-code"):
+            if bank not in k_by_bank:
+                continue
+            bd = k_by_bank[bank]
+            k_val = bd.get("k_score")
+            k_str = f"{k_val:.2f}x" if k_val is not None else "n/a"
+            eff_r = bd.get("effectiveness_ratio", 0)
+            if k_val is not None and k_val >= 1.5:
+                verdict = "Strong"
+            elif k_val is not None and k_val >= 1.2:
+                verdict = "Moderate"
+            elif k_val is not None:
+                verdict = "Weak"
+            else:
+                verdict = "n/a"
+            lines.append(f"  {bank:<25}{bd['sessions']:>9}{eff_r:>11.3f}{k_str:>9}{verdict:>10}")
+
+        eff_baseline = effectiveness.get("k_curve", {}).get("effectiveness_ratio_without_recall")
+        no_recall_sessions = effectiveness.get("total_sessions_without_recall", 0)
+        if eff_baseline is not None:
+            lines.append(f"  {'(no recall)':<25}{no_recall_sessions:>9}{eff_baseline:>11.3f}{'—':>9}{'Baseline':>10}")
+        lines.append("  " + "-" * 66)
+        lines.append("  K > 1.5 = strong value, K 1.2-1.5 = moderate, K < 1.2 = weak")
+    else:
+        lines.append("  No per-bank K-score data yet. Requires nightly analysis with")
+        lines.append("  sessions recalling from different banks.")
+
     # Recall Probe Quality
     lines.append("")
     lines.append("  RECALL PROBE QUALITY (Nightly Health Check)")
@@ -658,6 +887,73 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
         lines.append(f"  Total synthesized knowledge: {total_content:,} characters across {len(mm_stats)} models")
     else:
         lines.append("  No mental models configured. Run create-mental-models.py to set up.")
+
+    # Ingestion Coverage
+    lines.append("")
+    lines.append("  INGESTION COVERAGE (Is the pipeline indexing everything?)")
+    lines.append("  " + "-" * 66)
+    if coverage:
+        lines.append(f"  {'Source':<25}{'Indexed':>10}{'Total':>10}{'Coverage':>10}")
+        lines.append("  " + "-" * 66)
+        issues_total = coverage.get("issues", {}).get("total")
+        prs_total = coverage.get("prs", {}).get("total")
+        issues_indexed = coverage.get("issues_indexed", 0)
+        if issues_total is not None:
+            lines.append(f"  {'Issues':<25}{'—':>10}{issues_total:>10}{'—':>10}")
+        if prs_total is not None:
+            lines.append(f"  {'PRs':<25}{'—':>10}{prs_total:>10}{'—':>10}")
+        if issues_indexed:
+            lines.append(f"  {'Issues+PRs (indexed)':<25}{issues_indexed:>10}{'':>10}{'':>10}")
+        docs_pub = coverage.get("docs_published", {}).get("total")
+        docs_indexed = coverage.get("docs_indexed", 0)
+        if docs_pub is not None:
+            lines.append(f"  {'Docs (published)':<25}{'—':>10}{docs_pub:>10}{'—':>10}")
+        docs_repo = coverage.get("docs_repo", {}).get("total")
+        if docs_repo is not None:
+            lines.append(f"  {'Docs (repo)':<25}{'—':>10}{docs_repo:>10}{'—':>10}")
+        if docs_indexed:
+            lines.append(f"  {'Docs (indexed)':<25}{docs_indexed:>10}{'':>10}{'':>10}")
+        code_chunks = coverage.get("code_chunks")
+        if code_chunks is not None:
+            lines.append(f"  {'Code chunks':<25}{code_chunks:>10}{'—':>10}{'—':>10}")
+        lines.append("  " + "-" * 66)
+    else:
+        lines.append("  Coverage data not available (run with live Hindsight + gh CLI).")
+
+    # Data Freshness
+    lines.append("")
+    lines.append("  DATA FRESHNESS (Is the data current enough to be useful?)")
+    lines.append("  " + "-" * 66)
+    if freshness:
+        targets = {
+            "docs": ("< 1 hr", 1.0),
+            "issues": ("< 5 min", 5.0 / 60),
+            "code": ("< 5 min", 5.0 / 60),
+            "transcripts": ("< 1 hr", 1.0),
+        }
+        lines.append(f"  {'Source':<20}{'Staleness':>14}{'Target':>10}{'Status':>10}")
+        lines.append("  " + "-" * 66)
+        for source in ("docs", "issues", "code", "transcripts"):
+            if source not in freshness:
+                continue
+            fs = freshness[source]
+            hours = fs["staleness_hours"]
+            target_label, target_hours = targets.get(source, ("—", 999))
+            if hours < 1:
+                staleness_str = f"{fs['staleness_minutes']:.1f} min"
+            else:
+                staleness_str = f"{hours:.1f} hrs"
+            status = "Healthy" if hours <= target_hours else "STALE"
+            lines.append(f"  {source.capitalize():<20}{staleness_str:>14}{target_label:>10}{status:>10}")
+        lines.append("  " + "-" * 66)
+        stale_count = sum(1 for s, fs in freshness.items() if fs["staleness_hours"] > targets.get(s, ("", 999))[1])
+        if stale_count == 0:
+            lines.append("  All sources within freshness targets.")
+        else:
+            lines.append(f"  Warning: {stale_count} source(s) exceeding freshness target.")
+            lines.append("  Check: launchctl list | grep cocoindex")
+    else:
+        lines.append("  Freshness data not available (CocoIndex not running or no logs).")
 
     # Token Cost Analysis
     lines.append("")
@@ -733,11 +1029,91 @@ def export_csv(mcp_stats: dict, effectiveness: dict) -> str:
     return "\n".join(lines)
 
 
+def snapshot_metrics(data: dict, path: Path) -> None:
+    """Write a baseline snapshot for later comparison."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def compare_baselines(before: dict, after: dict) -> str:
+    """Produce a delta report comparing two baselines."""
+    lines = []
+    before_date = before.get("generated", "unknown")[:10]
+    lines.append("")
+    lines.append(f"  BEFORE/AFTER COMPARISON (baseline: {before_date})")
+    lines.append("  " + "-" * 66)
+    lines.append(f"  {'Metric':<35}{'Before':>12}{'After':>12}{'Delta':>12}")
+    lines.append("  " + "-" * 66)
+
+    def _row(label, b_val, a_val, fmt="f", suffix=""):
+        if b_val is None or a_val is None:
+            lines.append(f"  {label:<35}{'n/a':>12}{'n/a':>12}{'':>12}")
+            return
+        if fmt == "pct":
+            b_str = f"{b_val:.1f}%"
+            a_str = f"{a_val:.1f}%"
+            d_val = a_val - b_val
+            d_str = f"{d_val:+.1f}pp"
+        elif fmt == "x":
+            b_str = f"{b_val:.2f}x"
+            a_str = f"{a_val:.2f}x"
+            d_val = a_val - b_val
+            d_str = f"{d_val:+.2f}"
+        else:
+            b_str = f"{b_val:.1f}{suffix}"
+            a_str = f"{a_val:.1f}{suffix}"
+            d_val = a_val - b_val
+            d_str = f"{d_val:+.1f}{suffix}"
+        lines.append(f"  {label:<35}{b_str:>12}{a_str:>12}{d_str:>12}")
+
+    # Exploration efficiency
+    b_ee = before.get("exploration_efficiency", {})
+    a_ee = after.get("exploration_efficiency", {})
+    _row("Exploration calls (with recall)",
+         b_ee.get("with_recall", {}).get("avg_exploration_before_productive"),
+         a_ee.get("with_recall", {}).get("avg_exploration_before_productive"))
+    _row("Exploration calls (without recall)",
+         b_ee.get("without_recall", {}).get("avg_exploration_before_productive"),
+         a_ee.get("without_recall", {}).get("avg_exploration_before_productive"))
+
+    # K-score
+    b_eff = before.get("effectiveness", {})
+    a_eff = after.get("effectiveness", {})
+    _row("Overall K-score",
+         b_eff.get("k_curve", {}).get("k_score"),
+         a_eff.get("k_curve", {}).get("k_score"), fmt="x")
+
+    # Per-bank K-scores
+    for bank in ("hindsight", "hindsight-docs", "hindsight-issues", "cocoindex-code"):
+        b_bank = before.get("per_bank_k_score", {}).get(bank, {})
+        a_bank = after.get("per_bank_k_score", {}).get(bank, {})
+        _row(f"K-score ({bank})", b_bank.get("k_score"), a_bank.get("k_score"), fmt="x")
+
+    # Correction rates
+    _row("Corrections/session (with recall)",
+         b_eff.get("avg_corrections_with_recall"),
+         a_eff.get("avg_corrections_with_recall"))
+    _row("Corrections/session (without)",
+         b_eff.get("avg_corrections_without_recall"),
+         a_eff.get("avg_corrections_without_recall"))
+    _row("Correction reduction %",
+         b_eff.get("avg_reduction_pct"),
+         a_eff.get("avg_reduction_pct"), fmt="pct")
+
+    lines.append("  " + "-" * 66)
+    return "\n".join(lines)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Recollect effectiveness report")
     parser.add_argument("--days", type=int, default=7, help="Number of days to analyze (default: 7)")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     parser.add_argument("--csv", action="store_true", help="Output as CSV")
+    parser.add_argument("--snapshot", action="store_true",
+                        help="Save current metrics as a baseline snapshot")
+    parser.add_argument("--compare", type=str, metavar="BASELINE",
+                        help="Compare current metrics against a baseline snapshot file")
     args = parser.parse_args()
 
     mcp_calls = load_jsonl(MCP_CALLS_LOG, days=args.days)
@@ -748,23 +1124,48 @@ def main():
     effectiveness = aggregate_effectiveness(effectiveness_entries)
     probe_stats = aggregate_recall_probes(recall_signals)
     token_stats = analyze_token_consumption(days=args.days)
+    coverage = collect_ingestion_coverage()
+    freshness = collect_freshness_stats()
+
+    full_data = {
+        "period_days": args.days,
+        "generated": datetime.now().isoformat(),
+        "mcp_usage": mcp_stats["by_server"],
+        "mcp_by_bank": mcp_stats.get("by_bank", {}),
+        "daily_trend": mcp_stats["by_day"],
+        "effectiveness": effectiveness,
+        "recall_probes": probe_stats,
+        "token_consumption": token_stats,
+        "mental_models": collect_mental_model_stats(),
+        "exploration_efficiency": effectiveness.get("exploration_efficiency", {}),
+        "per_bank_k_score": effectiveness.get("k_score_by_bank", {}),
+        "ingestion_coverage": coverage,
+        "data_freshness": freshness,
+    }
+
+    if args.snapshot:
+        snap_path = LOG_DIR / f"baseline-{date.today().isoformat()}.json"
+        snapshot_metrics(full_data, snap_path)
+        print(f"Baseline snapshot saved to {snap_path}")
+        return
+
+    if args.compare:
+        baseline_path = Path(args.compare)
+        if not baseline_path.exists():
+            print(f"Error: baseline file not found: {baseline_path}")
+            sys.exit(1)
+        with open(baseline_path) as f:
+            before = json.load(f)
+        print(compare_baselines(before, full_data))
+        return
 
     if args.json:
-        output = {
-            "period_days": args.days,
-            "generated": datetime.now().isoformat(),
-            "mcp_usage": mcp_stats["by_server"],
-            "daily_trend": mcp_stats["by_day"],
-            "effectiveness": effectiveness,
-            "recall_probes": probe_stats,
-            "token_consumption": token_stats,
-            "mental_models": collect_mental_model_stats(),
-        }
-        print(json.dumps(output, indent=2))
+        print(json.dumps(full_data, indent=2))
     elif args.csv:
         print(export_csv(mcp_stats, effectiveness))
     else:
-        print(format_report(mcp_stats, effectiveness, probe_stats, token_stats, args.days))
+        print(format_report(mcp_stats, effectiveness, probe_stats, token_stats, args.days,
+                            coverage=coverage, freshness=freshness))
 
 
 if __name__ == "__main__":

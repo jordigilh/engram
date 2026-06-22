@@ -60,7 +60,7 @@ freshness for code.
 |--------|---------------|-----------------|------------------|
 | Docs | Manual `ingest-docs.py` | File-watching (instant) | < 1 hour |
 | Issues + PRs | Nightly `ingest-issues.py` (500 cap) | Polling every 5 min (all items) | < 5 minutes |
-| Code | Not indexed | File-watching (instant) | < 5 minutes |
+| Code | Not indexed | File-watching (instant) + hybrid search | < 5 minutes |
 | Transcripts | Nightly batch | File-watching (instant) | < 1 hour |
 
 ---
@@ -102,7 +102,7 @@ graph TB
     end
 
     cursor -->|"MCP HTTP ×3 banks"| api
-    cursor -->|"semantic code search"| coco_search
+    cursor -->|"hybrid code search"| coco_search
     api --> pg
     api --> emb
     api --> rerank
@@ -134,7 +134,7 @@ graph TB
 | Effectiveness report | `report.py` | Metrics aggregation, token analysis, mental model stats |
 | MCP hook | `cursor/hooks.json` + `hooks/log-mcp-calls.sh` | Real-time MCP call logging with hit/miss |
 | CocoIndex flows | `cocoindex-flows.py` (symlinked to `~/.hindsight/`) | Incremental ingestion for docs, issues, code, transcripts |
-| Code search | `cocoindex-search.py` | MCP-compatible semantic code search endpoint |
+| Code search | `cocoindex-search.py` | MCP hybrid code search (dense + BM25 via RRF fusion) |
 | Service plist | `~/Library/LaunchAgents/io.vectorize.hindsight.service.plist` | KeepAlive + RunAtLoad |
 | Nightly plist | `~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist` | Midnight execution |
 | CocoIndex plist | `~/Library/LaunchAgents/io.vectorize.cocoindex.service.plist` | KeepAlive continuous sync |
@@ -148,7 +148,7 @@ graph TB
 | `cursor-memory` | Corrections, instructions, workflow patterns | `concise` | Haiku 4.5 per window |
 | `kubernaut-docs` | Published architecture, API, operations docs | `chunks` | $0 (embeddings only) |
 | `kubernaut-issues` | GitHub issues + PRs: requirements, decisions, known bugs, design reviews | `chunks` | $0 (embeddings only) |
-| `code-index` | Codebase semantic chunks (Go functions, types, blocks) | `tree-sitter + embed` | $0 (local embeddings) |
+| `code-index` | Codebase semantic chunks (Go functions, types, blocks) | `tree-sitter + dense embed + BM25 tsvector` | $0 (local embeddings) |
 
 ### Security Boundary
 
@@ -192,8 +192,11 @@ flowchart TB
 
 > **Note:** Code search (`code-index`) runs as a parallel MCP tool
 > (`cocoindex-search.py`), not through Hindsight's recall pipeline. It queries
-> a separate pgvector table maintained by CocoIndex and is invoked directly by
-> the Cursor agent alongside — not instead of — the 3-tier recall hierarchy.
+> a separate pgvector table maintained by CocoIndex using **hybrid search** —
+> dense vector similarity for semantic queries and BM25 full-text matching for
+> exact identifiers, fused via Reciprocal Rank Fusion (RRF). It is invoked
+> directly by the Cursor agent alongside — not instead of — the 3-tier recall
+> hierarchy.
 
 ### Entity Graph
 

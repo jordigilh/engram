@@ -8,7 +8,7 @@
 - [gh](https://cli.github.com/) — GitHub CLI for issues ingestion (`brew install gh && gh auth login`)
 - [jq](https://jqlang.github.io/jq/) — JSON processor for MCP hook (`brew install jq`)
 - `pip install cocoindex` (or `uv pip install cocoindex`) — incremental ingestion engine
-- For code indexing: `pip install tree-sitter tree-sitter-go` (optional, for custom symbol extraction)
+- For code indexing: `pip install tree-sitter tree-sitter-go` (optional, for custom symbol extraction). The code index supports hybrid search (dense + BM25) out of the box — no additional setup required.
 - Google Cloud SDK (`gcloud`) with Application Default Credentials configured
 - Vertex AI API enabled on your GCP project
 - Claude models enabled on Vertex AI (Haiku 4.5 + Sonnet 4.6)

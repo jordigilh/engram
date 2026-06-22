@@ -55,7 +55,7 @@ LLM calls only happen overnight for pattern extraction.
 - **Mental models** — pre-synthesized documents (not scattered facts)
 - **Multi-bank architecture** — behavioral memory + project docs + GitHub issues/PRs + code index
 - **CocoIndex live sync** — docs, code, and transcripts watch for filesystem changes in real time; issues and PRs poll GitHub every 5 minutes. All four flows run concurrently as threads in a single launchd service
-- **Semantic code search** — tree-sitter AST parsing extracts functions, types, and methods into pgvector embeddings, searchable via MCP
+- **Hybrid code search** — tree-sitter AST parsing extracts functions, types, and methods; dense embeddings (pgvector) handle semantic queries while BM25 (tsvector + GIN) handles exact identifiers — results fused via Reciprocal Rank Fusion
 - **Self-cleaning** — nightly triage removes ephemeral, stale, and duplicate memories
 - **Self-evaluating** — exploration efficiency, per-bank K-score, correction reduction %, ingestion coverage, data freshness, baseline comparison
 - **Recoverable** — transcripts are source of truth; `recover-memories.py` rebuilds the bank
@@ -107,7 +107,7 @@ graph TB
     end
 
     cursor -->|"MCP ×3 banks"| api
-    cursor -->|"semantic code search"| coco_search
+    cursor -->|"hybrid code search"| coco_search
     api --> pg
     api --> emb
     api --> rerank
@@ -182,7 +182,7 @@ four source types. The expected improvements:
 | **Issues coverage** | 500 items (hardcoded cap) | All issues + PRs (~1,471 items) |
 | **Issues freshness** | ~24 hours (nightly batch) | < 5 minutes (polling every 300s) |
 | **Docs freshness** | Manual re-run | Instant (filesystem watching) |
-| **Code search** | Not available | Semantic search via pgvector + tree-sitter |
+| **Code search** | Not available | Hybrid search (dense + BM25 via RRF) over pgvector + tree-sitter |
 | **Transcript learning** | Nightly only | Continuous detection + nightly extraction |
 | **Exploration overhead** | Agent greps/globs for context | Recall front-loads synthesized knowledge |
 

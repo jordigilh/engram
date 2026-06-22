@@ -401,6 +401,7 @@ class CodeEmbedding:
     chunk_index: int
     code: str
     embedding: list[float]
+    search_text: str  # concatenated text for BM25 full-text search
 
 
 _embedder = None
@@ -442,13 +443,14 @@ async def process_code_file(
             chunk_index=i,
             code=chunk,
             embedding=embedding,
+            search_text=f"{filepath} {chunk}",
         )
         table.declare_row(row=row)
 
 
 @coco.fn
 async def code_main(code_dir: pathlib.Path) -> None:
-    """Walk Go source files, embed, and store in pgvector."""
+    """Walk Go source files, embed, and store in pgvector with hybrid search support."""
     from cocoindex.connectors import postgres
 
     schema = await postgres.TableSchema.from_class(
@@ -464,6 +466,49 @@ async def code_main(code_dir: pathlib.Path) -> None:
         PG_POOL, "code_embeddings", schema, pg_schema_name="cocoindex",
     )
     table.declare_vector_index(column="embedding", metric="cosine")
+
+    # BM25 full-text search: tsvector column + GIN index + auto-populate trigger.
+    # Uses 'simple' config (no stemming) to preserve code identifiers exactly.
+    table.declare_sql_command_attachment(
+        name="fts_search_vector",
+        setup_sql="""
+            ALTER TABLE cocoindex.code_embeddings
+                ADD COLUMN IF NOT EXISTS search_vector tsvector;
+
+            CREATE INDEX IF NOT EXISTS idx_code_embeddings_fts
+                ON cocoindex.code_embeddings USING gin(search_vector);
+
+            CREATE OR REPLACE FUNCTION cocoindex.update_code_search_vector()
+            RETURNS trigger AS $$
+            BEGIN
+                NEW.search_vector := to_tsvector('simple',
+                    coalesce(NEW.search_text, '') || ' ' || coalesce(NEW.filepath, ''));
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+
+            DROP TRIGGER IF EXISTS trg_code_search_vector
+                ON cocoindex.code_embeddings;
+            CREATE TRIGGER trg_code_search_vector
+                BEFORE INSERT OR UPDATE OF search_text, filepath
+                ON cocoindex.code_embeddings
+                FOR EACH ROW
+                EXECUTE FUNCTION cocoindex.update_code_search_vector();
+
+            UPDATE cocoindex.code_embeddings
+            SET search_vector = to_tsvector('simple',
+                coalesce(search_text, code, '') || ' ' || coalesce(filepath, ''))
+            WHERE search_vector IS NULL;
+        """,
+        teardown_sql="""
+            DROP TRIGGER IF EXISTS trg_code_search_vector
+                ON cocoindex.code_embeddings;
+            DROP FUNCTION IF EXISTS cocoindex.update_code_search_vector();
+            DROP INDEX IF EXISTS cocoindex.idx_code_embeddings_fts;
+            ALTER TABLE cocoindex.code_embeddings
+                DROP COLUMN IF EXISTS search_vector;
+        """,
+    )
 
     files = localfs.walk_dir(
         code_dir,

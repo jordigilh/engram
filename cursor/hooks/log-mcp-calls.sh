@@ -13,6 +13,13 @@ server=$(echo "$input" | jq -r '.mcp_server_name // "unknown"')
 tool=$(echo "$input" | jq -r '.tool_name // "unknown"')
 duration=$(echo "$input" | jq -r '.duration // 0')
 
+# Extract bank name from arguments when this is a recall/retain call
+bank=""
+args_raw=$(echo "$input" | jq -r '.arguments // empty' 2>/dev/null)
+if [ -n "$args_raw" ]; then
+  bank=$(echo "$args_raw" | jq -r '.bank // empty' 2>/dev/null)
+fi
+
 # result_json is a STRING containing JSON (double-encoded by Cursor)
 result_raw=$(echo "$input" | jq -r '.result_json // ""')
 
@@ -38,7 +45,12 @@ fi
 
 ts=$(date -u +"%Y-%m-%dT%H:%M:%S")
 
-printf '{"ts":"%s","server":"%s","tool":"%s","hit":%s,"result_chars":%d,"duration_ms":%.0f,"is_error":%s}\n' \
-  "$ts" "$server" "$tool" "$hit" "$result_chars" "${duration%.*}" "$is_error" >> "$LOG_FILE"
+if [ -n "$bank" ]; then
+  printf '{"ts":"%s","server":"%s","tool":"%s","bank":"%s","hit":%s,"result_chars":%d,"duration_ms":%.0f,"is_error":%s}\n' \
+    "$ts" "$server" "$tool" "$bank" "$hit" "$result_chars" "${duration%.*}" "$is_error" >> "$LOG_FILE"
+else
+  printf '{"ts":"%s","server":"%s","tool":"%s","hit":%s,"result_chars":%d,"duration_ms":%.0f,"is_error":%s}\n' \
+    "$ts" "$server" "$tool" "$hit" "$result_chars" "${duration%.*}" "$is_error" >> "$LOG_FILE"
+fi
 
 exit 0

@@ -48,7 +48,7 @@ CocoIndex declares four flows, each with a source, transform pipeline, and sink.
 |------|--------|-----------|------|-----------|
 | **docs** | Markdown files in `ENGRAM_DOCS_DIR` + repo docs | Split by heading → chunk → embed | Hindsight retain API (`kubernaut-docs` bank) | File-watching (instant) |
 | **issues** | GitHub issues + PRs via `gh` CLI | Serialize issue/PR + comments → chunk → embed | Hindsight retain API (`kubernaut-issues` bank) | Polling every 5 min (`ENGRAM_ISSUES_POLL_SECONDS`) |
-| **code** | Go source files in `ENGRAM_CODE_DIR` | tree-sitter AST parse → extract functions/types → embed | pg0 pgvector table (`code-index`) | File-watching (instant) |
+| **code** | Go source files in `ENGRAM_CODE_DIR` | tree-sitter AST parse → dense embed + BM25 tsvector | pg0 pgvector hybrid search (`code-index`) | File-watching (instant) |
 | **transcripts** | `.jsonl` files in Cursor transcripts dir | Extract correction windows → embed | Hindsight retain API (`cursor-memory` bank) | File-watching (instant) |
 
 ### Transform Details
@@ -66,12 +66,80 @@ Hindsight with `kind` and `state` tags. Re-ingestion is idempotent.
 **Code flow:** Uses tree-sitter to parse Go source files into an AST, then
 extracts function declarations, type definitions, and method blocks as individual
 chunks. Each chunk includes the file path, line range, and package name as
-metadata. Embeddings are stored in a pgvector table queried by `cocoindex-search.py`.
+metadata. Each row stores both a dense embedding (`vector(384)` via
+`all-MiniLM-L6-v2`) and a `search_text` column used for BM25 full-text search.
+A `declare_sql_command_attachment` on the table creates a PostgreSQL trigger
+that auto-populates a `tsvector` column and GIN index from `search_text` — this
+is managed entirely by CocoIndex's lifecycle (setup on create, teardown on
+removal). The result is **hybrid search**: `cocoindex-search.py` queries both
+the dense vector index and the BM25 index, then fuses results via Reciprocal
+Rank Fusion (RRF).
 
 **Transcripts flow:** Scans `.jsonl` transcript files for correction windows
 (same regex patterns as `nightly-learn.py`) and retains them through the
 Hindsight API. This supplements — not replaces — the nightly learning pipeline,
 which also runs LLM extraction and reflection.
+
+---
+
+## Hybrid Code Search
+
+The code flow produces a table (`cocoindex.code_embeddings`) that supports
+two retrieval methods simultaneously:
+
+| Method | Column | Index | Best for |
+|--------|--------|-------|----------|
+| **Dense** (semantic) | `embedding vector(384)` | HNSW/IVFFlat | Conceptual queries: "how does rate limiting work?" |
+| **BM25** (lexical) | `search_vector tsvector` | GIN | Exact identifiers: "ParseConfig", "RemediationRequest" |
+
+### How it works
+
+1. **At ingestion**, each code chunk gets a dense embedding (`all-MiniLM-L6-v2`)
+   and a `search_text` column (filepath + code concatenated).
+2. A **CocoIndex SQL command attachment** creates a PostgreSQL trigger that
+   auto-populates a `tsvector` column from `search_text` on every INSERT/UPDATE,
+   plus a GIN index for fast BM25 queries. CocoIndex manages the full lifecycle
+   of this infrastructure (setup and teardown).
+3. **At query time**, `cocoindex-search.py` runs both dense and BM25 retrieval
+   in parallel, then fuses results using **Reciprocal Rank Fusion (RRF)** with
+   `k=60`.
+
+### Search modes
+
+The MCP tool `cocoindex_search` accepts a `mode` parameter:
+
+| Mode | Behavior |
+|------|----------|
+| `hybrid` (default) | Dense + BM25 → RRF fusion. Best overall quality. |
+| `dense` | Semantic similarity only. Best for conceptual, natural-language queries. |
+| `bm25` | Keyword matching only. Best for exact identifiers and function names. |
+
+### CLI testing
+
+```bash
+# Hybrid (default)
+python3 cocoindex-search.py --query "how does the reconciler handle errors"
+
+# Dense only
+python3 cocoindex-search.py --query "error handling in reconciler" --mode dense
+
+# BM25 only — great for exact identifiers
+python3 cocoindex-search.py --query "ParseConfig" --mode bm25
+```
+
+### Why SQL command attachment (not a manual trigger)
+
+CocoIndex's `declare_sql_command_attachment()` lets us declare arbitrary SQL
+that CocoIndex manages as part of the table's lifecycle. This means:
+
+- **Setup**: trigger, function, GIN index, and tsvector column are created
+  automatically when the flow initializes.
+- **Teardown**: if the attachment is removed or changed, CocoIndex runs the
+  teardown SQL to clean up.
+- **No external migration scripts**: everything is declared in `cocoindex-flows.py`.
+
+This is preferred over manually creating triggers via `psql` because it keeps
+the full schema under CocoIndex's control.
 
 ---
 

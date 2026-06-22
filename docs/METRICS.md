@@ -311,10 +311,40 @@ where a specific bank was recalled vs. sessions where it was not.
 | `cursor-memory` | Behavioral pattern value | > 1.5x |
 | `kubernaut-docs` | Documentation recall value | > 1.3x |
 | `kubernaut-issues` | Issue context value | > 1.2x |
-| `code-index` | Code search value | > 1.2x |
+| `code-index` | Hybrid code search value (dense + BM25) | > 1.2x |
 
 A bank with K-score near 1.0 is not contributing meaningfully — its content
 may need refresh or its recall triggers may be too broad.
+
+### Hybrid Search Quality
+
+The code index uses hybrid search (dense + BM25 via RRF fusion). Track search
+mode effectiveness to understand which retrieval method contributes most:
+
+| Mode | Best for | Watch for |
+|------|----------|-----------|
+| `hybrid` (default) | General queries mixing concepts and identifiers | Should outperform either mode alone |
+| `dense` | "How does X work?" — conceptual, natural-language queries | Low scores = embedding model may need upgrade |
+| `bm25` | "ParseConfig" — exact identifier lookup | No results = tsvector may not be populated (check trigger) |
+
+To compare modes manually:
+
+```bash
+python3 cocoindex-search.py --query "reconciler error handling" --mode hybrid
+python3 cocoindex-search.py --query "reconciler error handling" --mode dense
+python3 cocoindex-search.py --query "ParseConfig" --mode bm25
+```
+
+**Healthy indicators:**
+- Hybrid mode returns more diverse results than either mode alone
+- BM25 mode finds exact identifiers that dense mode misses
+- Dense mode finds conceptually related code that BM25 misses
+
+**Warning signs:**
+- BM25 returns 0 results for known identifiers: the `search_vector` trigger
+  may not be firing — check `SELECT count(*) FROM cocoindex.code_embeddings WHERE search_vector IS NULL`
+- Hybrid results identical to dense-only: BM25 index may be empty — re-run
+  `python3 cocoindex-flows.py --mode backfill`
 
 ### Freshness-at-Recall
 
@@ -384,7 +414,7 @@ most improvement.
 | `hindsight` | Behavioral corrections and conventions | > 1.5x |
 | `hindsight-docs` | Published documentation recall | > 1.3x |
 | `hindsight-issues` | Issues + PRs context | > 1.2x |
-| `cocoindex-code` | Semantic code search | > 1.2x |
+| `cocoindex-code` | Hybrid code search (dense + BM25) | > 1.2x |
 
 A bank with K-score near 1.0 is not contributing meaningfully — its content may
 need refresh, more coverage, or better recall triggers.

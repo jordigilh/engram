@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Ingest GitHub issues into Hindsight knowledge bank.
 
+DEPRECATED: This script is superseded by CocoIndex, which provides real-time
+incremental ingestion with delta processing (polling every 5 min). The launchd
+job (io.vectorize.hindsight.issues.plist) has been disabled. This script remains
+for one-time manual use or environments without CocoIndex.
+
 Creates a 'kubernaut-issues' bank with chunks extraction mode (zero LLM cost)
 and ingests issues from the kubernaut repository. Filters out bot comments
 and CI noise to keep the knowledge signal-rich.

@@ -531,6 +531,23 @@ def measure_recall_quality(bank: str, query: str) -> dict:
             for c in (chunks.values() if isinstance(chunks, dict) else [])
             if isinstance(c, dict)
         )
+        avg_staleness_hours = None
+        now = datetime.now()
+        staleness_values = []
+        for r in results_list:
+            mentioned_at = r.get("mentioned_at")
+            if mentioned_at:
+                try:
+                    ts = datetime.fromisoformat(mentioned_at)
+                    staleness_h = (now - ts).total_seconds() / 3600
+                    if staleness_h >= 0:
+                        staleness_values.append(staleness_h)
+                except (ValueError, TypeError):
+                    pass
+        if staleness_values:
+            avg_staleness_hours = round(
+                sum(staleness_values) / len(staleness_values), 2
+            )
         signal = {
             "ts": datetime.now().isoformat(),
             "type": "recall_probe",
@@ -540,6 +557,7 @@ def measure_recall_quality(bank: str, query: str) -> dict:
             "results": len(results_list),
             "chunks": num_chunks,
             "approx_tokens": approx_tokens,
+            "avg_staleness_hours": avg_staleness_hours,
         }
         with open(RECALL_SIGNALS_PATH, "a") as f:
             f.write(json.dumps(signal) + "\n")
@@ -619,6 +637,7 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
     # Tracks: recall usage, proactive recall, context loading cost, K-curve effectiveness
     PRODUCTIVE_TOOLS = {"Shell", "Write", "StrReplace", "EditNotebook", "Delete"}
     EXPLORATION_TOOLS = {"Read", "Grep", "Glob", "SemanticSearch", "Task", "WebSearch"}
+    RECALL_BANKS = {"hindsight", "hindsight-docs", "hindsight-issues", "cocoindex-code"}
 
     sessions_with_recall = []
     sessions_without_recall = []
@@ -636,6 +655,9 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
         first_recall_turn = None
         user_requested_recall = False
         turn_idx = 0
+        banks_recalled = set()
+        exploration_before_productive = 0
+        seen_productive_action = False
 
         # K-curve tracking
         first_productive_turn = None
@@ -693,11 +715,18 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
                                 if "recall" in tool.lower():
                                     has_recall = True
                                     turn_has_recall = True
+                                    server = inp.get("server", "")
+                                    if server in RECALL_BANKS:
+                                        banks_recalled.add(server)
                                     if first_recall_turn is None:
                                         first_recall_turn = turn_idx
                             if name in PRODUCTIVE_TOOLS:
                                 productive_action_count += 1
                                 turn_has_productive = True
+                                if not seen_productive_action:
+                                    seen_productive_action = True
+                            if name in EXPLORATION_TOOLS and not seen_productive_action:
+                                exploration_before_productive += 1
 
                 if turn_has_recall:
                     agent_turns_with_recall += 1
@@ -752,6 +781,8 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
             "effectiveness_ratio": effectiveness_ratio,
             "rework_tokens": rework_tokens,
             "size_bucket": bucket,
+            "banks_recalled": sorted(banks_recalled),
+            "exploration_actions_before_productive": exploration_before_productive,
         }
 
         if has_recall:
@@ -819,6 +850,45 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
         k_score_normalized = round(
             sum(score * w for score, w in weighted_scores) / total_weight, 2
         )
+
+    # Per-bank K-score decomposition: for each bank, compare sessions that
+    # recalled from that bank vs sessions with no recall at all
+    all_sessions = sessions_with_recall + sessions_without_recall
+    k_score_by_bank = {}
+    for bank in RECALL_BANKS:
+        bank_sessions = [s for s in sessions_with_recall if bank in s["banks_recalled"]]
+        if bank_sessions and sessions_without_recall:
+            eff_bank = _avg(bank_sessions, "effectiveness_ratio")
+            eff_no_recall = _avg(sessions_without_recall, "effectiveness_ratio")
+            bank_k = round(eff_bank / eff_no_recall, 2) if eff_no_recall > 0 else None
+            k_score_by_bank[bank] = {
+                "sessions": len(bank_sessions),
+                "effectiveness_ratio": eff_bank,
+                "k_score": bank_k,
+            }
+
+    # Exploration efficiency: compare exploration actions before first productive
+    # action for sessions with/without recall, and with/without cocoindex-code
+    cocoindex_sessions = [s for s in sessions_with_recall if "cocoindex-code" in s["banks_recalled"]]
+    non_cocoindex_sessions = [s for s in all_sessions if "cocoindex-code" not in s.get("banks_recalled", [])]
+    exploration_efficiency = {
+        "with_recall": {
+            "avg_exploration_before_productive": _avg(sessions_with_recall, "exploration_actions_before_productive"),
+            "sessions": len(sessions_with_recall),
+        },
+        "without_recall": {
+            "avg_exploration_before_productive": _avg(sessions_without_recall, "exploration_actions_before_productive"),
+            "sessions": len(sessions_without_recall),
+        },
+        "with_cocoindex": {
+            "avg_exploration_before_productive": _avg(cocoindex_sessions, "exploration_actions_before_productive"),
+            "sessions": len(cocoindex_sessions),
+        },
+        "without_cocoindex": {
+            "avg_exploration_before_productive": _avg(non_cocoindex_sessions, "exploration_actions_before_productive"),
+            "sessions": len(non_cocoindex_sessions),
+        },
+    }
 
     # Net Efficiency Score (NES): rework-aware metric
     # NES = (total_tokens - rework_tokens) / total_tokens
@@ -900,6 +970,7 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
             },
             "k_score": k_score,
             "k_score_normalized": k_score_normalized,
+            "k_score_by_bank": k_score_by_bank,
             "by_bucket": k_curve_by_bucket,
             "context_loading_reduction_pct": ctx_reduction_pct,
             "token_efficiency_gain_pct": token_eff_gain_pct,
@@ -918,6 +989,7 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
             "nes_ratio": nes_ratio,
             "by_bucket": nes_by_bucket,
         },
+        "exploration_efficiency": exploration_efficiency,
         "token_signals": {
             "avg_session_messages_with_recall": _avg(sessions_with_recall, "messages"),
             "avg_session_messages_without_recall": _avg(sessions_without_recall, "messages"),
@@ -1190,6 +1262,34 @@ def run_nightly(watermarks: dict, seen_hashes: set) -> dict:
                     bucket, bd["nes_with"], bd["nes_without"], bd["nes_ratio"],
                     bd["avg_rework_pct_with"], bd["avg_rework_pct_without"],
                 )
+    k_by_bank = k_curve.get("k_score_by_bank", {}) if k_curve else {}
+    if k_by_bank:
+        for bank_name, bdata in k_by_bank.items():
+            if bdata.get("k_score") is not None:
+                log.info(
+                    "  K-score [%s]: %.2fx (%d sessions, eff_ratio=%.3f)",
+                    bank_name, bdata["k_score"], bdata["sessions"],
+                    bdata["effectiveness_ratio"],
+                )
+    explore_eff = effectiveness.get("exploration_efficiency", {})
+    if explore_eff:
+        wr = explore_eff.get("with_recall", {})
+        wor = explore_eff.get("without_recall", {})
+        log.info(
+            "  Exploration efficiency: %.1f avg actions before productive (recall, %d sessions) "
+            "vs %.1f (no recall, %d sessions)",
+            wr.get("avg_exploration_before_productive", 0), wr.get("sessions", 0),
+            wor.get("avg_exploration_before_productive", 0), wor.get("sessions", 0),
+        )
+        wc = explore_eff.get("with_cocoindex", {})
+        woc = explore_eff.get("without_cocoindex", {})
+        if wc.get("sessions", 0) > 0:
+            log.info(
+                "  Exploration efficiency [cocoindex]: %.1f avg actions (%d sessions) "
+                "vs %.1f without (%d sessions)",
+                wc.get("avg_exploration_before_productive", 0), wc.get("sessions", 0),
+                woc.get("avg_exploration_before_productive", 0), woc.get("sessions", 0),
+            )
 
     # Phase: Refresh all mental models
     log.info("Refreshing mental models...")

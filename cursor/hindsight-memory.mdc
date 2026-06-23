@@ -15,10 +15,23 @@ Use the appropriate bank(s):
 - **hindsight** — corrections, coding conventions, user preferences
 - **hindsight-docs** — kubernaut architecture, API/CRD contracts, operations
 - **hindsight-issues** — requirements, known bugs, design decisions, priorities
-- **cocoindex-code** — semantic code search, symbol lookup, architecture context
 
 Call one or more banks depending on what the task touches. A single recall to
 **hindsight** with a query summarizing the task intent is sufficient for most work.
+
+## Code search: use `cocoindex_search` tool
+
+The MCP server **user-cocoindex-code** provides a tool named **`cocoindex_search`**.
+Call it with `{"query": "your search terms", "limit": 10}`.
+
+Use `cocoindex_search` when:
+- You need to find code by concept: `cocoindex_search(query="how does rate limiting work")`
+- You need to locate an identifier: `cocoindex_search(query="ParseConfig")`
+- You want to understand a subsystem before modifying it
+- You need to find callers or dependents of a function/type
+
+Prefer `cocoindex_search` over Grep/SemanticSearch when searching by meaning.
+Use Grep only when you need exact regex matching.
 
 ## When to recall again (mid-session)
 
@@ -27,13 +40,11 @@ Call `recall` again if:
 - The user corrects you — check if this correction already exists in memory
 - You've made 2+ failed attempts at the same problem
 - A new entity (CRD, service, package) enters the conversation that wasn't part of the original recall
-- You need to understand how a subsystem works before modifying it — use `cocoindex-code`
-- You're looking for where a pattern is implemented — use `cocoindex-code` before Grep
 - A code search returned results from an unfamiliar file — recall `hindsight` for conventions about that area
 
 ### Phase-based triggers (MUST recall when entering these phases)
 
-| Phase | Bank | Query focus |
+| Phase | Bank or tool | Query focus |
 |-------|------|-------------|
 | Implementation planning | hindsight | testing methodology, TDD, pyramid invariant, FedRAMP business outcome tests |
 | Writing/designing tests | hindsight | test conventions, table-driven tests, assertion patterns |
@@ -42,12 +53,12 @@ Call `recall` again if:
 | Debugging/troubleshooting | hindsight-issues | known bugs, past failures, related issues |
 | Pipeline monitoring | hindsight | pipeline monitoring protocol, must-gather RCA, confidence gates |
 | Implementation complete (final gate) | hindsight | GA readiness audit, multi-dimensional review, authoritative validation |
-| Exploring unfamiliar code | cocoindex-code | semantic search for the feature/subsystem being investigated |
-| Understanding blast radius | cocoindex-code | what depends on the function/type being changed |
-| Refactoring / renaming | cocoindex-code | all references and callers of the target symbol |
+| Exploring unfamiliar code | `cocoindex_search` | semantic search for the feature/subsystem being investigated |
+| Understanding blast radius | `cocoindex_search` | what depends on the function/type being changed |
+| Refactoring / renaming | `cocoindex_search` | all references and callers of the target symbol |
 
 These are NOT optional. When you transition into one of these phases, recall
-the indicated bank with the query focus BEFORE writing code or proposing a plan.
+the indicated bank or call the indicated tool BEFORE writing code or proposing a plan.
 
 ## When to skip (OK)
 
@@ -72,14 +83,15 @@ Use the right tool for the right question:
 
 - **gopls** — precise type info, symbol references, diagnostics. Use for
   "what is the type of X?", "who implements interface Y?", "what errors exist?"
-- **cocoindex-code** — semantic code search by meaning. Use for "where do we
-  handle rate limiting?", "how does the remediation pipeline work?", "what
-  functions touch this data?" Prefer over Grep when searching by concept.
+- **`cocoindex_search`** — semantic code search by meaning. The tool is on the
+  `user-cocoindex-code` MCP server. Call it with `{"query": "...", "limit": 10}`.
+  Use for "where do we handle rate limiting?", "how does the remediation
+  pipeline work?", "what functions touch this data?"
 - **hindsight** — past mistakes, conventions, behavioral patterns about code.
   Use for "how should I structure this test?", "what was corrected before?"
 
-Prefer gopls for precise lookups, cocoindex-code for semantic exploration, and
-hindsight for behavioral context. Do not redundantly call all three for the
+Prefer gopls for precise lookups, `cocoindex_search` for semantic exploration,
+and hindsight for behavioral context. Do not redundantly call all three for the
 same question.
 
 ## Do NOT retain

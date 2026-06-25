@@ -211,10 +211,11 @@ Key metrics to watch:
 | Doc | Content |
 |-----|---------|
 | [Installation Guide](docs/INSTALL.md) | Full setup, prerequisites, verification |
-| [Customizing the Rule](docs/INSTALL.md#customizing-the-rule) | Adapt for your project (Python, Rust, etc.) |
+| [Customizing the Rule](docs/INSTALL.md#customizing-the-rule) | Ready-made rules for Go, Python, Rust, TypeScript, or any stack |
 | [Architecture & Internals](docs/README.md) | Design decisions, knowledge graph, correction detection |
 | [CocoIndex Operations](docs/COCOINDEX.md) | Flow catalog, running modes, monitoring, troubleshooting |
 | [Metrics & Monitoring](docs/METRICS.md) | Effectiveness tracking, proactive recall, triage, report interpretation |
+| [Effectiveness Dashboard](docs/DASHBOARD.md) | Daily metrics trend, auto-updated by nightly pipeline |
 | [Research Findings](docs/FINDINGS.md) | Empirical results, incidents, and lessons learned |
 
 ## License

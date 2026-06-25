@@ -1343,6 +1343,20 @@ def run_nightly(watermarks: dict, seen_hashes: set) -> dict:
         json.dump(results, f, indent=2)
     log.info("Results saved to %s", log_path)
 
+    # Regenerate dashboard from all daily reports
+    try:
+        import importlib.util
+        _dash_spec = importlib.util.spec_from_file_location(
+            "generate_dashboard",
+            Path(__file__).resolve().parent / "generate-dashboard.py",
+        )
+        _dash_mod = importlib.util.module_from_spec(_dash_spec)
+        _dash_spec.loader.exec_module(_dash_mod)
+        _dash_mod.main()
+        log.info("Dashboard updated")
+    except Exception as e:
+        log.warning("Dashboard generation failed: %s", e)
+
     # Clear retained hashes (start fresh for tomorrow), prune old watermarks
     seen_hashes.clear()
     pruned = prune_watermarks(watermarks)

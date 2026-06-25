@@ -12,7 +12,7 @@ does and why, see the [root README](../README.md).
 - [How Correction Detection Works](#how-correction-detection-works)
 - [Backup and Restore](#backup-and-restore)
 
-See also: [Installation Guide](INSTALL.md) | [Metrics and Monitoring](METRICS.md)
+See also: [Installation Guide](INSTALL.md) | [Metrics and Monitoring](METRICS.md) | [Dashboard](DASHBOARD.md)
 
 ---
 
@@ -125,6 +125,7 @@ graph TB
 | Hindsight process | `~/.hindsight/venv/bin/hindsight-api` | Native macOS service (launchd managed) |
 | MCP config | `~/.cursor/mcp.json` | Connects Cursor to Hindsight (memory + docs + issues) + gopls |
 | Cursor rule | `~/.cursor/rules/hindsight-memory.mdc` | Instructs agent to recall from all three banks |
+| Example rules | `cursor/examples/*.mdc` | Ready-made rules for Go, Python, Rust, TypeScript, minimal |
 | Nightly script | `nightly-learn.py` (symlinked to `~/.hindsight/`) | Processes transcripts, extracts patterns |
 | Doc ingestion | `ingest-docs.py` | One-time doc ingestion (deprecated — use CocoIndex) |
 | Issue ingestion | `ingest-issues.py` | Manual issues ingestion (deprecated — use CocoIndex) |
@@ -132,6 +133,7 @@ graph TB
 | Memory triage | `triage-memories.py` | Nightly cleanup of low-value memories (ephemeral, stale, duplicate) |
 | Memory recovery | `recover-memories.py` | One-time full reprocessing of all transcripts to rebuild the bank |
 | Effectiveness report | `report.py` | Metrics aggregation, token analysis, mental model stats |
+| Dashboard generator | `generate-dashboard.py` | Auto-updates `docs/DASHBOARD.md` from daily reports |
 | MCP hook | `cursor/hooks.json` + `hooks/log-mcp-calls.sh` | Real-time MCP call logging with hit/miss |
 | CocoIndex flows | `cocoindex-flows.py` (symlinked to `~/.hindsight/`) | Incremental ingestion for docs, issues, code, transcripts |
 | Code search | `cocoindex-search.py` | MCP hybrid code search (dense + BM25 via RRF fusion) |
@@ -332,4 +334,5 @@ relevant. See [Metrics — Memory Triage](METRICS.md#memory-triage) for details.
 - **[Customizing the Rule](INSTALL.md#customizing-the-rule)** — adapt the Cursor rule for your project (Python, Rust, etc.)
 - **[CocoIndex Operations](COCOINDEX.md)** — flow catalog, running modes, monitoring, troubleshooting
 - **[Metrics and Monitoring](METRICS.md)** — observability, effectiveness tracking, report interpretation
+- **[Effectiveness Dashboard](DASHBOARD.md)** — daily metrics trend, auto-updated by nightly pipeline
 - **[Research Findings](FINDINGS.md)** — empirical results, incidents, and lessons learned

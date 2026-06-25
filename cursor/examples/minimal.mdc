@@ -1,0 +1,66 @@
+---
+description: Recall relevant patterns from Hindsight memory before responding
+alwaysApply: true
+---
+
+## When to recall (MUST)
+
+You MUST call `recall` on your **first turn** when the task involves:
+- Writing or modifying code
+- Architecture or design decisions
+- Debugging, troubleshooting, or root-cause analysis
+- Anything the user has corrected you on before
+
+Use the **hindsight** bank with a query summarizing the task intent.
+
+## Before planning or implementing (MANDATORY GATE)
+
+Before proposing any plan or writing any implementation:
+
+1. Recall `hindsight` with query: **"project methodology, workflow, conventions"**
+2. Apply the recalled methodology to your plan
+3. If your plan does not follow the recalled methodology, **revise it before
+   presenting**
+
+## Mid-session re-recall (long sessions)
+
+In sessions longer than ~20 agent turns, or whenever a conversation summary
+has been applied, **re-recall `hindsight`** with:
+- "project methodology, workflow, conventions"
+
+## Code search: use `cocoindex_search` tool
+
+The MCP server **user-cocoindex-code** provides a tool named **`cocoindex_search`**.
+Call it with `{"query": "your search terms", "limit": 10}`.
+
+Use `cocoindex_search` when:
+- You need to find code by concept or meaning
+- You need to locate a symbol, function, or class
+- You want to understand a module before modifying it
+- You need to find callers or dependents of a function/type
+
+Prefer `cocoindex_search` over Grep/SemanticSearch when searching by meaning.
+Use Grep only when you need exact regex matching.
+
+## When to recall again (mid-session)
+
+Call `recall` again if:
+- The task shifts to a different area of the codebase
+- The user corrects you — check if this correction already exists in memory
+- You've made 2+ failed attempts at the same problem
+- A code search returned results from an unfamiliar file — recall `hindsight` for conventions about that area
+
+## When to skip (OK)
+
+- Trivial follow-ups ("yes", "do it", "commit")
+- Pure file reads or terminal commands with no design decisions
+- You already recalled this exact topic earlier in the session
+
+## How to use results
+
+- **Mental models**: use directly as authoritative context
+- **Individual facts**: reason over them to identify relevant patterns
+
+## Do NOT retain
+
+Never call `retain` during sessions. Memory extraction runs nightly.

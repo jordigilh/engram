@@ -385,84 +385,76 @@ curl -s http://localhost:8888/health | python3 -m json.tool
 ## Customizing the Rule
 
 The included `hindsight-memory.mdc` rule is tailored for kubernaut (a Go operator
-project). Adapt it for your own project by changing:
+project with CocoIndex code search and gopls). Adapt it for your own project
+by copying one of the ready-made examples below and tweaking the domain triggers.
 
-1. **When to recall** — replace the domain triggers with your project's domain
-2. **Banks** — rename or remove banks that don't apply
-3. **Language tooling** — replace `gopls` with your language's MCP (if any)
+### Ready-made examples
 
-### Example: Python web app
+Example rules live in `cursor/examples/`. Each is a complete, copy-ready `.mdc`
+file with the planning gate, mid-session re-recall, and phase-based triggers
+already wired in:
 
-```markdown
----
-description: Recall patterns from Engram memory before responding
-alwaysApply: true
----
+| Example | Stack | File |
+|---------|-------|------|
+| Go operator | Go, K8s, CRDs, gopls, CocoIndex | [`cursor/examples/go-operator.mdc`](../cursor/examples/go-operator.mdc) |
+| Python web app | Python, Django/Flask/FastAPI, CocoIndex | [`cursor/examples/python-web.mdc`](../cursor/examples/python-web.mdc) |
+| Rust systems | Rust, unsafe, traits, crates, CocoIndex | [`cursor/examples/rust-systems.mdc`](../cursor/examples/rust-systems.mdc) |
+| TypeScript/React | TS, React, components, hooks, CocoIndex | [`cursor/examples/typescript-react.mdc`](../cursor/examples/typescript-react.mdc) |
+| Minimal | Any stack (language-agnostic), CocoIndex | [`cursor/examples/minimal.mdc`](../cursor/examples/minimal.mdc) |
 
-## When to recall (MUST)
+**To install an example:**
 
-You MUST call `recall_memory` on your **first turn** when the task involves:
-- Python code, Django, or database migrations
-- API endpoint design or authentication changes
-- Debugging, troubleshooting, or production incidents
-- Anything the user has corrected you on before
+```bash
+# Copy to your global Cursor rules (applies to all projects)
+cp cursor/examples/python-web.mdc ~/.cursor/rules/hindsight-memory.mdc
 
-Use the appropriate bank(s):
-- **hindsight** — corrections, coding conventions, user preferences
-- **hindsight-docs** — project architecture, API contracts, deployment runbooks
-
-Call **hindsight** with a query summarizing the task intent.
-
-## When to skip (OK)
-
-- Trivial follow-ups ("yes", "do it", "commit")
-- Pure file reads or terminal commands with no design decisions
-- You already recalled earlier in this session for the same topic
-
-## How to use results
-
-- **Mental models**: use directly as authoritative context
-- **Individual facts**: reason over them to identify relevant patterns
-
-## Do NOT retain
-
-Never call `retain_memory` during sessions. Memory extraction runs nightly.
+# Or copy to a specific project (applies only to that repo)
+mkdir -p /path/to/your/project/.cursor/rules
+cp cursor/examples/python-web.mdc /path/to/your/project/.cursor/rules/hindsight-memory.mdc
 ```
 
-### Example: Rust systems project
+### What each example includes
 
-```markdown
----
-description: Recall patterns from Engram memory before responding
-alwaysApply: true
----
+Every example rule has these sections, which reflect empirical findings from
+the kubernaut project:
 
-## When to recall (MUST)
+1. **When to recall (MUST)** — domain-specific triggers for first-turn recall
+2. **Before planning or implementing (MANDATORY GATE)** — forces a recall of
+   project methodology before any plan is proposed. This prevents the agent from
+   defaulting to generic patterns instead of your established conventions
+3. **Mid-session re-recall** — triggered after ~20 agent turns or after context
+   summarization. Empirical data showed 61% of corrections occur in the second
+   half of sessions, largely due to summarization silently dropping recalled
+   conventions
+4. **Code search via CocoIndex** — directs the agent to use `cocoindex_search`
+   for semantic code exploration (finding code by concept/meaning) instead of
+   relying on Grep/SemanticSearch. Requires CocoIndex setup (step 16 above)
+5. **Phase-based triggers** — recall the right bank or call `cocoindex_search`
+   when transitioning to a new phase (planning, testing, API design, debugging,
+   code exploration, refactoring)
+6. **Skip criteria** — prevents recall spam on trivial follow-ups
+7. **Do NOT retain** — blocks in-session retain calls (extraction runs nightly)
 
-You MUST call `recall_memory` on your **first turn** when the task involves:
-- Rust code, unsafe blocks, or trait implementations
-- Concurrency, memory management, or performance work
-- API surface changes or breaking changes
-- Anything the user has corrected you on before
+### Adapting an example
 
-Use the **hindsight** bank with a query summarizing the task intent.
+When customizing, change:
 
-## When to skip (OK)
-
-- Trivial follow-ups or simple cargo commands
-- Pure file reads with no design decisions
-- You already recalled earlier in this session for the same topic
-
-## Do NOT retain
-
-Never call `retain_memory` during sessions. Memory extraction runs nightly.
-```
+1. **Domain triggers** — replace language/framework mentions with your stack
+2. **Banks** — adjust which banks exist (`hindsight` is always present; add
+   `hindsight-docs` and `hindsight-issues` if you ingest docs/issues)
+3. **Phase-based queries** — tailor query focus to your project's terminology
+   (e.g., "pytest fixtures" vs "table-driven tests")
+4. **Language tooling** — add your language's MCP if available (gopls for Go,
+   rust-analyzer for Rust, etc.)
 
 ### Key principles
 
 - **Be specific about triggers** — generic rules get ignored; domain-specific
   triggers (language, framework, problem type) get followed
-- **Keep it short** — rules over ~50 lines lose effectiveness
+- **Include the planning gate** — without it, the agent will propose plans
+  based on generic knowledge rather than your project's methodology
+- **Include mid-session re-recall** — long sessions lose context to
+  summarization; re-recalling counteracts this
 - **Include skip criteria** — prevents recall spam on trivial interactions
 - **One rule file** — don't split across multiple `.mdc` files; `alwaysApply: true`
   means it's always loaded

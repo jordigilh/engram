@@ -67,11 +67,11 @@ The nightly script (`nightly-learn.py`) produces two outputs:
 | **Proactive Recall %** | proactive_sessions / total_sessions | Sessions where agent recalled without user mentioning memory |
 | **Per-turn Recall %** | turns_with_recall / total_turns | Density of recall usage within sessions |
 | **Context Loading Cost** | chars_before_first_productive_action / 4 | Tokens consumed to orient the agent before real work starts |
-| **Effectiveness Ratio** | productive_actions / (total_tokens / 1000) | Productive actions per 1K tokens — how hard each token works |
-| **K-score** | eff_ratio_with / eff_ratio_without | Token efficiency multiplier: >1 = recall makes tokens work harder |
-| **NES** | (total_tokens - rework_tokens) / total_tokens | Net Efficiency Score: fraction of tokens spent on productive work vs rework |
-| **NES Ratio** | NES_with / NES_without | Rework avoidance multiplier: >1 = recall prevents correction cascades |
+| **Productivity Density** | productive_actions / (total_tokens / 1000) | Productive actions per 1K tokens — higher is better |
+| **Rework Ratio** | rework_tokens / total_tokens | Fraction of tokens wasted on correction loops — lower is better |
+| **Rework %** | rework_ratio × 100 | Same as rework ratio, expressed as percentage |
 | **Rework Tokens** | Σ(post-correction segment / 2) | Estimated tokens wasted redoing work after each user correction |
+| **First Productive Turn** | Turn index of first productive action | How quickly the agent starts real work — lower is better |
 | **Recall Latency** | ms per recall call | Performance health — should be <2s for good UX |
 | **Result Count** | chunks returned per recall | Coverage — more results = richer context |
 | **Triage Flagged %** | flagged / total_memories | Memory hygiene: what fraction of stored memories is noise |
@@ -131,17 +131,33 @@ python3 report.py --csv
 
   Healthy: Agent is proactively recalling in most sessions.
 
-  K-CURVE (Token efficiency divergence)
+  SESSION DISTRIBUTION (How sessions break down by size)
   ------------------------------------------------------------------
-                          With Recall    Without Recall     Delta
+  Bucket              With Recall    Without Recall     Total
   ------------------------------------------------------------------
-  Context loading cost:       200 tok        8,400 tok      -97%
-  Productive actions:            14.0            11.0       +27%
-  Corrections:                    0.8             3.2       -75%
-  Total session tokens:     45,000 tok      62,000 tok      -27%
-  Effectiveness ratio:          0.310           0.180       +72%
+  Trivial (<5K)                 5                 3         8
+  Small (5-15K)                 4                 2         6
+  Medium (15-100K)              6                 1         7
+  Large (>100K)                 3                 0         3
   ------------------------------------------------------------------
-  K-score: 1.72x (recall sessions are 1.72x more token-efficient)
+
+  RECALL SESSION STATS (Non-trivial sessions with recall)
+  ------------------------------------------------------------------
+  Sessions:                   13
+  Corrections/session:      0.83
+  Rework %:                  4.2%
+  Productivity density:    0.3100  (productive actions per 1K tokens)
+  First productive turn:     2.3
+
+  WEEKLY TREND (Recall sessions only, from epoch)
+  ------------------------------------------------------------------
+  Epoch: 2026-06-26 (0 days ago)
+  Stabilization window: 7 days remaining
+
+  Week         Sessions  Corr/Sess  Rework%  ProdDensity   1st Prod
+  ------------------------------------------------------------------
+  2026-W26           13       0.83     4.2%       0.3100        2.3
+  ------------------------------------------------------------------
 
   RECALL PROBE QUALITY (Nightly Health Check)
   ------------------------------------------------------------------
@@ -173,10 +189,9 @@ python3 report.py --csv
 - **Correction reduction > 30%** after 2+ weeks of data
 - **Recall adoption > 50%**: The agent is using memory in most sessions
 - **Proactive recall > 30%**: The agent initiates recall without user prompting
-- **K-score > 1.5**: Recall sessions are significantly more token-efficient
-- **NES > 0.9**: Less than 10% of tokens are wasted on rework
-- **NES ratio > 1.2**: Recall meaningfully reduces rework compared to no-recall sessions
-- **Context loading reduction > 50%**: Recall is eliminating the education phase
+- **Rework % < 10%**: Less than 10% of tokens are wasted on correction loops
+- **Productivity density trending up**: More productive actions per token over time
+- **First productive turn < 3**: Agent starts real work quickly with recalled context
 - **Recall latency < 2000ms** (local embeddings should be fast)
 
 ### Warning signs
@@ -185,10 +200,9 @@ python3 report.py --csv
 - **Correction rate increasing**: New patterns not being captured — check nightly logs
 - **Recall adoption < 30%**: The Cursor rule may not be triggering — check `alwaysApply` is set
 - **Proactive recall 0%**: Agent only recalls when user explicitly asks — rule wording may need strengthening
-- **K-score < 1.0**: Recall is not improving token efficiency — content may not be relevant enough
-- **K-score near 1.0**: Marginal value — mental models may need refresh or better query matching
-- **NES < 0.7**: More than 30% of tokens are going to rework — high correction rate
-- **NES ratio < 1.0**: Recall sessions have *more* rework than non-recall — investigate content quality
+- **Rework % > 20%**: Significant tokens going to correction loops — investigate content quality
+- **Productivity density declining week over week**: Agent efficiency is degrading — check for content staleness
+- **First productive turn > 5**: Agent is slow to start work — rule or recall content may need improvement
 - **Latency > 5000ms**: Database may need optimization or bank is too large
 - **Zero gopls calls**: Agent may not be using code intelligence — check rule
 
@@ -300,22 +314,6 @@ Results are appended to `~/.hindsight/logs/triage-report.jsonl` with per-run bre
 
 With CocoIndex integration, three additional metric dimensions become available.
 
-### Per-Bank K-Score
-
-The K-score can be broken down per bank to identify which knowledge source
-contributes most to token efficiency. A per-bank K-score compares sessions
-where a specific bank was recalled vs. sessions where it was not.
-
-| Bank | What it measures | Healthy target |
-|------|-----------------|----------------|
-| `cursor-memory` | Behavioral pattern value | > 1.5x |
-| `kubernaut-docs` | Documentation recall value | > 1.3x |
-| `kubernaut-issues` | Issue context value | > 1.2x |
-| `code-index` | Hybrid code search value (dense + BM25) | > 1.2x |
-
-A bank with K-score near 1.0 is not contributing meaningfully — its content
-may need refresh or its recall triggers may be too broad.
-
 ### Hybrid Search Quality
 
 The code index uses hybrid search (dense + BM25 via RRF fusion). Track search
@@ -404,21 +402,6 @@ Computed per session in the nightly pipeline and surfaced in `report.py`.
 - Exploration calls increasing with recall: content may not match query patterns
 - No difference between CocoIndex/non-CocoIndex: code index may not cover queried areas
 
-## Per-Bank Effectiveness
-
-Breaks down K-score by memory bank to identify which knowledge source drives the
-most improvement.
-
-| Bank | What it measures | Healthy K-score |
-|------|-----------------|-----------------|
-| `hindsight` | Behavioral corrections and conventions | > 1.5x |
-| `hindsight-docs` | Published documentation recall | > 1.3x |
-| `hindsight-issues` | Issues + PRs context | > 1.2x |
-| `cocoindex-code` | Hybrid code search (dense + BM25) | > 1.2x |
-
-A bank with K-score near 1.0 is not contributing meaningfully — its content may
-need refresh, more coverage, or better recall triggers.
-
 ## Ingestion Coverage
 
 Tracks what percentage of each source is actually indexed. Computed live by
@@ -439,7 +422,8 @@ to see deltas over time. Key metrics to watch:
 
 - Exploration calls delta (are we needing fewer searches?)
 - Correction rate delta (are corrections declining?)
-- Per-bank K-score trends (which banks are improving/declining?)
+- Rework % trends (is the agent spending less time on correction loops?)
+- Productivity density trends (are more productive actions produced per token?)
 
 ```bash
 # Take a baseline before making changes

@@ -27,6 +27,10 @@ from urllib.error import HTTPError, URLError
 
 HINDSIGHT_URL = "http://localhost:8888"
 BANK_ID = "cursor-memory"
+EPOCH_START_DATE = "2026-06-26"
+BUCKET_TRIVIAL = 5000
+BUCKET_SMALL = 15000
+BUCKET_MEDIUM = 100000
 TRANSCRIPTS_GLOB = os.path.expanduser(
     "~/.cursor/projects/*/agent-transcripts/**/*.jsonl"
 )
@@ -766,10 +770,17 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
         rework_tokens = round(rework_chars / 4)
 
         bucket = (
-            "small" if total_session_tokens < 50000
-            else "medium" if total_session_tokens < 500000
+            "trivial" if total_session_tokens < BUCKET_TRIVIAL
+            else "small" if total_session_tokens < BUCKET_SMALL
+            else "medium" if total_session_tokens < BUCKET_MEDIUM
             else "large"
         )
+        productivity_density = round(
+            productive_action_count / (total_session_tokens / 1000), 4
+        ) if total_session_tokens > 0 else 0.0
+        rework_ratio = round(
+            rework_tokens / total_session_tokens, 4
+        ) if total_session_tokens > 0 else 0.0
         session_info = {
             "transcript_id": transcript_path.stem,
             "corrections": correction_count,
@@ -780,6 +791,8 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
             "productive_actions": productive_action_count,
             "effectiveness_ratio": effectiveness_ratio,
             "rework_tokens": rework_tokens,
+            "productivity_density": productivity_density,
+            "rework_ratio": rework_ratio,
             "size_bucket": bucket,
             "banks_recalled": sorted(banks_recalled),
             "exploration_actions_before_productive": exploration_before_productive,
@@ -807,68 +820,16 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
         agent_turns_with_recall / total_agent_turns * 100, 1
     ) if total_agent_turns > 0 else 0.0
 
-    # K-curve computation
-    eff_ratio_with = _avg(sessions_with_recall, "effectiveness_ratio")
-    eff_ratio_without = _avg(sessions_without_recall, "effectiveness_ratio")
-    k_score = round(eff_ratio_with / eff_ratio_without, 2) if eff_ratio_without > 0 else None
-
-    ctx_load_with = _avg(sessions_with_recall, "context_loading_tokens")
-    ctx_load_without = _avg(sessions_without_recall, "context_loading_tokens")
-    ctx_reduction_pct = round(
-        (1 - ctx_load_with / ctx_load_without) * 100, 1
-    ) if ctx_load_without > 0 else None
-
-    token_eff_gain_pct = round(
-        (eff_ratio_with / eff_ratio_without - 1) * 100, 1
-    ) if eff_ratio_without > 0 else None
-
-    # Per-bucket K-scores for normalized comparison
-    # Exclude sessions <10K tokens where recall overhead dominates
-    K_SCORE_MIN_TOKENS = 10000
-    k_curve_by_bucket = {}
-    weighted_scores = []
-    for bucket in ("small", "medium", "large"):
-        with_b = [s for s in sessions_with_recall
-                  if s["size_bucket"] == bucket and s["total_session_tokens"] >= K_SCORE_MIN_TOKENS]
-        without_b = [s for s in sessions_without_recall
-                     if s["size_bucket"] == bucket and s["total_session_tokens"] >= K_SCORE_MIN_TOKENS]
-        if with_b and without_b:
-            eff_w = _avg(with_b, "effectiveness_ratio")
-            eff_wo = _avg(without_b, "effectiveness_ratio")
-            bucket_k = round(eff_w / eff_wo, 2) if eff_wo > 0 else None
-            k_curve_by_bucket[bucket] = {
-                "with_recall": len(with_b),
-                "without_recall": len(without_b),
-                "k_score": bucket_k,
-            }
-            if bucket_k is not None:
-                weighted_scores.append((bucket_k, len(with_b) + len(without_b)))
-
-    k_score_normalized = None
-    if weighted_scores:
-        total_weight = sum(w for _, w in weighted_scores)
-        k_score_normalized = round(
-            sum(score * w for score, w in weighted_scores) / total_weight, 2
-        )
-
-    # Per-bank K-score decomposition: for each bank, compare sessions that
-    # recalled from that bank vs sessions with no recall at all
+    # Session distribution by bucket (diagnostic)
     all_sessions = sessions_with_recall + sessions_without_recall
-    k_score_by_bank = {}
-    for bank in RECALL_BANKS:
-        bank_sessions = [s for s in sessions_with_recall if bank in s["banks_recalled"]]
-        if bank_sessions and sessions_without_recall:
-            eff_bank = _avg(bank_sessions, "effectiveness_ratio")
-            eff_no_recall = _avg(sessions_without_recall, "effectiveness_ratio")
-            bank_k = round(eff_bank / eff_no_recall, 2) if eff_no_recall > 0 else None
-            k_score_by_bank[bank] = {
-                "sessions": len(bank_sessions),
-                "effectiveness_ratio": eff_bank,
-                "k_score": bank_k,
-            }
+    session_distribution = {}
+    for bucket in ("trivial", "small", "medium", "large"):
+        session_distribution[bucket] = {
+            "with_recall": len([s for s in sessions_with_recall if s["size_bucket"] == bucket]),
+            "without_recall": len([s for s in sessions_without_recall if s["size_bucket"] == bucket]),
+        }
 
-    # Exploration efficiency: compare exploration actions before first productive
-    # action for sessions with/without recall, and with/without cocoindex-code
+    # Exploration efficiency
     cocoindex_sessions = [s for s in sessions_with_recall if "cocoindex-code" in s["banks_recalled"]]
     non_cocoindex_sessions = [s for s in all_sessions if "cocoindex-code" not in s.get("banks_recalled", [])]
     exploration_efficiency = {
@@ -890,49 +851,37 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
         },
     }
 
-    # Net Efficiency Score (NES): rework-aware metric
-    # NES = (total_tokens - rework_tokens) / total_tokens
-    # Higher NES means fewer tokens wasted on correction loops
-    avg_rework_with = _avg(sessions_with_recall, "rework_tokens")
-    avg_rework_without = _avg(sessions_without_recall, "rework_tokens")
-    avg_total_with = _avg(sessions_with_recall, "total_session_tokens")
-    avg_total_without = _avg(sessions_without_recall, "total_session_tokens")
-
-    nes_with = round(
-        (avg_total_with - avg_rework_with) / avg_total_with, 3
-    ) if avg_total_with > 0 else None
-    nes_without = round(
-        (avg_total_without - avg_rework_without) / avg_total_without, 3
-    ) if avg_total_without > 0 else None
-    nes_ratio = round(nes_with / nes_without, 2) if (nes_with and nes_without) else None
-
-    # Per-bucket NES for session-length strategy analysis
-    nes_by_bucket = {}
-    for bucket in ("small", "medium", "large"):
-        with_b = [s for s in sessions_with_recall
-                  if s["size_bucket"] == bucket and s["total_session_tokens"] >= K_SCORE_MIN_TOKENS]
-        without_b = [s for s in sessions_without_recall
-                     if s["size_bucket"] == bucket and s["total_session_tokens"] >= K_SCORE_MIN_TOKENS]
-        if with_b and without_b:
-            rw_w = _avg(with_b, "rework_tokens")
-            rw_wo = _avg(without_b, "rework_tokens")
-            tot_w = _avg(with_b, "total_session_tokens")
-            tot_wo = _avg(without_b, "total_session_tokens")
-            b_nes_w = round((tot_w - rw_w) / tot_w, 3) if tot_w > 0 else None
-            b_nes_wo = round((tot_wo - rw_wo) / tot_wo, 3) if tot_wo > 0 else None
-            b_ratio = round(b_nes_w / b_nes_wo, 2) if (b_nes_w and b_nes_wo) else None
-            nes_by_bucket[bucket] = {
-                "with_recall": len(with_b),
-                "without_recall": len(without_b),
-                "nes_with": b_nes_w,
-                "nes_without": b_nes_wo,
-                "nes_ratio": b_ratio,
-                "avg_rework_pct_with": round(rw_w / tot_w * 100, 1) if tot_w > 0 else None,
-                "avg_rework_pct_without": round(rw_wo / tot_wo * 100, 1) if tot_wo > 0 else None,
-            }
+    # Weekly trend: recall sessions only, from epoch date
+    # Groups by ISO week and computes per-week averages
+    epoch = date.fromisoformat(EPOCH_START_DATE)
+    non_trivial_recall = [
+        s for s in sessions_with_recall
+        if s["size_bucket"] != "trivial"
+    ]
+    weekly_trend = []
+    if non_trivial_recall:
+        today = date.today()
+        week_start = epoch - timedelta(days=epoch.weekday())
+        while week_start <= today:
+            week_end = week_start + timedelta(days=6)
+            iso_week = week_start.isocalendar()[1]
+            iso_year = week_start.isocalendar()[0]
+            week_label = f"{iso_year}-W{iso_week:02d}"
+            week_sessions = non_trivial_recall
+            if week_sessions:
+                weekly_trend.append({
+                    "week": week_label,
+                    "sessions": len(week_sessions),
+                    "corrections_per_session": _avg(week_sessions, "corrections"),
+                    "rework_pct": round(_avg(week_sessions, "rework_ratio") * 100, 2),
+                    "productivity_density": _avg(week_sessions, "productivity_density"),
+                    "first_productive_turn": _avg(week_sessions, "first_productive_turn"),
+                })
+            week_start += timedelta(days=7)
 
     report = {
         "date": date.today().isoformat(),
+        "epoch_start_date": EPOCH_START_DATE,
         "period_hours": hours,
         "mcp_usage": mcp_usage,
         "effectiveness": {
@@ -951,59 +900,22 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
             "agent_turns_with_recall": agent_turns_with_recall,
             "turn_recall_pct": turn_recall_pct,
         },
-        "k_curve": {
-            "with_recall": {
-                "sessions": len(sessions_with_recall),
-                "avg_context_loading_tokens": ctx_load_with,
-                "avg_productive_actions": _avg(sessions_with_recall, "productive_actions"),
-                "avg_corrections": _avg(sessions_with_recall, "corrections"),
-                "avg_total_tokens": _avg(sessions_with_recall, "total_session_tokens"),
-                "effectiveness_ratio": eff_ratio_with,
-            },
-            "without_recall": {
-                "sessions": len(sessions_without_recall),
-                "avg_context_loading_tokens": ctx_load_without,
-                "avg_productive_actions": _avg(sessions_without_recall, "productive_actions"),
-                "avg_corrections": _avg(sessions_without_recall, "corrections"),
-                "avg_total_tokens": _avg(sessions_without_recall, "total_session_tokens"),
-                "effectiveness_ratio": eff_ratio_without,
-            },
-            "k_score": k_score,
-            "k_score_normalized": k_score_normalized,
-            "k_score_by_bank": k_score_by_bank,
-            "by_bucket": k_curve_by_bucket,
-            "context_loading_reduction_pct": ctx_reduction_pct,
-            "token_efficiency_gain_pct": token_eff_gain_pct,
+        "session_distribution": session_distribution,
+        "recall_session_stats": {
+            "sessions": len(non_trivial_recall),
+            "avg_corrections": _avg(non_trivial_recall, "corrections"),
+            "avg_rework_pct": round(_avg(non_trivial_recall, "rework_ratio") * 100, 2),
+            "avg_productivity_density": _avg(non_trivial_recall, "productivity_density"),
+            "avg_first_productive_turn": _avg(non_trivial_recall, "first_productive_turn"),
+            "avg_total_tokens": _avg(non_trivial_recall, "total_session_tokens"),
         },
-        "net_efficiency_score": {
-            "with_recall": {
-                "nes": nes_with,
-                "avg_rework_tokens": avg_rework_with,
-                "avg_total_tokens": avg_total_with,
-            },
-            "without_recall": {
-                "nes": nes_without,
-                "avg_rework_tokens": avg_rework_without,
-                "avg_total_tokens": avg_total_without,
-            },
-            "nes_ratio": nes_ratio,
-            "by_bucket": nes_by_bucket,
-        },
+        "weekly_trend": weekly_trend,
         "exploration_efficiency": exploration_efficiency,
         "token_signals": {
             "avg_session_messages_with_recall": _avg(sessions_with_recall, "messages"),
             "avg_session_messages_without_recall": _avg(sessions_without_recall, "messages"),
         },
     }
-
-    # Compute estimated reduction percentage
-    with_rate = report["effectiveness"]["corrections_per_session_with_recall"]
-    without_rate = report["effectiveness"]["corrections_per_session_without_recall"]
-    if without_rate > 0:
-        reduction = round((1 - with_rate / without_rate) * 100, 1)
-        report["effectiveness"]["estimated_reduction_pct"] = reduction
-    else:
-        report["effectiveness"]["estimated_reduction_pct"] = None
 
     # Write effectiveness report
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -1217,60 +1129,33 @@ def run_nightly(watermarks: dict, seen_hashes: set) -> dict:
             proactive["total_agent_turns"],
             proactive["turn_recall_pct"],
         )
-    k_curve = effectiveness.get("k_curve", {})
-    if k_curve and k_curve.get("k_score") is not None:
+    dist = effectiveness.get("session_distribution", {})
+    if dist:
         log.info(
-            "  K-curve: score=%.2fx | context loading: %d tok (recall) vs %d tok (no recall) [-%s%%]",
-            k_curve["k_score"],
-            k_curve["with_recall"]["avg_context_loading_tokens"],
-            k_curve["without_recall"]["avg_context_loading_tokens"],
-            k_curve.get("context_loading_reduction_pct", "?"),
+            "  Session distribution: trivial=%d/%d small=%d/%d medium=%d/%d large=%d/%d (recall/no-recall)",
+            dist.get("trivial", {}).get("with_recall", 0), dist.get("trivial", {}).get("without_recall", 0),
+            dist.get("small", {}).get("with_recall", 0), dist.get("small", {}).get("without_recall", 0),
+            dist.get("medium", {}).get("with_recall", 0), dist.get("medium", {}).get("without_recall", 0),
+            dist.get("large", {}).get("with_recall", 0), dist.get("large", {}).get("without_recall", 0),
         )
+    recall_stats = effectiveness.get("recall_session_stats", {})
+    if recall_stats and recall_stats.get("sessions", 0) > 0:
         log.info(
-            "  K-curve: effectiveness ratio: %.3f (recall) vs %.3f (no recall) [+%s%%]",
-            k_curve["with_recall"]["effectiveness_ratio"],
-            k_curve["without_recall"]["effectiveness_ratio"],
-            k_curve.get("token_efficiency_gain_pct", "?"),
+            "  Recall sessions (non-trivial): %d sessions, %.2f corrections/session, "
+            "%.1f%% rework, %.4f productivity density",
+            recall_stats["sessions"], recall_stats["avg_corrections"],
+            recall_stats["avg_rework_pct"], recall_stats["avg_productivity_density"],
         )
-        by_bucket = k_curve.get("by_bucket", {})
-        for bucket, bk in by_bucket.items():
-            if bk.get("k_score") is not None:
-                log.info(
-                    "  K-curve [%s]: %d vs %d sessions, score=%.2fx",
-                    bucket, bk["with_recall"], bk["without_recall"], bk["k_score"],
-                )
-        if k_curve.get("k_score_normalized") is not None:
-            log.info("  K-curve normalized: %.2fx", k_curve["k_score_normalized"])
-    nes = effectiveness.get("net_efficiency_score", {})
-    if nes.get("nes_ratio") is not None:
-        log.info(
-            "  NES: %.3f (recall) vs %.3f (no recall), ratio=%.2fx",
-            nes["with_recall"]["nes"],
-            nes["without_recall"]["nes"],
-            nes["nes_ratio"],
-        )
-        log.info(
-            "  NES rework tokens: %d avg (recall) vs %d avg (no recall)",
-            nes["with_recall"]["avg_rework_tokens"],
-            nes["without_recall"]["avg_rework_tokens"],
-        )
-        nes_buckets = nes.get("by_bucket", {})
-        for bucket, bd in nes_buckets.items():
-            if bd.get("nes_ratio") is not None:
-                log.info(
-                    "  NES [%s]: %.3f vs %.3f, ratio=%.2fx (rework: %.1f%% vs %.1f%%)",
-                    bucket, bd["nes_with"], bd["nes_without"], bd["nes_ratio"],
-                    bd["avg_rework_pct_with"], bd["avg_rework_pct_without"],
-                )
-    k_by_bank = k_curve.get("k_score_by_bank", {}) if k_curve else {}
-    if k_by_bank:
-        for bank_name, bdata in k_by_bank.items():
-            if bdata.get("k_score") is not None:
-                log.info(
-                    "  K-score [%s]: %.2fx (%d sessions, eff_ratio=%.3f)",
-                    bank_name, bdata["k_score"], bdata["sessions"],
-                    bdata["effectiveness_ratio"],
-                )
+    weekly = effectiveness.get("weekly_trend", [])
+    if weekly:
+        for wk in weekly:
+            log.info(
+                "  Weekly [%s]: %d sessions, %.2f corr/sess, %.1f%% rework, "
+                "%.4f prod density, %.1f first-productive-turn",
+                wk["week"], wk["sessions"], wk["corrections_per_session"],
+                wk["rework_pct"], wk["productivity_density"],
+                wk["first_productive_turn"],
+            )
     explore_eff = effectiveness.get("exploration_efficiency", {})
     if explore_eff:
         wr = explore_eff.get("with_recall", {})

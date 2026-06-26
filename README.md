@@ -45,7 +45,7 @@ LLM calls only happen overnight for pattern extraction.
 | Repeating the same mistakes | Corrections are stored as persistent patterns |
 | Scattered knowledge across docs/issues/PRs | Mental models synthesize coherent context |
 | Agent wastes tokens exploring the codebase | CocoIndex front-loads semantic code context via recall |
-| No way to know if memory helps | Metrics track correction reduction, exploration efficiency, per-bank K-score |
+| No way to know if memory helps | Weekly trend metrics track corrections, rework, and productivity over time |
 
 ## Key features
 
@@ -57,7 +57,7 @@ LLM calls only happen overnight for pattern extraction.
 - **CocoIndex live sync** — docs, code, and transcripts watch for filesystem changes in real time; issues and PRs poll GitHub every 5 minutes. All four flows run concurrently as threads in a single launchd service
 - **Hybrid code search** — tree-sitter AST parsing extracts functions, types, and methods; dense embeddings (pgvector) handle semantic queries while BM25 (tsvector + GIN) handles exact identifiers — results fused via Reciprocal Rank Fusion
 - **Self-cleaning** — nightly triage removes ephemeral, stale, and duplicate memories
-- **Self-evaluating** — exploration efficiency, per-bank K-score, correction reduction %, ingestion coverage, data freshness, baseline comparison
+- **Self-evaluating** — weekly trend metrics (corrections/session, rework %, productivity density), exploration efficiency, ingestion coverage, data freshness
 - **Recoverable** — transcripts are source of truth; `recover-memories.py` rebuilds the bank
 - **Runs as macOS service** — launchd-managed, survives reboots, auto-restarts
 
@@ -129,19 +129,22 @@ graph TB
 
 **≈ $0.12/night** for a full learning cycle.
 
-## Value: the K-curve
+## Value: measuring effectiveness
 
-Engram's impact is a **K-shaped divergence** — sessions with recall simultaneously
-consume fewer tokens AND produce better outcomes:
+Engram tracks its own impact through **weekly trend metrics** that measure
+recall sessions over time. By tracking within the same cohort (sessions that
+use recall), week over week, we avoid selection bias and get a clear signal.
 
-```mermaid
-flowchart LR
-    S["Session starts"] --> F{"Recall active?"}
-    F -->|Yes| G["Lower cost + Higher effectiveness"]
-    F -->|No| B["Higher cost + Lower effectiveness"]
-```
+**Key metrics tracked weekly:**
 
-**Where the tokens go:**
+| Metric | What it measures | Goal |
+|--------|-----------------|------|
+| **Corrections/session** | User corrections per session | Lower = fewer mistakes |
+| **Rework %** | Tokens spent on correction loops | Lower = less waste |
+| **Productivity density** | Productive actions per 1K tokens | Higher = more efficient |
+| **First productive turn** | Turn where real work starts | Lower = faster ramp-up |
+
+**Where Engram saves tokens:**
 
 | Phase | Without Engram | With Engram |
 |-------|---------------|-------------|
@@ -150,27 +153,14 @@ flowchart LR
 | Productive work | Same | Same |
 | **Total session cost** | **~62K tokens** | **~45K tokens** |
 
-**The K-score** measures token efficiency: productive actions per 1,000 tokens spent.
-Sessions with recall produce more output per token while wasting less on orientation
-and rework.
-
-| Metric | Without Engram | With Engram | Delta |
-|--------|---------------|-------------|-------|
-| Context loading | ~8,400 tok | ~200 tok | **-97%** |
-| Corrections/session | 3.2 | 0.8 | -75% |
-| Effectiveness ratio | 0.18 | 0.31 | **+72%** |
-| **K-score** | | | **1.72x** |
-
-A K-score of 1.72 means every token works 1.72x harder when Engram is active.
 At 5 sessions/day over a month, this translates to:
 
 - **~17K fewer tokens/session** in wasted context loading and corrections
 - **~1.7M tokens/month saved** (20 working days × 5 sessions)
 - At Sonnet pricing (~$15/M tokens): **~$25/month saved** for **$3.60/month** cost
 
-> Run `python3 report.py` to see your measured K-score. The metric requires
-> sessions both with and without recall for comparison — initial data may show
-> K < 1.0 until recall adoption stabilizes above 30%.
+> Run `python3 report.py` to see your weekly trends and session stats.
+> The [Effectiveness Dashboard](docs/DASHBOARD.md) auto-updates nightly.
 
 ## Expected benefits from CocoIndex integration
 
@@ -200,9 +190,10 @@ python3 report.py --compare ~/.hindsight/logs/baseline-2026-06-22.json
 ```
 
 Key metrics to watch:
+- **Corrections/session** — are corrections declining week over week?
+- **Rework %** — is the agent spending less time on correction loops?
+- **Productivity density** — are more productive actions produced per token?
 - **Exploration efficiency** — are recall sessions needing fewer grep/glob calls?
-- **Correction reduction %** — are corrections declining with recall active?
-- **Per-bank K-score** — which knowledge sources contribute most?
 - **Ingestion coverage** — is everything indexed?
 - **Data freshness** — is the data current?
 

@@ -2,6 +2,97 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-06-26: Retire K-score and NES — Replace with Weekly Trend Metrics
+
+**Context**: After two weeks of collecting K-score (token efficiency multiplier)
+and NES (Net Efficiency Score / rework avoidance), we identified structural
+problems that made both metrics unreliable for tracking Engram's effectiveness.
+
+**Problem: selection bias between cohorts**
+
+K-score and NES compare sessions *with recall* against sessions *without recall*.
+This comparison is fundamentally flawed because:
+
+1. Sessions without recall are self-selecting — they tend to be trivial one-off
+   commands, quick fixes, or simple questions that don't trigger the rule.
+2. Sessions with recall are self-selecting — they tend to be complex multi-step
+   tasks where the agent engages deeply with the codebase.
+3. These are different *types* of work, not the same work done with/without a tool.
+
+The result: K-score and NES fluctuated wildly day to day (from 0.5x to 2.5x)
+depending on the mix of session types, not on Engram's actual effectiveness.
+A day with many trivial no-recall sessions would show high K-score (recall
+sessions look great by comparison); a day with only complex recall sessions
+would show low K-score (no baseline to compare against).
+
+**Additional factor**: The June 19 rule rewrite added mandatory planning gates
+and mid-session re-recall, significantly increasing recall frequency. This meant
+even more sessions would use recall, further shrinking the "without recall"
+control group and making the comparison even less stable.
+
+**Solution: within-cohort weekly trend metrics**
+
+Instead of comparing two structurally different cohorts, track the *same cohort*
+(recall sessions) over time. Week-over-week trends within a single population
+are immune to selection bias.
+
+New metrics (all computed on non-trivial recall sessions only):
+
+| Metric | Formula | What it measures |
+|--------|---------|-----------------|
+| Corrections/session | corrections / sessions | Error rate (lower is better) |
+| Rework % | rework_tokens / total_tokens | Waste rate (lower is better) |
+| Productivity density | productive_actions / (tokens / 1000) | Efficiency (higher is better) |
+| First productive turn | avg turn of first productive action | Ramp-up speed (lower is better) |
+
+**Other changes in this epoch:**
+
+1. **New bucket thresholds**: Trivial (<5K), Small (5-15K), Medium (15-100K),
+   Large (>100K). Previous thresholds (50K/500K) were too coarse — most sessions
+   clustered in "small" while meaningful work happened between 15-100K tokens.
+   Added a "trivial" bucket to explicitly exclude sessions that are too short
+   to measure (auto-completions, one-shot questions).
+
+2. **Session distribution diagnostic**: Raw counts per bucket with/without recall,
+   so empty buckets are immediately visible rather than silently producing no data.
+
+3. **Epoch boundary**: June 26, 2026. All weekly trends start from this date.
+   Data collected before the epoch used different rules, different bucket
+   thresholds, and different metrics — it is not comparable and is archived
+   but not displayed.
+
+4. **Per-session fields**: `productivity_density` and `rework_ratio` computed
+   per session and stored in the nightly report for downstream aggregation.
+
+**What was removed:**
+- K-score (global, per-bucket, per-bank, normalized)
+- NES (global, per-bucket, NES ratio)
+- `k_curve` and `net_efficiency_score` sections from nightly report output
+- Per-bank K-score effectiveness breakdown
+
+**What was kept:**
+- MCP usage and hit rates (operational health, not effectiveness measurement)
+- Proactive recall metrics (measures agent behavior, not session comparison)
+- Exploration efficiency (with/without recall comparison, but less sensitive to
+  selection bias because exploration call count is relatively stable across
+  session types)
+- Correction reduction % (simple and interpretable, even if noisy)
+
+**Lessons:**
+1. **Metrics that compare self-selected groups are structurally biased.** The
+   with/without recall split is not a controlled experiment — it's an
+   observational study with confounders (session complexity, task type, user
+   behavior). Within-cohort trends avoid this entirely.
+2. **Volatile daily metrics need weekly smoothing.** Any daily metric with <20
+   sessions will be dominated by random variation. Weekly cohorts provide enough
+   sample size for meaningful trends.
+3. **Epoch boundaries matter.** When system parameters change significantly
+   (rules, thresholds, recall triggers), old data becomes non-comparable.
+   Declaring a clean epoch and starting fresh is better than trying to normalize
+   across incompatible configurations.
+
+---
+
 ## 2026-06-20: Memory Triage Incident — Batch document_id Bug
 
 **Context**: Implemented a memory triage system to automatically clean low-value

@@ -6,15 +6,15 @@ alwaysApply: true
 ## When to recall (MUST)
 
 You MUST call `recall` on your **first turn** when the task involves:
-- Go code, kubernaut, or any operator/controller work
+- {{DOMAIN_TRIGGERS}}
 - Architecture, API design, or CRD changes
 - Debugging, troubleshooting, or root-cause analysis
 - Anything the user has corrected you on before
 
 Use the appropriate bank(s):
 - **hindsight** — corrections, coding conventions, user preferences
-- **hindsight-docs** — kubernaut architecture, API/CRD contracts, operations
-- **hindsight-issues** — requirements, known bugs, design decisions, priorities
+- **{{DOCS_BANK}}** — {{DOCS_BANK_DESCRIPTION}}
+- **{{ISSUES_BANK}}** — requirements, known bugs, design decisions, priorities
 
 Call one or more banks depending on what the task touches. A single recall to
 **hindsight** with a query summarizing the task intent is sufficient for most work.
@@ -45,18 +45,18 @@ Rationale: empirical data shows 61% of corrections occur in the second half of
 sessions. Re-recalling counteracts context loss from summarization and prevents
 late-session mistakes.
 
-## Code search: use `cocoindex_search` tool
+## Code search: use `{{CODE_SEARCH_TOOL}}` tool
 
-The MCP server **user-cocoindex-code** provides a tool named **`cocoindex_search`**.
+The MCP server **user-{{CODE_SEARCH_SERVER}}** provides a tool named **`{{CODE_SEARCH_TOOL}}`**.
 Call it with `{"query": "your search terms", "limit": 10}`.
 
-Use `cocoindex_search` when:
-- You need to find code by concept: `cocoindex_search(query="how does rate limiting work")`
-- You need to locate an identifier: `cocoindex_search(query="ParseConfig")`
+Use `{{CODE_SEARCH_TOOL}}` when:
+- You need to find code by concept: `{{CODE_SEARCH_TOOL}}(query="{{EXAMPLE_CONCEPT_QUERY}}")`
+- You need to locate an identifier: `{{CODE_SEARCH_TOOL}}(query="ParseConfig")`
 - You want to understand a subsystem before modifying it
 - You need to find callers or dependents of a function/type
 
-Prefer `cocoindex_search` over Grep/SemanticSearch when searching by meaning.
+Prefer `{{CODE_SEARCH_TOOL}}` over Grep/SemanticSearch when searching by meaning.
 Use Grep only when you need exact regex matching.
 
 ## When to recall again (mid-session)
@@ -74,14 +74,14 @@ Call `recall` again if:
 |-------|------|-------------|
 | Implementation planning | hindsight | project methodology, TDD, pyramid invariant, preflight checks |
 | Writing/designing tests | hindsight | test conventions, table-driven tests, assertion patterns |
-| Designing APIs or CRDs | hindsight-docs | API contracts, CRD conventions, architecture decisions |
+| Designing APIs or CRDs | {{DOCS_BANK}} | API contracts, CRD conventions, architecture decisions |
 | PR/commit workflow | hindsight | commit conventions, PR structure, review expectations |
-| Debugging/troubleshooting | hindsight-issues | known bugs, past failures, related issues |
+| Debugging/troubleshooting | {{ISSUES_BANK}} | known bugs, past failures, related issues |
 | Pipeline monitoring | hindsight | pipeline monitoring protocol, must-gather RCA, confidence gates |
 | Implementation complete (final gate) | hindsight | GA readiness audit, multi-dimensional review, authoritative validation |
-| Exploring unfamiliar code | `cocoindex_search` | semantic search for the feature/subsystem being investigated |
-| Understanding blast radius | `cocoindex_search` | what depends on the function/type being changed |
-| Refactoring / renaming | `cocoindex_search` | all references and callers of the target symbol |
+| Exploring unfamiliar code | `{{CODE_SEARCH_TOOL}}` | semantic search for the feature/subsystem being investigated |
+| Understanding blast radius | `{{CODE_SEARCH_TOOL}}` | what depends on the function/type being changed |
+| Refactoring / renaming | `{{CODE_SEARCH_TOOL}}` | all references and callers of the target symbol |
 
 These are NOT optional. When you transition into one of these phases, recall
 the indicated bank or call the indicated tool BEFORE writing code or proposing a plan.
@@ -99,7 +99,7 @@ the indicated bank or call the indicated tool BEFORE writing code or proposing a
 
 ## Data freshness
 
-The `hindsight-docs` and `hindsight-issues` banks are continuously updated
+The `{{DOCS_BANK}}` and `{{ISSUES_BANK}}` banks are continuously updated
 via CocoIndex incremental sync. Recalled doc/issue content is live — trust it
 without re-reading source files unless the task requires verifying current state.
 
@@ -109,15 +109,15 @@ Use the right tool for the right question:
 
 - **gopls** — precise type info, symbol references, diagnostics. Use for
   "what is the type of X?", "who implements interface Y?", "what errors exist?"
-- **`cocoindex_search`** — semantic code search by meaning. The tool is on the
-  `user-cocoindex-code` MCP server. Call it with `{"query": "...", "limit": 10}`.
-  Use for "where do we handle rate limiting?", "how does the remediation pipeline work?",
+- **`{{CODE_SEARCH_TOOL}}`** — semantic code search by meaning. The tool is on the
+  `user-{{CODE_SEARCH_SERVER}}` MCP server. Call it with `{"query": "...", "limit": 10}`.
+  Use for "{{EXAMPLE_SEMANTIC_QUERY_1}}", "{{EXAMPLE_SEMANTIC_QUERY_2}}",
   "what functions touch this data?"
 
 - **hindsight** — past mistakes, conventions, behavioral patterns about code.
   Use for "how should I structure this test?", "what was corrected before?"
 
-Prefer gopls for precise lookups, `cocoindex_search` for semantic exploration,
+Prefer gopls for precise lookups, `{{CODE_SEARCH_TOOL}}` for semantic exploration,
 and hindsight for behavioral context. Do not redundantly call all three for the
 same question.
 

@@ -374,6 +374,7 @@ def _format_issue_content(issue: dict, repo: str) -> str:
     human_comments = [
         c for c in comments
         if c.get("authorAssociation", "NONE") in TRUSTED_ASSOCIATIONS
+        and not c.get("author", {}).get("login", "").endswith("[bot]")
         and len(c.get("body", "")) > 20
     ]
     if human_comments:

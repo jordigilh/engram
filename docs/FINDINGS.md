@@ -2,6 +2,81 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-06-26: Hindsight API Memory Leak — 17GB in 5 Days
+
+**Context**: The `hindsight-api` process (PID 1346) had been running since Monday
+and accumulated 17GB of dirty memory (peaked at 19GB) on a MacBook with Apple
+Silicon. The machine was noticeably slower.
+
+**Memory breakdown:**
+
+| Category | Dirty Memory | Cause |
+|----------|----------:|-------|
+| IOAccelerator (graphics) | 9,358 MB | GPU memory from local embedding + reranker models via Metal |
+| MALLOC_SMALL | 3,425 MB | Heap growth from connection pools, caches |
+| MALLOC_NANO | 3,217 MB | Heap growth from Python object fragmentation |
+| VM_ALLOCATE | 746 MB | Generic virtual memory |
+| MALLOC_TINY | 491 MB | Small allocations |
+| MALLOC_MEDIUM | 119 MB | Medium allocations |
+| **Total** | **~17 GB** | |
+
+**Root causes:**
+
+1. **Local ML models on GPU (9.3GB)**: The embedding model (`BAAI/bge-small-en-v1.5`,
+   33M params) and cross-encoder reranker (`cross-encoder/ms-marco-MiniLM-L-6-v2`,
+   22M params) were running on Apple Silicon GPU via Metal. Metal's IOAccelerator
+   allocates large contiguous GPU buffers and does not release them. These are small
+   models that don't benefit meaningfully from GPU acceleration — the Metal overhead
+   dominates any inference speedup.
+
+2. **Oversized DB connection pool (6.6GB heap)**: Default pool was min=5 / max=100
+   asyncpg connections. For a single-user local deployment, this is ~10x more than
+   needed. Each connection holds buffers; over 5 days the heap grew unbounded.
+
+3. **Python heap fragmentation**: Long-lived Python processes accumulate fragmented
+   memory that the OS never reclaims even after Python's GC frees objects. This is a
+   known CPython behavior with no fix other than periodic restarts.
+
+**Fixes applied:**
+
+1. **Force CPU mode** for both models:
+   - `HINDSIGHT_API_EMBEDDINGS_LOCAL_FORCE_CPU=true`
+   - `HINDSIGHT_API_RERANKER_LOCAL_FORCE_CPU=true`
+   - Eliminates the 9.3GB GPU allocation entirely
+
+2. **Shrink DB pool** to match single-user usage:
+   - `HINDSIGHT_API_DB_POOL_MIN_SIZE=2`
+   - `HINDSIGHT_API_DB_POOL_MAX_SIZE=10`
+
+3. **Daily restart at 3pm** via launchd (`io.vectorize.hindsight.restart.plist`):
+   - Sends `pkill -f hindsight-api`; `KeepAlive: true` restarts it within 5 seconds
+   - Reclaims any heap fragmentation before it accumulates
+
+**Results after restart with new config:**
+
+| Metric | Before | After | Change |
+|--------|-------:|------:|-------:|
+| RSS memory | 17,000 MB | 1,077 MB | **-94%** |
+| cursor-memory recall | 2,444 ms | 1,459 ms | **-40%** |
+| kubernaut-docs recall | 13,987 ms | 3,252 ms | **-77%** |
+
+CPU mode was not only smaller but *faster* — Apple Silicon CPU cores avoid the
+Metal/IOAccelerator overhead for these small models. The GPU pathway adds
+serialization and buffer management cost that exceeds the compute speedup for
+models under ~100M parameters.
+
+**Lessons:**
+1. **GPU is not always faster** — for small models (<100M params) on Apple Silicon,
+   CPU inference can be faster due to Metal buffer management overhead.
+2. **Default pool sizes are for multi-tenant SaaS** — a single-user local deployment
+   should use min=2/max=10, not min=5/max=100.
+3. **Long-lived Python processes need periodic restarts** — CPython heap fragmentation
+   is inevitable; a daily restart is the practical solution.
+4. **Monitor process memory** — this went unnoticed for 5 days. A periodic memory
+   check in the nightly pipeline would have caught it sooner.
+
+---
+
 ## 2026-06-26: Retire K-score and NES — Replace with Weekly Trend Metrics
 
 **Context**: After two weeks of collecting K-score (token efficiency multiplier)

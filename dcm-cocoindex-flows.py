@@ -101,7 +101,7 @@ COCOINDEX_DB = pathlib.Path(os.environ.get(
 
 PG_POOL: coco.ContextKey[Any] = coco.ContextKey("pg_pool")
 
-BOT_AUTHORS = {"github-actions", "dependabot", "renovate", "codecov", "mergify", "jackjin1997"}
+TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"}
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +373,7 @@ def _format_issue_content(issue: dict, repo: str) -> str:
     comments = issue.get("comments", []) or []
     human_comments = [
         c for c in comments
-        if c.get("author", {}).get("login", "") not in BOT_AUTHORS
+        if c.get("authorAssociation", "NONE") in TRUSTED_ASSOCIATIONS
         and len(c.get("body", "")) > 20
     ]
     if human_comments:

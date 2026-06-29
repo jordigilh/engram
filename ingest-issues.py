@@ -30,7 +30,7 @@ from urllib.request import Request, urlopen
 
 BANK_ID = "kubernaut-issues"
 DEFAULT_REPO = "jordigilh/kubernaut"
-BOT_AUTHORS = {"github-actions", "dependabot", "renovate", "codecov", "mergify", "jackjin1997"}
+TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"}
 
 _config = {"hindsight_url": os.environ.get("HINDSIGHT_URL", "http://localhost:8888")}
 
@@ -108,7 +108,7 @@ def format_issue_content(issue: dict) -> str:
     comments = issue.get("comments", []) or []
     human_comments = [
         c for c in comments
-        if c.get("author", {}).get("login", "") not in BOT_AUTHORS
+        if c.get("authorAssociation", "NONE") in TRUSTED_ASSOCIATIONS
         and len(c.get("body", "")) > 20
     ]
 

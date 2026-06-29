@@ -481,6 +481,41 @@ def reflect() -> dict[str, Any]:
 
 
 RECALL_SIGNALS_PATH = LOG_DIR / "recall-signals.jsonl"
+
+PROJECT_CONFIGS = {
+    "kubernaut": {
+        "banks": ["cursor-memory", "kubernaut-docs", "kubernaut-issues"],
+        "mental_models": {
+            "kubernaut-issues": ("active-priorities", "known-bugs"),
+            "cursor-memory": ("workflow-preferences", "architecture-decisions", "testing-methodology", "coding-conventions"),
+            "kubernaut-docs": ("af-pipeline", "platform-topology", "ka-architecture"),
+        },
+        "probes": [
+            ("cursor-memory", "Go testing conventions and patterns"),
+            ("kubernaut-docs", "signal processing architecture and data flow"),
+            ("kubernaut-docs", "remediation orchestrator CRD spec"),
+            ("kubernaut-issues", "rate limiter design decisions and requirements"),
+            ("kubernaut-issues", "A2A streaming event structure"),
+        ],
+        "recall_banks": {"hindsight", "hindsight-docs", "hindsight-issues", "cocoindex-code"},
+        "log_suffix": "",
+    },
+    "dcm": {
+        "banks": ["cursor-memory", "dcm-docs", "dcm-issues"],
+        "mental_models": {
+            "dcm-docs": ("dcm-architecture", "dcm-enhancements", "dcm-api-contracts"),
+            "dcm-issues": ("active-priorities", "known-bugs"),
+        },
+        "probes": [
+            ("dcm-docs", "DCM architecture and service provider model"),
+            ("dcm-docs", "placement policy and catalog item lifecycle"),
+            ("dcm-issues", "open issues and active priorities"),
+        ],
+        "recall_banks": {"hindsight", "dcm-docs", "dcm-issues", "dcm-code"},
+        "log_suffix": "-dcm",
+    },
+}
+
 BANKS = ["cursor-memory", "kubernaut-docs", "kubernaut-issues"]
 
 
@@ -496,11 +531,11 @@ def api_get(path: str) -> dict:
         return {}
 
 
-def collect_bank_stats() -> dict:
-    """Collect stats from all configured banks and write to recall-signals.jsonl."""
+def collect_bank_stats(project: str = "kubernaut") -> dict:
+    """Collect stats from project banks and write to recall-signals.jsonl."""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     stats = {}
-    for bank in BANKS:
+    for bank in PROJECT_CONFIGS[project]["banks"]:
         bank_stats = api_get(f"/v1/default/banks/{bank}/stats")
         if bank_stats:
             stats[bank] = {
@@ -571,15 +606,9 @@ def measure_recall_quality(bank: str, query: str) -> dict:
         return {"error": str(e)}
 
 
-def run_observability_probes():
+def run_observability_probes(project: str = "kubernaut"):
     """Run a set of recall probes to measure system health and quality."""
-    probes = [
-        ("cursor-memory", "Go testing conventions and patterns"),
-        ("kubernaut-docs", "signal processing architecture and data flow"),
-        ("kubernaut-docs", "remediation orchestrator CRD spec"),
-        ("kubernaut-issues", "rate limiter design decisions and requirements"),
-        ("kubernaut-issues", "A2A streaming event structure"),
-    ]
+    probes = PROJECT_CONFIGS[project]["probes"]
     results = []
     for bank, query in probes:
         r = measure_recall_quality(bank, query)
@@ -1000,13 +1029,15 @@ def run_hourly(watermarks: dict, seen_hashes: set) -> dict:
     return results
 
 
-def run_nightly(watermarks: dict, seen_hashes: set) -> dict:
+def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") -> dict:
     """Nightly mode: catch-all retain + reflect + probes + metrics + mental models."""
-    log.info("=== Nightly processing started ===")
+    pconfig = PROJECT_CONFIGS[project]
+    log_suffix = pconfig["log_suffix"]
+    log.info("=== Nightly processing started (project=%s) ===", project)
 
     # Collect bank stats for observability
     log.info("Collecting bank stats...")
-    bank_stats = collect_bank_stats()
+    bank_stats = collect_bank_stats(project)
     for bank, s in bank_stats.items():
         log.info("  %s: %d nodes, %d docs", bank, s["total_nodes"], s["total_documents"])
 
@@ -1095,7 +1126,7 @@ def run_nightly(watermarks: dict, seen_hashes: set) -> dict:
 
     # Phase: Observability probes
     log.info("Running recall observability probes...")
-    results["observability_probes"] = run_observability_probes()
+    results["observability_probes"] = run_observability_probes(project)
 
     # Phase: MCP effectiveness analysis
     log.info("Analyzing MCP effectiveness...")
@@ -1178,11 +1209,7 @@ def run_nightly(watermarks: dict, seen_hashes: set) -> dict:
 
     # Phase: Refresh all mental models
     log.info("Refreshing mental models...")
-    models_to_refresh = {
-        "kubernaut-issues": ("active-priorities", "known-bugs"),
-        "cursor-memory": ("workflow-preferences", "architecture-decisions", "testing-methodology", "coding-conventions"),
-        "kubernaut-docs": ("af-pipeline", "platform-topology", "ka-architecture"),
-    }
+    models_to_refresh = pconfig["mental_models"]
     for bank, model_ids in models_to_refresh.items():
         for model_id in model_ids:
             resp = api_post(
@@ -1223,7 +1250,8 @@ def run_nightly(watermarks: dict, seen_hashes: set) -> dict:
 
     # Write daily log (after all phases so triage results are included)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / f"{date.today().isoformat()}.json"
+    results["project"] = project
+    log_path = LOG_DIR / f"{date.today().isoformat()}{log_suffix}.json"
     with open(log_path, "w") as f:
         json.dump(results, f, indent=2)
     log.info("Results saved to %s", log_path)
@@ -1266,6 +1294,12 @@ def main():
         default="both",
         help="Run mode: hourly (retain only), nightly (reflect+probes), both (default)",
     )
+    parser.add_argument(
+        "--project",
+        choices=list(PROJECT_CONFIGS.keys()),
+        default="kubernaut",
+        help="Project scope for nightly phases (default: kubernaut)",
+    )
     args = parser.parse_args()
 
     watermarks = load_watermarks()
@@ -1276,7 +1310,7 @@ def main():
             run_hourly(watermarks, seen_hashes)
 
         if args.mode in ("nightly", "both"):
-            run_nightly(watermarks, seen_hashes)
+            run_nightly(watermarks, seen_hashes, project=args.project)
     finally:
         save_watermarks(watermarks)
         save_retained_hashes(seen_hashes)

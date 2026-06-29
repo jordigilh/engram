@@ -2,8 +2,11 @@
 """CocoIndex flows for Engram — incremental ingestion into Hindsight and pgvector.
 
 Declares four apps:
-  1. docs-app:       Markdown docs → Hindsight kubernaut-docs bank
-  2. issues-app:     GitHub issues → Hindsight kubernaut-issues bank
+  1. docs-app:       Markdown docs from all kubernaut repos → Hindsight kubernaut-docs bank
+                     (kubernaut-docs, kubernaut/docs, kubernaut-operator/docs,
+                      kubernaut-console/docs, kubernaut-demo-scenarios/scenarios+docs)
+  2. issues-app:     GitHub issues from all kubernaut repos → Hindsight kubernaut-issues bank
+                     (kubernaut, kubernaut-operator, kubernaut-console, kubernaut-demo-scenarios)
   3. code-app:       Go source → pgvector code_embeddings table
   4. transcript-app: Cursor agent transcripts → Hindsight cursor-memory bank
 
@@ -44,11 +47,26 @@ ENGRAM_CODE_DIR = pathlib.Path(os.environ.get(
     os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut"),
 ))
 ENGRAM_CODE_DOCS_DIR = ENGRAM_CODE_DIR / "docs"
+ENGRAM_OPERATOR_DIR = pathlib.Path(os.environ.get(
+    "ENGRAM_OPERATOR_DIR",
+    os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-operator"),
+))
+ENGRAM_CONSOLE_DIR = pathlib.Path(os.environ.get(
+    "ENGRAM_CONSOLE_DIR",
+    os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-demo-console"),
+))
+ENGRAM_SCENARIOS_DIR = pathlib.Path(os.environ.get(
+    "ENGRAM_SCENARIOS_DIR",
+    os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-demo-scenarios"),
+))
 ENGRAM_TRANSCRIPTS_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_TRANSCRIPTS_DIR",
     os.path.expanduser("~/.cursor/projects"),
 ))
-ISSUES_REPO = os.environ.get("ENGRAM_ISSUES_REPO", "jordigilh/kubernaut")
+ISSUES_REPOS = os.environ.get(
+    "ENGRAM_ISSUES_REPOS",
+    "jordigilh/kubernaut,jordigilh/kubernaut-operator,jordigilh/kubernaut-console,jordigilh/kubernaut-demo-scenarios",
+).split(",")
 ISSUES_POLL_INTERVAL = int(os.environ.get("ENGRAM_ISSUES_POLL_SECONDS", "300"))
 
 PG_DSN = os.environ.get(
@@ -229,8 +247,14 @@ async def process_doc_file(
 
 
 @coco.fn
-async def docs_main(docs_dir: pathlib.Path, code_docs_dir: pathlib.Path) -> None:
-    """Walk markdown docs from both repos and mount one component per file."""
+async def docs_main(
+    docs_dir: pathlib.Path,
+    code_docs_dir: pathlib.Path,
+    operator_dir: pathlib.Path,
+    console_dir: pathlib.Path,
+    scenarios_dir: pathlib.Path,
+) -> None:
+    """Walk markdown docs from all kubernaut repos and mount one component per file."""
     published = localfs.walk_dir(
         docs_dir,
         recursive=True,
@@ -252,7 +276,10 @@ async def docs_main(docs_dir: pathlib.Path, code_docs_dir: pathlib.Path) -> None
                 "design/**/*.md",
                 "development/**/*.md",
                 "operations/**/*.md",
-                "services/**/*.md",
+                "requirements/**/*.md",
+                "spikes/**/*.md",
+                "testing/**/*.md",
+                "tests/**/*.md",
             ],
             excluded_patterns=["**/generated/**", "**/presentations/**"],
         ),
@@ -264,10 +291,69 @@ async def docs_main(docs_dir: pathlib.Path, code_docs_dir: pathlib.Path) -> None
         code_docs_dir, "kubernaut-repo",
     )
 
+    operator_docs = localfs.walk_dir(
+        operator_dir / "docs",
+        recursive=True,
+        path_matcher=PatternFilePathMatcher(
+            included_patterns=["**/*.md"],
+        ),
+        live=True,
+    )
+    await coco.mount_each(
+        coco.component_subpath("operator-docs"),
+        process_doc_file, operator_docs.items(),
+        operator_dir / "docs", "kubernaut-operator",
+    )
+
+    console_docs = localfs.walk_dir(
+        console_dir / "docs",
+        recursive=True,
+        path_matcher=PatternFilePathMatcher(
+            included_patterns=["**/*.md"],
+        ),
+        live=True,
+    )
+    await coco.mount_each(
+        coco.component_subpath("console-docs"),
+        process_doc_file, console_docs.items(),
+        console_dir / "docs", "kubernaut-console",
+    )
+
+    scenarios_docs = localfs.walk_dir(
+        scenarios_dir,
+        recursive=True,
+        path_matcher=PatternFilePathMatcher(
+            included_patterns=[
+                "scenarios/*/README.md",
+                "docs/**/*.md",
+                "reports/**/*.md",
+                "README.md",
+            ],
+            excluded_patterns=[
+                "overnight-logs-*/**",
+                "parallel-results-*/**",
+                "rerun-*/**",
+                "redeploy-*/**",
+                "sequential-*/**",
+                "golden-transcripts/**",
+            ],
+        ),
+        live=True,
+    )
+    await coco.mount_each(
+        coco.component_subpath("scenarios-docs"),
+        process_doc_file, scenarios_docs.items(),
+        scenarios_dir, "kubernaut-demo-scenarios",
+    )
+
 
 docs_app = coco.App(
     "engram-docs", docs_main,
-    docs_dir=ENGRAM_DOCS_DIR, code_docs_dir=ENGRAM_CODE_DOCS_DIR,
+    docs_dir=ENGRAM_DOCS_DIR,
+    code_docs_dir=ENGRAM_CODE_DOCS_DIR,
+    operator_dir=ENGRAM_OPERATOR_DIR,
+    console_dir=ENGRAM_CONSOLE_DIR,
+    scenarios_dir=ENGRAM_SCENARIOS_DIR,
 )
 
 
@@ -307,8 +393,13 @@ def _fetch_all_issues(repo: str) -> list[dict]:
     return all_items
 
 
-def _format_issue_content(issue: dict) -> str:
-    """Format an issue or PR into a text document."""
+def _repo_short_name(repo: str) -> str:
+    """Extract a short name from a GitHub repo slug (e.g. 'jordigilh/kubernaut-operator' -> 'kubernaut-operator')."""
+    return repo.split("/")[-1] if "/" in repo else repo
+
+
+def _format_issue_content(issue: dict, repo: str) -> str:
+    """Format an issue or PR into a text document with repo provenance."""
     parts = []
     number = issue.get("number", "?")
     title = issue.get("title", "")
@@ -318,9 +409,10 @@ def _format_issue_content(issue: dict) -> str:
     labels = [label.get("name", "") for label in issue.get("labels", [])]
     author = issue.get("author", {}).get("login", "unknown")
     created = issue.get("createdAt", "")[:10]
+    short_repo = _repo_short_name(repo)
 
-    parts.append(f"# {kind_label} #{number}: {title}")
-    parts.append(f"State: {state} | Labels: {', '.join(labels) or 'none'} | Author: {author} | Created: {created}")
+    parts.append(f"# {kind_label} #{number} ({short_repo}): {title}")
+    parts.append(f"Repo: {repo} | State: {state} | Labels: {', '.join(labels) or 'none'} | Author: {author} | Created: {created}")
     parts.append("")
 
     body = issue.get("body", "") or ""
@@ -351,9 +443,9 @@ def _format_issue_content(issue: dict) -> str:
 
 
 @coco.fn(memo=True)
-def process_issue(issue: dict) -> None:
+def process_issue(issue: dict, repo: str) -> None:
     """Format, chunk, and push a single issue to Hindsight."""
-    content = _format_issue_content(issue)
+    content = _format_issue_content(issue, repo)
     if not content.strip() or len(content) < 50:
         return
 
@@ -362,32 +454,43 @@ def process_issue(issue: dict) -> None:
     state = issue.get("state", "OPEN").lower()
     kind = issue.get("_kind", "issue")
     labels = [label.get("name", "") for label in issue.get("labels", [])]
+    short_repo = _repo_short_name(repo)
 
     chunks = _split_text(content, chunk_size=1200, chunk_overlap=300)
     for i, chunk in enumerate(chunks):
-        doc_id = f"{kind}-{number}"
+        doc_id = f"{short_repo}-{kind}-{number}"
         if i > 0:
-            doc_id = f"{kind}-{number}-chunk{i}"
+            doc_id = f"{short_repo}-{kind}-{number}-chunk{i}"
         hindsight_retain(
             bank_id="kubernaut-issues",
             content=chunk,
             document_id=doc_id,
             timestamp=updated_at,
-            metadata={"source": "cocoindex", "kind": kind, "number": str(number), "state": state},
-            tags=[state, kind] + labels[:5],
+            metadata={
+                "source": "cocoindex",
+                "repo": repo,
+                "kind": kind,
+                "number": str(number),
+                "state": state,
+            },
+            tags=[state, kind, short_repo] + labels[:5],
         )
 
 
 @coco.fn
-def issues_main(repo: str) -> None:
-    """Fetch all issues and process each one."""
-    issues = _fetch_all_issues(repo)
-    log.info("Fetched %d issues from %s", len(issues), repo)
-    for issue in issues:
-        process_issue(issue)
+def issues_main(repos: str) -> None:
+    """Fetch all issues from all repos and process each one."""
+    for repo in repos.split(","):
+        repo = repo.strip()
+        if not repo:
+            continue
+        issues = _fetch_all_issues(repo)
+        log.info("Fetched %d issues from %s", len(issues), repo)
+        for issue in issues:
+            process_issue(issue, repo)
 
 
-issues_app = coco.App("engram-issues", issues_main, repo=ISSUES_REPO)
+issues_app = coco.App("engram-issues", issues_main, repos=",".join(ISSUES_REPOS))
 
 
 # ---------------------------------------------------------------------------
@@ -424,15 +527,21 @@ def _embed_text(text: str) -> list[float]:
 async def process_code_file(
     file: localfs.File,
     table: "Any",
+    base_dir: pathlib.Path,
+    repo_tag: str,
 ) -> None:
-    """Read a Go file, chunk it, embed, and declare rows in pgvector table."""
+    """Read a source file, chunk it, embed, and declare rows in pgvector table."""
     from cocoindex.connectors import postgres
 
     content = await file.read_text()
     if not content or not content.strip():
         return
 
-    filepath = str(file.file_path.path)
+    abs_path = str(file.file_path.resolve())
+    base_prefix = str(base_dir) + "/"
+    rel_path = abs_path.replace(base_prefix, "") if abs_path.startswith(base_prefix) else str(file.file_path.path)
+    filepath = f"{repo_tag}/{rel_path}"
+
     chunks = _split_text(content, chunk_size=1000, chunk_overlap=300)
 
     for i, chunk in enumerate(chunks):
@@ -449,8 +558,12 @@ async def process_code_file(
 
 
 @coco.fn
-async def code_main(code_dir: pathlib.Path) -> None:
-    """Walk Go source files, embed, and store in pgvector with hybrid search support."""
+async def code_main(
+    code_dir: pathlib.Path,
+    operator_dir: pathlib.Path,
+    console_dir: pathlib.Path,
+) -> None:
+    """Walk source files from kubernaut repos, embed, and store in pgvector."""
     from cocoindex.connectors import postgres
 
     schema = await postgres.TableSchema.from_class(
@@ -467,8 +580,6 @@ async def code_main(code_dir: pathlib.Path) -> None:
     )
     table.declare_vector_index(column="embedding", metric="cosine")
 
-    # BM25 full-text search: tsvector column + GIN index + auto-populate trigger.
-    # Uses 'simple' config (no stemming) to preserve code identifiers exactly.
     table.declare_sql_command_attachment(
         name="fts_search_vector",
         setup_sql="""
@@ -510,7 +621,7 @@ async def code_main(code_dir: pathlib.Path) -> None:
         """,
     )
 
-    files = localfs.walk_dir(
+    kubernaut_files = localfs.walk_dir(
         code_dir,
         recursive=True,
         path_matcher=PatternFilePathMatcher(
@@ -519,10 +630,49 @@ async def code_main(code_dir: pathlib.Path) -> None:
         ),
         live=True,
     )
-    await coco.mount_each(process_code_file, files.items(), table)
+    await coco.mount_each(
+        coco.component_subpath("kubernaut"),
+        process_code_file, kubernaut_files.items(),
+        table, code_dir, "kubernaut",
+    )
+
+    operator_files = localfs.walk_dir(
+        operator_dir,
+        recursive=True,
+        path_matcher=PatternFilePathMatcher(
+            included_patterns=["**/*.go"],
+            excluded_patterns=["**/vendor/**", "**/*_test.go", "**/zz_generated*"],
+        ),
+        live=True,
+    )
+    await coco.mount_each(
+        coco.component_subpath("kubernaut-operator"),
+        process_code_file, operator_files.items(),
+        table, operator_dir, "kubernaut-operator",
+    )
+
+    console_files = localfs.walk_dir(
+        console_dir,
+        recursive=True,
+        path_matcher=PatternFilePathMatcher(
+            included_patterns=["**/*.ts", "**/*.tsx"],
+            excluded_patterns=["**/node_modules/**", "**/dist/**", "**/storybook-static/**", "**/*.d.ts"],
+        ),
+        live=True,
+    )
+    await coco.mount_each(
+        coco.component_subpath("kubernaut-console"),
+        process_code_file, console_files.items(),
+        table, console_dir, "kubernaut-console",
+    )
 
 
-code_app = coco.App("engram-code", code_main, code_dir=ENGRAM_CODE_DIR)
+code_app = coco.App(
+    "engram-code", code_main,
+    code_dir=ENGRAM_CODE_DIR,
+    operator_dir=ENGRAM_OPERATOR_DIR,
+    console_dir=ENGRAM_CONSOLE_DIR,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -737,8 +887,11 @@ def main():
     log.info("Starting CocoIndex in %s mode — apps: %s", args.mode, ", ".join(sorted(selected)))
     log.info("  Docs dir:        %s", ENGRAM_DOCS_DIR)
     log.info("  Code dir:        %s", ENGRAM_CODE_DIR)
+    log.info("  Operator dir:    %s", ENGRAM_OPERATOR_DIR)
+    log.info("  Console dir:     %s", ENGRAM_CONSOLE_DIR)
+    log.info("  Scenarios dir:   %s", ENGRAM_SCENARIOS_DIR)
     log.info("  Transcripts dir: %s", ENGRAM_TRANSCRIPTS_DIR)
-    log.info("  Issues repo:     %s", ISSUES_REPO)
+    log.info("  Issues repos:    %s", ", ".join(ISSUES_REPOS))
     log.info("  Hindsight URL:   %s", HINDSIGHT_URL)
     log.info("  CocoIndex DB:    %s", COCOINDEX_DB)
 

@@ -30,7 +30,7 @@ from urllib.request import Request, urlopen
 
 BANK_ID = "kubernaut-issues"
 DEFAULT_REPO = "jordigilh/kubernaut"
-BOT_AUTHORS = {"github-actions", "dependabot", "renovate", "codecov", "mergify"}
+BOT_AUTHORS = {"github-actions", "dependabot", "renovate", "codecov", "mergify", "jackjin1997"}
 
 _config = {"hindsight_url": os.environ.get("HINDSIGHT_URL", "http://localhost:8888")}
 

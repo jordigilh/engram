@@ -222,7 +222,15 @@ def aggregate_effectiveness(entries: list[dict]) -> dict:
 def collect_mental_model_stats() -> list[dict]:
     """Collect mental model status from Hindsight API."""
     import urllib.request
-    banks = ["cursor-memory", "kubernaut-docs", "kubernaut-issues"]
+    project_banks = {
+        "kubernaut": ["cursor-memory", "kubernaut-docs", "kubernaut-issues"],
+        "dcm": ["cursor-memory", "dcm-docs", "dcm-issues"],
+    }
+    banks = []
+    for bank_list in project_banks.values():
+        for b in bank_list:
+            if b not in banks:
+                banks.append(b)
     results = []
     for bank in banks:
         try:
@@ -264,7 +272,8 @@ def collect_ingestion_coverage() -> dict:
             pass
 
     # Bank document counts from Hindsight API
-    for bank_id, cov_key in [("kubernaut-issues", "issues_indexed"), ("kubernaut-docs", "docs_indexed")]:
+    for bank_id, cov_key in [("kubernaut-issues", "issues_indexed"), ("kubernaut-docs", "docs_indexed"),
+                              ("dcm-issues", "dcm_issues_indexed"), ("dcm-docs", "dcm_docs_indexed")]:
         try:
             url = f"http://localhost:8888/v1/default/banks/{bank_id}"
             with urllib.request.urlopen(url, timeout=10) as resp:
@@ -287,18 +296,19 @@ def collect_ingestion_coverage() -> dict:
     except Exception:
         pass
 
-    # Code index: row count from pgvector table
-    try:
-        result = subprocess.run(
-            ["psql", "-h", "localhost", "-p", "5432", "-U", "hindsight", "-d", "hindsight",
-             "-t", "-c", "SELECT count(*) FROM code_embeddings;"],
-            capture_output=True, text=True, timeout=10,
-            env={**os.environ, "PGPASSWORD": "hindsight"},
-        )
-        if result.returncode == 0:
-            coverage["code_chunks"] = int(result.stdout.strip())
-    except Exception:
-        pass
+    # Code index: row count from pgvector tables
+    for table, key in [("code_embeddings", "code_chunks"), ("dcm_code_embeddings", "dcm_code_chunks")]:
+        try:
+            result = subprocess.run(
+                ["psql", "-h", "localhost", "-p", "5432", "-U", "hindsight", "-d", "hindsight",
+                 "-t", "-c", f"SELECT count(*) FROM cocoindex.{table};"],
+                capture_output=True, text=True, timeout=10,
+                env={**os.environ, "PGPASSWORD": "hindsight"},
+            )
+            if result.returncode == 0:
+                coverage[key] = int(result.stdout.strip())
+        except Exception:
+            pass
 
     return coverage
 
@@ -783,7 +793,16 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
             lines.append(f"  {'Docs (indexed)':<25}{docs_indexed:>10}{'':>10}{'':>10}")
         code_chunks = coverage.get("code_chunks")
         if code_chunks is not None:
-            lines.append(f"  {'Code chunks':<25}{code_chunks:>10}{'—':>10}{'—':>10}")
+            lines.append(f"  {'Code chunks (kubernaut)':<25}{code_chunks:>10}{'—':>10}{'—':>10}")
+        dcm_docs_idx = coverage.get("dcm_docs_indexed", 0)
+        dcm_issues_idx = coverage.get("dcm_issues_indexed", 0)
+        dcm_code = coverage.get("dcm_code_chunks")
+        if dcm_docs_idx:
+            lines.append(f"  {'DCM docs (indexed)':<25}{dcm_docs_idx:>10}{'':>10}{'':>10}")
+        if dcm_issues_idx:
+            lines.append(f"  {'DCM issues (indexed)':<25}{dcm_issues_idx:>10}{'':>10}{'':>10}")
+        if dcm_code is not None:
+            lines.append(f"  {'DCM code chunks':<25}{dcm_code:>10}{'—':>10}{'—':>10}")
         lines.append("  " + "-" * 66)
     else:
         lines.append("  Coverage data not available (run with live Hindsight + gh CLI).")

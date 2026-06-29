@@ -80,7 +80,7 @@ COCOINDEX_DB = pathlib.Path(os.environ.get(
 
 PG_POOL: coco.ContextKey[Any] = coco.ContextKey("pg_pool")
 
-BOT_AUTHORS = {"github-actions", "dependabot", "renovate", "codecov", "mergify"}
+BOT_AUTHORS = {"github-actions", "dependabot", "renovate", "codecov", "mergify", "jackjin1997"}
 
 CORRECTION_PATTERNS = [
     re.compile(r"\bno[,.]?\s+that'?s\s+(not|wrong|incorrect)", re.I),

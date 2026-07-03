@@ -195,13 +195,52 @@ The template (`cursor/hindsight-memory.mdc.tmpl`) contains all the structural ru
 
 In `nightly-learn.py`:
 - Add `<project>-docs` and `<project>-issues` to `BANKS` list
+- Add a new entry to `PROJECT_CONFIGS[<project>]` with `banks`, `mental_models`, `probes`, `recall_banks`, `log_suffix`
 - Add mental model refresh entries to `models_to_refresh`
 - Add observability probes for new banks
+- **Add `workspace_prefixes`** to the new `PROJECT_CONFIGS` entry (see 10a — easy to miss, since nothing errors if you skip it)
 
 In `report.py`:
 - Add new banks to `collect_mental_model_stats()` bank list
 - Add new bank coverage to `collect_ingestion_coverage()`
 - Add new pgvector table to code chunk count queries
+
+### 10a. Scope Transcript-Derived Analytics Per Project (do not skip)
+
+**Why this matters:** Bank/table/CocoIndex isolation (above) only covers *ingested content*
+(docs, issues, code). It does **not** automatically isolate the nightly report's
+*session analytics* — `effectiveness` (session distribution, weekly trend, recall
+session stats, token signals, exploration efficiency) and `mcp_usage` (raw MCP call
+counts/hit-rates). Those are derived from Cursor agent transcripts and an MCP hook
+log that span **every** workspace on the machine, not just this project's repos.
+
+If you add a new project without scoping these, its nightly report will silently
+embed byte-identical global stats instead of project-specific ones — the numbers
+look plausible (non-zero, well-formed) so this is easy to miss for weeks. This
+happened when DCM was first added: both `kubernaut` and `dcm` nightly reports had
+identical `effectiveness` blocks because `find_recent_transcripts()` had no
+per-project filter.
+
+To scope correctly:
+
+1. Add `"workspace_prefixes": ["Users-jgil-go-src-github-com-<org>-<repo-prefix>"]`
+   to the project's `PROJECT_CONFIGS` entry in `nightly-learn.py`. This should match
+   the `~/.cursor/projects/<name>/` directory name(s) for the project's repos —
+   run `ls ~/.cursor/projects/ | grep <org>` to find the actual prefix once at least
+   one repo has been opened in Cursor.
+2. `find_recent_transcripts(hours, workspace_prefixes=...)` filters transcripts by
+   that prefix before they're used for effectiveness analysis. The **retain/corrections
+   pipeline stays unfiltered on purpose** (`cursor-memory` is an intentionally shared,
+   cross-project bank for coding-hygiene lessons) — only pass `workspace_prefixes`
+   into the effectiveness/analytics call sites, not the retain call sites.
+3. `mcp_usage` scoping additionally requires the `afterMCPExecution` hook
+   (`~/.cursor/hooks/log-mcp-calls.sh`) to tag each logged call with a `project_dir`
+   field (derived from `transcript_path` in the hook payload) — `analyze_mcp_effectiveness()`
+   filters on that field. This field is only present on log lines written *after* the
+   hook was updated to record it; older lines are silently excluded from scoped views.
+4. Verify by comparing the `effectiveness` block across two projects' daily JSON
+   reports (`~/.hindsight/logs/<date>.json` vs `<date>-dcm.json`) — they should differ,
+   not match byte-for-byte.
 
 ### 11. Verify End-to-End
 
@@ -243,4 +282,7 @@ curl -X POST http://localhost:8888/v1/default/banks/<project>-docs/memories/reca
 - **Code index**: Separate pgvector tables (`code_embeddings` vs `<project>_code_embeddings`)
 - **CocoIndex state**: Separate SQLite databases (`cocoindex.db` vs `<project>-cocoindex.db`)
 - **MCP routing**: Workspace-level config ensures agents only see their project's data
+- **Nightly analytics**: `effectiveness` and `mcp_usage` are isolated per project **only if**
+  `workspace_prefixes` is set on the `PROJECT_CONFIGS` entry (step 10a) — this is not
+  automatic and does not fail loudly if skipped
 - **Shared**: `cursor-memory` bank (behavioral corrections), Hindsight API instance, PostgreSQL

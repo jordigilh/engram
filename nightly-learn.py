@@ -144,12 +144,31 @@ def api_post(path: str, payload: dict) -> dict:
         raise
 
 
-def find_recent_transcripts(hours: int = 24) -> list[Path]:
-    """Find transcript files modified in the last N hours."""
+PROJECTS_ROOT = Path(os.path.expanduser("~/.cursor/projects"))
+
+
+def find_recent_transcripts(
+    hours: int = 24, workspace_prefixes: list[str] | None = None
+) -> list[Path]:
+    """Find transcript files modified in the last N hours.
+
+    If workspace_prefixes is given, only transcripts whose Cursor project
+    directory name (~/.cursor/projects/<name>/agent-transcripts/...) starts
+    with one of the given prefixes are returned. Used to scope per-project
+    analytics (e.g. effectiveness) to sessions that actually touched that
+    project's repos, since transcripts otherwise span every workspace.
+    """
     cutoff = datetime.now().timestamp() - (hours * 3600)
     results = []
     for path_str in glob(TRANSCRIPTS_GLOB, recursive=True):
         p = Path(path_str)
+        if workspace_prefixes:
+            try:
+                project_dir_name = p.relative_to(PROJECTS_ROOT).parts[0]
+            except ValueError:
+                continue
+            if not any(project_dir_name.startswith(pfx) for pfx in workspace_prefixes):
+                continue
         if p.stat().st_mtime >= cutoff:
             results.append(p)
     return sorted(results, key=lambda p: p.stat().st_mtime)
@@ -499,6 +518,7 @@ PROJECT_CONFIGS = {
         ],
         "recall_banks": {"hindsight", "hindsight-docs", "hindsight-issues", "cocoindex-code"},
         "log_suffix": "",
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-jordigilh-kubernaut"],
     },
     "dcm": {
         "banks": ["cursor-memory", "dcm-docs", "dcm-issues"],
@@ -513,6 +533,7 @@ PROJECT_CONFIGS = {
         ],
         "recall_banks": {"hindsight", "dcm-docs", "dcm-issues", "dcm-code"},
         "log_suffix": "-dcm",
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-dcm-project-"],
     },
 }
 
@@ -626,11 +647,19 @@ MCP_CALLS_LOG = LOG_DIR / "mcp-calls.jsonl"
 EFFECTIVENESS_LOG = LOG_DIR / "effectiveness-report.jsonl"
 
 
-def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
+def analyze_mcp_effectiveness(
+    transcripts: list[Path], hours: int = 24, workspace_prefixes: list[str] | None = None
+) -> dict:
     """Analyze MCP usage from hook logs and correlate with correction rates.
 
     Reads mcp-calls.jsonl (written by afterMCPExecution hook) and correlates
     with per-session correction counts to measure effectiveness.
+
+    If workspace_prefixes is given, only counts hook-log entries whose
+    project_dir (Cursor project directory name, e.g. from transcript_path)
+    starts with one of the given prefixes. Entries logged before the hook
+    started recording project_dir (empty string) are excluded from scoped
+    views since their project cannot be determined.
     """
     cutoff = datetime.now().timestamp() - (hours * 3600)
 
@@ -651,6 +680,10 @@ def analyze_mcp_effectiveness(transcripts: list[Path], hours: int = 24) -> dict:
                         continue
                     if entry_ts < cutoff:
                         continue
+                    if workspace_prefixes:
+                        project_dir = entry.get("project_dir", "")
+                        if not any(project_dir.startswith(pfx) for pfx in workspace_prefixes):
+                            continue
                     server = entry.get("server", "unknown")
                     if server not in mcp_usage:
                         mcp_usage[server] = {"calls": 0, "hits": 0, "misses": 0}
@@ -1129,8 +1162,24 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
     results["observability_probes"] = run_observability_probes(project)
 
     # Phase: MCP effectiveness analysis
+    # Scoped to this project's own workspaces so session/token/recall stats
+    # AND raw MCP call counts (mcp_usage) reflect this project's work, not
+    # every Cursor workspace on the machine. mcp_usage scoping relies on the
+    # project_dir field the afterMCPExecution hook started stamping on each
+    # log line; older log lines predating that change have no project_dir
+    # and are excluded from scoped views.
     log.info("Analyzing MCP effectiveness...")
-    effectiveness = analyze_mcp_effectiveness(transcripts)
+    workspace_prefixes = pconfig.get("workspace_prefixes")
+    project_transcripts = find_recent_transcripts(
+        hours=24, workspace_prefixes=workspace_prefixes
+    )
+    log.info(
+        "  Scoped to %d/%d transcripts for project=%s",
+        len(project_transcripts), len(transcripts), project,
+    )
+    effectiveness = analyze_mcp_effectiveness(
+        project_transcripts, workspace_prefixes=workspace_prefixes
+    )
     results["effectiveness"] = effectiveness
     if effectiveness["mcp_usage"]:
         for server, stats in effectiveness["mcp_usage"].items():

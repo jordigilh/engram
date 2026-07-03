@@ -242,6 +242,10 @@ async def docs_main(
     docs_dir: pathlib.Path,
     enhancements_dir: pathlib.Path,
     control_plane_dir: pathlib.Path,
+    cli_dir: pathlib.Path,
+    acm_cluster_sp_dir: pathlib.Path,
+    k8s_container_sp_dir: pathlib.Path,
+    utilities_dir: pathlib.Path,
 ) -> None:
     architecture_docs = localfs.walk_dir(
         architecture_dir,
@@ -304,6 +308,80 @@ async def docs_main(
         control_plane_dir, "dcm-control-plane",
     )
 
+    cli_docs = localfs.walk_dir(
+        cli_dir,
+        recursive=True,
+        path_matcher=PatternFilePathMatcher(
+            included_patterns=[
+                ".ai/**/*.md",
+                "CLAUDE.md",
+                "README.md",
+            ],
+        ),
+        live=True,
+    )
+    await coco.mount_each(
+        coco.component_subpath("cli-docs"),
+        process_doc_file, cli_docs.items(),
+        cli_dir, "dcm-cli",
+    )
+
+    acm_docs = localfs.walk_dir(
+        acm_cluster_sp_dir,
+        recursive=True,
+        path_matcher=PatternFilePathMatcher(
+            included_patterns=[
+                ".ai/**/*.md",
+                "CLAUDE.md",
+                "README.md",
+                "RUN.md",
+            ],
+        ),
+        live=True,
+    )
+    await coco.mount_each(
+        coco.component_subpath("acm-cluster-sp-docs"),
+        process_doc_file, acm_docs.items(),
+        acm_cluster_sp_dir, "dcm-acm-cluster-sp",
+    )
+
+    k8s_sp_docs = localfs.walk_dir(
+        k8s_container_sp_dir,
+        recursive=True,
+        path_matcher=PatternFilePathMatcher(
+            included_patterns=[
+                ".ai/**/*.md",
+                "CLAUDE.md",
+                "README.md",
+            ],
+        ),
+        live=True,
+    )
+    await coco.mount_each(
+        coco.component_subpath("k8s-container-sp-docs"),
+        process_doc_file, k8s_sp_docs.items(),
+        k8s_container_sp_dir, "dcm-k8s-container-sp",
+    )
+
+    utilities_docs = localfs.walk_dir(
+        utilities_dir,
+        recursive=True,
+        path_matcher=PatternFilePathMatcher(
+            included_patterns=[
+                "test-plans/**/*.md",
+                ".cursor/prompts/**/*.md",
+                "CLAUDE.md",
+                "README.md",
+            ],
+        ),
+        live=True,
+    )
+    await coco.mount_each(
+        coco.component_subpath("utilities-docs"),
+        process_doc_file, utilities_docs.items(),
+        utilities_dir, "dcm-utilities",
+    )
+
 
 docs_app = coco.App(
     "dcm-docs", docs_main,
@@ -311,6 +389,10 @@ docs_app = coco.App(
     docs_dir=DCM_DOCS_DIR,
     enhancements_dir=DCM_ENHANCEMENTS_DIR,
     control_plane_dir=DCM_CONTROL_PLANE_DIR,
+    cli_dir=DCM_CLI_DIR,
+    acm_cluster_sp_dir=DCM_ACM_CLUSTER_SP_DIR,
+    k8s_container_sp_dir=DCM_K8S_CONTAINER_SP_DIR,
+    utilities_dir=DCM_UTILITIES_DIR,
 )
 
 

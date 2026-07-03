@@ -6,43 +6,17 @@
     <string>io.vectorize.cocoindex.dcm</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.hindsight/venv/bin/python3</string>
-        <string>__HOME__/.hindsight/dcm-cocoindex-flows.py</string>
-        <string>--mode</string>
-        <string>live</string>
+        <string>__HOME__/.hindsight/dcm-nightly-ingest.sh</string>
     </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>1</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>DCM_ARCHITECTURE_DIR</key>
-        <string>__HOME__/go/src/github.com/dcm-project/dcm</string>
-        <key>DCM_DOCS_DIR</key>
-        <string>__HOME__/go/src/github.com/dcm-project/dcm-project.github.io</string>
-        <key>DCM_ENHANCEMENTS_DIR</key>
-        <string>__HOME__/go/src/github.com/dcm-project/enhancements</string>
-        <key>DCM_CONTROL_PLANE_DIR</key>
-        <string>__HOME__/go/src/github.com/dcm-project/control-plane</string>
-        <key>DCM_CLI_DIR</key>
-        <string>__HOME__/go/src/github.com/dcm-project/cli</string>
-        <key>DCM_KUBEVIRT_SP_DIR</key>
-        <string>__HOME__/go/src/github.com/dcm-project/kubevirt-service-provider</string>
-        <key>DCM_K8S_CONTAINER_SP_DIR</key>
-        <string>__HOME__/go/src/github.com/dcm-project/k8s-container-service-provider</string>
-        <key>DCM_ACM_CLUSTER_SP_DIR</key>
-        <string>__HOME__/go/src/github.com/dcm-project/acm-cluster-service-provider</string>
-        <key>DCM_THREE_TIER_SP_DIR</key>
-        <string>__HOME__/go/src/github.com/dcm-project/three-tier-app-demo-service-provider</string>
-        <key>DCM_UTILITIES_DIR</key>
-        <string>__HOME__/go/src/github.com/dcm-project/utilities</string>
-        <key>DCM_SHARED_WORKFLOWS_DIR</key>
-        <string>__HOME__/go/src/github.com/dcm-project/shared-workflows</string>
-        <key>DCM_ISSUES_REPOS</key>
-        <string>dcm-project/dcm,dcm-project/control-plane,dcm-project/cli,dcm-project/kubevirt-service-provider,dcm-project/k8s-container-service-provider,dcm-project/acm-cluster-service-provider,dcm-project/three-tier-app-demo-service-provider,dcm-project/utilities,dcm-project/dcm-project.github.io,dcm-project/enhancements,dcm-project/shared-workflows,dcm-project/quadlet-deploy</string>
-        <key>HINDSIGHT_URL</key>
-        <string>http://localhost:8888</string>
-        <key>COCOINDEX_PG_URL</key>
-        <string>postgresql://hindsight:hindsight@localhost:5432/hindsight</string>
-        <key>COCOINDEX_DB</key>
-        <string>__HOME__/.hindsight/dcm-cocoindex.db</string>
         <key>PATH</key>
         <string>__HOME__/.hindsight/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
@@ -50,12 +24,6 @@
     </dict>
     <key>WorkingDirectory</key>
     <string>__HOME__/.hindsight</string>
-    <key>KeepAlive</key>
-    <true/>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>ThrottleInterval</key>
-    <integer>10</integer>
     <key>StandardOutPath</key>
     <string>__HOME__/.hindsight/logs/dcm-cocoindex-stdout.log</string>
     <key>StandardErrorPath</key>

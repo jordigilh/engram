@@ -2,6 +2,73 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-03: Production Hindsight Outage — Leaked Test DB Advanced Prod Migrations
+
+**Context**: The daily 3pm `pkill -f hindsight-api` restart (see 2026-06-26 entry
+below) killed the service as scheduled, but it then crash-looped indefinitely on
+restart — `KeepAlive: true` respawned it every ~5 seconds, hitting the same fatal
+error each time. All Hindsight MCPs (recall/retain) were down machine-wide until
+fixed.
+
+**Root cause**: `hindsight-api`'s embedded Postgres (`pg0`) resolves the sentinel
+value `"pg0"` to a named instance under `~/.pg0/instances/<name>/`, defaulting to
+`name="hindsight"` — the exact same name/data directory the production service
+uses on port 5432. While investigating an unrelated deadlock bug in a forked
+`hindsight-api-slim` checkout (`~/go/src/github.com/jordigilh/hindsight`), some
+dev/test invocation ran without an explicit isolated instance name, attached to
+the already-running production Postgres, and ran `alembic upgrade head` using the
+fork's checkout — which was ~10 migrations ahead of the pip-installed production
+package (`hindsight-api` 0.8.1). This stamped `alembic_version` in the production
+DB to a revision (`b57a7c9e0d13`) that 0.8.1's migration chain didn't recognize.
+Every subsequent startup failed with `alembic.util.exc.CommandError: Can't locate
+revision identified by 'b57a7c9e0d13'` → `RuntimeError: Database migration
+failed` → `Application startup failed. Exiting.` This had been silently true for
+days — it only surfaced once the process was actually restarted (via the 3pm job).
+
+**Fixes applied**:
+
+1. **Unloaded the crash-looping launchd service** immediately to stop the
+   respawn loop (`launchctl unload io.vectorize.hindsight.service.plist`).
+2. **Verified the fix target**: downloaded and inspected the latest PyPI wheel
+   for `hindsight-api-slim` (0.8.4, three releases ahead of the installed 0.8.1)
+   and confirmed it contains the missing migration (`b57a7c9e0d13`) and matches
+   the fork's migration count exactly — i.e. the production DB's schema was
+   already fully consistent with an *officially released* version, just not
+   the one installed.
+3. **Upgraded via the documented runbook**: `uv pip install --python
+   ~/.hindsight/venv/bin/python -U 'hindsight-api[all]'`, then reloaded the
+   service. Migration check passed immediately; `/health` returned healthy.
+4. **Cleaned up 6 leaked embedded-Postgres test instances** (`hindsight-test`,
+   `hindsight-vecidx-test`, `hindsight-backsweep-test`, `hindsight-long-bankid-
+   test`, `hindsight-remaining-bankid-test`, `hindsight-obs-sv-backfill-test`)
+   that had been running unattended since the prior weekend's full pytest run —
+   ~1GB of leaked disk + idle processes, unrelated to the outage but discovered
+   during triage.
+5. **Fixed the actual trigger**: `io.vectorize.hindsight.restart.plist`'s daily
+   restart was still scheduled for 3pm despite an earlier decision to move it to
+   1am — that reschedule had never been applied (the plist lives only in
+   `~/Library/LaunchAgents/`, untracked by git, so the decision had no durable
+   record and silently reverted/never landed). Rescheduled to 1am and added the
+   plist to `launchd/` in this repo so future schedule decisions survive.
+
+**Takeaways**:
+- **Never point dev/test tooling at a shared default resource name.** When
+  working in ad hoc/manual sessions against a forked service (not the pytest
+  suite, which correctly isolates via named instances), always pass an explicit
+  `HINDSIGHT_API_DATABASE_URL` (or equivalent) that cannot collide with the
+  production instance name, even for "just checking something quickly."
+- **A migration mismatch fails silently until next restart.** A service that
+  never restarts can carry a corrupted/ahead-of-code DB state indefinitely
+  without any symptom, then fail 100% on the next restart. Consider a periodic
+  health check that actually exercises restart-sensitive paths, or a migration-
+  drift check independent of the daily restart.
+- **launchd plists that aren't checked into the repo are not durable decisions.**
+  If it's not in `launchd/` and referenced in setup docs, it will silently
+  regress the next time someone (person or agent) "fixes" it. All operational
+  schedule changes should be committed, not just applied live.
+
+---
+
 ## 2026-06-26: Hindsight API Memory Leak — 17GB in 5 Days
 
 **Context**: The `hindsight-api` process (PID 1346) had been running since Monday

@@ -14,6 +14,11 @@ Usage:
     python3 report.py --csv            # CSV export
 """
 
+# Some environments invoke this via macOS system Python (3.9.x), which predates
+# PEP 604 (`X | Y` union syntax). Defer annotation evaluation so type hints
+# like `dict | None` don't crash at import time on older interpreters.
+from __future__ import annotations
+
 import argparse
 import json
 import os

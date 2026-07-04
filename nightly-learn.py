@@ -10,6 +10,11 @@ Modes:
   --mode both     Run hourly then nightly (default, backward compat for manual runs).
 """
 
+# Launchd jobs invoke this via /usr/bin/python3 (macOS system Python, 3.9.x),
+# which predates PEP 604 (`X | Y` union syntax). Defer annotation evaluation
+# so `list[str] | None`-style hints don't crash at import time on 3.9.
+from __future__ import annotations
+
 import argparse
 import hashlib
 import json

@@ -16,9 +16,13 @@ inputs that would have been visible that night:
   - transcripts, filtered by mtime to [original_run_time - 24h, original_run_time]
   - mcp-calls.jsonl, filtered by `ts` to the same window
 
-The original run time is reconstructed from the historical JSON file's own
-mtime (nightly-learn.py writes it once, at the end of the run, so the file's
-mtime is a faithful proxy for "now" at analysis time that night).
+The original run time is reconstructed from each project's launchd
+StartCalendarInterval schedule (hindsight.nightly.plist runs kubernaut at
+2:01am, hindsight.nightly-dcm.plist runs dcm at 2:31am) combined with the
+file's own "date" field — NOT the file's mtime. mtime is destroyed the first
+time this script writes the file, which silently corrupts the window on any
+second run (every backfilled file would then look like it ran "now"). The
+schedule-based timestamp is stable and makes this script safely idempotent.
 
 Usage:
     python3 backfill-effectiveness.py [--dry-run] [--since YYYY-MM-DD]
@@ -45,6 +49,13 @@ _spec = importlib.util.spec_from_file_location(
 nl = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(nl)
 
+# (hour, minute) each project's nightly launchd job is scheduled to start,
+# per ~/Library/LaunchAgents/io.vectorize.hindsight.nightly{,-dcm}.plist.
+NIGHTLY_RUN_TIME = {
+    "kubernaut": (2, 1),
+    "dcm": (2, 31),
+}
+
 
 def backfill_one(project: str, json_path: Path, dry_run: bool) -> bool:
     if not json_path.exists():
@@ -64,9 +75,8 @@ def backfill_one(project: str, json_path: Path, dry_run: bool) -> bool:
         return False
     report_date = date.fromisoformat(report_date_str)
 
-    # The file's own mtime is when nightly-learn.py finished writing it that
-    # night — the same "now" the original analyze_mcp_effectiveness call used.
-    end_time = datetime.fromtimestamp(json_path.stat().st_mtime)
+    hour, minute = NIGHTLY_RUN_TIME[project]
+    end_time = datetime(report_date.year, report_date.month, report_date.day, hour, minute)
 
     pconfig = nl.PROJECT_CONFIGS[project]
     workspace_prefixes = pconfig.get("workspace_prefixes")

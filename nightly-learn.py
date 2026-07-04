@@ -947,33 +947,30 @@ def analyze_mcp_effectiveness(
         },
     }
 
-    # Weekly trend: recall sessions only, from epoch date
-    # Groups by ISO week and computes per-week averages
-    epoch = date.fromisoformat(EPOCH_START_DATE)
+    # Weekly trend: this run only has visibility into its own 24h window, so
+    # it can only ever honestly report *this run's* contribution to *one*
+    # ISO week — not a real week-over-week series. (A previous version of
+    # this code looped over every week since epoch and stamped the same
+    # non_trivial_recall list on all of them, which fabricated identical
+    # "trend" data for weeks that had nothing to do with this run.)
+    # report.py aggregates multiple days' entries (keyed by "date") into the
+    # actual multi-week trend; this field is that aggregation's raw input.
     non_trivial_recall = [
         s for s in sessions_with_recall
         if s["size_bucket"] != "trivial"
     ]
     weekly_trend = []
     if non_trivial_recall:
-        today = date.today()
-        week_start = epoch - timedelta(days=epoch.weekday())
-        while week_start <= today:
-            week_end = week_start + timedelta(days=6)
-            iso_week = week_start.isocalendar()[1]
-            iso_year = week_start.isocalendar()[0]
-            week_label = f"{iso_year}-W{iso_week:02d}"
-            week_sessions = non_trivial_recall
-            if week_sessions:
-                weekly_trend.append({
-                    "week": week_label,
-                    "sessions": len(week_sessions),
-                    "corrections_per_session": _avg(week_sessions, "corrections"),
-                    "rework_pct": round(_avg(week_sessions, "rework_ratio") * 100, 2),
-                    "productivity_density": _avg(week_sessions, "productivity_density"),
-                    "first_productive_turn": _avg(week_sessions, "first_productive_turn"),
-                })
-            week_start += timedelta(days=7)
+        this_run_date = report_date or date.today()
+        iso_year, iso_week, _ = this_run_date.isocalendar()
+        weekly_trend.append({
+            "week": f"{iso_year}-W{iso_week:02d}",
+            "sessions": len(non_trivial_recall),
+            "corrections_per_session": _avg(non_trivial_recall, "corrections"),
+            "rework_pct": round(_avg(non_trivial_recall, "rework_ratio") * 100, 2),
+            "productivity_density": _avg(non_trivial_recall, "productivity_density"),
+            "first_productive_turn": _avg(non_trivial_recall, "first_productive_turn"),
+        })
 
     report = {
         "date": (report_date or date.today()).isoformat(),

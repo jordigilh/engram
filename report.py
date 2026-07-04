@@ -168,37 +168,91 @@ def aggregate_effectiveness(entries: list[dict]) -> dict:
         total_turns_with_recall += pr.get("agent_turns_with_recall", 0)
         total_subagent_excluded += pr.get("subagent_sessions_excluded", 0)
 
-    # Aggregate exploration efficiency from the most recent entry
-    exploration_data = {}
-    for entry in reversed(entries):
-        ee = entry.get("exploration_efficiency", {})
-        if ee.get("with_recall", {}).get("sessions", 0) > 0:
-            exploration_data = ee
-            break
+    def _weighted_avg_over_entries(get_stats, avg_key, weight_key="sessions"):
+        """Weighted mean of a per-entry average, weighted by that entry's own
+        sample size. Each daily entry only has visibility into its own 24h
+        window, so summing counts and weighting per-day averages by that
+        day's session count approximates what a single pass over all
+        underlying sessions would produce, without needing raw per-session
+        data (which isn't persisted to the log)."""
+        total_weight = 0
+        total_value = 0.0
+        for entry in entries:
+            stats = get_stats(entry)
+            w = stats.get(weight_key, 0)
+            v = stats.get(avg_key, 0)
+            if w:
+                total_weight += w
+                total_value += v * w
+        return round(total_value / total_weight, 4) if total_weight else 0.0, total_weight
 
-    # Aggregate session distribution from the most recent entry
+    # Session distribution: sum with/without-recall counts per bucket across
+    # every entry in the window (each entry already reflects only its own
+    # 24h slice, so this is a true multi-day rollup, not just the last night).
     session_distribution = {}
-    for entry in reversed(entries):
-        sd = entry.get("session_distribution", {})
-        if sd:
-            session_distribution = sd
-            break
+    for bucket in ("trivial", "small", "medium", "large"):
+        with_r = sum(entry.get("session_distribution", {}).get(bucket, {}).get("with_recall", 0) for entry in entries)
+        without_r = sum(entry.get("session_distribution", {}).get(bucket, {}).get("without_recall", 0) for entry in entries)
+        if with_r or without_r:
+            session_distribution[bucket] = {"with_recall": with_r, "without_recall": without_r}
 
-    # Aggregate recall session stats from the most recent entry
+    # Recall session stats: weighted average of each entry's own averages,
+    # weighted by that entry's session count, plus a true sum of sessions.
     recall_session_stats = {}
-    for entry in reversed(entries):
-        rs = entry.get("recall_session_stats", {})
-        if rs.get("sessions", 0) > 0:
-            recall_session_stats = rs
-            break
+    total_rs_sessions = sum(entry.get("recall_session_stats", {}).get("sessions", 0) for entry in entries)
+    if total_rs_sessions:
+        recall_session_stats = {"sessions": total_rs_sessions}
+        for key in ("avg_corrections", "avg_rework_pct", "avg_productivity_density",
+                    "avg_first_productive_turn", "avg_total_tokens"):
+            avg, _ = _weighted_avg_over_entries(lambda e: e.get("recall_session_stats", {}), key)
+            recall_session_stats[key] = avg
 
-    # Aggregate weekly trend from the most recent entry
+    # Exploration efficiency: same weighted-average approach per sub-bucket.
+    exploration_data = {}
+    for subkey in ("with_recall", "without_recall", "with_cocoindex", "without_cocoindex"):
+        sessions = sum(entry.get("exploration_efficiency", {}).get(subkey, {}).get("sessions", 0) for entry in entries)
+        if sessions:
+            avg, _ = _weighted_avg_over_entries(
+                lambda e, sk=subkey: e.get("exploration_efficiency", {}).get(sk, {}),
+                "avg_exploration_before_productive",
+            )
+            exploration_data[subkey] = {"avg_exploration_before_productive": avg, "sessions": sessions}
+
+    # Weekly trend: bucket each entry by the ISO week of its own "date" field
+    # (not nightly-learn.py's per-entry weekly_trend, which only ever sees a
+    # 24h slice and can't compute real week-over-week numbers) and compute a
+    # weighted average per week across however many daily entries fall in it.
+    by_week: dict[str, list[dict]] = defaultdict(list)
+    for entry in entries:
+        rs = entry.get("recall_session_stats", {})
+        if not rs.get("sessions"):
+            continue
+        entry_date_str = entry.get("date")
+        if not entry_date_str:
+            continue
+        try:
+            entry_date = datetime.strptime(entry_date_str, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        iso_year, iso_week, _ = entry_date.isocalendar()
+        by_week[f"{iso_year}-W{iso_week:02d}"].append(rs)
+
     weekly_trend = []
-    for entry in reversed(entries):
-        wt = entry.get("weekly_trend", [])
-        if wt:
-            weekly_trend = wt
-            break
+    for week_label in sorted(by_week):
+        week_entries = by_week[week_label]
+        week_sessions = sum(rs.get("sessions", 0) for rs in week_entries)
+        if not week_sessions:
+            continue
+        def _wavg(key, _entries=week_entries, _total=week_sessions):
+            return round(sum(rs.get(key, 0) * rs.get("sessions", 0) for rs in _entries) / _total, 4)
+        weekly_trend.append({
+            "week": week_label,
+            "sessions": week_sessions,
+            "corrections_per_session": _wavg("avg_corrections"),
+            "rework_pct": _wavg("avg_rework_pct"),
+            "productivity_density": _wavg("avg_productivity_density"),
+            "first_productive_turn": _wavg("avg_first_productive_turn"),
+        })
 
     # Epoch info from the most recent entry
     epoch_start_date = None
@@ -408,6 +462,12 @@ def analyze_token_consumption(days: int = 7) -> dict:
     paths = []
     for path_str in glob(TRANSCRIPTS_GLOB, recursive=True):
         p = Path(path_str)
+        # Exclude Task-tool subagent transcripts: most run with no MCP access
+        # (readonly/explore), so they can't have has_recall=True and would
+        # only ever land in the without_recall bucket, understating recall's
+        # real token/tool-call efficiency. See docs/FINDINGS.md 2026-07-04.
+        if "/subagents/" in str(p):
+            continue
         if p.stat().st_mtime >= cutoff:
             paths.append(p)
 

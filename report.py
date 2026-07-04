@@ -159,12 +159,14 @@ def aggregate_effectiveness(entries: list[dict]) -> dict:
     total_sessions = 0
     total_turns = 0
     total_turns_with_recall = 0
+    total_subagent_excluded = 0
     for entry in entries:
         pr = entry.get("proactive_recall", {})
         total_proactive += pr.get("sessions_with_proactive_recall", 0)
         total_sessions += pr.get("total_sessions", 0)
         total_turns += pr.get("total_agent_turns", 0)
         total_turns_with_recall += pr.get("agent_turns_with_recall", 0)
+        total_subagent_excluded += pr.get("subagent_sessions_excluded", 0)
 
     # Aggregate exploration efficiency from the most recent entry
     exploration_data = {}
@@ -216,6 +218,7 @@ def aggregate_effectiveness(entries: list[dict]) -> dict:
         "proactive_recall_pct": round(total_proactive / total_sessions * 100, 1) if total_sessions > 0 else None,
         "recall_adoption_pct": round(total_with / (total_with + total_without) * 100, 1) if (total_with + total_without) > 0 else None,
         "turn_recall_pct": round(total_turns_with_recall / total_turns * 100, 1) if total_turns > 0 else None,
+        "subagent_sessions_excluded": total_subagent_excluded,
         "exploration_efficiency": exploration_data,
         "session_distribution": session_distribution,
         "recall_session_stats": recall_session_stats,
@@ -607,6 +610,9 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
             lines.append(f"  Proactive recall:    {effectiveness['proactive_recall_pct']:.1f}% of sessions recall without user prompting")
         if effectiveness.get("turn_recall_pct") is not None:
             lines.append(f"  Per-turn recall:     {effectiveness['turn_recall_pct']:.1f}% of agent turns include a recall call")
+        excluded = effectiveness.get("subagent_sessions_excluded", 0)
+        if excluded:
+            lines.append(f"  (excludes {excluded} subagent transcripts, most of which have no MCP access)")
         lines.append("")
         adoption = effectiveness.get("recall_adoption_pct", 0) or 0
         if adoption < 50:

@@ -153,7 +153,9 @@ PROJECTS_ROOT = Path(os.path.expanduser("~/.cursor/projects"))
 
 
 def find_recent_transcripts(
-    hours: int = 24, workspace_prefixes: list[str] | None = None
+    hours: int = 24,
+    workspace_prefixes: list[str] | None = None,
+    end_time: datetime | None = None,
 ) -> list[Path]:
     """Find transcript files modified in the last N hours.
 
@@ -162,8 +164,13 @@ def find_recent_transcripts(
     with one of the given prefixes are returned. Used to scope per-project
     analytics (e.g. effectiveness) to sessions that actually touched that
     project's repos, since transcripts otherwise span every workspace.
+
+    end_time defaults to now (normal live usage). Pass an explicit historical
+    timestamp to reconstruct the exact window a past nightly run would have
+    seen — used for backfilling corrected metrics against still-on-disk
+    transcripts without needing to "rewrite" anything, just recompute.
     """
-    cutoff = datetime.now().timestamp() - (hours * 3600)
+    cutoff = (end_time or datetime.now()).timestamp() - (hours * 3600)
     results = []
     for path_str in glob(TRANSCRIPTS_GLOB, recursive=True):
         p = Path(path_str)
@@ -653,7 +660,11 @@ EFFECTIVENESS_LOG = LOG_DIR / "effectiveness-report.jsonl"
 
 
 def analyze_mcp_effectiveness(
-    transcripts: list[Path], hours: int = 24, workspace_prefixes: list[str] | None = None
+    transcripts: list[Path],
+    hours: int = 24,
+    workspace_prefixes: list[str] | None = None,
+    end_time: datetime | None = None,
+    report_date: date | None = None,
 ) -> dict:
     """Analyze MCP usage from hook logs and correlate with correction rates.
 
@@ -665,8 +676,13 @@ def analyze_mcp_effectiveness(
     starts with one of the given prefixes. Entries logged before the hook
     started recording project_dir (empty string) are excluded from scoped
     views since their project cannot be determined.
+
+    end_time/report_date default to now/today (normal live usage). Pass
+    explicit historical values to backfill a past night's report using the
+    exact window it would have seen, against raw data (transcripts,
+    mcp-calls.jsonl) that is still on disk — see backfill-effectiveness.py.
     """
-    cutoff = datetime.now().timestamp() - (hours * 3600)
+    cutoff = (end_time or datetime.now()).timestamp() - (hours * 3600)
 
     # Phase 1: Aggregate MCP call stats from hook log
     mcp_usage: dict[str, dict] = {}
@@ -716,8 +732,21 @@ def analyze_mcp_effectiveness(
     proactive_recall_sessions = 0
     total_agent_turns = 0
     agent_turns_with_recall = 0
+    subagent_sessions_excluded = 0
 
     for transcript_path in transcripts:
+        # Subagent transcripts (agent-transcripts/<id>/subagents/<id>.jsonl) are
+        # excluded from recall-adoption scoring. Most subagents (e.g. Task-tool
+        # `explore`, or any launched with readonly=true) run with no MCP access
+        # at all, so they are *structurally* unable to call recall regardless of
+        # the alwaysApply rule. Counting them as "sessions without recall"
+        # conflates "the rule didn't fire" with "the tool wasn't even available",
+        # which previously dragged the blended recall_adoption_pct down to ~40%
+        # while genuine top-level conversations were actually recalling ~82% of
+        # the time. See docs/FINDINGS.md for the investigation.
+        if "/subagents/" in str(transcript_path):
+            subagent_sessions_excluded += 1
+            continue
         messages = parse_transcript(transcript_path)
         if len(messages) < 6:
             continue
@@ -947,7 +976,7 @@ def analyze_mcp_effectiveness(
             week_start += timedelta(days=7)
 
     report = {
-        "date": date.today().isoformat(),
+        "date": (report_date or date.today()).isoformat(),
         "epoch_start_date": EPOCH_START_DATE,
         "period_hours": hours,
         "mcp_usage": mcp_usage,
@@ -966,6 +995,9 @@ def analyze_mcp_effectiveness(
             "total_agent_turns": total_agent_turns,
             "agent_turns_with_recall": agent_turns_with_recall,
             "turn_recall_pct": turn_recall_pct,
+            # Subagent transcripts excluded from the counts above — see comment
+            # at subagent_sessions_excluded in the Phase 2 loop for rationale.
+            "subagent_sessions_excluded": subagent_sessions_excluded,
         },
         "session_distribution": session_distribution,
         "recall_session_stats": {

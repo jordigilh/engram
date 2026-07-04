@@ -2,6 +2,50 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-04: PEP 604 Union Syntax Silently Broke the Nightly Pipeline
+
+**Context**: The effectiveness-scoping fix from 2026-07-03 (`workspace_prefixes:
+list[str] | None = None`) crashed every `nightly-learn.py` invocation — hourly
+and nightly, both projects — starting the moment it was deployed. No corrections
+were retained, no reflect/probes/triage ran, and no `2026-07-04.json` /
+`2026-07-04-dcm.json` report was generated overnight, discovered only when
+asked for a status report the next morning.
+
+**Root cause**: launchd invokes `nightly-learn.py` via `/usr/bin/python3` —
+macOS's bundled system Python, pinned at 3.9.6 — not the project's `~/.hindsight/
+venv` (3.14). Python evaluates function annotations eagerly at import time
+unless told otherwise, and PEP 604's `X | Y` union syntax (`list[str] | None`)
+isn't valid until 3.10. The failure was a plain `TypeError` at module load,
+so *every* run failed identically and immediately — but nothing surfaced it in
+real time (no alerting on launchd job failures), so 18+ hourly runs and both
+nightly runs failed silently overnight before anyone asked for a status.
+`report.py` had the same latent issue (`dict | None` at line 544), pre-existing
+and unrelated to the 07-03 change — it just isn't scheduled, so it never
+crash-looped, only would fail if manually run under system Python.
+
+**Fix**: Added `from __future__ import annotations` to both scripts, deferring
+annotation evaluation to strings. Verified neither script does runtime
+introspection on annotations (no pydantic/dataclass/`get_type_hints`), so this
+is a pure compatibility fix with no behavior change. Manually re-ran both
+nightly jobs afterward to backfill the missed 2026-07-04 reports.
+
+**Takeaways**:
+- **Any code invoked via `/usr/bin/python3` in a launchd plist must target
+  Python 3.9 syntax**, not whatever version is used for local testing/dev.
+  `from __future__ import annotations` at the top of every launchd-invoked
+  script is cheap insurance against this entire class of bug.
+- **Test changes against the actual invocation path, not just `python3` in a
+  dev shell.** `python3 -c "import nightly_learn"` under the venv's 3.14 would
+  never have caught this; only running it exactly as launchd does
+  (`/usr/bin/python3 nightly-learn.py`) surfaces it.
+- **A crashing scheduled job produces no report and no error visible to the
+  user** — it just silently doesn't happen. There's currently no alerting for
+  "the nightly job didn't run" (as opposed to "the nightly job ran and
+  reported errors"), which is a gap worth closing given this is the second
+  silent-failure incident in two days.
+
+---
+
 ## 2026-07-03: Production Hindsight Outage — Leaked Test DB Advanced Prod Migrations
 
 **Context**: The daily 3pm `pkill -f hindsight-api` restart (see 2026-06-26 entry

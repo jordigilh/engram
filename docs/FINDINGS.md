@@ -2,6 +2,77 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-04: "40% Recall Adoption" Was a Measurement Artifact, Not a Rule Failure
+
+**Context**: `report.py` flagged recall adoption at ~40% ("agent is not recalling
+in most sessions"), pointing at the `alwaysApply` rule in
+`.cursor/rules/hindsight-memory.mdc` as possibly unreliable. Investigated by
+recomputing `analyze_mcp_effectiveness` over a true, deduplicated 7-day window
+(264 transcripts) instead of report.py's summed daily snapshots, then splitting
+the result by transcript type.
+
+**Root cause**: `find_recent_transcripts` globs `agent-transcripts/**/*.jsonl`,
+which recursively matches both top-level conversation transcripts *and*
+`.../subagents/<id>.jsonl` transcripts created by the `Task` tool. Of the 264
+transcripts in the window, 207 (78%) were subagents, not user-facing
+conversations. Splitting recall adoption by type:
+- Top-level conversations: 45/55 = **81.8%** recall adoption — healthy, the
+  rule is working as intended.
+- Subagent transcripts: 46/199 = **23.1%** — and of the 153 subagent sessions
+  without recall, 152 made *zero* MCP tool calls of any kind in the entire
+  transcript (only 1 had MCP access but chose not to recall). This means
+  recall wasn't skipped — it was **structurally unavailable**, most likely
+  because these were `explore`/readonly subagents, which per the `Task` tool's
+  own contract run with "no MCP or internet access."
+
+Blending both populations into one "sessions_with_recall / sessions_without_
+recall" ratio produced a number that looked alarming but was mostly measuring
+"what fraction of transcripts happened to be read-only research subagents,"
+not "is the agent ignoring the memory rule."
+
+**Fix**: `analyze_mcp_effectiveness` in `nightly-learn.py` now skips any
+transcript path containing `/subagents/` before per-session recall scoring,
+and reports the excluded count as `subagent_sessions_excluded` for
+transparency. `report.py` surfaces that count next to the adoption line. No
+change was made to the `hindsight-memory.mdc` rule — it wasn't the problem.
+
+Rather than wait ~7 days for the rolling window to fill back up with
+corrected snapshots, added `end_time`/`report_date` override parameters to
+`find_recent_transcripts`/`analyze_mcp_effectiveness` (both default to
+now/today, so live nightly runs are unaffected) and a new
+`backfill-effectiveness.py` that replays each historical night's exact 24h
+window — reconstructed from the existing daily JSON's own mtime — against
+transcripts and `mcp-calls.jsonl` still on disk. This retroactively corrected
+2026-06-27 through 2026-07-03 in place (only the outer `effectiveness` key of
+each daily JSON; everything else untouched) and, as a side effect, also fixed
+those same days' pre-existing "identical effectiveness/mcp_usage across
+kubernaut and dcm" bug (the 07-03 fix that added `workspace_prefixes` scoping
+also only applied going forward until this backfill). `report.py --days 7`
+went from 40.6% to 79.9% recall adoption immediately after backfilling,
+instead of six more days of degraded/misleading dashboard data.
+
+**Takeaways**:
+- **A metric that blends two structurally different populations (user-facing
+  sessions vs. delegated, often tool-restricted subagent runs) will trend
+  toward whichever population is more numerous** — here subagents outnumbered
+  real conversations ~4:1, so their near-zero MCP access dominated the signal.
+- **Before treating a low-adoption metric as a rule-compliance problem, check
+  whether the tool being measured was even *available* in the sessions being
+  counted.** A session with zero MCP calls of any kind (not just zero recall
+  calls) is a strong signal of "couldn't," not "didn't."
+- When adding new session-derived metrics, decide explicitly whether subagent
+  transcripts belong in the denominator, and if so, track them as a distinct
+  bucket rather than merging them silently into "sessions."
+- **Derived metrics computed from durable raw sources (transcripts,
+  append-only logs) are backfillable, not just fixable-going-forward** — as
+  long as the scoring function takes an explicit time window instead of
+  hardcoding `datetime.now()`, a bug fix can be replayed against historical
+  windows instead of waiting for the rolling window to refill. Worth
+  designing new analytics this way from the start (explicit `end_time` param)
+  rather than retrofitting it under pressure, as done here.
+
+---
+
 ## 2026-07-04: PEP 604 Union Syntax Silently Broke the Nightly Pipeline
 
 **Context**: The effectiveness-scoping fix from 2026-07-03 (`workspace_prefixes:

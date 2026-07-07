@@ -2,6 +2,109 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-07: Data Freshness Alarm Was Unmeasurable, Not Stale — Plus a Real Upstream Fix
+
+**Context**: `report.py`'s "Data Freshness" section had been flagging Docs/Code/
+Transcripts as several hours "STALE" every morning (target ≤1hr) since at
+least 2026-07-04. Investigated whether this was a real ingestion problem or
+another measurement artifact, and separately looked into why Cursor shows the
+Hindsight MCP servers as down most mornings.
+
+**Root cause (freshness)**: `collect_freshness_stats()` derived staleness from
+the last `"docs-app"`/`"code-app"`/`"transcript"` log line matching
+"watching"/"complete"/"file-watching" in `cocoindex-stderr.log`. Checked what
+actually emits those lines: CocoIndex's live file-watcher apps only log
+`"Starting <app> (live, file-watching)..."` **once at process startup** —
+there's no periodic "still watching" or per-file "indexed X" line, and the
+underlying `cocoindex.code_embeddings` table has no `updated_at` column
+either (confirmed via direct schema inspection). So the metric was measuring
+"time since the watcher process last restarted", not "time since data was
+actually indexed" — a perfectly healthy, idle watcher with no local file
+changes is indistinguishable from a dead one by this signal alone. Compounding
+this: `io.vectorize.hindsight.restart.plist` kills `cocoindex-flows` (in
+addition to `hindsight-api`) every night at 1am, so the "staleness" clock
+reset nightly regardless of real indexing activity — explaining why it never
+read below ~4-10 hours each morning.
+
+**Root cause (why cocoindex was being killed nightly in the first place)**:
+Traced this back to a known upstream bug: on macOS, FSEvents can silently
+stop delivering file-change notifications after long-running watch sessions,
+and the old `cocoindex` live-watcher had no recovery path — it blocked
+indefinitely on the event queue. The nightly kill-and-respawn was almost
+certainly a workaround for this (undocumented, predates this project). Checked
+upstream: `cocoindex-io/cocoindex#2232` ("add periodic rescan + watcher
+recreation for live mode") fixes exactly this with a `rescan_interval`
+(default 1hr) that periodically tears down and recreates the watcher, no
+restart needed — **we authored and submitted this PR** (during earlier work
+on this project), it was merged upstream 2026-06-30, and shipped in PyPI
+`cocoindex` 1.0.15 (2026-07-04) and 1.0.16 (2026-07-06). We were still pinned
+to 1.0.11 (2026-06-17), predating both our own fix and its release — i.e. we'd
+fixed the root cause upstream 8 days earlier and just hadn't pulled it in.
+
+Separately checked the other upstream contribution from this project,
+`vectorize-io/hindsight#2529` (the `DeadlockDetectedError` retry fix, also
+authored by us — see 2026-07-02 entry) and its maintainer follow-up `#2534`
+— **both still open, unreviewed, unmerged** as of this writing. No new
+`hindsight-api` release contains either fix yet.
+
+> **Follow-up needed**: periodically check `gh pr view 2529 --repo
+> vectorize-io/hindsight` (and `2534`) for merge status. Once either merges
+> and a new `hindsight-api` PyPI release includes it, upgrade the same way
+> `cocoindex` was upgraded here (`uv pip install --python
+> ~/.hindsight/venv/bin/python -U 'hindsight-api[all]'`) and confirm the
+> deadlock stops appearing in `hindsight-stderr.log`.
+
+**Fixes applied**:
+1. Upgraded `cocoindex` 1.0.11 → 1.0.16 in `~/.hindsight/venv` (`uv pip
+   install -U cocoindex`) and restarted the service — now self-heals FSEvents
+   staleness on its own every hour, no process restart required.
+2. Removed `pkill -f cocoindex-flows` from `io.vectorize.hindsight.restart.
+   plist` (kept the `hindsight-api` restart) — it was a workaround for a bug
+   that's now fixed upstream and had no other known purpose. Reversible via
+   git history if cocoindex misbehaves without it.
+3. Reworked `collect_freshness_stats()`/the report's Data Freshness section to
+   stop presenting a fabricated Healthy/STALE verdict for docs/code/
+   transcripts. They now show "watcher uptime" as informational only; only
+   "issues" (which has a genuine ~300s periodic poll signal) gets a real
+   pass/fail verdict.
+
+Versions as of this entry, for future incident triage: `cocoindex` 1.0.16,
+`hindsight-api` 0.8.4 (last upgraded 2026-07-03, see that entry — unrelated to
+and unaffected by the still-open deadlock PRs above).
+
+**On "Cursor shows the MCP as down every morning" (not fully solved)**:
+`hindsight`/`hindsight-docs`/`hindsight-issues` are configured as `type:
+"http"` MCP servers pointing at `localhost:8888` — a connection Cursor holds
+open, unlike the `stdio`-transport `cocoindex-code`/`gopls` servers Cursor
+spawns fresh per use. When the 1am `pkill -f hindsight-api` drops that
+connection, Cursor's HTTP MCP client does not appear to automatically retry
+in the background; the server shows red until a manual reload (of the MCP
+panel or the whole window). This is Cursor client-side reconnection behavior,
+not something fixable from this repo. Removing the `cocoindex-flows` kill
+(fix #2 above) narrows the nightly disruption window to `hindsight-api` only,
+but doesn't eliminate it — `hindsight-api` still restarts nightly and its
+original justification predates this project and was never documented (see
+2026-06-26 entry). Left as-is pending more evidence on whether that restart
+is still needed at all.
+
+**Takeaways**:
+- **A log-line-based "last activity" signal is only as good as how often that
+  line actually fires.** A one-time-at-startup log line makes a terrible
+  proxy for "still healthy" — it can only ever measure uptime, never real
+  activity, no matter how you interpret the number.
+- **When a workaround (nightly kill-and-respawn) has no documented reason,
+  check upstream before assuming it's still needed.** In this case the
+  workaround's likely root cause had already been fixed by an accepted PR
+  sitting in a newer release we simply hadn't pulled — the fix was to update
+  a dependency, not to keep re-applying the workaround.
+- **HTTP-transport local MCP servers are more fragile to backend restarts
+  than stdio-transport ones**, because Cursor holds a live connection to the
+  former but spawns the latter fresh per invocation. Worth factoring into
+  future MCP server design decisions for anything that needs to restart
+  periodically.
+
+---
+
 ## 2026-07-04: "40% Recall Adoption" Was a Measurement Artifact, Not a Rule Failure
 
 **Context**: `report.py` flagged recall adoption at ~40% ("agent is not recalling

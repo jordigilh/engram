@@ -376,7 +376,24 @@ def collect_ingestion_coverage() -> dict:
 
 
 def collect_freshness_stats() -> dict:
-    """Compute data freshness by checking CocoIndex logs for last successful sync."""
+    """Compute data freshness by checking CocoIndex logs for last successful sync.
+
+    "issues" has a genuine per-cycle activity signal ("Issues poll: complete"
+    is logged every ~300s regardless of whether anything changed), so its
+    staleness number is trustworthy and gets a real Healthy/STALE verdict.
+
+    "docs"/"code"/"transcripts" run as CocoIndex live file-watchers, which
+    only log a "Starting ... (live, file-watching)" line once at process
+    startup — there is no periodic "still watching, nothing changed" or
+    per-file "indexed X" log line to key off, and no updated_at column in the
+    underlying pgvector tables either (checked: cocoindex.code_embeddings has
+    no timestamp column). So for these three, this function can only report
+    "time since the watcher process last (re)started", NOT "time since data
+    was last actually indexed" — a healthy idle watcher with no local edits
+    looks identical to a dead one by this signal alone. Callers must treat
+    signal_type="process_start" as informational uptime, not a staleness
+    verdict. See docs/FINDINGS.md 2026-07-07.
+    """
     freshness = {}
     stderr_log = Path.home() / ".hindsight" / "logs" / "cocoindex-stderr.log"
 
@@ -384,6 +401,12 @@ def collect_freshness_stats() -> dict:
         return freshness
 
     now = datetime.now()
+    signal_types = {
+        "issues": "poll_complete",
+        "docs": "process_start",
+        "code": "process_start",
+        "transcripts": "process_start",
+    }
 
     # Parse the log for last successful completion timestamps per flow
     last_timestamps = {}
@@ -396,19 +419,19 @@ def collect_freshness_stats() -> dict:
                         last_timestamps["issues"] = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S,%f")
                     except ValueError:
                         pass
-                elif "docs-app" in line and ("watching" in line or "complete" in line or "file-watching" in line):
+                elif "Starting docs-app" in line:
                     ts_str = line[:23]
                     try:
                         last_timestamps["docs"] = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S,%f")
                     except ValueError:
                         pass
-                elif "code-app" in line and ("watching" in line or "complete" in line or "file-watching" in line):
+                elif "Starting code-app" in line:
                     ts_str = line[:23]
                     try:
                         last_timestamps["code"] = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S,%f")
                     except ValueError:
                         pass
-                elif "transcript" in line.lower() and ("watching" in line or "complete" in line or "file-watching" in line):
+                elif "Starting transcripts-app" in line:
                     ts_str = line[:23]
                     try:
                         last_timestamps["transcripts"] = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S,%f")
@@ -424,6 +447,7 @@ def collect_freshness_stats() -> dict:
             "last_sync": ts.isoformat(),
             "staleness_hours": round(hours, 2),
             "staleness_minutes": round(delta.total_seconds() / 60, 1),
+            "signal_type": signal_types.get(source, "unknown"),
         }
 
     return freshness
@@ -883,33 +907,44 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
     lines.append("  DATA FRESHNESS (Is the data current enough to be useful?)")
     lines.append("  " + "-" * 66)
     if freshness:
-        targets = {
-            "docs": ("< 1 hr", 1.0),
-            "issues": ("< 5 min", 5.0 / 60),
-            "code": ("< 5 min", 5.0 / 60),
-            "transcripts": ("< 1 hr", 1.0),
-        }
-        lines.append(f"  {'Source':<20}{'Staleness':>14}{'Target':>10}{'Status':>10}")
+        # Only "issues" has a genuine periodic activity signal (polls every
+        # ~300s regardless of whether anything changed) — a real Healthy/STALE
+        # verdict is meaningful there. docs/code/transcripts are live file
+        # watchers that only log once at process startup; a healthy, idle
+        # watcher with no local file changes is indistinguishable from a dead
+        # one by this signal, so we report their uptime as information only,
+        # not a pass/fail verdict. See collect_freshness_stats() docstring.
+        verdict_targets = {"issues": ("< 5 min", 5.0 / 60)}
+        lines.append(f"  {'Source':<20}{'Staleness':>14}{'Target':>10} {'Status':>13}")
         lines.append("  " + "-" * 66)
+        stale_count = 0
         for source in ("docs", "issues", "code", "transcripts"):
             if source not in freshness:
                 continue
             fs = freshness[source]
             hours = fs["staleness_hours"]
-            target_label, target_hours = targets.get(source, ("—", 999))
             if hours < 1:
                 staleness_str = f"{fs['staleness_minutes']:.1f} min"
             else:
                 staleness_str = f"{hours:.1f} hrs"
-            status = "Healthy" if hours <= target_hours else "STALE"
-            lines.append(f"  {source.capitalize():<20}{staleness_str:>14}{target_label:>10}{status:>10}")
+            if fs.get("signal_type") == "process_start":
+                target_label, status = "n/a", "uptime only"
+            else:
+                target_label, target_hours = verdict_targets.get(source, ("—", 999))
+                status = "Healthy" if hours <= target_hours else "STALE"
+                if hours > target_hours:
+                    stale_count += 1
+            lines.append(f"  {source.capitalize():<20}{staleness_str:>14}{target_label:>10} {status:>13}")
         lines.append("  " + "-" * 66)
-        stale_count = sum(1 for s, fs in freshness.items() if fs["staleness_hours"] > targets.get(s, ("", 999))[1])
         if stale_count == 0:
-            lines.append("  All sources within freshness targets.")
+            lines.append("  Issues polling is within target.")
         else:
             lines.append(f"  Warning: {stale_count} source(s) exceeding freshness target.")
             lines.append("  Check: launchctl list | grep cocoindex")
+        if any(fs.get("signal_type") == "process_start" for fs in freshness.values()):
+            lines.append("  Note: docs/code/transcripts show time since the watcher last")
+            lines.append("  (re)started, not confirmed data staleness — no per-file activity")
+            lines.append("  signal exists yet to measure that directly (see FINDINGS.md).")
     else:
         lines.append("  Freshness data not available (CocoIndex not running or no logs).")
 

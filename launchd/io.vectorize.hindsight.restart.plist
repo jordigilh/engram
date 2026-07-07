@@ -8,7 +8,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>/usr/bin/pkill -f hindsight-api; sleep 5; /usr/bin/pkill -f cocoindex-flows</string>
+        <string>/usr/bin/pkill -f hindsight-api</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>

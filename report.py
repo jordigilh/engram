@@ -46,6 +46,12 @@ CORRECTION_PATTERNS = [
     re.compile(r"\byou\s+(shouldn'?t|should\s+not)\s+have", re.I),
     re.compile(r"\bdo\s+not\s+use\b", re.I),
     re.compile(r"\bwe\s+don'?t\s+use\b", re.I),
+    # Keep in sync with the same list in nightly-learn.py. Added 2026-07-08 —
+    # see docs/FINDINGS.md for why (16 real corrections/7 days, 0 detected).
+    re.compile(r"\b(you'?re|you\s+are)\s+(still\s+)?not\s+(following|aligned)\b", re.I),
+    re.compile(r"\bnot\s+following\s+(the\s+)?(project'?s?\s+)?(methodology|convention|AGENTS\.md|CLAUDE\.md)\b", re.I),
+    re.compile(r"\byou\s+keep\s+making\s+the\s+same\s+mistake\b", re.I),
+    re.compile(r"\bmistak(?:e|ing)\b.{0,40}\bfor\b", re.I),
 ]
 
 

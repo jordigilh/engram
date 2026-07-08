@@ -2,6 +2,73 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-08: Correction Detection Missed 100% of "Not Following Methodology" Corrections
+
+**Context**: User asked whether a specific recurring correction — the model mistaking
+TDD REFACTOR-phase work for a CHECKPOINT gate (or vice versa) in `kubernaut`'s
+RED/GREEN/REFACTOR + CHECKPOINT A/B/C/D/DD/W workflow (see `kubernaut/AGENTS.md`) —
+was being captured by the effectiveness pipeline, given they'd corrected it "plenty"
+over the prior two days. `corrections_detected` had read `0` for both projects for
+three days straight (2026-07-06 through 2026-07-08), which was itself a red flag
+given the user's report of frequent live corrections.
+
+**Root cause**: `CORRECTION_PATTERNS` (duplicated in `nightly-learn.py`, `report.py`,
+and `cocoindex-flows.py`) is a fixed list of ~10 regexes for generic corrective
+phrasing ("no, that's wrong", "don't do that", "undo that", etc.). None of them
+match this user's actual, highly consistent phrasing for methodology/convention
+corrections. Scanned the last 7 days of top-level transcripts (subagents excluded)
+for correction-adjacent language and hand-verified each hit: **16 genuine
+corrections, 0 detected** by the existing patterns. Examples that were silently
+invisible to every downstream metric (`corrections_detected`, `recall_session_stats`,
+and — most importantly — the `[CORRECTION]`-tagging in `cocoindex-flows.py` that
+feeds the `cursor-memory` Hindsight bank):
+
+- "again, you're not following AGENTS.md"
+- "no, you're still not following the project's methodology"
+- "you keep making the same mistake with refactor phase: you're not aligned with..."
+- "why does REFACTOR still show checkpoint tasks? it should be split. You're still
+  not following the AGENTS.md"
+- "these tests are not following project convention https://..."
+- "I'm finding often that the model tends to mistake TDD refactoring for checkpoint"
+
+The existing "no, that's wrong"-style pattern requires the literal word "that's";
+none of the above use it, despite being unambiguous corrections to a human reader.
+
+**Fix applied**: Added four new patterns to all three `CORRECTION_PATTERNS` copies:
+`you're/you are (still) not following|aligned`, `not following the
+methodology/convention/AGENTS.md/CLAUDE.md`, `you keep making the same mistake`, and
+`mistak(e|ing) ... for ...` (catches "mistake X for Y" conflation reports like the
+TDD/checkpoint one above). Verified against the full 7-day sample plus a battery of
+adversarial near-misses ("confidence score... by mistake", "I'm still not clear on
+1578", "what should be? I'm confused") to confirm no false positives — result: 11/11
+genuine corrections now caught (the remaining 5 unmatched hits were correctly
+filtered as non-corrections), zero regressions on the benign set.
+
+**Not yet done**: This only fixes *detection going forward* (tonight's nightly run
+onward). It does not retroactively backfill `corrections_detected` counts for past
+days the way `backfill-effectiveness.py` did for recall-adoption — the raw signal
+(transcript text) is still on disk, so a similar backfill is possible if the
+historical trend line becomes valuable, but wasn't done here since correction
+counts aren't currently plotted in `weekly_trend`.
+
+**Takeaways**:
+- **A near-zero rate on a metric that should clearly be nonzero is itself a signal
+  worth investigating before trusting the number.** `corrections_detected: 0` for
+  three consecutive days, next to a user explicitly saying they corrected the model
+  "plenty", should have been the tell — the absence of data was the bug report.
+- **Regex-based intent detection silently rots as phrasing drifts.** This user's
+  actual correction style ("you're not following X", "you keep making the same
+  mistake") is completely different from the patterns the list was originally
+  seeded with ("no, that's wrong"). Worth periodically re-deriving patterns from a
+  sample of real recent corrections rather than trusting a static list indefinitely.
+- **This pattern list has three independent copies** (`nightly-learn.py`,
+  `report.py`, `cocoindex-flows.py`) that must be kept in sync by hand — the
+  `cocoindex-flows.py` copy is the most consequential of the three since it's what
+  actually tags `[CORRECTION]` windows for ingestion into the `cursor-memory`
+  Hindsight bank; a fix applied only to the reporting copies would still leave the
+  memory system blind to this class of correction. Worth extracting to a shared
+  module if a fourth copy is ever needed.
+
 ## 2026-07-07: Data Freshness Alarm Was Unmeasurable, Not Stale — Plus a Real Upstream Fix
 
 **Context**: `report.py`'s "Data Freshness" section had been flagging Docs/Code/

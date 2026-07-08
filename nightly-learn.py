@@ -53,6 +53,16 @@ CORRECTION_PATTERNS = [
     re.compile(r"\byou\s+(shouldn'?t|should\s+not)\s+have", re.I),
     re.compile(r"\bdo\s+not\s+use\b", re.I),
     re.compile(r"\bwe\s+don'?t\s+use\b", re.I),
+    # "you're not following AGENTS.md/the methodology/convention" — this
+    # user's most common correction phrasing for process/methodology
+    # violations (e.g. TDD phase confusion). Added 2026-07-08 after finding
+    # 16 real corrections in 7 days, 100% missed by the patterns above.
+    re.compile(r"\b(you'?re|you\s+are)\s+(still\s+)?not\s+(following|aligned)\b", re.I),
+    re.compile(r"\bnot\s+following\s+(the\s+)?(project'?s?\s+)?(methodology|convention|AGENTS\.md|CLAUDE\.md)\b", re.I),
+    re.compile(r"\byou\s+keep\s+making\s+the\s+same\s+mistake\b", re.I),
+    # "mistake X for Y" / "mistaking X for Y" — the agent conflating two
+    # distinct concepts (e.g. "mistake TDD refactoring for checkpoint").
+    re.compile(r"\bmistak(?:e|ing)\b.{0,40}\bfor\b", re.I),
 ]
 
 STRUCTURAL_CORRECTION_PATTERNS = [

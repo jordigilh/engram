@@ -2,6 +2,172 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-08: Prefilter Shadow Trial — No Cheap Gate Safely Narrows Haiku Intake; Found and Fixed a System-Boilerplate Contamination Bug Along the Way
+
+**Context**: Same day as the semantic correction detection spike below, user asked whether
+Haiku's intake for "classify every message" (Variant B, the spike's winning design) could be
+narrowed with some form of preprocessing, given the embedding gate (Variant A) had already
+failed. Proposed running two prefilter candidates in shadow mode against live traffic for a
+couple of weeks, scored non-circularly against Haiku's own classifications (not against
+`ground_truth.py`, which was itself discovered via keyword search and would make any regex-based
+prefilter's recall look artificially good against it).
+
+**What was built**: `spike/prefilters.py` (two candidate gates: `loose_regex_prefilter`, a
+deliberately broad recall-oriented regex net distinct from production `CORRECTION_PATTERNS`;
+and `trivial_message_exclusion_filter`, a conservative filter that only excludes near-zero-
+plausibility messages like bare acknowledgments and bare URLs) and `prefilter-shadow-trial.py`
+(a periodic, watermark-based scanner — same incremental-diffing pattern as `nightly-learn.py` —
+that calls Haiku on every new top-level user message, logs both prefilters' verdicts alongside
+Haiku's real classification to `~/.hindsight/logs/prefilter-shadow.jsonl`, and gates nothing for
+real). Backfilled 14 days of existing transcripts for an immediate large sample (mitigating the
+risk that live volume would be too low to reach a conclusion during an upcoming 2-week absence),
+then installed `launchd/io.vectorize.prefilter-shadow-trial.plist` (`StartInterval`, every 20
+minutes, with a PID-based lock file since overlapping unattended runs over 2+ weeks could race on
+the watermark file) to keep extending the sample with live traffic.
+
+**Bug found and fixed en route**: The first backfill run showed an implausibly high 15.3%
+"correction" rate, and several of the loose-regex-net's "missed" corrections were the *identical*
+string repeated dozens of times, e.g. `"The beginning of the above subagent result is already
+visible to the user. Perform any follow-up actions (if needed)."` (28 occurrences) and `"Briefly
+inform the user about the task result and perform any follow-up actions (if needed)"` (68
+occurrences) — these are Cursor's own system-injected Task-tool background-subagent-completion
+templates, attributed to `role="user"` in the transcript JSONL despite never being typed by a
+human. Haiku sometimes read their instructional phrasing ("perform any follow-up actions") as an
+instruction-violation-shaped correction. ~9% of raw "user" messages in the 1-day sample were one
+of these (plus a third, `<mcp_server_catalog>...` tool-listing dumps). The existing regex-based
+`CORRECTION_PATTERNS` never shared vocabulary with this boilerplate, so **production was
+accidentally immune to a false-positive class that a semantic classifier is newly exposed to by
+seeing 100% of raw traffic instead of a curated subset.** Fixed in `prefilter-shadow-trial.py`'s
+own `extract_user_text` with an explicit boilerplate-prefix/tag exclusion list (also covers
+`<system_reminder>`, `<attached_files>`, `<system_notification>`, `<user_info>` defensively, even
+though only `<mcp_server_catalog>` appeared in-sample) — not yet ported to `nightly-learn.py` /
+`cocoindex-flows.py` since their regex-based detection isn't currently vulnerable to it, but
+worth reconsidering if either ever adopts semantic classification.
+
+**Result** (14-day backfill, 3,873 real top-level user messages, 630 Haiku-confirmed
+corrections — 16.3% of traffic, itself notably higher than the ~1-2/day assumed from the smaller
+hand-curated 7-day scan used to build `ground_truth.py`, which undercounts by construction since
+it only sampled messages that already matched a keyword net):
+
+| Candidate prefilter | Haiku-call reduction | Recall vs. Haiku's own verdicts |
+|---|---|---|
+| Loose regex/keyword net (recall-oriented, broader than `CORRECTION_PATTERNS`) | 90.0% | **24.4%** (154/630) |
+| Trivial-message exclusion filter (skips bare acks/URLs only) | 3.4% | 100% (630/630) |
+
+The loose regex net fails even worse than Variant A's embedding gate did in the original spike
+(which topped out around 67% recall before collapsing) — it's not just insufficiently tuned, it's
+fundamentally the wrong tool: Haiku's notion of "correction" spans far more linguistic variety
+(clarifying questions, scope corrections, factual-error callouts) than any keyword list, however
+broad, can anticipate. The trivial exclusion filter is safe but nearly worthless — real traffic
+essentially never consists of bare acknowledgments or bare URLs, so there's almost nothing safe to
+exclude.
+
+**Conclusion**: There is currently no known way to meaningfully and safely narrow Haiku's intake
+below "classify everything" (Variant B). Given Variant B's cost is already negligible at this
+volume (revised estimate, using the corrected 16.3% correction rate for contradiction-check
+volume: still low single-digit dollars/month) and there is no safe cheaper alternative, if
+Variant B/contradiction-checking is ever adopted for production, it should run on 100% of
+messages with no prefilter gate at all — the earlier idea of "prefilter to reduce intake" is a
+reasonable instinct that this evidence now rules out, exactly the kind of negative result the
+shadow-trial methodology was built to surface cheaply before any production commitment.
+
+**Takeaways**:
+- **The same circularity trap that would have undermined testing embeddings against
+  `ground_truth.py` applies to testing any prefilter against it.** Scoring a candidate gate's
+  recall against a set that was itself discovered via keyword/regex scanning is close to
+  tautological. A live shadow trial scored against a separately-validated classifier's own
+  real-time judgments (not a hand-labeled set) is the only way to get a trustworthy, non-circular
+  recall number for a prefilter.
+- **A near-zero assumed rate should be treated with the same suspicion as the correction-count
+  metric that turned out to be a measurement artifact.** The ~1-2/day assumption from the
+  hand-curated scan was itself downstream of a keyword search — this is the second time in one
+  day that a keyword-discovered sample understated a real rate by an order of magnitude or more.
+- **Widening a classifier's input surface from "curated/pre-filtered" to "100% of raw traffic"
+  can expose new failure modes the curated set never contained** (here: system-injected
+  boilerplate attributed to the wrong role). Any evaluation built on a hand-picked or
+  keyword-discovered sample should be treated as necessarily incomplete for this reason, not just
+  for coverage of correction *phrasing* but for coverage of message *types*.
+
+## 2026-07-08: Semantic Correction Detection Spike — Embedding Gate Underperforms Regex, Direct LLM Classification Wins
+
+**Context**: Same day as the regex-patching fix below, user asked whether we could do better
+than regex entirely: embed transcript messages, find semantic neighbors of known corrections
+via a vector DB, validate candidates with Haiku, and separately flag when a new
+correction/fact would contradict something already retained in Hindsight. This was scoped
+explicitly as a research spike (see
+`~/.cursor/plans/semantic_correction_detection_spike_86e447df.plan.md`) — an evidence-backed
+"don't adopt" was an accepted outcome, not a failure.
+
+**What was built** (all under `spike/`, nothing wired into production):
+- 52-example hand-labeled ground truth (37 corrections across 8 categories — methodology
+  violations, convention violations, technical misstatements, undo/revert, repeated mistakes,
+  unwanted/unauthorized actions, scope corrections — plus 15 hard negatives, including a
+  message where the *user* self-corrects, which is lexically similar to a real correction but
+  semantically the opposite), split into a seed subset (33, feeds the vector DB) and a
+  held-out eval subset (19, never seen by any pipeline, scores everything).
+- `cocoindex.correction_embeddings` pgvector table seeded from the seed split.
+- Two candidate-generation variants: **A** (embed message → cosine similarity vs. seed corpus
+  → Haiku validates only candidates above a threshold) and **B** (Haiku classifies every
+  message directly, no gate).
+- A contradiction check (Hindsight `recall()` + LLM judges new-vs-existing) evaluated two
+  ways: Config A (Sonnet call) and Config B (13-case synthetic contradiction/non-contradiction
+  suite, including two adversarial cases — a "blanket rule vs. narrow exception" case and a
+  lexical-overlap-but-unrelated case).
+- `contradictions-pending.jsonl` queue + `review-contradictions.py` interactive
+  approve/reject/skip CLI + a "Pending Contradictions" line in `report.py`'s nightly report.
+- `spike-semantic-correction-detection.py`: the evaluation harness that produced the numbers
+  below.
+
+**Result 1 — correction detection: Variant B (classify everything) wins; Variant A
+(embedding-gated, the originally proposed design) does not clear the bar at any threshold
+tested.** Scored against the 19-example held-out set (15 corrections, 4 benign), never seen
+by seeding or few-shot prompts:
+
+| Method | Precision | Recall | F1 | LLM calls | Time |
+|---|---|---|---|---|---|
+| Regex (production, post this morning's patch) | 1.00 | 0.80 | 0.89 | 0 | ~0s |
+| **Variant B (Haiku classifies every message)** | **1.00** | **0.93** | **0.97** | 19 | 12s |
+| Variant A, threshold=0.30 (best F1 of the sweep) | 1.00 | 0.67 | 0.80 | 14 | 19s |
+| Variant A, threshold=0.35–0.55 | 1.00 | 0.27–0.53 | 0.42–0.70 | 5–11 | 3–10s |
+
+Variant A's F1 *never* beat the already-patched regex baseline at any of 6 thresholds swept
+(0.30–0.55), and recall collapses as the threshold rises. Root cause: MiniLM sentence-embedding
+similarity between short, stylistically varied corrections and the 33-example seed corpus is
+weak and inconsistent — e.g. "why did you remove the sizeLimit?" and "do not use patent search
+engine" are genuine corrections that Haiku correctly flags when given the raw text, but score
+too low against the seed corpus to ever reach Haiku under Variant A. The embedding gate doesn't
+just add complexity (pgvector table, seed corpus maintenance, threshold tuning) — it actively
+throws away recall that a direct Haiku call would have caught for free.
+
+At current volume (measured: ~489 user messages/day across both projects), Variant B costs 19
+Haiku calls for the entire 19-message eval set in 12 seconds — cost/latency are not a
+meaningful constraint at this scale, so Variant A's "cheaper" pitch doesn't offset its recall
+loss.
+
+**Result 2 — contradiction check is trustworthy.** Both Sonnet (Config A, the originally
+proposed model) and Haiku scored 100% (13/13) on the synthetic suite, including both
+adversarial cases, with correct conflicting-memory-index identification on all 7 applicable
+cases. Haiku was ~2.4x faster (0.87s vs. 2.12s avg latency) at the same accuracy on this suite
+— worth a larger synthetic suite before trusting that parity if this gets adopted, since 13
+cases is a small sample for a high-stakes gate. A follow-up real-world sanity check — running
+the contradiction check against 6 known-clean confirmed corrections and their actual recall()
+results from the live `cursor-memory` bank — surfaced 0 false-positive contradictions.
+
+**Recommendation**: If this gets adopted, use **Variant B (direct Haiku classification, no
+embedding gate)** for correction detection — drop the vector-DB design entirely rather than
+try to tune it further; the data says the gate is actively harmful here, not just unproven.
+For the contradiction check, either model configuration cleared the bar on this suite; Sonnet
+remains the more conservative choice for a low-volume/high-stakes gate given the suite's small
+size. Adoption itself (wiring into `cocoindex-flows.py`'s live `process_transcript` pipeline)
+was explicitly out of scope for this spike and is a separate decision.
+
+**Takeaway**: The originally proposed design (embed → vector DB → gate) is not always the
+right shape even when the underlying idea (LLM-validate candidate corrections) is sound —
+running both the "clever" and the "obvious" variant side by side against the same held-out
+data caught this before any production commitment was made. Worth defaulting to this
+side-by-side comparison whenever a spike's design has a "just ask the LLM directly" simpler
+alternative available.
+
 ## 2026-07-08: Correction Detection Missed 100% of "Not Following Methodology" Corrections
 
 **Context**: User asked whether a specific recurring correction — the model mistaking

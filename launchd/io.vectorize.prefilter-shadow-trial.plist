@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.vectorize.prefilter-shadow-trial</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.hindsight/venv/bin/python3</string>
+        <string>__HOME__/.hindsight/prefilter-shadow-trial.py</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>1200</integer>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>VERTEXAI_PROJECT</key>
+        <string>__VERTEXAI_PROJECT__</string>
+        <key>VERTEXAI_LOCATION</key>
+        <string>global</string>
+        <key>GOOGLE_CLOUD_PROJECT</key>
+        <string>__VERTEXAI_PROJECT__</string>
+        <key>GOOGLE_APPLICATION_CREDENTIALS</key>
+        <string>__HOME__/.config/gcloud/application_default_credentials.json</string>
+        <key>PATH</key>
+        <string>__HOME__/.hindsight/venv/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.hindsight/logs/prefilter-shadow-trial-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.hindsight/logs/prefilter-shadow-trial-stderr.log</string>
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+</dict>
+</plist>

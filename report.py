@@ -381,6 +381,29 @@ def collect_ingestion_coverage() -> dict:
     return coverage
 
 
+def count_pending_contradictions() -> int:
+    """Count unresolved entries in contradictions-pending.jsonl.
+
+    Written by the Semantic Correction Detection Spike's contradiction
+    check (see spike/pending_queue.py) when a candidate correction/fact
+    would conflict with something already retained in the cursor-memory
+    bank -- those are withheld from retain and queued here instead of being
+    silently applied. Resolve with `python3 review-contradictions.py`.
+    Reads the file directly (rather than importing spike/pending_queue.py)
+    to keep report.py's system-Python-3.9 runtime decoupled from the
+    spike's venv-only dependencies.
+    """
+    path = os.path.expanduser("~/.hindsight/logs/contradictions-pending.jsonl")
+    if not os.path.exists(path):
+        return 0
+    count = 0
+    with open(path) as f:
+        for line in f:
+            if line.strip():
+                count += 1
+    return count
+
+
 def collect_freshness_stats() -> dict:
     """Compute data freshness by checking CocoIndex logs for last successful sync.
 
@@ -953,6 +976,16 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
             lines.append("  signal exists yet to measure that directly (see FINDINGS.md).")
     else:
         lines.append("  Freshness data not available (CocoIndex not running or no logs).")
+
+    # Pending Contradictions (Semantic Correction Detection Spike, 2026-07-08)
+    pending_count = count_pending_contradictions()
+    if pending_count:
+        lines.append("")
+        lines.append("  PENDING CONTRADICTIONS")
+        lines.append("  " + "-" * 66)
+        lines.append(
+            f"  {pending_count} unresolved -- run: python3 review-contradictions.py"
+        )
 
     # Token Cost Analysis
     lines.append("")

@@ -2,6 +2,96 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-09: Haiku Correction Classifier Had 90%+ False Positive Rate — Prompt v2 Cuts It to ~10% With Zero Recall Regression
+
+**Context**: With the Prefilter Shadow Trial running live (see the two 2026-07-08 spike entries below),
+user asked to triage whether Haiku's `classify_correction` was itself over-flagging — specifically,
+mislabeling clarifications, new task assignments, and open questions as "corrections" — and to tweak the
+prompt if so, then keep updating this file daily with the ongoing evaluation.
+
+**Triage method**: Pulled a random sample of 80 unique messages Haiku (v1 prompt) had flagged
+`is_correction=true` from the live shadow trial log and manually read each one, judging genuine
+correction vs. false positive independent of Haiku's own label.
+
+**Result — v1 prompt false positive rate: ~42.5% (34/80)**. This wasn't a handful of ambiguous edge
+cases; it was entire categories the v1 prompt's negative examples never anticipated, all sharing a common
+shape: imperative or declarative phrasing that *sounds* instructional/critical without actually asserting
+the assistant did anything wrong. Four recurring patterns:
+- **New task/plan assignment**: "implement the plan as specified", "commit in logical groups and create a
+  PR", "add integration tests for both gateways" — assigning new work, not correcting prior work.
+- **Forward-looking requirement/scope statement**: "leave them for amd64 only", "we should have ITs for
+  both gateways", "I'd rather have it phased like X" — a new decision, no implied prior wrongdoing.
+- **Open design question**: "why not a simple regex?", "can we organize it better?", "should we have a
+  dedicated memory bank or consolidate?" — genuine questions, not assertions that something is wrong.
+- **TODO/status-check reminder**: "you will still have to add jordigilh to cspell.yaml", "check that we're
+  using the correct context" — pending work, not a claim the assistant already got it wrong.
+
+**Fix applied**: Rewrote `_CORRECTION_SYSTEM_PROMPT` in `spike/classify.py` (v1 → v2) with explicit
+negative examples for each of the four patterns above, plus a stricter framing ("must assign fault to
+something the assistant ALREADY did or said") and an explicit false-negative-is-cheaper-than-false-positive
+tie-break for genuine ambiguity.
+
+**First validation pass surfaced a real regression, caught before it shipped**: Re-running v2 against
+`ground_truth.py`'s 19-example held-out eval split (never used to write either prompt) showed recall
+dropping from 0.93 (v1) to 0.73 — v2 was now missing "do not use patent search engine" and "we don't use
+env variables"-style convention violations. Root cause: v2's new "new task/requirement statement" negative
+examples used imperative phrasing that pattern-matched too broadly against "we don't use X" / "do not use
+X" corrections, which are *also* phrased as forward directives despite being genuine convention-violation
+corrections (the exact category the original `CORRECTION_PATTERNS` regex fix on 2026-07-08 was written to
+catch). **Fixed by adding an explicit carve-out**: "we don't use X" / "do not use X" / "that's not how we
+do it" phrasing is called out as a correction regardless of imperative shape, with an explicit note that
+this exception overrides both the "new task assignment" rule and the ambiguity tie-break.
+
+**Final validation (v2 with carve-out)**:
+
+| Test | v1 | v2 |
+|---|---|---|
+| Ground truth eval split (15 corrections, 4 benign, held-out) | recall 0.93, precision 1.00, F1 0.97 | recall 0.93, precision 1.00, F1 0.97 (identical — same single pre-existing miss both versions) |
+| Live-traffic false-positive sample (30 messages, all human-judged non-corrections that v1 flagged) | 28/30 (93%) still flagged | 3/30 (10%) still flagged |
+
+Zero regression on the original hand-labeled ground truth; the live false-positive rate dropped by
+~90 percentage points. The 3 residual false positives under v2 are themselves genuinely borderline
+(e.g. "we won't be using goose here, agents will be packaged as OCI..." — legitimately ambiguous with the
+"we don't use X" carve-out given Haiku sees the message in isolation, with no preceding assistant turn to
+confirm whether goose was actually proposed/used) — chasing them further risked re-introducing the same
+regression just fixed, so v2 was kept as final for now.
+
+**Corrected shadow-trial estimate**: Re-ran v2 against all 659 messages the v1 prompt had flagged as
+corrections in the shadow trial log (540 unique texts, weighted back by original frequency): v2 confirms
+only 270/659 (41.0%), excluding 389/659 (59.0%) as false positives — consistent with the ~42.5% rate found
+in the manual 80-message triage. Applied against the full 4,045-message trial window, this revises the
+estimated true correction rate from the previously reported 16.3% (630/3,873, using v1) down to **~6.7%
+(270/4,045)**. This is a large downward revision of an already-large upward revision (the original
+hand-curated 7-day scan assumed ~1-2/day); both directions of that arc reinforce the same lesson below.
+
+**Not yet done**: The corrected v2 rate above is a point-in-time re-classification of already-collected v1
+verdicts, not a live re-run of the trial — `prefilter-shadow-trial.py` itself hasn't been updated to call
+v2 yet (it currently imports `classify_correction` from `spike/classify.py`, so it will pick up v2
+automatically on its next scheduled run; no separate wiring needed, but this hasn't been confirmed against
+a fresh run yet). The two prefilter candidates (`loose_regex_prefilter`,
+`trivial_message_exclusion_filter`) were evaluated against v1's verdicts in the 2026-07-08 shadow-trial
+entry below; their recall/reduction numbers should be treated as provisional until re-checked against v2's
+corrected "confirmed correction" set, since the composition of what counts as a true correction just
+changed materially.
+
+**Takeaways**:
+- **A classifier's own false-positive rate needs the same "does this number look plausible" scrutiny as
+  any other metric in this system.** The shadow trial was built specifically to get a non-circular recall
+  number for prefilters *against Haiku's verdicts* — but nothing was validating Haiku's verdicts
+  themselves until this triage. A classifier can be simultaneously "the best available reference" (0.97 F1
+  against held-out ground truth) and still wrong 40%+ of the time on a different, wider distribution of
+  real traffic that the ground truth sample didn't fully represent.
+- **Negative examples in a classification prompt can silently cannibalize a positive category that
+  overlaps in surface phrasing.** "Do not use X" is simultaneously the shape of a brand-new forward
+  directive (not a correction) and the shape of a convention-violation correction — v2's fix for the
+  former accidentally broke the latter until an explicit carve-out was added and re-validated against held-
+  out data. Any prompt change that adds negative examples should be checked for exactly this kind of
+  overlap with existing positive categories, not just checked for whether it fixes the false positives it
+  was written for.
+- **Validate a prompt/classifier change against both the original ground truth AND the specific failure
+  sample that motivated the change, every time** — checking only one side would have missed either the
+  regression (ground truth) or the fix (false-positive sample) in this case.
+
 ## 2026-07-09: `report.py` Was Still Silently Blending Kubernaut + DCM, Despite the Earlier Scoping Fix
 
 **Context**: User asked for last night's report for both projects. Running `report.py` produced

@@ -27,11 +27,33 @@ os.environ.setdefault(
 HAIKU_MODEL = "vertex_ai/claude-haiku-4-5@20251001"
 SONNET_MODEL = "vertex_ai/claude-sonnet-4-6"
 
+# v2, 2026-07-09: v1 had ~42% false positives on live traffic (manual review
+# of an 80-message random sample of Haiku's "is_correction=true" output --
+# see docs/FINDINGS.md). The failure wasn't ambiguous edge cases, it was
+# whole classes of message v1's negative examples didn't cover: new task/
+# plan assignments, forward-looking requirement/scope statements, open
+# design questions, and TODO-style reminders -- all of which sound
+# instructional or critical without actually asserting the assistant did
+# something wrong. v2 adds explicit negative examples for each pattern
+# found and a strict fault-assignment test. Re-validated against
+# ground_truth.py's eval split (never used to write these examples) before
+# and after this change to confirm no recall regression -- see
+# docs/FINDINGS.md 2026-07-09 for the before/after numbers.
 _CORRECTION_SYSTEM_PROMPT = """You are analyzing a single message a human sent to an AI coding assistant during a work session. Decide whether this message is CORRECTING the assistant for something it did or said wrong.
 
-A correction includes (non-exhaustive): pointing out a methodology/process violation, a convention violation ("we don't use X here"), a factual/technical error, an unwanted or unauthorized action the assistant took, a request to undo/revert something, or calling out a repeated mistake.
+A correction must assign fault to something the assistant ALREADY did or said -- not merely describe future/desired work. It includes (non-exhaustive): pointing out a methodology/process violation, a convention violation ("we don't use X here"), a factual/technical error, an unwanted or unauthorized action the assistant took, a request to undo/revert something, or calling out a repeated mistake.
 
-NOT a correction: the human correcting THEMSELVES (self-reflection, "I misunderstood"), a plain question, a status update, a dismissal ("nevermind", "it's fine"), or an observation that doesn't assign fault to the assistant's prior action.
+IMPORTANT EXCEPTION -- still IS a correction even though phrased as a forward directive: "we don't use X", "do not use X", "we don't do X here", "that's not how we do it" -- these assert an EXISTING convention that the assistant's current/just-proposed approach conflicts with. Treat these as corrections regardless of imperative phrasing; do not let the "new task assignment" rule below override this.
+
+NOT a correction (these are commonly confused with corrections -- read carefully):
+- The human correcting THEMSELVES (self-reflection, "I misunderstood").
+- A plain question, INCLUDING ones that sound critical ("why not a simple regex?", "why skip TLS verify?", "can we organize it better?") -- unless the human also explicitly asserts the current thing is wrong/incorrect, not just asks for justification or floats an alternative.
+- A NEW task or plan assignment unrelated to any existing convention ("implement the plan as specified", "add integration tests for both gateways", "create an issue to track this") -- assigning brand-new work is not correcting prior work, even when phrased as an imperative instruction. This does NOT apply to the "we don't use X" exception above.
+- A requirement, scope, or preference statement that doesn't reference a specific thing the assistant already did wrong AND doesn't invoke an existing convention ("leave this for amd64 only", "one diagram per lane", "we should have ITs for both gateways", "I'd rather have it phased like X").
+- A reminder, TODO, or status-check about something not yet done, when nothing indicates the assistant previously claimed it was already done ("you'll still need to add X", "check that we're using the right context", "we still have comments unaddressed").
+- A status update, a dismissal ("nevermind", "it's fine"), or an observation that doesn't assign fault to the assistant's prior action.
+
+When genuinely uncertain whether something is a correction versus a plain instruction/question/requirement, prefer NOT a correction -- false negatives here are cheaper than false positives. This tie-break does NOT apply to the "we don't use X" exception above, which should lean toward IS a correction.
 
 Respond with ONLY a JSON object, no other text:
 {"is_correction": true or false, "category": "short_snake_case_label or null", "confidence": 0.0-1.0}"""

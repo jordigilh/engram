@@ -2,6 +2,51 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-09: `report.py` Was Still Silently Blending Kubernaut + DCM, Despite the Earlier Scoping Fix
+
+**Context**: User asked for last night's report for both projects. Running `report.py` produced
+a single, unlabeled report with no visible way to separate the two projects.
+
+**Root cause**: The 2026-07-03/04 scoping fix (see the "silent data scoping bug" entry) made
+`nightly-learn.py` write correctly project-scoped daily snapshot files (`{date}.json` for
+kubernaut, `{date}-dcm.json` for dcm) and tagged `mcp-calls.jsonl` entries with `project_dir`.
+But `report.py` — the script actually run to view a report — never consumed either of those
+fixes. Its multi-day aggregation (`--days N`, the normal mode) reads raw `mcp-calls.jsonl` /
+`effectiveness-report.jsonl` / `recall-signals.jsonl` directly, with **no project filtering
+anywhere in the file**: `effectiveness-report.jsonl` entries didn't even carry a `project` field
+(nightly-learn.py appended kubernaut's and dcm's nightly summaries to the same file, once each,
+with no tag distinguishing which was which), `aggregate_mcp_calls` didn't filter by
+`project_dir`, and `collect_mental_model_stats()` unconditionally combined both projects' bank
+lists. The fix from a week prior only ever addressed the single-night *snapshot files*, not the
+*rolling-window report* actually used to check in — the two code paths diverged and only one
+got fixed.
+
+**Fix applied**:
+- `nightly-learn.py`: `analyze_mcp_effectiveness` now takes a `project` param and writes it into
+  the `report` dict appended to `effectiveness-report.jsonl`.
+- Backfilled the `project` tag onto the 42 pre-existing entries by cross-referencing each
+  entry's `mcp_usage` dict against the corresponding `{date}.json`/`{date}-dcm.json` snapshot
+  file's `effectiveness.mcp_usage` (byte-for-byte match, since both are written from the exact
+  same in-memory dict) — 39/42 matched exactly; the remaining 3 (2026-06-16/20/22) predate DCM's
+  existence as a project entirely and were tagged `kubernaut` directly.
+- `report.py`: added a `PROJECT_CONFIGS` dict (kept in sync with `nightly-learn.py`'s), a
+  `--project {kubernaut,dcm,all}` flag (default `all`, which now prints both projects as clearly
+  separated sections instead of one blended report), and threaded project filtering through
+  `mcp_calls` (by `project_dir` prefix), `effectiveness_entries` (by the newly-backfilled
+  `project` field, defaulting untagged/pre-DCM entries to kubernaut), `recall_signals` (by bank
+  membership), and `analyze_token_consumption`/`collect_mental_model_stats` (by
+  `workspace_prefixes`/bank list respectively). Also caught mid-fix: `format_report` was calling
+  `collect_mental_model_stats()` unfiltered internally instead of using the already-scoped value
+  computed upstream — the mental models table would have silently stayed blended even after
+  everything else was fixed.
+
+**Takeaway**: fixing project-scoping at the *write* path (the nightly job) doesn't guarantee the
+*read* path (the report script) is fixed too if they don't share the same aggregation code —
+they diverged silently for almost a week because nothing exercised `report.py`'s default mode
+against two real projects until this request. Worth checking, next time a scoping/multi-tenancy
+fix goes into a producer script, whether every consumer of that data was audited too, not just
+the one that prompted the original fix.
+
 ## 2026-07-08: Prefilter Shadow Trial — No Cheap Gate Safely Narrows Haiku Intake; Found and Fixed a System-Boilerplate Contamination Bug Along the Way
 
 **Context**: Same day as the semantic correction detection spike below, user asked whether

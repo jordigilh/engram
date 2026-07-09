@@ -675,6 +675,7 @@ def analyze_mcp_effectiveness(
     workspace_prefixes: list[str] | None = None,
     end_time: datetime | None = None,
     report_date: date | None = None,
+    project: str = "kubernaut",
 ) -> dict:
     """Analyze MCP usage from hook logs and correlate with correction rates.
 
@@ -984,6 +985,12 @@ def analyze_mcp_effectiveness(
 
     report = {
         "date": (report_date or date.today()).isoformat(),
+        # Written by run_nightly per project; report.py's multi-day
+        # aggregation groups effectiveness-report.jsonl entries by this
+        # field. Entries written before this field existed have no
+        # "project" key and are treated as "kubernaut" (the only project
+        # that existed at the time) by report.py for backward compatibility.
+        "project": project,
         "epoch_start_date": EPOCH_START_DATE,
         "period_hours": hours,
         "mcp_usage": mcp_usage,
@@ -1222,7 +1229,7 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
         len(project_transcripts), len(transcripts), project,
     )
     effectiveness = analyze_mcp_effectiveness(
-        project_transcripts, workspace_prefixes=workspace_prefixes
+        project_transcripts, workspace_prefixes=workspace_prefixes, project=project
     )
     results["effectiveness"] = effectiveness
     if effectiveness["mcp_usage"]:

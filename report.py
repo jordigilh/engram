@@ -34,6 +34,24 @@ MCP_CALLS_LOG = LOG_DIR / "mcp-calls.jsonl"
 EFFECTIVENESS_LOG = LOG_DIR / "effectiveness-report.jsonl"
 RECALL_SIGNALS_LOG = LOG_DIR / "recall-signals.jsonl"
 TRANSCRIPTS_GLOB = os.path.expanduser("~/.cursor/projects/*/agent-transcripts/**/*.jsonl")
+PROJECTS_ROOT = Path(os.path.expanduser("~/.cursor/projects"))
+
+# Keep in sync with PROJECT_CONFIGS in nightly-learn.py. Used to scope
+# mcp_calls (by project_dir), transcripts (by workspace_prefixes), and
+# recall probes (by bank) to a single project instead of blending both
+# together -- see docs/FINDINGS.md 2026-07-09 for why this matters (the
+# CLI report was silently combining kubernaut + dcm numbers even though the
+# underlying per-project snapshot JSON files were already correctly scoped).
+PROJECT_CONFIGS = {
+    "kubernaut": {
+        "banks": ["cursor-memory", "kubernaut-docs", "kubernaut-issues"],
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-jordigilh-kubernaut"],
+    },
+    "dcm": {
+        "banks": ["cursor-memory", "dcm-docs", "dcm-issues"],
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-dcm-project-"],
+    },
+}
 
 CORRECTION_PATTERNS = [
     re.compile(r"\bno[,.]?\s+that'?s\s+(not|wrong|incorrect)", re.I),
@@ -287,18 +305,21 @@ def aggregate_effectiveness(entries: list[dict]) -> dict:
     }
 
 
-def collect_mental_model_stats() -> list[dict]:
-    """Collect mental model status from Hindsight API."""
+def collect_mental_model_stats(project: str | None = None) -> list[dict]:
+    """Collect mental model status from Hindsight API.
+
+    If project is given, only returns models for that project's banks
+    (cursor-memory is shared across projects, so it's included either way).
+    """
     import urllib.request
-    project_banks = {
-        "kubernaut": ["cursor-memory", "kubernaut-docs", "kubernaut-issues"],
-        "dcm": ["cursor-memory", "dcm-docs", "dcm-issues"],
-    }
-    banks = []
-    for bank_list in project_banks.values():
-        for b in bank_list:
-            if b not in banks:
-                banks.append(b)
+    if project:
+        banks = list(PROJECT_CONFIGS[project]["banks"])
+    else:
+        banks = []
+        for cfg in PROJECT_CONFIGS.values():
+            for b in cfg["banks"]:
+                if b not in banks:
+                    banks.append(b)
     results = []
     for bank in banks:
         try:
@@ -504,12 +525,16 @@ def aggregate_recall_probes(entries: list[dict]) -> dict:
     return dict(by_bank)
 
 
-def analyze_token_consumption(days: int = 7) -> dict:
+def analyze_token_consumption(days: int = 7, workspace_prefixes: list[str] | None = None) -> dict:
     """Analyze token consumption from transcripts, grouped by recall usage.
 
     Scans recent transcripts to compute tokens/request, tool_calls/request,
     and correction cost — the key metrics for measuring whether the MCP
     services reduce overall token spend.
+
+    If workspace_prefixes is given, only scans transcripts whose Cursor
+    project directory name starts with one of the given prefixes (same
+    convention as find_recent_transcripts in nightly-learn.py).
     """
     cutoff = datetime.now().timestamp() - (days * 86400)
     paths = []
@@ -521,6 +546,13 @@ def analyze_token_consumption(days: int = 7) -> dict:
         # real token/tool-call efficiency. See docs/FINDINGS.md 2026-07-04.
         if "/subagents/" in str(p):
             continue
+        if workspace_prefixes:
+            try:
+                project_dir_name = p.relative_to(PROJECTS_ROOT).parts[0]
+            except ValueError:
+                continue
+            if not any(project_dir_name.startswith(pfx) for pfx in workspace_prefixes):
+                continue
         if p.stat().st_mtime >= cutoff:
             paths.append(p)
 
@@ -662,7 +694,8 @@ def analyze_token_consumption(days: int = 7) -> dict:
 
 def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
                   token_stats: dict, days: int,
-                  coverage: dict | None = None, freshness: dict | None = None) -> str:
+                  coverage: dict | None = None, freshness: dict | None = None,
+                  mental_models: list[dict] | None = None) -> str:
     """Format a human-readable report."""
     lines = []
     lines.append("=" * 70)
@@ -876,7 +909,7 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
     lines.append("")
     lines.append("  MENTAL MODELS")
     lines.append("  " + "-" * 66)
-    mm_stats = collect_mental_model_stats()
+    mm_stats = mental_models if mental_models is not None else collect_mental_model_stats()
     if mm_stats:
         lines.append(f"  {'Bank':<25} {'Model':<25} {'Content':>8} {'Refreshed':>12}")
         lines.append("  " + "-" * 66)
@@ -1126,6 +1159,63 @@ def compare_baselines(before: dict, after: dict) -> str:
     return "\n".join(lines)
 
 
+def build_report_data(args, project: str) -> dict:
+    """Build all report data scoped to a single project."""
+    pconfig = PROJECT_CONFIGS[project]
+    workspace_prefixes = pconfig["workspace_prefixes"]
+
+    mcp_calls = load_jsonl(MCP_CALLS_LOG, days=args.days)
+    effectiveness_entries = load_jsonl(EFFECTIVENESS_LOG, days=args.days)
+    recall_signals = load_jsonl(RECALL_SIGNALS_LOG, days=args.days)
+
+    mcp_calls = [
+        e for e in mcp_calls
+        if any(e.get("project_dir", "").startswith(pfx) for pfx in workspace_prefixes)
+    ]
+    # Entries written before the 2026-07-09 project-scoping fix have no
+    # "project" key; they all predate DCM's existence as a project, so
+    # treat them as kubernaut for backward compatibility (see FINDINGS.md).
+    effectiveness_entries = [
+        e for e in effectiveness_entries if e.get("project", "kubernaut") == project
+    ]
+    recall_signals = [e for e in recall_signals if e.get("bank") in pconfig["banks"]]
+
+    mcp_stats = aggregate_mcp_calls(mcp_calls)
+    effectiveness = aggregate_effectiveness(effectiveness_entries)
+    probe_stats = aggregate_recall_probes(recall_signals)
+    token_stats = analyze_token_consumption(days=args.days, workspace_prefixes=workspace_prefixes)
+    coverage = collect_ingestion_coverage()
+    freshness = collect_freshness_stats()
+
+    full_data = {
+        "project": project,
+        "period_days": args.days,
+        "generated": datetime.now().isoformat(),
+        "mcp_usage": mcp_stats["by_server"],
+        "mcp_by_bank": mcp_stats.get("by_bank", {}),
+        "daily_trend": mcp_stats["by_day"],
+        "effectiveness": effectiveness,
+        "recall_probes": probe_stats,
+        "token_consumption": token_stats,
+        "mental_models": collect_mental_model_stats(project),
+        "exploration_efficiency": effectiveness.get("exploration_efficiency", {}),
+        "session_distribution": effectiveness.get("session_distribution", {}),
+        "recall_session_stats": effectiveness.get("recall_session_stats", {}),
+        "weekly_trend": effectiveness.get("weekly_trend", []),
+        "ingestion_coverage": coverage,
+        "data_freshness": freshness,
+    }
+    return {
+        "full_data": full_data,
+        "mcp_stats": mcp_stats,
+        "effectiveness": effectiveness,
+        "probe_stats": probe_stats,
+        "token_stats": token_stats,
+        "coverage": coverage,
+        "freshness": freshness,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Recollect effectiveness report")
     parser.add_argument("--days", type=int, default=7, help="Number of days to analyze (default: 7)")
@@ -1135,41 +1225,19 @@ def main():
                         help="Save current metrics as a baseline snapshot")
     parser.add_argument("--compare", type=str, metavar="BASELINE",
                         help="Compare current metrics against a baseline snapshot file")
+    parser.add_argument("--project", choices=["kubernaut", "dcm", "all"], default="all",
+                        help="Scope the report to one project, or 'all' for both "
+                             "shown separately (default: all)")
     args = parser.parse_args()
 
-    mcp_calls = load_jsonl(MCP_CALLS_LOG, days=args.days)
-    effectiveness_entries = load_jsonl(EFFECTIVENESS_LOG, days=args.days)
-    recall_signals = load_jsonl(RECALL_SIGNALS_LOG, days=args.days)
-
-    mcp_stats = aggregate_mcp_calls(mcp_calls)
-    effectiveness = aggregate_effectiveness(effectiveness_entries)
-    probe_stats = aggregate_recall_probes(recall_signals)
-    token_stats = analyze_token_consumption(days=args.days)
-    coverage = collect_ingestion_coverage()
-    freshness = collect_freshness_stats()
-
-    full_data = {
-        "period_days": args.days,
-        "generated": datetime.now().isoformat(),
-        "mcp_usage": mcp_stats["by_server"],
-        "mcp_by_bank": mcp_stats.get("by_bank", {}),
-        "daily_trend": mcp_stats["by_day"],
-        "effectiveness": effectiveness,
-        "recall_probes": probe_stats,
-        "token_consumption": token_stats,
-        "mental_models": collect_mental_model_stats(),
-        "exploration_efficiency": effectiveness.get("exploration_efficiency", {}),
-        "session_distribution": effectiveness.get("session_distribution", {}),
-        "recall_session_stats": effectiveness.get("recall_session_stats", {}),
-        "weekly_trend": effectiveness.get("weekly_trend", []),
-        "ingestion_coverage": coverage,
-        "data_freshness": freshness,
-    }
+    projects = list(PROJECT_CONFIGS) if args.project == "all" else [args.project]
+    per_project = {p: build_report_data(args, p) for p in projects}
 
     if args.snapshot:
-        snap_path = LOG_DIR / f"baseline-{date.today().isoformat()}.json"
-        snapshot_metrics(full_data, snap_path)
-        print(f"Baseline snapshot saved to {snap_path}")
+        for p, data in per_project.items():
+            snap_path = LOG_DIR / f"baseline-{date.today().isoformat()}-{p}.json"
+            snapshot_metrics(data["full_data"], snap_path)
+            print(f"Baseline snapshot saved to {snap_path}")
         return
 
     if args.compare:
@@ -1179,16 +1247,31 @@ def main():
             sys.exit(1)
         with open(baseline_path) as f:
             before = json.load(f)
-        print(compare_baselines(before, full_data))
+        # Baselines saved before per-project scoping have no "project" key;
+        # fall back to whichever single project was requested (or the first
+        # of the two, if comparing against an old blended snapshot with
+        # --project all).
+        target_project = before.get("project") if before.get("project") in per_project else None
+        data = per_project.get(target_project) or next(iter(per_project.values()))
+        print(compare_baselines(before, data["full_data"]))
         return
 
     if args.json:
-        print(json.dumps(full_data, indent=2))
-    elif args.csv:
-        print(export_csv(mcp_stats, effectiveness))
-    else:
-        print(format_report(mcp_stats, effectiveness, probe_stats, token_stats, args.days,
-                            coverage=coverage, freshness=freshness))
+        print(json.dumps({p: d["full_data"] for p, d in per_project.items()}, indent=2))
+        return
+
+    if args.csv:
+        for p, data in per_project.items():
+            print(f"# project: {p}")
+            print(export_csv(data["mcp_stats"], data["effectiveness"]))
+        return
+
+    for p, data in per_project.items():
+        print(f"\n########## PROJECT: {p.upper()} ##########")
+        print(format_report(data["mcp_stats"], data["effectiveness"], data["probe_stats"],
+                            data["token_stats"], args.days, coverage=data["coverage"],
+                            freshness=data["freshness"],
+                            mental_models=data["full_data"]["mental_models"]))
 
 
 if __name__ == "__main__":

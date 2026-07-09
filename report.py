@@ -33,6 +33,7 @@ LOG_DIR = Path.home() / ".hindsight" / "logs"
 MCP_CALLS_LOG = LOG_DIR / "mcp-calls.jsonl"
 EFFECTIVENESS_LOG = LOG_DIR / "effectiveness-report.jsonl"
 RECALL_SIGNALS_LOG = LOG_DIR / "recall-signals.jsonl"
+PREFILTER_SHADOW_LOG = LOG_DIR / "prefilter-shadow.jsonl"
 TRANSCRIPTS_GLOB = os.path.expanduser("~/.cursor/projects/*/agent-transcripts/**/*.jsonl")
 PROJECTS_ROOT = Path(os.path.expanduser("~/.cursor/projects"))
 
@@ -425,6 +426,71 @@ def count_pending_contradictions() -> int:
     return count
 
 
+def collect_regex_vs_haiku_stats(days: int = 7, project: str | None = None) -> dict | None:
+    """Compare production CORRECTION_PATTERNS regex against Haiku's direct
+    classification, using the Semantic Correction Detection Spike's ongoing
+    shadow trial (prefilter-shadow-trial.py, see docs/FINDINGS.md 2026-07-08).
+
+    The shadow trial calls Haiku on every new top-level user message and
+    logs the verdict without gating or retaining anything -- this is
+    evidence to inform a future adoption decision, not something currently
+    driving what gets retained into cursor-memory (that's still the regex
+    list below, run by nightly-learn.py/cocoindex-flows.py).
+
+    Returns None if the shadow trial hasn't produced any data yet.
+    """
+    if not PREFILTER_SHADOW_LOG.exists():
+        return None
+
+    cutoff = datetime.now() - timedelta(days=days)
+    records = []
+    with open(PREFILTER_SHADOW_LOG) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            try:
+                ts = datetime.fromisoformat(r.get("timestamp", ""))
+            except ValueError:
+                continue
+            if ts < cutoff:
+                continue
+            if project and r.get("project") != project:
+                continue
+            records.append(r)
+
+    if not records:
+        return None
+
+    def is_regex_correction(text: str) -> bool:
+        return any(p.search(text) for p in CORRECTION_PATTERNS)
+
+    n = len(records)
+    haiku_flagged = [r for r in records if r.get("haiku_is_correction")]
+    n_haiku = len(haiku_flagged)
+    regex_flagged = [r for r in records if is_regex_correction(r.get("text", ""))]
+    n_regex = len(regex_flagged)
+
+    regex_agrees_on_haiku_hits = sum(1 for r in haiku_flagged if is_regex_correction(r.get("text", "")))
+    regex_and_haiku_agree = sum(1 for r in regex_flagged if r.get("haiku_is_correction"))
+
+    return {
+        "messages_observed": n,
+        "window_start": min(r["timestamp"] for r in records)[:10],
+        "window_end": max(r["timestamp"] for r in records)[:10],
+        "haiku_flagged": n_haiku,
+        "haiku_flagged_pct": round(n_haiku / n * 100, 1),
+        "regex_flagged": n_regex,
+        "regex_flagged_pct": round(n_regex / n * 100, 1),
+        "regex_recall_vs_haiku": round(regex_agrees_on_haiku_hits / n_haiku * 100, 1) if n_haiku else None,
+        "regex_precision_vs_haiku": round(regex_and_haiku_agree / n_regex * 100, 1) if n_regex else None,
+    }
+
+
 def collect_freshness_stats() -> dict:
     """Compute data freshness by checking CocoIndex logs for last successful sync.
 
@@ -695,7 +761,8 @@ def analyze_token_consumption(days: int = 7, workspace_prefixes: list[str] | Non
 def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
                   token_stats: dict, days: int,
                   coverage: dict | None = None, freshness: dict | None = None,
-                  mental_models: list[dict] | None = None) -> str:
+                  mental_models: list[dict] | None = None,
+                  regex_vs_haiku: dict | None = None) -> str:
     """Format a human-readable report."""
     lines = []
     lines.append("=" * 70)
@@ -1020,6 +1087,30 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
             f"  {pending_count} unresolved -- run: python3 review-contradictions.py"
         )
 
+    # Regex vs. Haiku correction detection (prefilter-shadow-trial.py,
+    # 2026-07-09). Observational only -- this is evidence to inform whether
+    # adopting Haiku classification is worth it, not something currently
+    # driving what gets retained (that's still CORRECTION_PATTERNS below).
+    if regex_vs_haiku:
+        rvh = regex_vs_haiku
+        lines.append("")
+        lines.append("  CORRECTION DETECTION: REGEX VS. HAIKU (shadow trial, observational)")
+        lines.append("  " + "-" * 66)
+        lines.append(f"  Window: {rvh['window_start']} .. {rvh['window_end']}  "
+                     f"({rvh['messages_observed']} messages)")
+        lines.append(f"  Haiku flagged as correction:  {rvh['haiku_flagged']:>5} "
+                     f"({rvh['haiku_flagged_pct']}% of traffic)")
+        lines.append(f"  Regex flagged as correction:  {rvh['regex_flagged']:>5} "
+                     f"({rvh['regex_flagged_pct']}% of traffic)")
+        recall = rvh["regex_recall_vs_haiku"]
+        precision = rvh["regex_precision_vs_haiku"]
+        lines.append(f"  Regex recall vs. Haiku:    {recall if recall is not None else 'n/a':>6}%  "
+                     f"(of what Haiku calls a correction, this % regex also caught)")
+        lines.append(f"  Regex precision vs. Haiku: {precision if precision is not None else 'n/a':>6}%  "
+                     f"(of what regex flagged, this % Haiku agreed with)")
+        lines.append("  Not yet acted on -- nothing is retained based on Haiku's verdict here;")
+        lines.append("  production still retains based on CORRECTION_PATTERNS regex only.")
+
     # Token Cost Analysis
     lines.append("")
     lines.append("  TOKEN COST ANALYSIS")
@@ -1186,6 +1277,7 @@ def build_report_data(args, project: str) -> dict:
     token_stats = analyze_token_consumption(days=args.days, workspace_prefixes=workspace_prefixes)
     coverage = collect_ingestion_coverage()
     freshness = collect_freshness_stats()
+    regex_vs_haiku = collect_regex_vs_haiku_stats(days=args.days, project=project)
 
     full_data = {
         "project": project,
@@ -1204,6 +1296,7 @@ def build_report_data(args, project: str) -> dict:
         "weekly_trend": effectiveness.get("weekly_trend", []),
         "ingestion_coverage": coverage,
         "data_freshness": freshness,
+        "regex_vs_haiku": regex_vs_haiku,
     }
     return {
         "full_data": full_data,
@@ -1213,6 +1306,7 @@ def build_report_data(args, project: str) -> dict:
         "token_stats": token_stats,
         "coverage": coverage,
         "freshness": freshness,
+        "regex_vs_haiku": regex_vs_haiku,
     }
 
 
@@ -1271,7 +1365,8 @@ def main():
         print(format_report(data["mcp_stats"], data["effectiveness"], data["probe_stats"],
                             data["token_stats"], args.days, coverage=data["coverage"],
                             freshness=data["freshness"],
-                            mental_models=data["full_data"]["mental_models"]))
+                            mental_models=data["full_data"]["mental_models"],
+                            regex_vs_haiku=data["regex_vs_haiku"]))
 
 
 if __name__ == "__main__":

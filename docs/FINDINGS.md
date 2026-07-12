@@ -2,6 +2,47 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-12: `gopls` MCP "Down Every Window" Was a Client Architecture Change, Not a Regression We Caused
+
+**Context**: After a laptop reboot, the `gopls` MCP server started failing across every open Cursor
+window simultaneously, even after the earlier `PATH`-resolution fix (bare `"gopls"` → absolute
+`/Users/jgil/go/bin/gopls` in `~/.cursor/mcp.json`). User asked why it had been working so far if
+nothing on our side changed.
+
+**Root cause, found by diffing Cursor's own log history across sessions**:
+- gopls has *never* been stable. In the prior session (2026-07-05 → 2026-07-09), the `kubernaut-v1.5`
+  workspace's gopls connection alone respawned **135 times in 4 days** (~once/hour). Zero panics among
+  those restarts — just routine, silent respawns.
+- Critically, that session's architecture spawned **one gopls process per workspace/window**
+  (`MCP user-gopls.workspaceId-<id>.<ts>.log`, nested per-window). A crash in one workspace's instance
+  only killed that instance and respawned in ~200ms; every other window's gopls was untouched. Invisible
+  by design.
+- Sometime between 2026-07-09 and 2026-07-12, Cursor's client changed: the globally-configured `gopls`
+  entry (from the top-level `~/.cursor/mcp.json`) is now served by **one shared process for the whole
+  session**, not one per window (`mcp-server-user-gopls.log` at the top level, no per-window nesting).
+- That shared process is fed the aggregate list of workspace roots from every open window. One of
+  them — `kubernaut-v1.5` — is being advertised as a bare filesystem path instead of a `file://` URI:
+  `panic: only file URIs are supported, got "" from "/Users/jgil/go/src/github.com/jordigilh/kubernaut-v1.5"`
+  (`golang.org/x/tools/gopls@v0.22.0/internal/protocol/uri.go:89`, `DocumentURI.Path()`). Because the
+  process is now shared, this one panic kills gopls for *every* window at once — the actual cause of
+  "down every morning."
+- Confirmed this is not a gopls version issue: upgraded to v0.23.0 (`go install
+  golang.org/x/tools/gopls@latest`) and verified the identical panic-prone `Path()` implementation is
+  still present in that release. The bug is in how the client formats/aggregates one root in the shared
+  list, not in gopls.
+
+**Fix applied**: Moved `gopls` out of the global `~/.cursor/mcp.json` entirely and into a project-scoped
+`.cursor/mcp.json` for each actual Go workspace (`kubernaut`, `kubernaut-v1.5`, `kubernaut-v1.6`,
+`kubernaut-operator` — verified each has a `go.mod`; `kubernaut-demo-console` and `kubernaut-docs` do
+not and were left alone). This restores the old per-workspace isolation model: each Go workspace gets
+its own gopls process again, so a URI panic triggered by one workspace can no longer cascade into every
+other open window.
+
+**Lesson**: when a previously-reliable local tool suddenly fails everywhere at once after an editor
+update, check whether the *sharing model* changed before assuming a regression in our own config. Diffing
+per-session log structure (nested per-window logs vs. a single top-level log) was the tell here — the
+crash rate didn't change, only its blast radius did.
+
 ## 2026-07-09: Haiku Correction Classifier Had 90%+ False Positive Rate — Prompt v2 Cuts It to ~10% With Zero Recall Regression
 
 **Context**: With the Prefilter Shadow Trial running live (see the two 2026-07-08 spike entries below),

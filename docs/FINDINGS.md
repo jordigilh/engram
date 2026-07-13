@@ -2,6 +2,141 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-12: Shipped the Haiku Correction Gate and Contradiction Check to Production (Haiku/Sonnet Only, No New Infra)
+
+**Why now**: This traces back to comparing Engram against
+[AutoMem](https://autolearnmem.github.io/), a framework where an LLM agent learns to manage its
+own memory as a cognitive skill via two meta-LLM loops — one that tunes the agent's own scaffold
+(prompts, action vocabulary, gating logic), one that trains a dedicated memory specialist.
+Self-hosting a fine-tuned specialist model wasn't feasible given this environment's resources, but
+AutoMem's "Loop #1" — an LLM judging/gating the agent's own actions instead of a fixed heuristic —
+is the same category of change as replacing Engram's regex correction gate with a Haiku-judged one.
+Auditing what was already built but never wired into production surfaced three validated
+components sitting unused; AutoMem's results were the concrete reason to prioritize closing that
+gap now rather than wait on a self-hosted specialist model.
+
+**What changed** — three phases, all using only the existing Haiku/Sonnet Vertex AI setup:
+
+**Phase 1 — Correction detection: regex → Haiku.** New shared module `correction_gate.py`
+(imported by both `nightly-learn.py` and `cocoindex-flows.py`) replaces the
+`CORRECTION_PATTERNS`/`STRUCTURAL_CORRECTION_PATTERNS` regex gate with `spike/classify.py`'s
+`classify_correction()` (Haiku), disk-cached by `sha256(text)` since `cocoindex-flows.py`'s
+`process_transcript` reprocesses a transcript's entire content on every change (no incremental
+slicing there, unlike `nightly-learn.py`'s watermark system) — without the cache this would
+re-classify every earlier message in a session with Haiku on every subsequent message. Also ports
+the boilerplate-message filter found by the 2026-07-08 Prefilter Shadow Trial entry below (Cursor's
+own injected subagent-completion/system-reminder templates, attributed to `role="user"`), which
+that entry explicitly flagged as "worth reconsidering if either [production file] ever adopts
+semantic classification" — that's happening now. `ENGRAM_CORRECTION_DETECTOR=haiku|regex` (default
+`haiku`) is a one-line rollback; the old regex lists stay in the codebase, unused by default. The
+Prefilter Shadow Trial's 14-day/3,873-message backfill measured Haiku at 16.3% correction rate vs.
+the best regex candidate's 24.4% recall against Haiku's own verdicts — that gap is what this phase
+closes.
+
+**Phase 2 — Contradiction check wired in, three-tier resolution.** `spike/classify.py`'s
+`check_contradiction()` (Sonnet) is now called from both production retain paths
+(`nightly-learn.py`'s `retain_windows()`, `cocoindex-flows.py`'s `process_transcript()`) for every
+`[CORRECTION]`-tagged window, via a new shared `contradiction_resolution.py`:
+- No contradiction → retain as before.
+- Contradicts, confidence ≥ `ENGRAM_CONTRADICTION_AUTO_THRESHOLD` (default `0.9`) → auto-resolve.
+  Ships **shadow-first** (`ENGRAM_CONTRADICTION_AUTO_MODE=shadow` default): logs what it would
+  delete/supersede to `contradictions-auto-resolved.jsonl` without actually deleting; flip to
+  `live` only after reviewing real shadow output, the same bar this project applied before trusting
+  `classify_correction` itself.
+- Contradicts, below threshold → queued via `spike/pending_queue.py` for human review.
+  `generate-dashboard.py` now also generates `docs/PENDING_CONTRADICTIONS.md` (full entry detail
+  plus the auto-resolved rollup) alongside `docs/DASHBOARD.md`, so outliers surface automatically
+  in the existing nightly/on-demand reporting flow instead of requiring a separate script anyone
+  has to remember to run. Resolve with `python3 review-contradictions.py`.
+
+Three real bugs were found and fixed while wiring this up, not just inferred:
+- `spike/hindsight_client.py`'s `recall()` parsed a `"chunks"` key the live `hindsight-api` never
+  populates (always `{}`) — the real shape is `{"results": [...]}`, matching
+  `nightly-learn.py`'s own `measure_recall_quality()`. **This means `recall()` had never actually
+  seen real memory content before this fix** — which puts the 2026-07-08 "Semantic Correction
+  Detection Spike" entry's real-world sanity check ("0 false-positive contradictions") in the same
+  category as the "zero corrections detected" measurement-artifact incident: a clean-looking
+  number that may reflect broken plumbing rather than a real signal, not a validated result to
+  keep relying on. Fixed to parse `results` and return `(document_id, text)` pairs; re-ran the
+  same style of check against live `cursor-memory` content post-fix and got correct verdicts.
+- `review-contradictions.py`'s "approve" path never actually deleted or invalidated the superseded
+  memory — it only tagged the new one with `supersedes` metadata that nothing downstream read.
+  Both the manual approve path and the new auto-resolve tier now call a real
+  `DELETE /v1/default/banks/{bank}/documents/{document_id}` (mirroring `nightly-learn.py`'s
+  `dedup_graph()` pattern) via `contradiction_resolution.delete_document()`.
+- The "queued" tier's own `resolve()` docstring initially claimed "the caller retains the new
+  statement in every case" — but `spike/pending_queue.py` (unmodified, pre-existing) explicitly
+  documents queued entries as "withheld from `hindsight_retain()` pending human confirmation...
+  never auto-retained," and `review-contradictions.py`'s `[r]eject` describes itself as "discard
+  the new statement, keep the existing memory." Under the original wiring, `retain_windows()` /
+  `process_transcript()` called retain unconditionally regardless of `resolve()`'s verdict, so a
+  queued item was *already permanently retained* before a human ever saw it — `[r]eject` had
+  nothing left to discard, and `[a]pprove` would have created a second, duplicate copy under a
+  different `document_id`. Caught immediately after the first live run (see below) surfaced two
+  real queued entries and both turned out to be false positives, which made the bug's *absence*
+  of consequence in that specific case obvious but not the underlying asymmetry: a queued item
+  where the *new* statement is the wrong one had no way to actually get removed. Fixed by adding
+  `continue`/skip-retain in both call sites when `resolution.action == "queued"`; verified with
+  monkeypatched `resolve()` returning each of the three actions and asserting retain is called
+  exactly 0 (queued) or 1 (retain/auto_resolved) times.
+
+`ContradictionResult` gained a `confidence` field (mirroring `ClassificationResult`'s existing one)
+so the two tiers above have a real signal to threshold on. Spiked confidence separation before
+trusting it: 0.85 on the classify.py suite's documented "blanket rule vs. narrow exception" hard
+case vs. 0.95–0.99 on three clear-cut cases — real and directionally correct, but n=4 is too small
+to trust for live deletes, hence the shadow-first rollout above. `ENGRAM_CONTRADICTION_CHECK=on|off`
+(default `on`) is the whole-feature rollback switch.
+
+**Phase 3 — Two new `report.py` metrics, pure surfacing of existing data**: empty-recall rate
+(`1 - hit_rate` from `mcp-calls.jsonl` entries filtered to `tool == "recall"`) and writes-per-search
+ratio (`sum(windows_retained)` from daily JSON logs ÷ recall-call count over the same window). No
+new logging needed. `load_daily_logs()` gained a `log_suffix` parameter so this stays scoped
+per-project (kubernaut vs. dcm), matching every other per-project metric in the file.
+
+**Unplanned but necessary infra fix, found while implementing Phase 1**: `nightly-learn.py`'s
+hourly/nightly `launchd` jobs invoke `/usr/bin/python3` — macOS **system** Python 3.9.6 — which has
+never had any third-party dependency, since the script was pure-stdlib until now.
+`correction_gate.py` calls `litellm` (via `spike/classify.py`), which only exists in
+`~/.hindsight/venv` (the same venv CocoIndex already runs under). Confirmed by direct test that
+`nightly-learn.py` runs correctly under the venv's Python (already 3.9-safe via
+`from __future__ import annotations`), then repointed both `launchd/io.vectorize.hindsight.hourly.plist`
+and `.../nightly.plist` at `~/.hindsight/venv/bin/python3`, regenerated and reloaded the live
+installed jobs, and updated `docs/INSTALL.md` (including the missing `correction_gate.py` /
+`spike/` symlink steps for `nightly-learn.py`, which previously only needed them documented for
+CocoIndex). Without this, every hourly/nightly run would have crashed with
+`ModuleNotFoundError: No module named 'litellm'` the first time it hit a correction-tagged message.
+
+**What to verify once 24h+ of live uptime resumes** (see the 2026-07-08 "Correction Detection
+Missed 100% of 'Not Following Methodology' Corrections" entry below — `corrections_detected` reading
+`0` for three straight days despite frequent real corrections was itself the red flag that started
+this whole investigation, and needs real uptime rather than a code review to confirm is actually
+fixed): the
+correction-detection rate should trend toward the shadow trial's observed 16.3%, not the regex
+gate's far lower historical rate; `count_pending_contradictions()` in `report.py` /
+`docs/PENDING_CONTRADICTIONS.md` should start showing real (rather than structurally-empty) data
+once any live contradictions occur; and `contradictions-auto-resolved.jsonl` should accumulate
+shadow-mode entries to review before ever flipping `ENGRAM_CONTRADICTION_AUTO_MODE` to `live`.
+
+**Rollback instructions**: `ENGRAM_CORRECTION_DETECTOR=regex` reverts Phase 1 to the old regex gate
+(and removes the venv-interpreter requirement, though there's no harm leaving it as-is either way).
+`ENGRAM_CONTRADICTION_CHECK=off` disables Phase 2 entirely; `ENGRAM_CONTRADICTION_AUTO_MODE=shadow`
+(the default) keeps the auto-resolve tier logging-only even with the feature on. Phase 3 is pure
+reporting and has no failure mode beyond a missing/empty section if the underlying logs are absent.
+
+**First live run, immediately after deploy**: manually triggered the hourly `launchd` job end to
+end. It ran Haiku classification and Sonnet's contradiction check against real `cursor-memory`
+content and queued 2 entries in `contradictions-pending.jsonl` for human review — the pipeline's
+first real (non-shadow, non-spike) contradiction signal. Both were reviewed and confirmed **false
+positives**: one was Sonnet reading an instruction ("stop using HAPI, it's deprecated") as if it
+contradicted a prior "migrate off HAPI" memory rather than reinforcing it; the other similarly
+misread a declarative instruction as conflicting rather than corroborating. Both were phrased as
+flat statements rather than questions, which the user flagged as a real contributing factor —
+Sonnet's `_CONTRADICTION_SYSTEM_PROMPT` (`spike/classify.py`) isn't yet tuned to distinguish
+"restating/reinforcing an existing rule" from "contradicting" it, especially for imperative
+sentences. Not fixed yet — logged here as a concrete prompt-tuning candidate rather than acted on
+immediately, since n=2 is too small to safely tighten the prompt without risking false negatives
+in the other direction. This same live run is what surfaced the third bug above.
+
 ## 2026-07-12: `gopls` MCP "Down Every Window" Was a Client Architecture Change, Not a Regression We Caused
 
 **Context**: After a laptop reboot, the `gopls` MCP server started failing across every open Cursor

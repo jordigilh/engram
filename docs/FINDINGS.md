@@ -137,6 +137,103 @@ sentences. Not fixed yet — logged here as a concrete prompt-tuning candidate r
 immediately, since n=2 is too small to safely tighten the prompt without risking false negatives
 in the other direction. This same live run is what surfaced the third bug above.
 
+## 2026-07-13: Project Scoping Fix for the Retain Pipeline + First Regression Test Suite
+
+**Why now**: Two issues surfaced while reviewing the prior entry's first live run: (1) one of the two
+queued contradictions traced back to a transcript from `koku` (an unrelated project, not
+kubernaut/dcm/engram), which meant the shared `cursor-memory` bank was absorbing project-specific
+technical decisions from every Cursor workspace on the machine, not just onboarded projects; and (2)
+three real bugs (chunks-vs-results, missing delete-on-approve, queued-tier-retained-anyway, all
+described in the entry above) had shipped to production in one session with zero automated coverage
+catching any of them.
+
+**Problem 1 — unscoped transcript ingestion.** Neither `nightly-learn.py`'s `run_hourly()`/
+`run_nightly()` nor `cocoindex-flows.py`'s `transcript_app` had any project filter on the retain path
+itself — `find_recent_transcripts()` was called with no `workspace_prefixes` argument (even though
+that parameter already existed, used only for analytics scoping), and `PatternFilePathMatcher`'s
+`included_patterns=["**/*.jsonl"]` matched every one of the ~270+ Cursor workspaces under
+`~/.cursor/projects/`. Confirmed impact at plan time: 139 of 444 transcript-traceable `cursor-memory`
+documents (31%) came from out-of-scope workspaces (`insights-onprem`/`koku`, `redhat-developer-rhdh-plugins`,
+blank "no folder open" sessions). By the time the fix actually shipped (~21h later), continued
+unfiltered ingestion had grown that to **221 documents actually purged** — confirming the live counts
+mattered more than the plan-time estimate, and that this kept getting worse the longer it went
+unfixed.
+
+**Fix**: new shared module `project_scope.py` (same pattern as `correction_gate.py`/
+`contradiction_resolution.py`) with `ALLOWED_WORKSPACE_PREFIXES` (kubernaut, dcm, engram),
+`is_allowed_workspace()`, and `transcript_glob_patterns()`. Wired into `nightly-learn.py`'s
+`run_hourly()`/`run_nightly()` via `workspace_prefixes=project_scope.ALLOWED_WORKSPACE_PREFIXES`, and
+into `cocoindex-flows.py`'s `transcript_app` via `PatternFilePathMatcher(included_patterns=project_scope.transcript_glob_patterns())`.
+Verified CocoIndex's `globset`-based matcher semantics directly before relying on them: `prefix*`
+only matches within one path segment (doesn't cross `/`), so `"kubernaut*/agent-transcripts/**/*.jsonl"`
+correctly matches `kubernaut` and sibling repos like `kubernaut-operator` while rejecting
+`insights-onprem-koku` and blank `empty-window` sessions — confirmed with a standalone script against
+real path strings before wiring it in, not just inferred from the docs.
+
+**Purge**: new `purge-out-of-scope-memories.py` (dry-run default, `--execute` to delete) builds a
+`transcript_id → project_dir_name` map by walking `~/.cursor/projects/*/agent-transcripts/**/*.jsonl`
+(910 files indexed), classifies every `cursor-memory` document by its `document_metadata.transcript_id`,
+and deletes (via `contradiction_resolution.delete_document()`) any resolving to a non-allowlisted
+project. Documents with no `transcript_id` (355 — curated/pre-pipeline facts) or an unresolvable one
+are left untouched by design. Ran dry-run, reviewed the list, got explicit approval, then executed —
+but the count *grew* between dry-run (184) and execute (217) because the unfixed `cocoindex-flows.py`
+service was still ingesting live. Final breakdown of the 217+4=**221 documents deleted**: 100
+`empty-window`, 61 `insights-onprem-koku` (across two passes), 45 `insights-onprem` workspace, 6
+plain `insights-onprem`, 6 `redhat-developer-rhdh-plugins`, 2 bare-numeric ("no folder open") sessions,
+1 `insights-onprem-ros-helm-chart`.
+
+**Deployment gotcha found while purging**: `io.vectorize.cocoindex.service` is a long-running
+`--mode live` daemon (`ps` showed it running since before this session started) — editing
+`cocoindex-flows.py` on disk does nothing until the process actually reloads it, since Python doesn't
+hot-reload. Had to `launchctl kickstart -k gui/$(id -u)/io.vectorize.cocoindex.service` to pick up the
+scoping fix, which is why the purge count kept growing until the restart. Also found `~/.hindsight/`
+was missing a `project_scope.py` symlink entirely (both `nightly-learn.py` and `cocoindex-flows.py`
+now `import project_scope` unconditionally) — would have crashed both scripts with
+`ModuleNotFoundError` on the very next run had it not been caught immediately via the restart. Added
+the missing symlink, confirmed clean restart in `~/.hindsight/logs/cocoindex-stderr.log`, then
+re-ran the dry-run 15s later and watched new out-of-scope documents drop to near-zero (4 in-flight
+stragglers from before the restart, since deleted) — the concrete signal the fix actually took effect
+in the running process, not just on disk. `nightly-learn.py`'s hourly/nightly launchd jobs needed no
+restart since they spawn a fresh process per invocation.
+
+**Problem 2 — no regression test suite.** Added `pytest` (`requirements-dev.txt`) plus a `tests/`
+directory: 101 tests across 7 files (`test_correction_gate.py`, `test_hindsight_client.py`,
+`test_contradiction_resolution.py`, `test_review_contradictions.py`, `test_project_scope.py`,
+`test_nightly_learn.py`, `test_cocoindex_flows.py`), all passing, running in well under a second with
+zero live network/LLM/Hindsight calls — every `litellm`/`urlopen`/CocoIndex call is mocked via
+`monkeypatch`. Root `conftest.py` adds the repo root and `spike/` to `sys.path` and provides
+session-scoped fixtures (`nightly_learn`, `cocoindex_flows`, `review_contradictions`, `purge_script`)
+for loading the hyphenated production scripts via `importlib.util.spec_from_file_location` (same
+pattern already used inside `review-contradictions.py`). Explicit regression tests guard all three
+bugs from the entry above: `test_hindsight_client.py::test_regression_ignores_chunks_key_even_when_present`,
+`test_review_contradictions.py::TestApprove::test_regression_approve_deletes_conflicting_memory_and_retains_new_statement`,
+and `test_nightly_learn.py`/`test_cocoindex_flows.py`'s `test_regression_correction_window_queued_action_*`
+(asserting the retain/post call happens exactly 0 times for `action="queued"`, 1 time for
+`"retain"`/`"auto_resolved"`). Also added `test_project_scope.py::TestIsAllowedWorkspace::test_substring_match_is_not_enough_must_be_prefix`
+as a forward-looking regression guard against a naive `in` check ever replacing the current
+`startswith` — the exact class of bug that would silently re-widen this fix's scope.
+
+**Test-infra fragility found while writing the suite (not a production bug)**: `cocoindex-flows.py`
+registers a CocoIndex `ContextKey("pg_pool")` at module-exec time, and CocoIndex raises if the same
+key name is registered twice in one process. `review-contradictions.py`'s own internal
+`importlib`-based load of `cocoindex-flows.py` silently assumes it's the *only* thing in the process
+that ever loads that file — true in real usage (one script, one process) but false once a test suite
+also loads `cocoindex-flows.py` independently (for `test_cocoindex_flows.py`) in the same pytest
+session. The second load's `exec_module()` throws partway through (before reaching `hindsight_retain`'s
+definition), which `review-contradictions.py`'s existing `try/except` catches and silently sets
+`_HAS_RETAIN = False` — exactly the kind of silent degradation this whole test suite exists to catch,
+just self-inflicted by test ordering rather than a real code path. Fixed at the fixture level, not in
+production code: `conftest.py`'s `review_contradictions` fixture depends on the `cocoindex_flows`
+fixture and replaces the broken `_cf`/`_HAS_RETAIN` with the one already-loaded, working module
+instance. Confirmed the full 101-test suite passes regardless of file run order (ran forwards,
+reversed, and various subsets).
+
+**Rollback instructions**: revert `project_scope.py`'s wiring in `nightly-learn.py`/
+`cocoindex-flows.py` (drop the `workspace_prefixes=`/`included_patterns=` arguments) to go back to
+unscoped ingestion — no other rollback needed, since the purge only deleted documents, it didn't
+change any retain-time behavior beyond the filter itself. The test suite has no production-code
+coupling beyond what it's testing; `rm -rf tests/ conftest.py requirements-dev.txt` fully removes it.
+
 ## 2026-07-12: `gopls` MCP "Down Every Window" Was a Client Architecture Change, Not a Regression We Caused
 
 **Context**: After a laptop reboot, the `gopls` MCP server started failing across every open Cursor

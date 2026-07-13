@@ -30,6 +30,9 @@ from typing import Any
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
+import correction_gate
+import contradiction_resolution
+
 HINDSIGHT_URL = "http://localhost:8888"
 BANK_ID = "cursor-memory"
 EPOCH_START_DATE = "2026-06-26"
@@ -227,7 +230,10 @@ def extract_user_text(msg: dict) -> str:
                 texts.append(match.group(1))
             elif not text.startswith("<external_links>"):
                 texts.append(text)
-    return "\n".join(texts).strip()
+    raw = "\n".join(texts).strip()
+    if correction_gate.is_system_boilerplate(raw):
+        return ""
+    return raw
 
 
 def extract_assistant_text(msg: dict) -> str:
@@ -243,16 +249,14 @@ def extract_assistant_text(msg: dict) -> str:
 
 
 def is_correction(text: str) -> bool:
-    """Detect if a user message looks like a correction."""
-    if not text or len(text) > 2000:
-        return False
-    for pat in CORRECTION_PATTERNS:
-        if pat.search(text):
-            return True
-    for pat in STRUCTURAL_CORRECTION_PATTERNS:
-        if pat.search(text):
-            return True
-    return False
+    """Detect if a user message looks like a correction.
+
+    Delegates to correction_gate (Haiku-based, ~0.97 F1 vs. this file's own
+    CORRECTION_PATTERNS/STRUCTURAL_CORRECTION_PATTERNS, ~24% recall -- see
+    docs/FINDINGS.md 2026-07-08). Set ENGRAM_CORRECTION_DETECTOR=regex for an
+    instant rollback to the patterns below, which are kept in place unused.
+    """
+    return correction_gate.is_correction(text, CORRECTION_PATTERNS + STRUCTURAL_CORRECTION_PATTERNS)
 
 
 def is_instruction(text: str) -> bool:
@@ -341,23 +345,46 @@ def extract_learning_windows(
 
 
 def retain_windows(windows: list[str], transcript_id: str) -> dict[str, Any]:
-    """Send correction windows to Hindsight retain endpoint."""
+    """Send correction/instruction windows to Hindsight retain endpoint.
+
+    Windows tagged [CORRECTION] (see extract_learning_windows/_build_windows)
+    run the three-tier contradiction check (contradiction_resolution.resolve())
+    first -- see docs/FINDINGS.md. Instruction windows retain unchanged:
+    check_contradiction is only meaningful once a message is confirmed as a
+    correction, not a forward-looking instruction.
+    """
     total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     items_retained = 0
+    contradictions_auto_resolved = 0
+    contradictions_queued = 0
 
     for i, window in enumerate(windows):
-        payload = {
-            "items": [
-                {
-                    "content": window,
-                    "metadata": {
-                        "source": "cursor-transcript",
-                        "transcript_id": transcript_id,
-                        "window": str(i),
-                    },
-                }
-            ]
+        tags = None
+        if "[CORRECTION]" in window:
+            resolution = contradiction_resolution.resolve(BANK_ID, window)
+            if resolution.action == "auto_resolved":
+                contradictions_auto_resolved += 1
+                tags = ["CORRECTION", "supersedes-prior-memory"]
+            elif resolution.action == "queued":
+                contradictions_queued += 1
+                # Withheld from retain pending human review (pending_queue.py's
+                # contract: "never auto-retained"). review-contradictions.py
+                # retains it itself on approve; reject then correctly means
+                # nothing was ever written, matching its own "discard the new
+                # statement" description. See docs/FINDINGS.md.
+                continue
+
+        item: dict[str, Any] = {
+            "content": window,
+            "metadata": {
+                "source": "cursor-transcript",
+                "transcript_id": transcript_id,
+                "window": str(i),
+            },
         }
+        if tags:
+            item["tags"] = tags
+        payload = {"items": [item]}
         try:
             result = api_post(
                 f"/v1/default/banks/{BANK_ID}/memories", payload
@@ -370,7 +397,12 @@ def retain_windows(windows: list[str], transcript_id: str) -> dict[str, Any]:
         except Exception as e:
             log.warning("Retain failed for window %d of %s: %s", i, transcript_id, e)
 
-    return {"items_retained": items_retained, "usage": total_usage}
+    return {
+        "items_retained": items_retained,
+        "usage": total_usage,
+        "contradictions_auto_resolved": contradictions_auto_resolved,
+        "contradictions_queued": contradictions_queued,
+    }
 
 
 def filter_and_scan(
@@ -404,7 +436,15 @@ def filter_and_scan(
             }
             continue
 
-        # Layer 2: regex pre-filter on new messages only
+        # Layer 2: has this file got any correction/instruction signal at all?
+        # is_correction() is Haiku-backed via correction_gate (disk-cached),
+        # not a cheap regex net -- the 2026-07-08 prefilter shadow trial found
+        # no safe way to narrow Haiku's intake below "classify everything"
+        # (best regex candidate: 24.4% recall vs. Haiku's own verdicts, see
+        # docs/FINDINGS.md), so this scan intentionally classifies every new
+        # message rather than pre-filtering. extract_learning_windows() below
+        # re-checks the same messages to build windows; the cache makes that
+        # second pass free.
         has_signal = False
         for m in new_messages:
             if m.get("role") != "user":
@@ -444,6 +484,8 @@ def retain_windows_deduped(
             "items_retained": 0,
             "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
             "skipped_duplicates": skipped,
+            "contradictions_auto_resolved": 0,
+            "contradictions_queued": 0,
         }
 
     result = retain_windows(new_windows, transcript_id)
@@ -1054,6 +1096,8 @@ def run_hourly(watermarks: dict, seen_hashes: set) -> dict:
         "instructions_detected": 0,
         "windows_retained": 0,
         "skipped_duplicates": 0,
+        "contradictions_auto_resolved": 0,
+        "contradictions_queued": 0,
         "total_retain_usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
         "errors": [],
     }
@@ -1092,6 +1136,8 @@ def run_hourly(watermarks: dict, seen_hashes: set) -> dict:
             )
             results["windows_retained"] += retain_result["items_retained"]
             results["skipped_duplicates"] += retain_result.get("skipped_duplicates", 0)
+            results["contradictions_auto_resolved"] += retain_result.get("contradictions_auto_resolved", 0)
+            results["contradictions_queued"] += retain_result.get("contradictions_queued", 0)
             for k in results["total_retain_usage"]:
                 results["total_retain_usage"][k] += retain_result["usage"].get(k, 0)
             log.info(
@@ -1137,6 +1183,8 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
         "instructions_detected": 0,
         "windows_retained": 0,
         "skipped_duplicates": 0,
+        "contradictions_auto_resolved": 0,
+        "contradictions_queued": 0,
         "total_retain_usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
         "reflect_result": None,
         "bank_stats": bank_stats,
@@ -1187,6 +1235,8 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
                 )
                 results["windows_retained"] += retain_result["items_retained"]
                 results["skipped_duplicates"] += retain_result.get("skipped_duplicates", 0)
+                results["contradictions_auto_resolved"] += retain_result.get("contradictions_auto_resolved", 0)
+                results["contradictions_queued"] += retain_result.get("contradictions_queued", 0)
                 for k in results["total_retain_usage"]:
                     results["total_retain_usage"][k] += retain_result["usage"].get(k, 0)
                 log.info(

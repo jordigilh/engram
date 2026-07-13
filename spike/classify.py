@@ -62,8 +62,10 @@ _CONTRADICTION_SYSTEM_PROMPT = """You are checking whether a NEW statement from 
 
 A contradiction means the new statement asserts something that is factually incompatible with an existing memory (not just a refinement, elaboration, unrelated topic, or a more specific case of the same rule).
 
+Also rate your confidence that "contradicts" is correct. Use a LOWER confidence (below 0.9) when the case is a narrow exception, scoping change, or partial overlap rather than a clear-cut factual conflict -- this signal is used to decide whether a contradiction is safe to auto-resolve without human review, so it must reflect genuine uncertainty, not just be a high number by default.
+
 Respond with ONLY a JSON object, no other text:
-{"contradicts": true or false, "conflicting_memory_index": <int index into the existing memories list, or null>, "explanation": "one sentence"}"""
+{"contradicts": true or false, "conflicting_memory_index": <int index into the existing memories list, or null>, "explanation": "one sentence", "confidence": 0.0-1.0}"""
 
 
 @dataclass
@@ -83,6 +85,7 @@ class ContradictionResult:
     explanation: str
     raw: str
     latency_s: float
+    confidence: float = 0.0
     error: str | None = None
 
 
@@ -143,6 +146,7 @@ def check_contradiction(
         return ContradictionResult(
             contradicts=False, conflicting_memory_index=None,
             explanation="no existing memories to compare against", raw="", latency_s=0.0,
+            confidence=1.0,
         )
 
     memory_list = "\n".join(f"[{i}] {m[:300]}" for i, m in enumerate(existing_memories))
@@ -170,11 +174,12 @@ def check_contradiction(
                 explanation=parsed.get("explanation", ""),
                 raw=raw,
                 latency_s=time.time() - t0,
+                confidence=float(parsed.get("confidence", 0.0)),
             )
         except Exception as e:
             last_err = e
             time.sleep(1.5 * (attempt + 1))
     return ContradictionResult(
         contradicts=False, conflicting_memory_index=None, explanation="",
-        raw="", latency_s=time.time() - t0, error=str(last_err),
+        raw="", latency_s=time.time() - t0, confidence=0.0, error=str(last_err),
     )

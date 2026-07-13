@@ -47,10 +47,12 @@ PROJECT_CONFIGS = {
     "kubernaut": {
         "banks": ["cursor-memory", "kubernaut-docs", "kubernaut-issues"],
         "workspace_prefixes": ["Users-jgil-go-src-github-com-jordigilh-kubernaut"],
+        "log_suffix": "",
     },
     "dcm": {
         "banks": ["cursor-memory", "dcm-docs", "dcm-issues"],
         "workspace_prefixes": ["Users-jgil-go-src-github-com-dcm-project-"],
+        "log_suffix": "-dcm",
     },
 }
 
@@ -102,12 +104,17 @@ def load_jsonl(path: Path, days: int = 7) -> list[dict]:
     return entries
 
 
-def load_daily_logs(days: int = 7) -> list[dict]:
-    """Load nightly JSON logs from the last N days."""
+def load_daily_logs(days: int = 7, log_suffix: str = "") -> list[dict]:
+    """Load nightly JSON logs from the last N days.
+
+    log_suffix matches PROJECT_CONFIGS[project]["log_suffix"] / nightly-learn.py's
+    same field ("" for kubernaut, "-dcm" for dcm) -- daily logs are one file per
+    project per day (see nightly-learn.py's run_nightly log_path).
+    """
     entries = []
     for i in range(days):
         day = date.today() - timedelta(days=i)
-        path = LOG_DIR / f"{day.isoformat()}.json"
+        path = LOG_DIR / f"{day.isoformat()}{log_suffix}.json"
         if path.exists():
             with open(path) as f:
                 try:
@@ -403,14 +410,52 @@ def collect_ingestion_coverage() -> dict:
     return coverage
 
 
+def compute_recall_write_metrics(mcp_calls: list[dict], daily_logs: list[dict]) -> dict:
+    """Empty-recall rate and writes-per-search ratio.
+
+    Pure surfacing of data already on disk -- no new logging needed (see
+    docs/FINDINGS.md, Phase 3 of the Haiku correction gate rollout):
+      - Empty-recall rate: 1 - hit_rate, computed from mcp_calls filtered to
+        tool == "recall" (mcp_calls's own by_server/by_bank stats mix recall
+        with non-recall tool calls like go_workspace/references, so this
+        filters the raw entries first rather than the pre-aggregated output).
+      - Writes-per-search ratio: sum(windows_retained) across daily_logs
+        (nightly-learn.py's results["windows_retained"]) divided by the
+        count of recall calls in the same window.
+    """
+    recall_calls = [e for e in mcp_calls if e.get("tool") == "recall"]
+    recall_agg = aggregate_mcp_calls(recall_calls)
+
+    total_recalls = len(recall_calls)
+    total_hits = sum(1 for e in recall_calls if e.get("hit"))
+    empty_recall_rate = round(1 - (total_hits / total_recalls), 3) if total_recalls > 0 else None
+
+    total_windows_retained = sum(d.get("windows_retained", 0) for d in daily_logs)
+    writes_per_search_ratio = (
+        round(total_windows_retained / total_recalls, 4) if total_recalls > 0 else None
+    )
+
+    return {
+        "total_recall_calls": total_recalls,
+        "empty_recall_rate": empty_recall_rate,
+        "empty_recall_rate_by_server": {
+            srv: round(1 - s["hit_rate"], 3) for srv, s in recall_agg["by_server"].items()
+        },
+        "total_windows_retained": total_windows_retained,
+        "writes_per_search_ratio": writes_per_search_ratio,
+    }
+
+
 def count_pending_contradictions() -> int:
     """Count unresolved entries in contradictions-pending.jsonl.
 
-    Written by the Semantic Correction Detection Spike's contradiction
-    check (see spike/pending_queue.py) when a candidate correction/fact
-    would conflict with something already retained in the cursor-memory
-    bank -- those are withheld from retain and queued here instead of being
-    silently applied. Resolve with `python3 review-contradictions.py`.
+    Written by contradiction_resolution.py's three-tier check (wired into
+    nightly-learn.py/cocoindex-flows.py's retain paths as of 2026-07-12) for
+    contradictions below the auto-resolve confidence threshold -- these are
+    queued for human review rather than silently retained or discarded.
+    Resolve with `python3 review-contradictions.py`; see also
+    docs/PENDING_CONTRADICTIONS.md for full detail on each entry and a
+    rollup of what the auto-resolve tier has done.
     Reads the file directly (rather than importing spike/pending_queue.py)
     to keep report.py's system-Python-3.9 runtime decoupled from the
     spike's venv-only dependencies.
@@ -427,15 +472,16 @@ def count_pending_contradictions() -> int:
 
 
 def collect_regex_vs_haiku_stats(days: int = 7, project: str | None = None) -> dict | None:
-    """Compare production CORRECTION_PATTERNS regex against Haiku's direct
+    """Compare the CORRECTION_PATTERNS regex list against Haiku's direct
     classification, using the Semantic Correction Detection Spike's ongoing
     shadow trial (prefilter-shadow-trial.py, see docs/FINDINGS.md 2026-07-08).
 
     The shadow trial calls Haiku on every new top-level user message and
-    logs the verdict without gating or retaining anything -- this is
-    evidence to inform a future adoption decision, not something currently
-    driving what gets retained into cursor-memory (that's still the regex
-    list below, run by nightly-learn.py/cocoindex-flows.py).
+    logs the verdict independently of production. As of 2026-07-12,
+    production (correction_gate.py, default ENGRAM_CORRECTION_DETECTOR=haiku)
+    retains based on this same kind of Haiku verdict, not the regex list --
+    so this comparison is now a monitoring signal (did the live classify
+    rate drift?), not a pre-adoption sanity check.
 
     Returns None if the shadow trial hasn't produced any data yet.
     """
@@ -762,7 +808,8 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
                   token_stats: dict, days: int,
                   coverage: dict | None = None, freshness: dict | None = None,
                   mental_models: list[dict] | None = None,
-                  regex_vs_haiku: dict | None = None) -> str:
+                  regex_vs_haiku: dict | None = None,
+                  recall_write_metrics: dict | None = None) -> str:
     """Format a human-readable report."""
     lines = []
     lines.append("=" * 70)
@@ -1084,13 +1131,32 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
         lines.append("  PENDING CONTRADICTIONS")
         lines.append("  " + "-" * 66)
         lines.append(
-            f"  {pending_count} unresolved -- run: python3 review-contradictions.py"
+            f"  {pending_count} unresolved -- see docs/PENDING_CONTRADICTIONS.md, "
+            "run: python3 review-contradictions.py"
+        )
+
+    # Recall/write ratios (Phase 3 of the Haiku correction gate rollout, 2026-07-12)
+    if recall_write_metrics and recall_write_metrics.get("total_recall_calls"):
+        rwm = recall_write_metrics
+        lines.append("")
+        lines.append("  RECALL / WRITE RATIOS")
+        lines.append("  " + "-" * 66)
+        err = rwm["empty_recall_rate"]
+        lines.append(
+            f"  Empty-recall rate: {err*100:.1f}% ({rwm['total_recall_calls']} recall calls)"
+            if err is not None else "  Empty-recall rate: n/a (no recall calls this window)"
+        )
+        wps = rwm["writes_per_search_ratio"]
+        lines.append(
+            f"  Writes-per-search: {wps:.3f} ({rwm['total_windows_retained']} windows retained)"
+            if wps is not None else "  Writes-per-search: n/a (no recall calls this window)"
         )
 
     # Regex vs. Haiku correction detection (prefilter-shadow-trial.py,
-    # 2026-07-09). Observational only -- this is evidence to inform whether
-    # adopting Haiku classification is worth it, not something currently
-    # driving what gets retained (that's still CORRECTION_PATTERNS below).
+    # 2026-07-09). Originally observational evidence for whether adopting
+    # Haiku classification was worth it; as of 2026-07-12 production made
+    # that switch (correction_gate.py) so this is now a monitoring signal
+    # for the live classification rate, not a pre-adoption comparison.
     if regex_vs_haiku:
         rvh = regex_vs_haiku
         lines.append("")
@@ -1108,8 +1174,9 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
                      f"(of what Haiku calls a correction, this % regex also caught)")
         lines.append(f"  Regex precision vs. Haiku: {precision if precision is not None else 'n/a':>6}%  "
                      f"(of what regex flagged, this % Haiku agreed with)")
-        lines.append("  Not yet acted on -- nothing is retained based on Haiku's verdict here;")
-        lines.append("  production still retains based on CORRECTION_PATTERNS regex only.")
+        lines.append("  Since 2026-07-12, production retains based on this same Haiku verdict")
+        lines.append("  by default (correction_gate.py, ENGRAM_CORRECTION_DETECTOR=haiku); this")
+        lines.append("  comparison is now a monitoring signal, not a pre-adoption sanity check.")
 
     # Token Cost Analysis
     lines.append("")
@@ -1278,6 +1345,8 @@ def build_report_data(args, project: str) -> dict:
     coverage = collect_ingestion_coverage()
     freshness = collect_freshness_stats()
     regex_vs_haiku = collect_regex_vs_haiku_stats(days=args.days, project=project)
+    daily_logs = load_daily_logs(days=args.days, log_suffix=pconfig["log_suffix"])
+    recall_write_metrics = compute_recall_write_metrics(mcp_calls, daily_logs)
 
     full_data = {
         "project": project,
@@ -1297,6 +1366,7 @@ def build_report_data(args, project: str) -> dict:
         "ingestion_coverage": coverage,
         "data_freshness": freshness,
         "regex_vs_haiku": regex_vs_haiku,
+        "recall_write_metrics": recall_write_metrics,
     }
     return {
         "full_data": full_data,
@@ -1307,6 +1377,7 @@ def build_report_data(args, project: str) -> dict:
         "coverage": coverage,
         "freshness": freshness,
         "regex_vs_haiku": regex_vs_haiku,
+        "recall_write_metrics": recall_write_metrics,
     }
 
 
@@ -1366,7 +1437,8 @@ def main():
                             data["token_stats"], args.days, coverage=data["coverage"],
                             freshness=data["freshness"],
                             mental_models=data["full_data"]["mental_models"],
-                            regex_vs_haiku=data["regex_vs_haiku"]))
+                            regex_vs_haiku=data["regex_vs_haiku"],
+                            recall_write_metrics=data["recall_write_metrics"]))
 
 
 if __name__ == "__main__":

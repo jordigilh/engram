@@ -128,6 +128,18 @@ customize it — see [Customizing the Rule](#customizing-the-rule) below.
 ```bash
 ln -sf "$(pwd)/nightly-learn.py" ~/.hindsight/nightly-learn.py
 ln -sf "$(pwd)/ingest-issues.py" ~/.hindsight/ingest-issues.py
+ln -sf "$(pwd)/correction_gate.py" ~/.hindsight/correction_gate.py
+ln -sf "$(pwd)/contradiction_resolution.py" ~/.hindsight/contradiction_resolution.py
+```
+
+`correction_gate.py` is the Haiku-based correction-detection gate and
+`contradiction_resolution.py` the three-tier contradiction check — both shared
+by `nightly-learn.py` and `cocoindex-flows.py` (see [FINDINGS.md](../docs/FINDINGS.md)).
+They import from `spike/`, so also symlink that directory if you haven't
+already (step 16 does this for CocoIndex, but `nightly-learn.py` needs it too):
+
+```bash
+ln -sf "$(pwd)/spike" ~/.hindsight/spike
 ```
 
 ## 10. Schedule with launchd
@@ -140,6 +152,24 @@ sed "s|__HOME__|$HOME|g" launchd/io.vectorize.hindsight.nightly.plist \
 
 launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist
 ```
+
+Do the same for the hourly retain-only job:
+
+```bash
+sed "s|__HOME__|$HOME|g" launchd/io.vectorize.hindsight.hourly.plist \
+  > ~/Library/LaunchAgents/io.vectorize.hindsight.hourly.plist
+
+launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.hourly.plist
+```
+
+> **Note:** both the hourly and nightly plists run `nightly-learn.py` under
+> `~/.hindsight/venv/bin/python3`, not the macOS system Python. This is required
+> because `correction_gate.py` (via `spike/classify.py`) calls `litellm`, which
+> is only installed in the Hindsight venv — `nightly-learn.py` was pure-stdlib
+> before this and ran fine under system Python, but no longer does. If you ever
+> revert to `ENGRAM_CORRECTION_DETECTOR=regex` full-time, the venv requirement
+> goes away, but there's no harm in leaving the interpreter pointed at the venv
+> either way.
 
 ## 11. Ingest project documentation (Knowledge RAG)
 
@@ -241,6 +271,10 @@ uv pip install --python ~/.hindsight/venv/bin/python cocoindex
 ln -sf "$(pwd)/cocoindex-flows.py" ~/.hindsight/cocoindex-flows.py
 ln -sf "$(pwd)/cocoindex-search.py" ~/.hindsight/cocoindex-search.py
 ```
+
+`cocoindex-flows.py` also imports `correction_gate.py` and `contradiction_resolution.py`
+directly — make sure step 9's symlinks are in place before running this, or
+CocoIndex's transcript app will fail to start with a `ModuleNotFoundError`.
 
 ### Configure source directories
 

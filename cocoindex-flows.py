@@ -31,6 +31,9 @@ import cocoindex as coco
 from cocoindex.connectors import localfs
 from cocoindex.resources.file import PatternFilePathMatcher
 
+import correction_gate
+import contradiction_resolution
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
@@ -690,9 +693,11 @@ code_app = coco.App(
 # ---------------------------------------------------------------------------
 
 def _is_correction(text: str) -> bool:
-    if not text or len(text) > 2000:
-        return False
-    return any(pat.search(text) for pat in CORRECTION_PATTERNS)
+    """Delegates to correction_gate (Haiku-based, disk-cached -- see
+    docs/FINDINGS.md). Set ENGRAM_CORRECTION_DETECTOR=regex for an instant
+    rollback to CORRECTION_PATTERNS below, which is kept in place unused.
+    """
+    return correction_gate.is_correction(text, CORRECTION_PATTERNS)
 
 
 def _is_instruction(text: str) -> bool:
@@ -714,7 +719,10 @@ def _extract_user_text(msg: dict) -> str:
                 texts.append(match.group(1))
             elif not text.startswith("<external_links>"):
                 texts.append(text)
-    return "\n".join(texts).strip()
+    raw = "\n".join(texts).strip()
+    if correction_gate.is_system_boilerplate(raw):
+        return ""
+    return raw
 
 
 def _extract_assistant_text(msg: dict) -> str:
@@ -800,11 +808,22 @@ async def process_transcript(file: localfs.File) -> None:
     for i, window_text in enumerate(windows):
         if not window_text.strip():
             continue
+        tags = None
+        if "[CORRECTION]" in window_text:
+            resolution = contradiction_resolution.resolve("cursor-memory", window_text)
+            if resolution.action == "auto_resolved":
+                tags = ["CORRECTION", "supersedes-prior-memory"]
+            elif resolution.action == "queued":
+                # Withheld from retain pending human review (pending_queue.py's
+                # contract: "never auto-retained"). review-contradictions.py
+                # retains it itself on approve. See docs/FINDINGS.md.
+                continue
         hindsight_retain(
             bank_id="cursor-memory",
             content=window_text,
             document_id=f"transcript-{transcript_id}-w{i}",
             metadata={"source": "cocoindex-transcript", "transcript_id": transcript_id},
+            tags=tags,
         )
 
 

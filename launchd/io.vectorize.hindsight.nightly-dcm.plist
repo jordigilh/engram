@@ -6,7 +6,7 @@
     <string>io.vectorize.hindsight.nightly-dcm</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
+        <string>__HOME__/.hindsight/venv/bin/python3</string>
         <string>__HOME__/.hindsight/nightly-learn.py</string>
         <string>--mode</string>
         <string>nightly</string>
@@ -27,7 +27,11 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+        <string>__HOME__/.hindsight/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>GOOGLE_APPLICATION_CREDENTIALS</key>
+        <string>__HOME__/.config/gcloud/application_default_credentials.json</string>
     </dict>
 </dict>
 </plist>

@@ -6,8 +6,9 @@ Lists each entry in ~/.hindsight/logs/contradictions-pending.jsonl (new
 statement vs. the existing memory it appears to conflict with, plus the
 model's explanation) and lets you:
 
-  [a]pprove  -- retain the new statement into cursor-memory (tagged as
-               superseding the conflicting memory) and remove from the queue
+  [a]pprove  -- delete the conflicting memory, retain the new statement into
+               cursor-memory (tagged as superseding it), and remove from the
+               queue
   [r]eject   -- discard the new statement, keep the existing memory, remove
                from the queue
   [s]kip     -- leave it in the queue for next time
@@ -24,6 +25,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "spike"))
 from pending_queue import load_pending, remove_pending  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from contradiction_resolution import delete_document  # noqa: E402
 
 # cocoindex-flows.py has a hyphen, so it can't be `import`ed normally.
 _spec = importlib.util.spec_from_file_location(
@@ -77,6 +81,12 @@ def main() -> int:
             if not _HAS_RETAIN:
                 print("Cannot approve: hindsight_retain unavailable in this environment. Skipping.")
                 continue
+            old_id = entry.get("document_id")
+            if old_id:
+                deleted = delete_document("cursor-memory", old_id)
+                print(f"{'Deleted' if deleted else 'Could not delete (already gone or not found)'} superseded memory {old_id}.")
+            else:
+                print("No document_id on this entry (queued before the supersede fix) -- old memory left in place.")
             result = _cf.hindsight_retain(
                 bank_id="cursor-memory",
                 content=entry["new_statement"],
@@ -84,6 +94,7 @@ def main() -> int:
                 metadata={
                     "source": "review-contradictions",
                     "supersedes": entry.get("conflicting_memory"),
+                    "supersedes_document_id": old_id,
                 },
                 tags=["CORRECTION", "supersedes-prior-memory"],
             )

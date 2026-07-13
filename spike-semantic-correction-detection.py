@@ -214,10 +214,11 @@ def step4_real_world_contradiction_check() -> int:
     positives = [e for e in eval_examples() if e.is_correction][:6]
     false_positive_contradictions = 0
     for ex in positives:
-        memories = recall("cursor-memory", ex.text, max_results=3)
-        if not memories:
+        memory_pairs = recall("cursor-memory", ex.text, max_results=3)
+        if not memory_pairs:
             print(f"  (no related memories found for: {ex.text[:60]})")
             continue
+        memories = [text for _, text in memory_pairs]
         r = check_contradiction(ex.text, memories, model=SONNET_MODEL)
         flag = "CONTRADICTION FLAGGED" if r.contradicts else "no contradiction"
         print(f"  [{flag}] {ex.text[:60]}")

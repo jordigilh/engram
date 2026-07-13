@@ -32,6 +32,7 @@ from urllib.error import HTTPError, URLError
 
 import correction_gate
 import contradiction_resolution
+import project_scope
 
 HINDSIGHT_URL = "http://localhost:8888"
 BANK_ID = "cursor-memory"
@@ -1084,7 +1085,12 @@ def run_hourly(watermarks: dict, seen_hashes: set) -> dict:
     """Hourly mode: retain new corrections/instructions with watermark + hash dedup."""
     log.info("=== Hourly retain started ===")
 
-    transcripts = find_recent_transcripts(hours=2)
+    # Scoped to onboarded projects only (project_scope.py) -- see docs/FINDINGS.md
+    # 2026-07-13. Before this, every one of ~270 Cursor workspaces on this
+    # machine fed the shared cursor-memory bank, not just kubernaut/dcm/engram.
+    transcripts = find_recent_transcripts(
+        hours=2, workspace_prefixes=project_scope.ALLOWED_WORKSPACE_PREFIXES
+    )
     log.info("Found %d transcripts from last 2h", len(transcripts))
 
     results = {
@@ -1171,7 +1177,11 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
     for bank, s in bank_stats.items():
         log.info("  %s: %d nodes, %d docs", bank, s["total_nodes"], s["total_documents"])
 
-    transcripts = find_recent_transcripts(hours=24)
+    # Scoped to onboarded projects only -- see run_hourly()'s comment above and
+    # docs/FINDINGS.md 2026-07-13.
+    transcripts = find_recent_transcripts(
+        hours=24, workspace_prefixes=project_scope.ALLOWED_WORKSPACE_PREFIXES
+    )
     log.info("Found %d transcripts from last 24h", len(transcripts))
 
     results = {

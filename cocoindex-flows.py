@@ -33,6 +33,7 @@ from cocoindex.resources.file import PatternFilePathMatcher
 
 import correction_gate
 import contradiction_resolution
+import project_scope
 
 logging.basicConfig(
     level=logging.INFO,
@@ -829,11 +830,19 @@ async def process_transcript(file: localfs.File) -> None:
 
 @coco.fn
 async def transcript_main(transcripts_dir: pathlib.Path) -> None:
-    """Walk JSONL transcripts and mount one component per file."""
+    """Walk JSONL transcripts and mount one component per file.
+
+    Scoped to onboarded projects only (project_scope.py) -- see
+    docs/FINDINGS.md 2026-07-13. Before this, included_patterns=["**/*.jsonl"]
+    matched every one of ~270 Cursor workspaces under transcripts_dir, not
+    just kubernaut/dcm/engram.
+    """
     files = localfs.walk_dir(
         transcripts_dir,
         recursive=True,
-        path_matcher=PatternFilePathMatcher(included_patterns=["**/*.jsonl"]),
+        path_matcher=PatternFilePathMatcher(
+            included_patterns=project_scope.transcript_glob_patterns()
+        ),
         live=True,
     )
     await coco.mount_each(process_transcript, files.items())

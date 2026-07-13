@@ -130,17 +130,28 @@ ln -sf "$(pwd)/nightly-learn.py" ~/.hindsight/nightly-learn.py
 ln -sf "$(pwd)/ingest-issues.py" ~/.hindsight/ingest-issues.py
 ln -sf "$(pwd)/correction_gate.py" ~/.hindsight/correction_gate.py
 ln -sf "$(pwd)/contradiction_resolution.py" ~/.hindsight/contradiction_resolution.py
+ln -sf "$(pwd)/project_scope.py" ~/.hindsight/project_scope.py
 ```
 
-`correction_gate.py` is the Haiku-based correction-detection gate and
-`contradiction_resolution.py` the three-tier contradiction check — both shared
-by `nightly-learn.py` and `cocoindex-flows.py` (see [FINDINGS.md](../docs/FINDINGS.md)).
-They import from `spike/`, so also symlink that directory if you haven't
-already (step 16 does this for CocoIndex, but `nightly-learn.py` needs it too):
+`correction_gate.py` is the Haiku-based correction-detection gate,
+`contradiction_resolution.py` the three-tier contradiction check, and
+`project_scope.py` the onboarded-project allowlist gate — all shared by
+`nightly-learn.py` and `cocoindex-flows.py` (see [FINDINGS.md](../docs/FINDINGS.md)).
+`correction_gate.py` and `contradiction_resolution.py` import from `spike/`, so
+also symlink that directory if you haven't already (step 16 does this for
+CocoIndex, but `nightly-learn.py` needs it too):
 
 ```bash
 ln -sf "$(pwd)/spike" ~/.hindsight/spike
 ```
+
+> **Customize for your projects**: `project_scope.py`'s `ALLOWED_WORKSPACE_PREFIXES`
+> hardcodes which Cursor workspaces feed the shared `cursor-memory` retain
+> pipeline (currently kubernaut/dcm/engram). Edit that list to match your own
+> project(s) before deploying — otherwise `nightly-learn.py` and
+> `cocoindex-flows.py` will retain nothing (or the wrong projects' transcripts)
+> from your workspaces. See [FINDINGS.md](../docs/FINDINGS.md) 2026-07-13 for
+> why this allowlist exists.
 
 ## 10. Schedule with launchd
 
@@ -272,9 +283,10 @@ ln -sf "$(pwd)/cocoindex-flows.py" ~/.hindsight/cocoindex-flows.py
 ln -sf "$(pwd)/cocoindex-search.py" ~/.hindsight/cocoindex-search.py
 ```
 
-`cocoindex-flows.py` also imports `correction_gate.py` and `contradiction_resolution.py`
-directly — make sure step 9's symlinks are in place before running this, or
-CocoIndex's transcript app will fail to start with a `ModuleNotFoundError`.
+`cocoindex-flows.py` also imports `correction_gate.py`, `contradiction_resolution.py`,
+and `project_scope.py` directly — make sure step 9's symlinks are in place before
+running this, or CocoIndex's transcript app will fail to start with a
+`ModuleNotFoundError`.
 
 ### Configure source directories
 

@@ -383,6 +383,39 @@ interpret the results.
 
 ---
 
+## Running the Test Suite
+
+The `tests/` directory has a `pytest` regression suite covering the shared
+modules (`correction_gate.py`, `contradiction_resolution.py`, `project_scope.py`),
+the `spike/hindsight_client.py` recall client, `review-contradictions.py`'s
+approve/reject/skip/quit flow, and the core retain logic in `nightly-learn.py`
+and `cocoindex-flows.py`. Added 2026-07-13 after three real bugs shipped to
+production in one session with zero automated coverage catching any of them
+(see [FINDINGS.md](FINDINGS.md)).
+
+Install the dev dependency into the same venv the production scripts run
+under:
+
+```bash
+uv pip install --python ~/.hindsight/venv/bin/python -r requirements-dev.txt
+```
+
+Run the suite:
+
+```bash
+~/.hindsight/venv/bin/python3 -m pytest tests/ -v
+```
+
+The suite is fully offline — every LLM call (Haiku classification, Sonnet
+contradiction check), Hindsight API call, and CocoIndex file-watch is mocked
+via `pytest`'s `monkeypatch` fixture, so it runs in well under a second and
+never touches your live `~/.hindsight/` data or costs any tokens. `conftest.py`
+adds the repo root and `spike/` to `sys.path` and provides fixtures
+(`nightly_learn`, `cocoindex_flows`, `review_contradictions`, `purge_script`)
+for loading the hyphenated production scripts as importable modules.
+
+---
+
 ## Troubleshooting
 
 ### Service won't start

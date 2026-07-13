@@ -1,0 +1,6 @@
+# Dev-only dependencies for running the tests/ suite. Install into the same
+# venv the production scripts run under (see docs/INSTALL.md):
+#
+#   uv pip install --python ~/.hindsight/venv/bin/python -r requirements-dev.txt
+#
+pytest>=8.0

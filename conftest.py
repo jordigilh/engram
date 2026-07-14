@@ -66,3 +66,8 @@ def review_contradictions(cocoindex_flows: ModuleType) -> ModuleType:
 @pytest.fixture(scope="session")
 def purge_script() -> ModuleType:
     return load_hyphenated_module("purge-out-of-scope-memories.py", "purge_out_of_scope_memories")
+
+
+@pytest.fixture(scope="session")
+def check_rule_sync() -> ModuleType:
+    return load_hyphenated_module("check-rule-sync.py", "check_rule_sync")

@@ -92,6 +92,27 @@ the indicated bank or call the indicated tool BEFORE writing code or proposing a
 - Pure file reads or terminal commands with no design decisions
 - You already recalled this exact topic earlier in the session and nothing has changed
 
+## Right-size the payload for narrow queries (`max_tokens`)
+
+`recall` defaults to `max_tokens: 4096`, which in practice returns 60+ results
+(tens of KB) — appropriate for the mandatory broad methodology gate and other
+first-turn/broad recalls, where you want maximum coverage. For a narrow
+follow-up (one specific fact, file, or decision), pass a lower `max_tokens`
+instead of the default:
+
+- Broad/first-turn recall (methodology gate, unfamiliar subsystem): omit
+  `max_tokens` (use the default).
+- Narrow follow-up (a specific fact, prior decision, or single file/function):
+  pass `max_tokens: 800` to `1500`.
+
+Verified 2026-07-14 by direct measurement: `max_tokens: 500` returned 8
+results (~3KB), `max_tokens: 1000` returned 14 results (~6.4KB), and the
+`max_tokens: 4096` default returned 66-68 results (~57-60KB) — a real,
+substantial lever. Do **not** use the `budget` parameter for this: the same
+test showed `budget: "low"` vs. `budget: "high"` made no measurable
+difference in payload size (two queries, both within ~2% of each other) —
+it does not control response size the way `max_tokens` does.
+
 ## How to use results
 
 - **Mental models** (long synthesized documents): use directly as authoritative context

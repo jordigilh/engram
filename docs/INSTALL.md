@@ -123,6 +123,15 @@ cp cursor/hindsight-memory.mdc ~/.cursor/rules/
 The included rule is tuned for kubernaut/Go development. For other projects,
 customize it — see [Customizing the Rule](#customizing-the-rule) below.
 
+Because this copy step is manual, the deployed `~/.cursor/rules/hindsight-memory.mdc`
+and this repo's `cursor/hindsight-memory.mdc` can silently drift apart if one is
+edited without the other. After editing either copy, check they're still in sync:
+
+```bash
+python3 check-rule-sync.py          # reports drift, exit 1 if any
+python3 check-rule-sync.py --fix    # copies canonical -> deployed on drift
+```
+
 ## 9. Install the nightly learning and ingestion scripts
 
 ```bash

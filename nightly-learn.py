@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import date, datetime, timedelta
@@ -45,6 +46,15 @@ TRANSCRIPTS_GLOB = os.path.expanduser(
 )
 LOG_DIR = Path.home() / ".hindsight" / "logs"
 MAX_CONTENT_LEN = 12000  # max chars per retain item to control token usage
+
+# Standing-cadence nudge for the human-review queue (lever #5 of the
+# 2026-07-14 "reduce input tokens" review) -- see
+# notify_pending_contradictions_backlog().
+PENDING_CONTRADICTIONS_LOG = LOG_DIR / "contradictions-pending.jsonl"
+CONTRADICTION_NOTIFY_THRESHOLD = int(
+    os.environ.get("ENGRAM_CONTRADICTION_NOTIFY_THRESHOLD", "10")
+)
+CONTRADICTION_NOTIFY_STATE = LOG_DIR / "last-contradiction-notify.txt"
 
 CORRECTION_PATTERNS = [
     re.compile(r"\bno[,.]?\s+that'?s\s+(not|wrong|incorrect)", re.I),
@@ -89,6 +99,24 @@ INSTRUCTION_PATTERNS = [
 STATE_DIR = Path.home() / ".hindsight"
 WATERMARKS_PATH = STATE_DIR / "watermarks.json"
 RETAINED_HASHES_PATH = STATE_DIR / "retained-hashes.json"
+MODEL_REFRESH_STATE_PATH = STATE_DIR / "model-refresh-state.json"
+
+# Lever #2 of the 2026-07-14 "reduce input tokens" review: refresh mental
+# models on topic-shift (enough new material since the last refresh),
+# not just on the nightly cycle. See maybe_refresh_mental_models_on_topic_shift().
+TOPIC_SHIFT_REFRESH_THRESHOLD = int(
+    os.environ.get("ENGRAM_TOPIC_SHIFT_REFRESH_THRESHOLD", "5")
+)
+TOPIC_SHIFT_REFRESH_MIN_INTERVAL_HOURS = float(
+    os.environ.get("ENGRAM_TOPIC_SHIFT_REFRESH_MIN_INTERVAL_HOURS", "4")
+)
+# Bank -> mental model ids eligible for a topic-shift refresh. Only
+# cursor-memory is listed: it's the only bank run_hourly() retains into
+# directly (kubernaut-docs/issues and dcm-docs/issues are populated by the
+# separate CocoIndex/ingest-issues pipelines and only refreshed nightly).
+TOPIC_SHIFT_MODELS = {
+    "cursor-memory": ("workflow-preferences", "architecture-decisions", "testing-methodology", "coding-conventions"),
+}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -135,6 +163,92 @@ def save_retained_hashes(hashes: set) -> None:
     tmp = RETAINED_HASHES_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps({"hashes": sorted(hashes)}))
     tmp.rename(RETAINED_HASHES_PATH)
+
+
+def load_model_refresh_state() -> dict:
+    """Load per-bank topic-shift refresh counters from disk."""
+    if MODEL_REFRESH_STATE_PATH.exists():
+        try:
+            return json.loads(MODEL_REFRESH_STATE_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            log.warning("Corrupt model-refresh-state.json, starting fresh")
+    return {}
+
+
+def save_model_refresh_state(state: dict) -> None:
+    """Atomically save topic-shift refresh counters to disk."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = MODEL_REFRESH_STATE_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, indent=2))
+    tmp.rename(MODEL_REFRESH_STATE_PATH)
+
+
+def maybe_refresh_mental_models_on_topic_shift(bank_id: str, new_items_count: int) -> dict:
+    """Trigger an out-of-cycle mental model refresh once enough new material
+    has landed in a bank since its last refresh, instead of only ever
+    refreshing on the nightly cycle (lever #2 of the 2026-07-14 "reduce
+    input tokens" review).
+
+    Mental models are Engram's only mechanism that survives a cold start or
+    context-summarization event -- refreshing them only nightly means a
+    same-day topic shift (e.g. a new architecture decision retained this
+    afternoon) isn't reflected in recall until the next night at the
+    earliest. Each refresh is a real Sonnet resynthesis call (~8-14KB of
+    output per model, confirmed against the live cursor-memory bank during
+    the 2026-07-14 spike), so this supplements rather than replaces the
+    nightly unconditional refresh, and is gated by both a minimum new-item
+    count (TOPIC_SHIFT_REFRESH_THRESHOLD) and a minimum time between forced
+    refreshes (TOPIC_SHIFT_REFRESH_MIN_INTERVAL_HOURS) to bound cost.
+
+    Returns a dict describing what happened (for logging/testing). Never
+    raises -- a failed refresh trigger must not fail the hourly retain path.
+    """
+    result: dict[str, Any] = {
+        "bank_id": bank_id, "triggered": False, "count_since_refresh": 0, "reason": None,
+    }
+    model_ids = TOPIC_SHIFT_MODELS.get(bank_id)
+    if not model_ids or new_items_count <= 0:
+        result["reason"] = "no_new_items_or_untracked_bank"
+        return result
+
+    try:
+        state = load_model_refresh_state()
+        bank_state = state.get(bank_id, {"count_since_refresh": 0, "last_triggered_at": None})
+        bank_state["count_since_refresh"] += new_items_count
+        result["count_since_refresh"] = bank_state["count_since_refresh"]
+
+        if bank_state["count_since_refresh"] < TOPIC_SHIFT_REFRESH_THRESHOLD:
+            result["reason"] = "below_threshold"
+            state[bank_id] = bank_state
+            save_model_refresh_state(state)
+            return result
+
+        last_triggered_at = bank_state.get("last_triggered_at")
+        if last_triggered_at:
+            elapsed_hours = (
+                datetime.now() - datetime.fromisoformat(last_triggered_at)
+            ).total_seconds() / 3600
+            if elapsed_hours < TOPIC_SHIFT_REFRESH_MIN_INTERVAL_HOURS:
+                result["reason"] = "debounced"
+                state[bank_id] = bank_state
+                save_model_refresh_state(state)
+                return result
+
+        for model_id in model_ids:
+            resp = api_post(f"/v1/default/banks/{bank_id}/mental-models/{model_id}/refresh", {})
+            if resp and "error" not in resp:
+                log.info("  Topic-shift refresh: %s/%s", bank_id, model_id)
+            else:
+                log.warning("  Topic-shift refresh failed: %s/%s", bank_id, model_id)
+
+        bank_state["count_since_refresh"] = 0
+        bank_state["last_triggered_at"] = datetime.now().isoformat()
+        state[bank_id] = bank_state
+        save_model_refresh_state(state)
+        result["triggered"] = True
+    except Exception as e:
+        result["reason"] = f"error: {e}"
+    return result
 
 
 def prune_watermarks(watermarks: dict, max_age_days: int = 7) -> dict:
@@ -491,6 +605,64 @@ def retain_windows_deduped(
 
     result = retain_windows(new_windows, transcript_id)
     result["skipped_duplicates"] = skipped
+    return result
+
+
+def notify_pending_contradictions_backlog(
+    pending_log: Path = PENDING_CONTRADICTIONS_LOG,
+) -> dict:
+    """Standing-cadence nudge for the contradiction-review queue.
+
+    Lever #5 of the 2026-07-14 "reduce input tokens" review: every day a
+    queued contradiction sits unreviewed in
+    ~/.hindsight/logs/contradictions-pending.jsonl is a day that fact isn't
+    available to recall (contradiction_resolution.py's three-tier check
+    withholds queued items from retain until review-contradictions.py
+    resolves them -- see docs/PENDING_CONTRADICTIONS.md). The dashboard
+    already surfaces the count passively; this fires an active macOS
+    notification once per calendar day when the backlog is at or above
+    CONTRADICTION_NOTIFY_THRESHOLD, so the review doesn't depend on someone
+    remembering to check the dashboard.
+
+    Idempotent across same-day runs (nightly-learn.py runs once per project
+    via separate launchd plists, so this can be called more than once per
+    day) via CONTRADICTION_NOTIFY_STATE. Never raises -- notification
+    delivery is best-effort and must not fail the nightly pipeline.
+    """
+    result: dict[str, Any] = {"pending_count": 0, "notified": False, "skipped_reason": None}
+    try:
+        if not pending_log.exists():
+            result["skipped_reason"] = "no_pending_log"
+            return result
+
+        count = sum(1 for line in pending_log.read_text().splitlines() if line.strip())
+        result["pending_count"] = count
+
+        if count < CONTRADICTION_NOTIFY_THRESHOLD:
+            result["skipped_reason"] = "below_threshold"
+            return result
+
+        today = date.today().isoformat()
+        if (
+            CONTRADICTION_NOTIFY_STATE.exists()
+            and CONTRADICTION_NOTIFY_STATE.read_text().strip() == today
+        ):
+            result["skipped_reason"] = "already_notified_today"
+            return result
+
+        subprocess.run(
+            [
+                "osascript", "-e",
+                f'display notification "{count} contradictions awaiting review '
+                f'(review-contradictions.py)" with title "Engram"',
+            ],
+            capture_output=True, timeout=10,
+        )
+        CONTRADICTION_NOTIFY_STATE.parent.mkdir(parents=True, exist_ok=True)
+        CONTRADICTION_NOTIFY_STATE.write_text(today)
+        result["notified"] = True
+    except Exception as e:
+        result["skipped_reason"] = f"error: {e}"
     return result
 
 
@@ -1064,6 +1236,7 @@ def analyze_mcp_effectiveness(
             "avg_productivity_density": _avg(non_trivial_recall, "productivity_density"),
             "avg_first_productive_turn": _avg(non_trivial_recall, "first_productive_turn"),
             "avg_total_tokens": _avg(non_trivial_recall, "total_session_tokens"),
+            "avg_context_loading_tokens": _avg(non_trivial_recall, "context_loading_tokens"),
         },
         "weekly_trend": weekly_trend,
         "exploration_efficiency": exploration_efficiency,
@@ -1155,6 +1328,21 @@ def run_hourly(watermarks: dict, seen_hashes: set) -> dict:
         except Exception as e:
             results["errors"].append({"transcript": transcript_id, "error": str(e)})
             log.error("  Failed: %s", e)
+
+    # Topic-shift mental model refresh (lever #2, 2026-07-14 review) --
+    # cursor-memory is the only bank this loop retains into.
+    refresh_result = maybe_refresh_mental_models_on_topic_shift(
+        "cursor-memory", results["windows_retained"]
+    )
+    results["topic_shift_refresh"] = refresh_result
+    if refresh_result["triggered"]:
+        log.info("Topic-shift refresh triggered for cursor-memory")
+    elif refresh_result["count_since_refresh"] > 0:
+        log.info(
+            "Topic-shift refresh: %d/%d new items since last refresh (%s)",
+            refresh_result["count_since_refresh"], TOPIC_SHIFT_REFRESH_THRESHOLD,
+            refresh_result["reason"],
+        )
 
     log.info(
         "=== Hourly done: %d retained, %d duplicates skipped, %d tokens ===",
@@ -1382,6 +1570,18 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
                 log.warning("  %s/%s: refresh failed", bank, model_id)
     results["mental_model_refresh"] = "triggered"
 
+    # This unconditional refresh just covered every bank it manages,
+    # including cursor-memory (shared across projects) -- reset the
+    # topic-shift counters so run_hourly() doesn't force a redundant
+    # refresh later today for material this nightly pass already covered.
+    refresh_state = load_model_refresh_state()
+    for bank in models_to_refresh:
+        if bank in TOPIC_SHIFT_MODELS:
+            refresh_state[bank] = {
+                "count_since_refresh": 0, "last_triggered_at": datetime.now().isoformat(),
+            }
+    save_model_refresh_state(refresh_state)
+
     # Phase: Deduplicate graph (remove exact content-hash duplicates)
     dedup_graph(BANK_ID)
 
@@ -1429,6 +1629,20 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
         log.info("Dashboard updated")
     except Exception as e:
         log.warning("Dashboard generation failed: %s", e)
+
+    # Phase: Standing-cadence nudge for the pending-contradictions backlog
+    notify_result = notify_pending_contradictions_backlog()
+    results["pending_contradictions_notify"] = notify_result
+    if notify_result["notified"]:
+        log.info(
+            "Notified: %d pending contradictions >= threshold",
+            notify_result["pending_count"],
+        )
+    elif notify_result["pending_count"] > 0:
+        log.info(
+            "Pending contradictions: %d (%s)",
+            notify_result["pending_count"], notify_result["skipped_reason"],
+        )
 
     # Clear retained hashes (start fresh for tomorrow), prune old watermarks
     seen_hashes.clear()

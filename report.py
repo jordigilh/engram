@@ -124,14 +124,49 @@ def load_daily_logs(days: int = 7, log_suffix: str = "") -> list[dict]:
     return entries
 
 
+# Cursor prepends a project-workspace-derived prefix to MCP server names at
+# call time (e.g. "kubernaut-hindsight-docs", "project-0-kubernaut-v1.6-
+# hindsight-docs") and sometimes appends a "::mcpScope:profile:...:project:
+# ...:cfg:..." suffix -- neither comes from this repo's mcp.json, which
+# registers each bank once under a plain short name (see docs/FINDINGS.md
+# 2026-07-14 spike for the full live-data investigation backing this). Left
+# unstripped, these near-duplicate names fragment one correctly-configured
+# tool's hit-rate stats across many rows in report.py's MCP usage table.
+#
+# Deliberately does NOT strip a "user-" prefix. Live mcp-calls.jsonl data
+# showed every "user-*" call across three tool families (cocoindex-code,
+# hindsight-docs, hindsight-issues) was a 100% miss (6/6) -- unlike the
+# project-prefixed variants (which are ~100% hits, just cosmetically
+# renamed), "user-*" correlates with a real, unexplained binding problem.
+# Merging it into the main bucket would dilute that signal rather than fix
+# an observability gap, so it's left as its own visible row on purpose.
+_MCP_SCOPE_SUFFIX_RE = re.compile(r"::mcpScope:.*$")
+_PROJECT_PREFIX_RE = re.compile(r"^(project-\d+-)?[a-z0-9]+(-v[\d.]+)?-(?=hindsight|cocoindex)")
+
+
+def normalize_server_name(raw: str) -> str:
+    """Collapse Cursor's call-time project-prefix/mcpScope-suffix naming
+    variants down to the underlying MCP tool identity. See module comment
+    above _MCP_SCOPE_SUFFIX_RE for why "user-*" is excluded on purpose.
+    """
+    name = _MCP_SCOPE_SUFFIX_RE.sub("", raw)
+    if name.startswith("user-"):
+        return name
+    return _PROJECT_PREFIX_RE.sub("", name)
+
+
 def aggregate_mcp_calls(entries: list[dict]) -> dict:
-    """Aggregate MCP call stats by server and by bank."""
+    """Aggregate MCP call stats by server and by bank.
+
+    "server" here is the *normalized* tool identity (normalize_server_name),
+    not Cursor's raw per-call name -- see comment above that function.
+    """
     by_server = defaultdict(lambda: {"calls": 0, "hits": 0, "misses": 0})
     by_bank = defaultdict(lambda: {"calls": 0, "hits": 0, "misses": 0})
     by_day = defaultdict(lambda: defaultdict(int))
 
     for entry in entries:
-        server = entry.get("server", "unknown")
+        server = normalize_server_name(entry.get("server", "unknown"))
         by_server[server]["calls"] += 1
         if entry.get("hit"):
             by_server[server]["hits"] += 1
@@ -235,7 +270,8 @@ def aggregate_effectiveness(entries: list[dict]) -> dict:
     if total_rs_sessions:
         recall_session_stats = {"sessions": total_rs_sessions}
         for key in ("avg_corrections", "avg_rework_pct", "avg_productivity_density",
-                    "avg_first_productive_turn", "avg_total_tokens"):
+                    "avg_first_productive_turn", "avg_total_tokens",
+                    "avg_context_loading_tokens"):
             avg, _ = _weighted_avg_over_entries(lambda e: e.get("recall_session_stats", {}), key)
             recall_session_stats[key] = avg
 
@@ -919,6 +955,8 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
         lines.append(f"  Productivity density:   {rs['avg_productivity_density']:>8.4f}  (productive actions per 1K tokens)")
         lines.append(f"  First productive turn:  {rs['avg_first_productive_turn']:>8.1f}")
         lines.append(f"  Avg total tokens:       {rs['avg_total_tokens']:>8,.0f}")
+        clt = rs.get("avg_context_loading_tokens", 0)
+        lines.append(f"  Avg context-loading tokens: {clt:>4,.0f}  (burned before first productive action)")
     else:
         lines.append("  No recall session data yet.")
 
@@ -1211,6 +1249,15 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
             lines.append(f"  Total wasted on corrections: {total_waste:,} tokens")
             cost_usd = total_waste * 3 / 1_000_000
             lines.append(f"    (est. ${cost_usd:.3f} at Sonnet 4.6 input rates)")
+
+        if rs and rs.get("sessions", 0) > 0 and rs.get("avg_context_loading_tokens"):
+            clt_total = rs["avg_context_loading_tokens"] * rs["sessions"]
+            lines.append(
+                f"  Context-loading tokens (before first productive action): "
+                f"{clt_total:,.0f} across {rs['sessions']} sessions"
+            )
+            clt_cost_usd = clt_total * 3 / 1_000_000
+            lines.append(f"    (est. ${clt_cost_usd:.3f} at Sonnet 4.6 input rates)")
 
         lines.append("")
         if wr["sessions"] < 5:

@@ -242,6 +242,10 @@ def generate_dashboard(reports: list[dict]) -> str:
     pfpt = prev_rs.get("avg_first_productive_turn")
     lines.append(f"| First productive turn | {fmt(fpt, '.1f')}{trend(fpt, pfpt)} | {fmt(pfpt, '.1f')} |")
 
+    clt = rs.get("avg_context_loading_tokens")
+    pclt = prev_rs.get("avg_context_loading_tokens")
+    lines.append(f"| Context-loading tokens (before first productive action) | {fmt(clt, ',.0f')}{trend(clt, pclt)} | {fmt(pclt, ',.0f')} |")
+
     ra = pr.get("recall_adoption_pct")
     pra = prev.get("effectiveness", {}).get("proactive_recall", {}).get("recall_adoption_pct")
     lines.append(f"| Recall adoption | {pct(ra)}{trend(ra, pra)} | {pct(pra)} |")

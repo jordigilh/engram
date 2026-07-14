@@ -2,6 +2,120 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-14: Six Input-Token-Reduction Levers — Confidence-Gated Triage, Three Spikes, All Six Shipped
+
+**Why now**: Reading Gergely Orosz's ["The Pulse: Interesting AI coding stats from
+Cursor"](https://newsletter.pragmaticengineer.com/p/the-pulse-interesting-ai-coding-stats) (90% of
+Cursor's token volume is input, not output) prompted a review of how Engram's `recall`
+(Hindsight) and `cocoindex_search` (CocoIndex) could push further on the same problem using only
+what's already deployed. The resulting 6-lever proposal was first triaged for factual accuracy
+against live data (two levers — MCP server "fragmentation" and rule-deployment parity — turned out
+to be based on wrong assumptions and were corrected before implementation), then confidence-scored
+per this project's mandatory gate before any code was written: **1 (95%) and 5 (95%) and 6 (90%)
+cleared the ≥90% bar immediately; 2 (55%), 3 (60%), and 4 (70%) did not** and required a spike each
+before implementation, per the same gate's own escalation path ("run spikes to close the gap, don't
+implement below threshold").
+
+**Lever #1 — surface `context_loading_tokens` (95% confidence, implemented as-is).**
+`nightly-learn.py`'s `analyze_mcp_effectiveness()` already computed
+`context_loading_tokens` (preamble chars before first productive action, ÷4) into every daily JSON
+log, but `report.py`/`generate-dashboard.py` never read it. Added `avg_context_loading_tokens` to
+`recall_session_stats` (both the per-run dict in `nightly-learn.py` and the multi-day weighted
+aggregation in `report.py`), a new "Avg context-loading tokens" line in the CLI report, a $-cost
+line using the same Sonnet-input-rate formula already applied to "tokens wasted on corrections",
+and a new row in `generate-dashboard.py`'s trend table. Two new regression tests pin the exact
+message-loop boundary (`test_context_loading_tokens_stops_at_first_productive_action`,
+`test_context_loading_tokens_excludes_the_productive_turn_itself`) so a future refactor can't
+silently change what "before first productive action" means.
+
+**Lever #5 — standing-cadence nudge for the pending-contradictions backlog (95% confidence,
+implemented as-is).** The backlog was already passively surfaced (dashboard warning banner,
+`docs/PENDING_CONTRADICTIONS.md`), but clearing it depended entirely on someone remembering to
+check. New `notify_pending_contradictions_backlog()` in `nightly-learn.py` fires one macOS
+notification (`osascript display notification`) per calendar day once the queue is at or above
+`ENGRAM_CONTRADICTION_NOTIFY_THRESHOLD` (default 10), tracked via a `last-contradiction-notify.txt`
+state file so it stays idempotent across `nightly-learn.py`'s two separate per-project launchd
+invocations (kubernaut, dcm) each night — without that guard the same global backlog would
+double-notify every night.
+
+**Lever #6 — diff the deployed rule against the repo's canonical copy (90% confidence, implemented
+as-is; caught real drift on first run).** New `check-rule-sync.py` diffs
+`~/.cursor/rules/hindsight-memory.mdc` (deployed) against `cursor/hindsight-memory.mdc` (this repo's
+canonical copy) and supports `--fix` to copy canonical → deployed. First run found the two actually
+had drifted — a cosmetic line-wrap difference in the `cocoindex_search` paragraph, not a content
+change — confirming the tool catches real (if benign, this time) drift rather than being a
+speculative safeguard. `docs/INSTALL.md`'s rule-install step now points at it.
+
+**Lever #4 — normalize MCP server names before aggregating hit-rate stats (70% → ~90% after
+spike).** Sampled the live `~/.hindsight/logs/mcp-calls.jsonl` (857 calls, 21 distinct raw server
+names) before writing any normalization regex. Confirmed the core hypothesis: Cursor prepends a
+project-workspace-derived prefix (`kubernaut-`, `kubernaut-v1.6-`, `project-0-kubernaut-`,
+`enhancements-`) and sometimes an `::mcpScope:profile:...:project:...:cfg:...` suffix to server
+names at call time, fragmenting one correctly bank-scoped tool across many near-duplicate rows —
+all such variants for `hindsight-docs`/`hindsight-issues`/`cocoindex-code` were ≥96% hit rate,
+confirming they're cosmetic renames of a working tool, safe to merge. **But the spike also found a
+real anomaly the original proposal didn't anticipate**: every `user-*` prefixed call (6 total,
+across `user-cocoindex-code`, `user-hindsight-docs`, `user-hindsight-issues`) was a 100% miss.
+Blindly normalizing everything would have diluted that signal into the healthy majority instead of
+keeping it visible. `report.py`'s new `normalize_server_name()` strips the project-prefix/mcpScope
+patterns but explicitly excludes `user-*`, so those rows stay separately visible. Verified against
+the live log: 21 raw rows → 11 normalized rows, with the `user-*` anomaly rows intact and unchanged.
+The root cause of the `user-*` binding issue itself is still open — flagged for follow-up
+investigation, not fixed here (fixing an unconfirmed binding bug is a different, riskier task than
+an observability fix).
+
+**Lever #3 — right-size recall's payload for narrow queries (60% → ~90% after spike, and the
+mechanism changed).** The original proposal targeted the `budget` parameter ("reserve high for the
+methodology gate, use lower budgets for narrow follow-ups"). Direct measurement disproved this:
+`budget: "low"` vs. `budget: "high"` on the same query returned 57.3KB vs. 58.3KB (and on a second,
+unrelated query, 57.9KB vs. a similar-sized high-budget response) — no measurable difference,
+within noise, in the wrong direction if anything. `max_tokens` (a separate, independent parameter,
+default 4096) is the actual lever: `max_tokens: 500` returned 8 results (~3KB), `max_tokens: 1000`
+returned 14 results (~6.4KB), and the default 4096 returned 66-68 results (~57-60KB) on the same
+query — a real, substantial, reproducible effect. Rewrote `cursor/hindsight-memory.mdc`'s guidance
+accordingly (new "Right-size the payload for narrow queries" section): omit `max_tokens` for
+broad/first-turn recalls, pass `800`-`1500` for narrow follow-ups, and don't bother with `budget`
+for this purpose. Redeployed via `check-rule-sync.py --fix` (lever #6's own tool, used for real for
+the first time here).
+
+**Lever #2 — refresh mental models on topic-shift, not just nightly (55% → ~85% after spike).** The
+blocking gap was that "topic-shift" wasn't a defined signal anywhere, and each refresh is a real
+Sonnet resynthesis call (confirmed 8-14KB of output per model against the live `cursor-memory`
+bank's four models) — an undebounced trigger risked a real cost regression. Investigated Hindsight's
+`pending_consolidation` bank-stats field as a possible ready-made signal; rejected it, because it
+equaled `total_nodes` (2343 = 2343) with no visible per-refresh delta behavior confirmable from the
+API alone — using an opaque, unverified signal would have been worse than not spiking at all.
+Instead designed a fully self-controlled counter: new
+`maybe_refresh_mental_models_on_topic_shift()` in `nightly-learn.py` increments a per-bank
+`count_since_refresh` (persisted to `model-refresh-state.json`) by `windows_retained` after every
+hourly retain, and triggers an immediate refresh of `cursor-memory`'s four models once the counter
+reaches `ENGRAM_TOPIC_SHIFT_REFRESH_THRESHOLD` (default 5) — gated by a second, independent
+`ENGRAM_TOPIC_SHIFT_REFRESH_MIN_INTERVAL_HOURS` (default 4) debounce so a burst of corrections can't
+trigger repeated resynthesis calls. `run_nightly()`'s existing unconditional refresh now also resets
+the counter for every topic-shift-tracked bank it covers, so the two mechanisms don't fight (nightly
+refreshing for free right after an hourly topic-shift trigger already covered the same material).
+Only `cursor-memory` is wired in (`TOPIC_SHIFT_MODELS`) since it's the only bank `run_hourly()`
+writes to directly — `kubernaut-docs`/`-issues` and `dcm-docs`/`-issues` are populated by separate
+ingestion pipelines and still refresh only nightly.
+
+**Test suite growth**: 108 → 136 tests (3 new files — `test_check_rule_sync.py`, `test_report.py` —
+plus additions to `test_nightly_learn.py`), all passing, all offline (every `osascript`/`api_post`/
+Hindsight call mocked via `monkeypatch`). New regression guards worth calling out specifically:
+`test_report.py::test_regression_user_prefix_is_never_stripped` and
+`test_regression_user_scoped_misses_stay_visible_not_diluted` (lever #4's anomaly-preservation
+behavior), and `test_nightly_learn.py::test_regression_debounced_within_min_interval_even_above_threshold`
+(lever #2's cost-containment behavior) — both pin behavior that a "just make it simpler" refactor
+could easily and silently break.
+
+**Rollback instructions**: levers #1/#5/#6 are additive and side-effect-free to revert (delete the
+new lines/files; #5's notification and #6's `--fix` only ever touch their own state
+file/`~/.cursor/rules/hindsight-memory.mdc`). Lever #4: revert `report.py`'s `by_server`/`by_day`
+keys to the raw `entry.get("server", ...)` value to restore pre-normalization behavior. Lever #3:
+revert `cursor/hindsight-memory.mdc`'s new section and re-run `check-rule-sync.py --fix`. Lever #2:
+set `ENGRAM_TOPIC_SHIFT_REFRESH_THRESHOLD` to a very high number (e.g. `999999`) to effectively
+disable without removing code, or delete `~/.hindsight/model-refresh-state.json` and the call site
+in `run_hourly()` to fully remove.
+
 ## 2026-07-12: Shipped the Haiku Correction Gate and Contradiction Check to Production (Haiku/Sonnet Only, No New Infra)
 
 **Why now**: This traces back to comparing Engram against

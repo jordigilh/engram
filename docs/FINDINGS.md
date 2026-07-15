@@ -2,6 +2,153 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-15: Engram Onboarded Into Its Own Hindsight+CocoIndex Project, kubernaut-operator/console Get Tag-Scoped Recall
+
+**Why now**: Engram itself had no `hindsight-docs`/`cocoindex-code` presence — none of this repo's
+own docs or Python source were recallable/searchable the way kubernaut's and dcm's are, despite
+this being the project doing the most active development at the time. Separately, the user asked
+whether `kubernaut-operator`/`kubernaut-console` (sub-repos of the `kubernaut` org, already
+ingested into the shared `kubernaut-docs` bank / `code_embeddings` table) should get their own
+dedicated banks, with cross-repo query access back to core `kubernaut` for triage. Researching that
+split first (before implementing Engram onboarding) turned up enough live data to change the
+recommended design.
+
+**Part B decision, made before Part A implementation — tag-scoped recall instead of a bank
+split.** Direct measurement of the shared bank/table showed a clean, already-correct partition:
+pgvector `code_embeddings` has 719 `kubernaut-operator/` rows, 894 `kubernaut-console/` rows, 19,222
+core `kubernaut/` rows; the `kubernaut-docs` Hindsight bank has 341 docs tagged
+`kubernaut-operator`, 255 tagged `kubernaut-console`, out of 38,777 total — ingestion was already
+tagging by repo correctly, the only thing missing was a way to *query* by that tag. A full bank
+split would have required scripting explicit deletes for both sinks (pgvector's `declare_row`/
+`declare_target_state` likely auto-GCs orphaned rows when a `mount_each` block changes, but this
+is unverified for a live production table; a Hindsight-bank retain is a plain HTTP POST inside a
+memoized CocoIndex function, so CocoIndex has zero visibility into it and would **never**
+auto-delete anything left behind) — real migration risk for a benefit (query isolation) that
+Hindsight's/CocoIndex's own `tags`/`repo`-filter parameters already deliver without moving any
+data. Implemented instead:
+- Two new tag-scoped mental models in the existing `kubernaut-docs` bank via `create_mental_model`'s
+  `tags` field: `operator-architecture` (`tags: ["kubernaut-operator"]`), `console-architecture`
+  (`tags: ["kubernaut-console"]`) — see `create-mental-models.py`. Both added to
+  `nightly-learn.py`'s `PROJECT_CONFIGS["kubernaut"]["mental_models"]["kubernaut-docs"]` tuple so
+  they refresh nightly alongside the existing 3 (`ka-architecture`, `af-pipeline`,
+  `platform-topology`), bringing that bank's total to 5.
+- An optional `repo` parameter on `cocoindex-search.py`'s `search_code()` / `cocoindex_search` MCP
+  tool: when given, adds `WHERE filepath LIKE '<repo>/%'` to both the dense and BM25 legs of the
+  hybrid search before RRF fusion; omitted (the default, used by core `kubernaut` work), searches
+  everything unchanged.
+- Hand-authored, project-specific `.cursor/rules/hindsight-memory.mdc` for both repos (via new
+  `cursor/projects/operator.vars`/`console.vars` + `cursor/operator-hindsight-memory.mdc`/
+  `console-hindsight-memory.mdc`), replacing what had been byte-identical stale clones of the
+  global template with no project customization and no `.vars` source at all. New guidance:
+  default to `tags: ["kubernaut-operator"]`-scoped recall and `repo: "kubernaut-operator"`-scoped
+  code search for own-repo work; drop both filters explicitly for cross-repo/upstream triage
+  (the exact "quickly triage failures against upstream kubernaut" use case that prompted the
+  research). Console's copy drops the Go/`gopls` section (TypeScript/React, not Go) the same way
+  `engram`'s already does; both copies also picked up the `max_tokens` right-sizing section
+  (lever #3, 2026-07-14 entry below) that their stale pre-existing copies were missing entirely.
+
+**Part A — Engram onboarded as its own project**, following the same pattern as kubernaut/dcm but
+with two variants (now documented in `docs/NEW_PROJECT_SETUP.md`'s new "Variants" section so the
+next onboarding doesn't have to rediscover them): no `engram-issues` bank/app at all (this repo has
+zero GitHub issues; bugs and decisions live in this file instead), and the new `engram-docs` bank's
+2 mental models (`engram-architecture`, `engram-operations`) start as empty shells with no refresh
+until real content exists. New `engram-cocoindex-flows.py` (`docs_app`: `docs/*.md` →
+`engram-docs`; `code_app`: `*.py` → `cocoindex.engram_code_embeddings`, excluding
+`__pycache__`/`.pytest_cache`/`.git`/`venv`/`node_modules`) and `engram-cocoindex-search.py`
+(hybrid dense+BM25+RRF over the new table, MCP tool `engram_code_search`), both symlinked into
+`~/.hindsight/` matching the existing pattern. New `launchd/io.vectorize.cocoindex.engram.plist`
+created but **not loaded** — this repo's own ingestion stays paused alongside the other 6 already-
+paused jobs from the mid-session scale-down, consistent with not starting new background load
+during a declared pause.
+
+**Three real bugs found while building Part A, none hypothetical — all now regression-tested:**
+
+1. **`ENGRAM_CONSOLE_DIR` in `cocoindex-flows.py` still pointed at the renamed-away
+   `kubernaut-demo-console` path** (should be `kubernaut-console`) — a directly blocking bug found
+   at plan time via `ls`, not by a user report. Left unfixed, the new console-tag-scoped work would
+   have kept relying on stale rows from a backfill that ran before the rename (the 894/255
+   console rows/docs currently in the shared sinks all predate it), and any future console
+   backfill would find zero files. Fixed in both the repo's `cocoindex-flows.py` and the deployed
+   `~/Library/LaunchAgents/io.vectorize.cocoindex.service.plist.disabled` (which had drifted to the
+   same stale value independently of the repo copy) — also brought the repo's own template plist
+   (`launchd/io.vectorize.cocoindex.service.plist`) up to date with `ENGRAM_OPERATOR_DIR`/
+   `ENGRAM_CONSOLE_DIR`/`ENGRAM_SCENARIOS_DIR`/`ENGRAM_ISSUES_REPOS`, none of which the checked-in
+   template previously declared at all despite the live deployment needing them.
+2. **`nightly-learn.py`'s `analyze_mcp_effectiveness()` had `RECALL_BANKS`/`CODE_BANK` hardcoded to
+   kubernaut's own MCP server names** (`"hindsight"`, `"hindsight-docs"`, `"hindsight-issues"`,
+   `"cocoindex-code"`) at module scope, used for every project regardless of the `project` argument.
+   DCM's actual server names (`dcm-docs`, `dcm-issues`, `dcm-code`) never matched that hardcoded
+   set, so `banks_recalled` filtering and the `with_cocoindex` exploration-efficiency bucket were
+   silently zeroing out DCM's cocoindex usage in every run to date — DCM sessions that *did* use
+   `cocoindex_search` were being bucketed as if they hadn't. Fixed by deriving both from
+   `PROJECT_CONFIGS[project]["recall_banks"]`/`["code_bank"]` instead (new keys added to every
+   project's config). Regression-tested with a cross-check that specifically proves the fix is a
+   real per-project derivation and not just a widened accept-everything set:
+   `test_nightly_learn.py::TestRecallBanksPerProject::test_dcm_server_name_not_counted_under_kubernaut_project`
+   asserts a `dcm-code` recall analyzed under `project="kubernaut"` does **not** count, alongside
+   the positive case that it *does* count under `project="dcm"`.
+3. **`report.py`'s `collect_ingestion_coverage()` queried GitHub issues/PRs for a single hardcoded
+   `jordigilh/kubernaut` repo**, regardless of which project's report was being generated — so
+   DCM's (and every other project's) issues/PRs total was always the kubernaut count, not its own
+   (in practice this manifested as DCM always showing zero real coverage relative to its own repos,
+   since the loop never queried any of them). Fixed by adding `issues_repos` lists to
+   `PROJECT_CONFIGS` (kubernaut: 4 repos including `-operator`/`-console`/`-demo-scenarios`; dcm: 12
+   repos) in both `nightly-learn.py` and `report.py`, and rewriting the loop to sum across
+   `PROJECT_CONFIGS[project]["issues_repos"]` when a project is given, or every configured
+   project's repos combined when it isn't. A project with no `issues_repos` key at all (engram)
+   simply contributes nothing to the total rather than erroring or defaulting to kubernaut's repo —
+   verified directly in `test_report.py::TestCollectIngestionCoverageProjectScoping`.
+
+**Test-infra-only bug, not a production bug (same class as the 2026-07-13 `pg_pool` collision
+below it in this file)**: `engram-cocoindex-flows.py` initially reused the exact same
+`coco.ContextKey("pg_pool")` name `cocoindex-flows.py` already registers for its own Postgres
+pool. CocoIndex registers `ContextKey`s process-globally and raises `ValueError` on a same-name
+second registration — harmless in real deployment (each flow file is its own long-running
+`launchd` process), but fatal for the pytest suite, which loads both hyphenated files as modules
+in one process via `conftest.py`'s `load_hyphenated_module()`. Renamed to
+`"engram_repo_pg_pool"` before writing any tests against the new file, confirmed both modules now
+load together without error, and documented the naming requirement directly next to the
+`ContextKey()` call plus in `docs/NEW_PROJECT_SETUP.md`'s CocoIndex-flows step, so the next
+per-project flow file doesn't reintroduce it.
+
+**Tracked but not fixed — `create-mental-models.py`'s `refresh_after_consolidation` drift.**
+While auditing the 3 existing `kubernaut-docs` models (`ka-architecture`, `af-pipeline`,
+`platform-topology`) for the operator/console tag-scoping work, found the source file declares
+`"refresh_after_consolidation": False` for all three, but the *live* Hindsight API currently
+reports `True` for them — meaning someone (or something) changed the live trigger config directly
+via the API at some point without updating the source-of-truth Python file, and the two have been
+silently diverged since. Deliberately **not fixed here**: it's unrelated to this session's actual
+work, and it isn't obvious which direction is correct (the live `True` could be an intentional
+manual tune that the source just never caught up to, or an accidental change that should be
+reverted) — logged here as a flagged gap rather than guessed at. Next time `create-mental-models.py`
+is touched, diff its `MENTAL_MODELS` trigger config against a live `GET
+/v1/default/banks/kubernaut-docs/mental-models` response before assuming the source file is
+authoritative.
+
+**Test suite growth**: 136 → 168 tests. New file `test_engram_cocoindex_flows.py` (10 tests: module
+loads without the `ContextKey` collision, `_split_text` chunking, `process_doc_file`'s path →
+document_id/tags/section derivation, `hindsight_retain`'s retry contract — mirrors the existing
+`test_cocoindex_flows.py` coverage ceiling for the analogous kubernaut file). New classes in
+`test_nightly_learn.py` (`TestRecallBanksPerProject`, 5 tests; `TestProjectConfigsEngram`, 3 tests)
+and `test_report.py` (`TestProjectConfigsEngram`, 3 tests; `TestCollectIngestionCoverageProjectScoping`,
+5 tests) pin the three real bugs above so a future refactor of either file's per-project scoping
+can't silently regress them. New `TestRulePairsRealShape` in `test_check_rule_sync.py` pins the
+real (non-monkeypatched) `RULE_PAIRS` dict — the existing `TestMain` class only ever exercises fake
+pairs, so it couldn't have caught a future edit accidentally dropping the `engram`/`operator`/
+`console` pairs added in this session.
+
+**Rollback instructions**: Part A is fully additive — delete `engram-cocoindex-flows.py`,
+`engram-cocoindex-search.py`, their `~/.hindsight/` symlinks, the `engram-docs` bank, and the
+`"engram"` `PROJECT_CONFIGS` entries in `nightly-learn.py`/`report.py` to fully remove; the new
+`launchd` plist was never loaded, so there's no running process to stop. Part B: delete the two new
+tag-scoped mental models via the Hindsight API, revert `cocoindex-search.py`'s `repo` parameter
+(optional, backward-compatible — omitting it is already the unchanged default), and restore
+operator/console's `.cursor/rules/hindsight-memory.mdc` from git history if the tag-scoped
+guidance turns out not to be followed correctly in practice. The three bug fixes (console path,
+`RECALL_BANKS`/`CODE_BANK`, `issues_repos`-based coverage totals) should **not** be rolled back
+independently of the features above — they're correctness fixes for pre-existing multi-project
+support, not new-project-specific behavior.
+
 ## 2026-07-14: Six Input-Token-Reduction Levers — Confidence-Gated Triage, Three Spikes, All Six Shipped
 
 **Why now**: Reading Gergely Orosz's ["The Pulse: Interesting AI coding stats from

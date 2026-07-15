@@ -340,6 +340,15 @@ You should see all four apps starting (docs, code, transcripts, issues) and
 issue poll cycles completing with the full count of issues + PRs. See
 [CocoIndex Operations](COCOINDEX.md) for monitoring and troubleshooting details.
 
+> **Onboarding additional projects**: the steps above cover the original
+> kubernaut project's single `cocoindex-flows.py`. Each additional onboarded
+> project gets its own `<project>-cocoindex-flows.py` / `<project>-cocoindex-search.py`
+> pair, symlinked into `~/.hindsight/` the same way (see `engram-cocoindex-flows.py`/
+> `engram-cocoindex-search.py` for a real example), plus its own `launchd` plist.
+> See [NEW_PROJECT_SETUP.md](NEW_PROJECT_SETUP.md) for the full walkthrough,
+> including a lighter tag-scoped-recall variant for sub-repos of an
+> already-onboarded project that don't need a fully separate pipeline.
+
 ## 17. Migration from Old Scripts
 
 After verifying CocoIndex is syncing successfully, the old batch ingestion

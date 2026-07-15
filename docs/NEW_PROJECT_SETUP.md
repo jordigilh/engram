@@ -20,6 +20,42 @@ Each project gets:
 - CocoIndex Python environment at `~/.hindsight/venv/`
 - `gh` CLI authenticated with access to the target organization
 
+## Variants
+
+The steps below describe the full pattern (dedicated docs bank + issues bank +
+code table + own launchd service). Two lighter variants exist, both shipped
+for real during the 2026-07-15 Engram-onboarding + kubernaut-operator/console
+work (see [FINDINGS.md](FINDINGS.md)):
+
+**No-issues-bank variant** — for a project with zero GitHub issues (e.g. this
+repo, `engram`, which tracks bugs/decisions in `docs/FINDINGS.md` instead):
+skip the `<project>-issues` bank entirely, skip the `issues_app` in the
+CocoIndex flow file, and omit `issues_repos` from the project's
+`PROJECT_CONFIGS` entry in both `nightly-learn.py` and `report.py` (both
+files' `collect_ingestion_coverage()`/probe logic treat a missing
+`issues_repos` key as "contributes nothing to the total," not an error —
+verified by `tests/test_report.py::TestCollectIngestionCoverageProjectScoping::test_engram_project_contributes_nothing_to_issues_total`).
+
+**Tag-scoped mental model variant** — for a sub-repo of an *already-onboarded*
+project that wants its own focused recall/search view without the overhead of
+a fully separate bank/table/pipeline (e.g. `kubernaut-operator`/
+`kubernaut-console`, which are still ingested into the shared `kubernaut-docs`
+bank / `code_embeddings` table, already tagged by repo at ingestion time). No
+new bank, no new CocoIndex app, no new launchd service — just:
+1. `create_mental_model` with a `tags: ["<repo>"]` filter, scoped to the
+   existing shared bank (see `create-mental-models.py`'s `operator-architecture`/
+   `console-architecture` entries).
+2. An optional `repo` parameter on `cocoindex-search.py`'s `search_code()` /
+   `cocoindex_search` MCP tool, which adds a `filepath LIKE '<repo>/%'` filter
+   to scope code search the same way.
+3. A hand-authored `.cursor/rules/hindsight-memory.mdc` that defaults to the
+   repo's own tag/prefix for own-repo work, and explicitly drops the filter
+   for cross-repo/upstream triage (see `cursor/operator-hindsight-memory.mdc`).
+
+Use the full pattern below when a sub-repo's content volume, access pattern,
+or lifecycle genuinely warrants isolation; use the tag-scoped variant when it
+just needs a narrower lens on data that's already being ingested correctly.
+
 ## Steps
 
 ### 1. Fork and Clone Repositories
@@ -78,6 +114,18 @@ Create `<project>-cocoindex-flows.py` adapted from `cocoindex-flows.py`:
 - Separate CocoIndex state DB: `~/.hindsight/<project>-cocoindex.db`
 - Environment variables prefixed with `<PROJECT>_*`
 
+> **Gotcha**: give the Postgres pool `coco.ContextKey(...)` a name unique
+> across *every* flow file in this repo, not just this project's own file
+> (e.g. `"<project>_repo_pg_pool"`, not the generic `"pg_pool"` that
+> `cocoindex-flows.py` already uses). CocoIndex registers `ContextKey`s
+> process-globally and raises `ValueError` on a same-name second
+> registration — harmless in production (each flow file runs as its own
+> `launchd` process), but it means the pytest suite will crash at collection
+> time if it ever loads two flow files with colliding key names into one
+> process. `engram-cocoindex-flows.py`'s `PG_POOL` (`"engram_repo_pg_pool"`)
+> is the reference example; see `tests/test_engram_cocoindex_flows.py::TestModuleLoadsWithoutContextKeyCollision`
+> for the regression guard.
+
 ### 5. Create Code Search Server
 
 Create `<project>-cocoindex-search.py` adapted from `cocoindex-search.py`:
@@ -105,6 +153,12 @@ sed "s|__HOME__|$HOME|g" launchd/io.vectorize.cocoindex.<project>.plist \
 
 launchctl load ~/Library/LaunchAgents/io.vectorize.cocoindex.<project>.plist
 ```
+
+If you're not ready to run the new project's ingestion live yet (e.g. mid
+scale-down, or still validating the flow file with a manual `--mode backfill`
+run first), it's fine to create the plist in `launchd/` and commit it without
+this `load` step — `engram`'s own plist shipped this way initially. Nothing
+else in this guide depends on the service actually being loaded.
 
 ### 7. Configure Workspace-Level MCP
 
@@ -190,6 +244,26 @@ done
 ```
 
 The template (`cursor/hindsight-memory.mdc.tmpl`) contains all the structural rules (recall gates, phase triggers, three-tier guidance, etc.). Only the project-specific variables differ.
+
+If the generated rule needs hand-editing beyond what the template variables
+cover (e.g. dropping a language-specific section, adding tag-scoped recall
+guidance — see `cursor/engram-hindsight-memory.mdc`/`cursor/console-hindsight-memory.mdc`
+for real examples), register the canonical/deployed pair in
+`check-rule-sync.py`'s `RULE_PAIRS` dict so drift-checking covers it:
+
+```python
+RULE_PAIRS: dict[str, tuple[Path, Path]] = {
+    "global": (CANONICAL, DEPLOYED),
+    "<project>": (
+        REPO_ROOT / "cursor" / "<project>-hindsight-memory.mdc",
+        HOME / "go" / "src" / "github.com" / "<org>" / "<repo>" / ".cursor" / "rules" / "hindsight-memory.mdc",
+    ),
+    ...
+}
+```
+
+`python3 check-rule-sync.py` (no `--pair`) checks every registered pair;
+`--pair <project>` checks just one.
 
 ### 10. Update Nightly Pipeline
 
@@ -278,11 +352,20 @@ curl -X POST http://localhost:8888/v1/default/banks/<project>-docs/memories/reca
 
 ## Isolation Guarantees
 
-- **Banks**: Fully separate Hindsight banks per project
-- **Code index**: Separate pgvector tables (`code_embeddings` vs `<project>_code_embeddings`)
+- **Banks**: Fully separate Hindsight banks per project (full variant); or a
+  shared bank filtered by `tags` at recall/mental-model-creation time
+  (tag-scoped variant — see Variants above)
+- **Code index**: Separate pgvector tables (`code_embeddings` vs `<project>_code_embeddings`);
+  or the shared table filtered by `repo`-prefixed `filepath` at search time
+  (tag-scoped variant)
 - **CocoIndex state**: Separate SQLite databases (`cocoindex.db` vs `<project>-cocoindex.db`)
+  (full variant only — the tag-scoped variant adds no new CocoIndex app at all)
 - **MCP routing**: Workspace-level config ensures agents only see their project's data
 - **Nightly analytics**: `effectiveness` and `mcp_usage` are isolated per project **only if**
   `workspace_prefixes` is set on the `PROJECT_CONFIGS` entry (step 10a) — this is not
   automatic and does not fail loudly if skipped
+- **GitHub issues/PRs totals**: scoped per project via `PROJECT_CONFIGS[project]["issues_repos"]`
+  in both `nightly-learn.py` and `report.py` — a project with no `issues_repos` key
+  (e.g. the no-issues-bank variant) simply contributes nothing to any total, rather
+  than defaulting to one hardcoded repo (the pre-2026-07-15 behavior; see FINDINGS.md)
 - **Shared**: `cursor-memory` bank (behavioral corrections), Hindsight API instance, PostgreSQL

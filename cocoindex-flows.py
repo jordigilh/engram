@@ -57,7 +57,7 @@ ENGRAM_OPERATOR_DIR = pathlib.Path(os.environ.get(
 ))
 ENGRAM_CONSOLE_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_CONSOLE_DIR",
-    os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-demo-console"),
+    os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-console"),
 ))
 ENGRAM_SCENARIOS_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_SCENARIOS_DIR",

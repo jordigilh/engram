@@ -744,7 +744,10 @@ PROJECT_CONFIGS = {
         "mental_models": {
             "kubernaut-issues": ("active-priorities", "known-bugs"),
             "cursor-memory": ("workflow-preferences", "architecture-decisions", "testing-methodology", "coding-conventions"),
-            "kubernaut-docs": ("af-pipeline", "platform-topology", "ka-architecture"),
+            # operator-architecture/console-architecture are tag-scoped views
+            # (tags=["kubernaut-operator"]/["kubernaut-console"]) on this same
+            # shared bank, not a physical per-repo split -- see docs/FINDINGS.md.
+            "kubernaut-docs": ("af-pipeline", "platform-topology", "ka-architecture", "operator-architecture", "console-architecture"),
         },
         "probes": [
             ("cursor-memory", "Go testing conventions and patterns"),
@@ -752,10 +755,19 @@ PROJECT_CONFIGS = {
             ("kubernaut-docs", "remediation orchestrator CRD spec"),
             ("kubernaut-issues", "rate limiter design decisions and requirements"),
             ("kubernaut-issues", "A2A streaming event structure"),
+            ("kubernaut-docs", "kubernaut-operator reconciliation loop and CRD controllers"),
+            ("kubernaut-docs", "kubernaut-console UI components and platform API usage"),
         ],
         "recall_banks": {"hindsight", "hindsight-docs", "hindsight-issues", "cocoindex-code"},
+        "code_bank": "cocoindex-code",
         "log_suffix": "",
         "workspace_prefixes": ["Users-jgil-go-src-github-com-jordigilh-kubernaut"],
+        "issues_repos": [
+            "jordigilh/kubernaut",
+            "jordigilh/kubernaut-operator",
+            "jordigilh/kubernaut-console",
+            "jordigilh/kubernaut-demo-scenarios",
+        ],
     },
     "dcm": {
         "banks": ["cursor-memory", "dcm-docs", "dcm-issues"],
@@ -769,8 +781,39 @@ PROJECT_CONFIGS = {
             ("dcm-issues", "open issues and active priorities"),
         ],
         "recall_banks": {"hindsight", "dcm-docs", "dcm-issues", "dcm-code"},
+        "code_bank": "dcm-code",
         "log_suffix": "-dcm",
         "workspace_prefixes": ["Users-jgil-go-src-github-com-dcm-project-"],
+        "issues_repos": [
+            "dcm-project/dcm",
+            "dcm-project/control-plane",
+            "dcm-project/cli",
+            "dcm-project/kubevirt-service-provider",
+            "dcm-project/k8s-container-service-provider",
+            "dcm-project/acm-cluster-service-provider",
+            "dcm-project/three-tier-app-demo-service-provider",
+            "dcm-project/utilities",
+            "dcm-project/dcm-project.github.io",
+            "dcm-project/enhancements",
+            "dcm-project/shared-workflows",
+            "dcm-project/quadlet-deploy",
+        ],
+    },
+    "engram": {
+        # No issues bank: this repo has zero GitHub issues (decisions and bugs
+        # are tracked in docs/FINDINGS.md instead), so no "issues_repos" key.
+        "banks": ["cursor-memory", "engram-docs"],
+        "mental_models": {
+            "engram-docs": ("engram-architecture", "engram-operations"),
+        },
+        "probes": [
+            ("engram-docs", "Haiku correction gate and contradiction resolution design"),
+            ("engram-docs", "project scoping allowlist for transcript ingestion"),
+        ],
+        "recall_banks": {"hindsight", "hindsight-docs", "cocoindex-code"},
+        "code_bank": "cocoindex-code",
+        "log_suffix": "-engram",
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-jordigilh-engram"],
     },
 }
 
@@ -950,7 +993,14 @@ def analyze_mcp_effectiveness(
     # Tracks: recall usage, proactive recall, context loading cost, K-curve effectiveness
     PRODUCTIVE_TOOLS = {"Shell", "Write", "StrReplace", "EditNotebook", "Delete"}
     EXPLORATION_TOOLS = {"Read", "Grep", "Glob", "SemanticSearch", "Task", "WebSearch"}
-    RECALL_BANKS = {"hindsight", "hindsight-docs", "hindsight-issues", "cocoindex-code"}
+    # Derived per-project rather than hardcoded to kubernaut's server names --
+    # DCM (and now engram) use different MCP server names for their docs/
+    # issues/code banks (e.g. "dcm-docs" not "hindsight-docs"), so a fixed
+    # kubernaut-shaped set silently zeroed out banks_recalled for every other
+    # project's sessions. See docs/FINDINGS.md.
+    pconfig_for_banks = PROJECT_CONFIGS.get(project, PROJECT_CONFIGS["kubernaut"])
+    RECALL_BANKS = pconfig_for_banks["recall_banks"]
+    CODE_BANK = pconfig_for_banks["code_bank"]
 
     sessions_with_recall = []
     sessions_without_recall = []
@@ -1152,8 +1202,8 @@ def analyze_mcp_effectiveness(
         }
 
     # Exploration efficiency
-    cocoindex_sessions = [s for s in sessions_with_recall if "cocoindex-code" in s["banks_recalled"]]
-    non_cocoindex_sessions = [s for s in all_sessions if "cocoindex-code" not in s.get("banks_recalled", [])]
+    cocoindex_sessions = [s for s in sessions_with_recall if CODE_BANK in s["banks_recalled"]]
+    non_cocoindex_sessions = [s for s in all_sessions if CODE_BANK not in s.get("banks_recalled", [])]
     exploration_efficiency = {
         "with_recall": {
             "avg_exploration_before_productive": _avg(sessions_with_recall, "exploration_actions_before_productive"),

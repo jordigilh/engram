@@ -89,6 +89,7 @@ def backfill_one(project: str, json_path: Path, dry_run: bool) -> bool:
         workspace_prefixes=workspace_prefixes,
         end_time=end_time,
         report_date=report_date,
+        project=project,
     )
 
     old_sessions = old_report.get("proactive_recall", {}).get("total_sessions", "?")

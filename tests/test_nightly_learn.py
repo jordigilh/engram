@@ -330,6 +330,127 @@ class TestContextLoadingTokens:
         assert rs2["avg_context_loading_tokens"] == rs["avg_context_loading_tokens"]
 
 
+class TestRecallBanksPerProject:
+    """Regression guard for the 2026-07-15 fix to analyze_mcp_effectiveness():
+    RECALL_BANKS/CODE_BANK used to be hardcoded to kubernaut's server names
+    ("hindsight", "hindsight-docs", "hindsight-issues", "cocoindex-code"),
+    which silently zeroed out banks_recalled (and the with_cocoindex
+    exploration-efficiency bucket) for every other project -- DCM's
+    "dcm-docs"/"dcm-issues"/"dcm-code" server names never matched, so DCM
+    sessions always looked like they never used cocoindex regardless of
+    reality. Both now derive from PROJECT_CONFIGS[project]["recall_banks"]/
+    ["code_bank"].
+    """
+
+    def _write_minimal_transcript(self, path, recall_server):
+        messages = [
+            {"role": "user", "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]}},
+            {"role": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "CallMcpTool",
+                 "input": {"toolName": "recall", "server": recall_server}},
+            ]}},
+            {"role": "user", "message": {"role": "user", "content": [{"type": "text", "text": "ok"}]}},
+            {"role": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Write", "input": {}},
+            ]}},
+            {"role": "user", "message": {"role": "user", "content": [{"type": "text", "text": "thanks"}]}},
+            {"role": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Read", "input": {}},
+            ]}},
+        ]
+        with open(path, "w") as f:
+            for m in messages:
+                f.write(json.dumps(m) + "\n")
+
+    def test_regression_dcm_code_bank_is_counted_for_dcm_project(self, nightly_learn, tmp_path, monkeypatch):
+        monkeypatch.setattr(nightly_learn, "is_correction", lambda text: False)
+        path = tmp_path / "dcm-session.jsonl"
+        self._write_minimal_transcript(path, recall_server="dcm-code")
+
+        result = nightly_learn.analyze_mcp_effectiveness(
+            [path], project="dcm", report_date=nightly_learn.date(2026, 7, 15),
+        )
+
+        assert result["exploration_efficiency"]["with_cocoindex"]["sessions"] == 1
+
+    def test_kubernaut_cocoindex_code_bank_still_counted_by_default(self, nightly_learn, tmp_path, monkeypatch):
+        """Non-regression: kubernaut's own server name must keep working."""
+        monkeypatch.setattr(nightly_learn, "is_correction", lambda text: False)
+        path = tmp_path / "kubernaut-session.jsonl"
+        self._write_minimal_transcript(path, recall_server="cocoindex-code")
+
+        result = nightly_learn.analyze_mcp_effectiveness(
+            [path], project="kubernaut", report_date=nightly_learn.date(2026, 7, 15),
+        )
+
+        assert result["exploration_efficiency"]["with_cocoindex"]["sessions"] == 1
+
+    def test_dcm_server_name_not_counted_under_kubernaut_project(self, nightly_learn, tmp_path, monkeypatch):
+        """Cross-check: a dcm-code recall analyzed under project="kubernaut"
+        must NOT count as cocoindex usage -- proves the bank set is genuinely
+        derived per-project, not just widened to accept everything."""
+        monkeypatch.setattr(nightly_learn, "is_correction", lambda text: False)
+        path = tmp_path / "mismatched-session.jsonl"
+        self._write_minimal_transcript(path, recall_server="dcm-code")
+
+        result = nightly_learn.analyze_mcp_effectiveness(
+            [path], project="kubernaut", report_date=nightly_learn.date(2026, 7, 15),
+        )
+
+        assert result["exploration_efficiency"]["with_cocoindex"]["sessions"] == 0
+
+    def test_engram_cocoindex_code_bank_is_counted(self, nightly_learn, tmp_path, monkeypatch):
+        monkeypatch.setattr(nightly_learn, "is_correction", lambda text: False)
+        path = tmp_path / "engram-session.jsonl"
+        self._write_minimal_transcript(path, recall_server="cocoindex-code")
+
+        result = nightly_learn.analyze_mcp_effectiveness(
+            [path], project="engram", report_date=nightly_learn.date(2026, 7, 15),
+        )
+
+        assert result["exploration_efficiency"]["with_cocoindex"]["sessions"] == 1
+
+    def test_unknown_project_falls_back_to_kubernaut_recall_banks_without_crashing(self, nightly_learn, tmp_path, monkeypatch):
+        monkeypatch.setattr(nightly_learn, "is_correction", lambda text: False)
+        path = tmp_path / "unknown-project-session.jsonl"
+        self._write_minimal_transcript(path, recall_server="cocoindex-code")
+
+        result = nightly_learn.analyze_mcp_effectiveness(
+            [path], project="some-future-project", report_date=nightly_learn.date(2026, 7, 15),
+        )
+
+        assert result["exploration_efficiency"]["with_cocoindex"]["sessions"] == 1
+
+
+class TestProjectConfigsEngram:
+    """The engram PROJECT_CONFIGS entry added during the 2026-07-15 Engram
+    onboarding -- pins its shape so a future edit can't silently drop a
+    required key (e.g. workspace_prefixes, which project-scopes ingestion)."""
+
+    def test_engram_config_has_required_keys(self, nightly_learn):
+        cfg = nightly_learn.PROJECT_CONFIGS["engram"]
+        assert cfg["log_suffix"] == "-engram"
+        assert cfg["workspace_prefixes"] == ["Users-jgil-go-src-github-com-jordigilh-engram"]
+        assert "cocoindex-code" in cfg["recall_banks"]
+        assert cfg["code_bank"] == "cocoindex-code"
+        assert "engram-docs" in cfg["banks"]
+        # No issues bank: engram tracks bugs/decisions in docs/FINDINGS.md.
+        assert "issues_repos" not in cfg
+
+    def test_engram_mental_models_target_engram_docs_bank(self, nightly_learn):
+        cfg = nightly_learn.PROJECT_CONFIGS["engram"]
+        assert cfg["mental_models"]["engram-docs"] == ("engram-architecture", "engram-operations")
+
+    def test_kubernaut_and_dcm_have_issues_repos_for_coverage_totals(self, nightly_learn):
+        """Regression guard for the collect_ingestion_coverage() fix: DCM's
+        GitHub issues/PRs total was always zero because the loop only ever
+        queried jordigilh/kubernaut. Both projects must declare their repos."""
+        assert "jordigilh/kubernaut" in nightly_learn.PROJECT_CONFIGS["kubernaut"]["issues_repos"]
+        assert len(nightly_learn.PROJECT_CONFIGS["kubernaut"]["issues_repos"]) == 4
+        assert "dcm-project/dcm" in nightly_learn.PROJECT_CONFIGS["dcm"]["issues_repos"]
+        assert len(nightly_learn.PROJECT_CONFIGS["dcm"]["issues_repos"]) == 12
+
+
 class TestNotifyPendingContradictionsBacklog:
     """notify_pending_contradictions_backlog() is the standing-cadence nudge
     (lever #5 of the 2026-07-14 "reduce input tokens" review) that fires a

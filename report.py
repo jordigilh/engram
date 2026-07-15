@@ -48,11 +48,37 @@ PROJECT_CONFIGS = {
         "banks": ["cursor-memory", "kubernaut-docs", "kubernaut-issues"],
         "workspace_prefixes": ["Users-jgil-go-src-github-com-jordigilh-kubernaut"],
         "log_suffix": "",
+        "issues_repos": [
+            "jordigilh/kubernaut",
+            "jordigilh/kubernaut-operator",
+            "jordigilh/kubernaut-console",
+            "jordigilh/kubernaut-demo-scenarios",
+        ],
     },
     "dcm": {
         "banks": ["cursor-memory", "dcm-docs", "dcm-issues"],
         "workspace_prefixes": ["Users-jgil-go-src-github-com-dcm-project-"],
         "log_suffix": "-dcm",
+        "issues_repos": [
+            "dcm-project/dcm",
+            "dcm-project/control-plane",
+            "dcm-project/cli",
+            "dcm-project/kubevirt-service-provider",
+            "dcm-project/k8s-container-service-provider",
+            "dcm-project/acm-cluster-service-provider",
+            "dcm-project/three-tier-app-demo-service-provider",
+            "dcm-project/utilities",
+            "dcm-project/dcm-project.github.io",
+            "dcm-project/enhancements",
+            "dcm-project/shared-workflows",
+            "dcm-project/quadlet-deploy",
+        ],
+    },
+    "engram": {
+        # No issues_repos: this repo has zero GitHub issues.
+        "banks": ["cursor-memory", "engram-docs"],
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-jordigilh-engram"],
+        "log_suffix": "-engram",
     },
 }
 
@@ -384,29 +410,55 @@ def collect_mental_model_stats(project: str | None = None) -> list[dict]:
     return results
 
 
-def collect_ingestion_coverage() -> dict:
-    """Check how much of each source is actually indexed."""
+def collect_ingestion_coverage(project: str | None = None) -> dict:
+    """Check how much of each source is actually indexed.
+
+    GitHub issues/PRs totals are scoped to PROJECT_CONFIGS[project]["issues_repos"]
+    when project is given, otherwise summed across every configured project's
+    repos combined. Projects with no issues_repos (e.g. engram, which has zero
+    GitHub issues) simply contribute nothing to the total.
+
+    Bank/pgvector indexed counts are always reported for every known project
+    regardless of scoping -- they're cheap, always-available reads that are
+    useful cross-project context either way (this mirrors the pre-existing
+    behavior where dcm's indexed counts always appeared even in kubernaut's
+    report).
+    """
     import subprocess
     import urllib.request
 
     coverage = {}
 
-    # Issues + PRs: compare gh CLI counts with bank document count
+    if project:
+        repos = list(PROJECT_CONFIGS[project].get("issues_repos", []))
+    else:
+        repos = []
+        for cfg in PROJECT_CONFIGS.values():
+            repos.extend(cfg.get("issues_repos", []))
+
+    # Issues + PRs: compare gh CLI counts (summed across repos) with bank document count
     for kind, cmd in [("issues", ["gh", "issue", "list"]), ("prs", ["gh", "pr", "list"])]:
-        try:
-            result = subprocess.run(
-                cmd + ["--repo", "jordigilh/kubernaut", "--state", "all", "--limit", "10000",
-                       "--json", "number", "--jq", "length"],
-                capture_output=True, text=True, timeout=60,
-            )
-            if result.returncode == 0:
-                coverage[kind] = {"total": int(result.stdout.strip())}
-        except Exception:
-            pass
+        total = 0
+        got_any = False
+        for repo in repos:
+            try:
+                result = subprocess.run(
+                    cmd + ["--repo", repo, "--state", "all", "--limit", "10000",
+                           "--json", "number", "--jq", "length"],
+                    capture_output=True, text=True, timeout=60,
+                )
+                if result.returncode == 0:
+                    total += int(result.stdout.strip())
+                    got_any = True
+            except Exception:
+                pass
+        if got_any:
+            coverage[kind] = {"total": total}
 
     # Bank document counts from Hindsight API
     for bank_id, cov_key in [("kubernaut-issues", "issues_indexed"), ("kubernaut-docs", "docs_indexed"),
-                              ("dcm-issues", "dcm_issues_indexed"), ("dcm-docs", "dcm_docs_indexed")]:
+                              ("dcm-issues", "dcm_issues_indexed"), ("dcm-docs", "dcm_docs_indexed"),
+                              ("engram-docs", "engram_docs_indexed")]:
         try:
             url = f"http://localhost:8888/v1/default/banks/{bank_id}"
             with urllib.request.urlopen(url, timeout=10) as resp:
@@ -430,7 +482,8 @@ def collect_ingestion_coverage() -> dict:
         pass
 
     # Code index: row count from pgvector tables
-    for table, key in [("code_embeddings", "code_chunks"), ("dcm_code_embeddings", "dcm_code_chunks")]:
+    for table, key in [("code_embeddings", "code_chunks"), ("dcm_code_embeddings", "dcm_code_chunks"),
+                        ("engram_code_embeddings", "engram_code_chunks")]:
         try:
             result = subprocess.run(
                 ["psql", "-h", "localhost", "-p", "5432", "-U", "hindsight", "-d", "hindsight",
@@ -1112,6 +1165,12 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
             lines.append(f"  {'DCM issues (indexed)':<25}{dcm_issues_idx:>10}{'':>10}{'':>10}")
         if dcm_code is not None:
             lines.append(f"  {'DCM code chunks':<25}{dcm_code:>10}{'—':>10}{'—':>10}")
+        engram_docs_idx = coverage.get("engram_docs_indexed", 0)
+        engram_code = coverage.get("engram_code_chunks")
+        if engram_docs_idx:
+            lines.append(f"  {'Engram docs (indexed)':<25}{engram_docs_idx:>10}{'':>10}{'':>10}")
+        if engram_code is not None:
+            lines.append(f"  {'Engram code chunks':<25}{engram_code:>10}{'—':>10}{'—':>10}")
         lines.append("  " + "-" * 66)
     else:
         lines.append("  Coverage data not available (run with live Hindsight + gh CLI).")
@@ -1389,7 +1448,7 @@ def build_report_data(args, project: str) -> dict:
     effectiveness = aggregate_effectiveness(effectiveness_entries)
     probe_stats = aggregate_recall_probes(recall_signals)
     token_stats = analyze_token_consumption(days=args.days, workspace_prefixes=workspace_prefixes)
-    coverage = collect_ingestion_coverage()
+    coverage = collect_ingestion_coverage(project=project)
     freshness = collect_freshness_stats()
     regex_vs_haiku = collect_regex_vs_haiku_stats(days=args.days, project=project)
     daily_logs = load_daily_logs(days=args.days, log_suffix=pconfig["log_suffix"])
@@ -1437,9 +1496,9 @@ def main():
                         help="Save current metrics as a baseline snapshot")
     parser.add_argument("--compare", type=str, metavar="BASELINE",
                         help="Compare current metrics against a baseline snapshot file")
-    parser.add_argument("--project", choices=["kubernaut", "dcm", "all"], default="all",
-                        help="Scope the report to one project, or 'all' for both "
-                             "shown separately (default: all)")
+    parser.add_argument("--project", choices=["kubernaut", "dcm", "engram", "all"], default="all",
+                        help="Scope the report to one project, or 'all' for every "
+                             "configured project shown separately (default: all)")
     args = parser.parse_args()
 
     projects = list(PROJECT_CONFIGS) if args.project == "all" else [args.project]

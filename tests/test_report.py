@@ -1,5 +1,8 @@
 """Tests for report.py's normalize_server_name() / aggregate_mcp_calls()
-(lever #4 of the 2026-07-14 "reduce input tokens" review).
+(lever #4 of the 2026-07-14 "reduce input tokens" review), and for
+collect_ingestion_coverage()'s per-project GitHub issues/PRs scoping and
+PROJECT_CONFIGS additions from the 2026-07-15 Engram onboarding +
+kubernaut-operator/console tag-scoped recall work.
 
 Cursor prepends a project-workspace prefix (and sometimes an mcpScope
 suffix) to MCP server names at call time, fragmenting one correctly
@@ -10,6 +13,9 @@ carve-out for "user-*" names, which the same spike found correlates with a
 real 100%-miss anomaly rather than a cosmetic rename.
 """
 from __future__ import annotations
+
+import subprocess
+import urllib.request
 
 import report
 
@@ -106,3 +112,109 @@ class TestAggregateMcpCallsNormalization:
 
         assert list(agg["by_day"]["2026-07-14"].keys()) == ["hindsight-docs"]
         assert agg["by_day"]["2026-07-14"]["hindsight-docs"] == 2
+
+
+class TestProjectConfigsEngram:
+    """Mirrors nightly-learn.py's PROJECT_CONFIGS additions from the
+    2026-07-15 Engram onboarding -- report.py keeps its own copy, so it can
+    drift independently if only one file is edited."""
+
+    def test_engram_config_has_no_issues_repos(self):
+        assert "issues_repos" not in report.PROJECT_CONFIGS["engram"]
+
+    def test_engram_config_has_required_keys(self):
+        cfg = report.PROJECT_CONFIGS["engram"]
+        assert cfg["log_suffix"] == "-engram"
+        assert cfg["workspace_prefixes"] == ["Users-jgil-go-src-github-com-jordigilh-engram"]
+        assert "engram-docs" in cfg["banks"]
+
+    def test_kubernaut_and_dcm_declare_issues_repos(self):
+        assert "jordigilh/kubernaut" in report.PROJECT_CONFIGS["kubernaut"]["issues_repos"]
+        assert "dcm-project/dcm" in report.PROJECT_CONFIGS["dcm"]["issues_repos"]
+
+
+class TestCollectIngestionCoverageProjectScoping:
+    """Regression guard for the 2026-07-15 fix: collect_ingestion_coverage()
+    used to hardcode a single "jordigilh/kubernaut" gh query, so DCM's (and
+    every other project's) GitHub issues/PRs total was always zero. It now
+    iterates PROJECT_CONFIGS[project]["issues_repos"] when a project is
+    given, or every configured project's repos combined when it is not.
+    """
+
+    def _fake_gh_run(self, queried_repos: list[str]):
+        def _run(cmd, **kwargs):
+            if "--repo" in cmd:
+                queried_repos.append(cmd[cmd.index("--repo") + 1])
+            result = subprocess.CompletedProcess(cmd, returncode=0, stdout="3\n", stderr="")
+            return result
+        return _run
+
+    def test_kubernaut_project_only_queries_kubernaut_repos(self, monkeypatch):
+        queried: list[str] = []
+        monkeypatch.setattr(subprocess, "run", self._fake_gh_run(queried))
+        monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(OSError("no network in test")))
+
+        coverage = report.collect_ingestion_coverage(project="kubernaut")
+
+        expected_repos = report.PROJECT_CONFIGS["kubernaut"]["issues_repos"]
+        assert len(queried) == 2 * len(expected_repos)  # issues + prs loops
+        assert set(queried) == set(expected_repos)
+        assert coverage["issues"]["total"] == 3 * len(expected_repos)
+
+    def test_dcm_project_only_queries_dcm_repos(self, monkeypatch):
+        queried: list[str] = []
+        monkeypatch.setattr(subprocess, "run", self._fake_gh_run(queried))
+        monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(OSError("no network in test")))
+
+        coverage = report.collect_ingestion_coverage(project="dcm")
+
+        expected_repos = report.PROJECT_CONFIGS["dcm"]["issues_repos"]
+        assert len(queried) == 2 * len(expected_repos)  # issues + prs loops
+        assert set(queried) == set(expected_repos)
+        assert coverage["issues"]["total"] == 3 * len(expected_repos)
+
+    def test_engram_project_contributes_nothing_to_issues_total(self, monkeypatch):
+        """Engram has no issues_repos -- collect_ingestion_coverage() must
+        not crash, and must not report a bogus issues/prs total for it."""
+        queried: list[str] = []
+        monkeypatch.setattr(subprocess, "run", self._fake_gh_run(queried))
+        monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(OSError("no network in test")))
+
+        coverage = report.collect_ingestion_coverage(project="engram")
+
+        assert queried == []
+        assert "issues" not in coverage
+        assert "prs" not in coverage
+
+    def test_no_project_sums_across_all_configured_repos(self, monkeypatch):
+        queried: list[str] = []
+        monkeypatch.setattr(subprocess, "run", self._fake_gh_run(queried))
+        monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(OSError("no network in test")))
+
+        coverage = report.collect_ingestion_coverage(project=None)
+
+        all_repos = [r for cfg in report.PROJECT_CONFIGS.values() for r in cfg.get("issues_repos", [])]
+        assert coverage["issues"]["total"] == 3 * len(all_repos)
+
+    def test_engram_bank_and_pgvector_keys_are_populated_from_hindsight_api(self, monkeypatch):
+        """Bank/pgvector counts (unlike issues/prs) are always reported for
+        every known project regardless of the project= filter."""
+        monkeypatch.setattr(subprocess, "run", self._fake_gh_run([]))
+
+        def fake_urlopen(url, timeout=10):
+            class _Resp:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *a):
+                    return False
+
+                def read(self):
+                    return b'{"total_documents": 42}'
+            return _Resp()
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+        coverage = report.collect_ingestion_coverage(project="kubernaut")
+
+        assert coverage["engram_docs_indexed"] == 42

@@ -19,8 +19,14 @@
         <string>__HOME__/go/src/github.com/jordigilh/kubernaut</string>
         <key>ENGRAM_TRANSCRIPTS_DIR</key>
         <string>__HOME__/.cursor/projects</string>
-        <key>ENGRAM_ISSUES_REPO</key>
-        <string>jordigilh/kubernaut</string>
+        <key>ENGRAM_OPERATOR_DIR</key>
+        <string>__HOME__/go/src/github.com/jordigilh/kubernaut-operator</string>
+        <key>ENGRAM_CONSOLE_DIR</key>
+        <string>__HOME__/go/src/github.com/jordigilh/kubernaut-console</string>
+        <key>ENGRAM_SCENARIOS_DIR</key>
+        <string>__HOME__/go/src/github.com/jordigilh/kubernaut-demo-scenarios</string>
+        <key>ENGRAM_ISSUES_REPOS</key>
+        <string>jordigilh/kubernaut,jordigilh/kubernaut-operator,jordigilh/kubernaut-console,jordigilh/kubernaut-demo-scenarios</string>
         <key>HINDSIGHT_URL</key>
         <string>http://localhost:8888</string>
         <key>COCOINDEX_PG_URL</key>

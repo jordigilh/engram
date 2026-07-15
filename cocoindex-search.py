@@ -78,11 +78,24 @@ def _rrf_fuse(
     return [{**items[key], "rrf_score": round(score, 6)} for key, score in ranked]
 
 
-def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[str, Any]]:
-    """Search the code_embeddings table using hybrid dense + BM25 retrieval."""
+def search_code(
+    query: str,
+    limit: int = 10,
+    mode: str = "hybrid",
+    repo: str | None = None,
+) -> list[dict[str, Any]]:
+    """Search the code_embeddings table using hybrid dense + BM25 retrieval.
+
+    filepath is stored as "{repo_tag}/{rel_path}" (see cocoindex-flows.py's
+    process_code_file), so passing repo narrows results to one repo (e.g.
+    "kubernaut-operator") via a LIKE prefix match. Omit repo to search the
+    whole platform (kubernaut core + operator + console + demo scenarios)
+    unfiltered -- the default, unchanged behavior.
+    """
     import psycopg2
 
     candidate_pool = limit * 3
+    repo_prefix = f"{repo}/%" if repo else None
 
     conn = psycopg2.connect(PG_URL)
     try:
@@ -93,16 +106,29 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
             if mode in ("hybrid", "dense"):
                 embedding = _embed_query(query)
                 embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
-                cur.execute(
-                    """
-                    SELECT id, filepath, chunk_index, code,
-                           1 - (embedding <=> %s::vector) AS score
-                    FROM cocoindex.code_embeddings
-                    ORDER BY embedding <=> %s::vector
-                    LIMIT %s
-                    """,
-                    (embedding_str, embedding_str, candidate_pool),
-                )
+                if repo_prefix:
+                    cur.execute(
+                        """
+                        SELECT id, filepath, chunk_index, code,
+                               1 - (embedding <=> %s::vector) AS score
+                        FROM cocoindex.code_embeddings
+                        WHERE filepath LIKE %s
+                        ORDER BY embedding <=> %s::vector
+                        LIMIT %s
+                        """,
+                        (embedding_str, repo_prefix, embedding_str, candidate_pool),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT id, filepath, chunk_index, code,
+                               1 - (embedding <=> %s::vector) AS score
+                        FROM cocoindex.code_embeddings
+                        ORDER BY embedding <=> %s::vector
+                        LIMIT %s
+                        """,
+                        (embedding_str, embedding_str, candidate_pool),
+                    )
                 dense_results = [
                     {"id": r[0], "filepath": r[1], "chunk_index": r[2],
                      "code": r[3], "dense_score": round(float(r[4]), 4)}
@@ -114,17 +140,31 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                     t + ":*" for t in query.split() if t.strip()
                 )
                 if tsquery:
-                    cur.execute(
-                        """
-                        SELECT id, filepath, chunk_index, code,
-                               ts_rank_cd(search_vector, to_tsquery('simple', %s)) AS score
-                        FROM cocoindex.code_embeddings
-                        WHERE search_vector @@ to_tsquery('simple', %s)
-                        ORDER BY score DESC
-                        LIMIT %s
-                        """,
-                        (tsquery, tsquery, candidate_pool),
-                    )
+                    if repo_prefix:
+                        cur.execute(
+                            """
+                            SELECT id, filepath, chunk_index, code,
+                                   ts_rank_cd(search_vector, to_tsquery('simple', %s)) AS score
+                            FROM cocoindex.code_embeddings
+                            WHERE search_vector @@ to_tsquery('simple', %s)
+                              AND filepath LIKE %s
+                            ORDER BY score DESC
+                            LIMIT %s
+                            """,
+                            (tsquery, tsquery, repo_prefix, candidate_pool),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT id, filepath, chunk_index, code,
+                                   ts_rank_cd(search_vector, to_tsquery('simple', %s)) AS score
+                            FROM cocoindex.code_embeddings
+                            WHERE search_vector @@ to_tsquery('simple', %s)
+                            ORDER BY score DESC
+                            LIMIT %s
+                            """,
+                            (tsquery, tsquery, candidate_pool),
+                        )
                     bm25_results = [
                         {"id": r[0], "filepath": r[1], "chunk_index": r[2],
                          "code": r[3], "bm25_score": round(float(r[4]), 4)}
@@ -185,18 +225,23 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
     )
 
     @mcp.tool()
-    def cocoindex_search(query: str, limit: int = 10) -> str:
-        """Hybrid code search over the kubernaut codebase.
+    def cocoindex_search(query: str, limit: int = 10, repo: str | None = None) -> str:
+        """Hybrid code search over the kubernaut platform codebase.
 
         Combines dense vector similarity and BM25 keyword matching via
         Reciprocal Rank Fusion for best results.  Works equally well for:
         - conceptual queries: "how does the remediation pipeline work?"
         - exact identifiers: "ParseConfig"
 
+        By default searches the whole platform (kubernaut core + operator +
+        console + demo scenarios). Pass repo (e.g. "kubernaut-operator",
+        "kubernaut-console") to scope results to just that repo -- use this
+        for own-repo work; omit it for upstream/cross-repo triage.
+
         Returns ranked code snippets with file paths and relevance scores.
         Prefer this over Grep when searching by concept rather than exact text.
         """
-        results = search_code(query, limit=min(limit, 20))
+        results = search_code(query, limit=min(limit, 20), repo=repo)
         return _format_results(query, results)
 
     if transport == "stdio":
@@ -211,8 +256,8 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
 # CLI query mode
 # ---------------------------------------------------------------------------
 
-def _run_cli_query(query: str, limit: int = 10, mode: str = "hybrid") -> None:
-    results = search_code(query, limit=limit, mode=mode)
+def _run_cli_query(query: str, limit: int = 10, mode: str = "hybrid", repo: str | None = None) -> None:
+    results = search_code(query, limit=limit, mode=mode, repo=repo)
     print(_format_results(query, results, mode=mode))
 
 
@@ -224,12 +269,14 @@ def main():
     parser.add_argument("--limit", "-n", type=int, default=10, help="Max results (default: 10)")
     parser.add_argument("--mode", "-m", default="hybrid", choices=["hybrid", "dense", "bm25"],
                         help="Search mode (default: hybrid)")
+    parser.add_argument("--repo", default=None,
+                        help="Scope results to one repo tag (e.g. kubernaut-operator); default: whole platform")
     parser.add_argument("--port", "-p", type=int, default=8889, help="MCP server port (default: 8889)")
     parser.add_argument("--host", default="127.0.0.1", help="MCP server bind address")
     args = parser.parse_args()
 
     if args.query:
-        _run_cli_query(args.query, limit=args.limit, mode=args.mode)
+        _run_cli_query(args.query, limit=args.limit, mode=args.mode, repo=args.repo)
     else:
         _run_mcp_server(host=args.host, port=args.port)
 

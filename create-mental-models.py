@@ -98,6 +98,44 @@ MENTAL_MODELS = [
         "max_tokens": 4096,
         "trigger": {"mode": "delta", "refresh_after_consolidation": False},
     },
+    # kubernaut-docs, tag-scoped: narrow per-repo views on top of the shared
+    # bank, so kubernaut-operator/kubernaut-console get a focused model
+    # without needing their own dedicated bank. See docs/FINDINGS.md.
+    {
+        "bank": "kubernaut-docs",
+        "id": "operator-architecture",
+        "name": "Kubernaut Operator Architecture",
+        "source_query": "What is the architecture of the kubernaut-operator service -- its CRDs, controllers, reconciliation loops, and how it integrates with the rest of the kubernaut platform?",
+        "max_tokens": 4096,
+        "trigger": {"mode": "full", "refresh_after_consolidation": False},
+        "tags": ["kubernaut-operator"],
+    },
+    {
+        "bank": "kubernaut-docs",
+        "id": "console-architecture",
+        "name": "Kubernaut Console Architecture",
+        "source_query": "What is the architecture of the kubernaut console plugin -- its components, how it communicates with platform APIs, and its UI design?",
+        "max_tokens": 4096,
+        "trigger": {"mode": "full", "refresh_after_consolidation": False},
+        "tags": ["kubernaut-console"],
+    },
+    # engram-docs: this repo's own Hindsight + CocoIndex tooling
+    {
+        "bank": "engram-docs",
+        "id": "engram-architecture",
+        "name": "Engram Pipeline Architecture",
+        "source_query": "How does the Engram Hindsight + CocoIndex pipeline work? Describe nightly-learn.py, cocoindex-flows.py, the Haiku correction gate, the three-tier contradiction resolution system, and how project scoping isolates ingestion per Cursor workspace.",
+        "max_tokens": 4096,
+        "trigger": {"mode": "full", "refresh_after_consolidation": False},
+    },
+    {
+        "bank": "engram-docs",
+        "id": "engram-operations",
+        "name": "Engram Operations",
+        "source_query": "How is Engram deployed and operated? Describe the launchd services, the ~/.hindsight/ symlink layout, the Python venv setup, and the pytest regression test suite.",
+        "max_tokens": 4096,
+        "trigger": {"mode": "full", "refresh_after_consolidation": False},
+    },
 ]
 
 
@@ -122,6 +160,8 @@ def create_model(model: dict) -> bool:
         "max_tokens": model["max_tokens"],
         "trigger": model["trigger"],
     }
+    if model.get("tags"):
+        payload["tags"] = model["tags"]
     result = api_request("POST", f"/v1/default/banks/{bank}/mental-models", payload)
     if "error" in result:
         if result["error"] == 409:
@@ -143,7 +183,7 @@ def refresh_model(bank: str, model_id: str) -> bool:
 
 
 def list_models():
-    banks = ["cursor-memory", "kubernaut-docs", "kubernaut-issues"]
+    banks = ["cursor-memory", "kubernaut-docs", "kubernaut-issues", "dcm-docs", "dcm-issues", "engram-docs"]
     for bank in banks:
         result = api_request("GET", f"/v1/default/banks/{bank}/mental-models")
         items = result.get("items", [])

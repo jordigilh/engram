@@ -71,3 +71,15 @@ def purge_script() -> ModuleType:
 @pytest.fixture(scope="session")
 def check_rule_sync() -> ModuleType:
     return load_hyphenated_module("check-rule-sync.py", "check_rule_sync")
+
+
+@pytest.fixture(scope="session")
+def engram_cocoindex_flows() -> ModuleType:
+    """engram-cocoindex-flows.py (2026-07-15 Engram onboarding). Its
+    PG_POOL ContextKey is deliberately named "engram_repo_pg_pool" (not
+    "pg_pool" like cocoindex-flows.py's own) precisely so it can be loaded
+    into the same process as the cocoindex_flows fixture above without
+    CocoIndex's "Context key already used" ValueError -- see the comment
+    next to that ContextKey() call for the full rationale.
+    """
+    return load_hyphenated_module("engram-cocoindex-flows.py", "engram_cocoindex_flows")

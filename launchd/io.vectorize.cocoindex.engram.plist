@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.vectorize.cocoindex.engram</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.hindsight/venv/bin/python3</string>
+        <string>__HOME__/.hindsight/engram-cocoindex-flows.py</string>
+        <string>--mode</string>
+        <string>live</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>ENGRAM_REPO_DIR</key>
+        <string>__HOME__/go/src/github.com/jordigilh/engram</string>
+        <key>HINDSIGHT_URL</key>
+        <string>http://localhost:8888</string>
+        <key>COCOINDEX_PG_URL</key>
+        <string>postgresql://hindsight:hindsight@localhost:5432/hindsight</string>
+        <key>PATH</key>
+        <string>__HOME__/.hindsight/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>__HOME__/.hindsight</string>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.hindsight/logs/cocoindex-engram-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.hindsight/logs/cocoindex-engram-stderr.log</string>
+</dict>
+</plist>

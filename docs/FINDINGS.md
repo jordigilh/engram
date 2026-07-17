@@ -2,6 +2,153 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-17: Live In-Loop Write Decision — Design De-Risked via Spikes, NOT Implemented, Review Checklist Below
+
+**Status: design + validation only. Zero production code changed.** `git status`
+at end of this work shows exactly three new untracked files under `spike/`
+(`evidence_span_matching_spike.py`, `groundedness_check_spike.py`,
+`cocoindex_watch_latency_spike.py`) — `cocoindex-flows.py`,
+`contradiction_resolution.py`, `correction_gate.py`, and `nightly-learn.py` all
+have zero diff. No new MCP tool, no flag-queue consumer, no provisional-status
+tagging exist. This entry exists so a future review knows exactly what was and
+wasn't de-risked, and what to check before trusting this to gate real writes.
+
+**The idea**: today, correction detection is entirely async/inferred — regex
+or Haiku scanning transcript text after the fact (`correction_gate.py`,
+`classify_correction`), with a measured recall of 0.80-0.93 (see 2026-07-14
+entry below). The proposal is to give the *acting agent* a live, in-loop
+signal: it flags **when** something notable happened (a correction, a
+decision), and the existing pipeline still decides **what** gets written —
+the agent's own flag is never trusted to write to `cursor-memory` directly.
+
+**What was actually validated (2 spikes, both clean but small-sample)**:
+- `spike/evidence_span_matching_spike.py` — verbatim/whitespace-normalized
+  substring matching of an agent-cited `evidence_span` against real transcript
+  text. 7/7 cases passed (verbatim, trailing-space, multiline-collapsed,
+  paraphrase-rejected, fabrication-rejected, cross-message-boundary-rejected),
+  zero false positives. This is the mechanical check that would block an agent
+  from citing evidence that doesn't actually appear in the transcript.
+- `spike/groundedness_check_spike.py` — for the specific gap where a claim
+  doesn't contradict any existing memory (so `contradiction_resolution.resolve()`
+  would return `action="retain"` with zero scrutiny), can Sonnet independently
+  judge whether the claim is *supported* by its own cited evidence? 8/8 cases
+  passed, including catching all 5/5 fabrication cases with zero false alarms
+  on the 3 faithful ones.
+- Both test sets were hand-picked and small (7, 8 cases) — clean results here
+  are a good sign, not proof against adversarial or naturally-occurring edge
+  cases at real volume.
+
+**What was tested operationally (real infra, not simulated)**:
+- Loaded both `io.vectorize.cocoindex.service` (shared kubernaut/dcm/engram
+  pipeline) and the never-before-deployed `io.vectorize.cocoindex.engram`
+  live, end-to-end, against real data — confirmed `process_transcript` genuinely
+  parses real transcripts, flags `[CORRECTION]`/`[INSTRUCTION]` windows, and
+  calls `hindsight_retain()` successfully (e.g. `transcript-56dfb74e-...-w0`
+  landed in `cursor-memory` for real).
+- A synthetic `[CORRECTION]`-shaped test file went **unprocessed for the full
+  ~13 minutes observed** — as a new file in a new subdirectory, as a new file
+  in an already-known directory, and as a modification to a known file, all
+  three untouched while pre-existing (2-day-old) files got reprocessed. Looked
+  at first like the live watcher might be broken.
+- Followed up with `spike/cocoindex_watch_latency_spike.py` — the same
+  `localfs.walk_dir(recursive=True, live=True)` + `PatternFilePathMatcher` +
+  `coco.mount_each` primitives, pointed at a brand-new empty temp directory
+  (zero backlog). All three cases (new subdir, new file in known dir,
+  modification of known file) detected in **0.01-0.02s**. **Conclusion: the
+  `watchdog`/FSEvents-backed live watcher is not broken — the ~13 minute delay
+  was the initial backlog scan** (accumulated during a deliberate multi-day
+  pause) queuing ahead of genuinely new events, not a detection failure. Real
+  implication: Tier 2's "near-synchronous" property holds in steady state but
+  degrades hard on the first restart after any extended pause — resume it
+  well before you need near-real-time behavior from it, not exactly when you
+  need it.
+
+**Confidence, decomposed (not a single number)**:
+- Design soundness if actually built: **~65%**, up from ~45-60% pre-spike.
+  Both riskiest/most-novel pieces validated clean; the operational blocker
+  (Tier 2 disabled) is resolved.
+- That it moves Engram's own stated goals (`docs/METRICS.md`'s Correction
+  Rate, Reduction %, Rework %/Tokens — "the same mistake never happens
+  twice"): **~55%**. Decomposed:
+  - Closing the current classifier's 7-20% recall gap (real misses = real
+    repeat mistakes, since Engram literally doesn't know about them): **~75%**
+    confidence this helps, and the most defensible direct link to the goal.
+  - Latency reduction (catching corrections near-real-time vs. waiting for
+    the nightly batch, benefiting *concurrent* sessions on the same project):
+    **~60%**, contingent on Tier 2 staying warm operationally (see above).
+  - Precision/pollution risk — a fabricated or misattributed "correction"
+    slipping through is worse than a missed one, since a wrongly-recalled
+    lesson actively creates new rework: **~30%** chance of net-negative here,
+    only partially mitigated by the two spikes' small samples.
+  - Measurement wrinkle: **Correction Rate is computed by running a
+    classifier over transcripts** — improving recall will likely make the
+    *measured* corrections/session go **up** at first (catching what was
+    previously invisible), which could misread as a regression. The metric
+    that actually matters here is **Reduction %** and repeat-mistake rate
+    over several weeks, not the immediate corrections/session count.
+
+**Recommended path, if/when this gets built** (methodology-driven, not a
+blanket "spike everything" or "just ship it"):
+1. New MCP tool for the agent to flag "when," and wiring it into a Tier 2
+   consumer calling the already-validated pieces — implement directly, no
+   spike needed. This is assembling parts already proven individually
+   (evidence-span match, `classify_correction`, `contradiction_resolution`,
+   groundedness check), not an unknown.
+2. Run the actual gating decision in **shadow/observe-only mode first** —
+   this repo already has the right precedent in `prefilter-shadow-trial.py`
+   (logs verdicts, "gates nothing for real"). Do the same here before trusting
+   it to write to `cursor-memory`.
+3. One concrete, cheap, unverified assumption to check **before** writing the
+   provisional-status/promotion logic: `retain`'s MCP schema supports `tags`
+   on write and `recall`'s schema has `tags`/`tags_match`/`tag_groups` on
+   read, but nothing in this codebase has ever exercised *tag exclusion*
+   (`grep`-verified: zero hits for exclusion-style tag usage anywhere in
+   `*.py`). The "hide provisional items from recall until promoted" mechanism
+   assumes exclusion works the way the design wants — verify this against the
+   real Hindsight API before building promotion/cooldown around it, not after.
+4. Rate/plausibility guard against agent over-flagging — not designed in
+   detail yet; better tuned from real shadow-mode data than spiked in the
+   abstract.
+
+**Decision (same day, after the above was written): deferred, not built.** Re-checked
+`correction_gate.py`'s actual default before deciding — `ENGRAM_CORRECTION_DETECTOR`
+defaults to `"haiku"`, not regex, measured at ~0.97 F1 against 630 Haiku-confirmed
+corrections in the 2026-07-08 shadow trial (see that date's entry). That's a stronger
+baseline than this entry's earlier confidence section implied by citing 0.80 recall
+as if it were today's live gap — 0.80 was the regex *fallback*'s number, not what's
+actually running. With Haiku already default, the ceiling a new agent-self-flag
+MCP tool could realistically close is roughly the last ~3%, not ~20%, for a
+mechanism whose entire safety net (steps 2-8 above) is still unbuilt and whose
+rollout would mean editing AGENTS.md/cursor rules across three projects
+(kubernaut, dcm, engram each have their own `.mdc` file), not just this one.
+Risk/reward doesn't justify building it right now.
+
+**Chosen path: lean on the resumed Tier 2 pipeline as-is.** No new MCP tool, no
+AGENTS.md/cursor-rules changes, on any project. The existing Haiku-classifier
+path, now running near-real-time instead of nightly-only (see the watch-latency
+finding above), already captures most of the achievable benefit with zero new
+hallucination/fabrication surface.
+
+**Explicit revisit trigger** (so this isn't just "someday, maybe"): come back to
+the MCP-tool plan only if, after several weeks of Tier 2 running warm, the real
+`Correction Rate`/`Reduction %` trend data (`docs/METRICS.md`) shows the residual
+gap is actually large enough in practice to justify the added complexity and
+risk — not before there's real trend data to justify it.
+
+**Review checklist for whoever picks this back up**:
+- [ ] Is the MCP tool + flag-queue actually built, or still just this design?
+- [ ] Was the tag-exclusion assumption (point 3 above) verified against the
+      real Hindsight API? What was the result?
+- [ ] Has it run in shadow/observe-only mode, and for how long, before any
+      gating was enabled for real?
+- [ ] What's the false-positive rate on real (not hand-picked) agent
+      self-flags, once there's real volume?
+- [ ] Did `Correction Rate` go up (expected, not a red flag on its own) while
+      `Reduction %` / observed repeat-mistake rate over weeks trended the
+      right way (the actual bar this needs to clear)?
+- [ ] Is Tier 2 (`io.vectorize.cocoindex.service` / `.engram`) still loaded
+      and warm, or did it get paused again and accumulate backlog?
+
 ## 2026-07-15: Engram Onboarded Into Its Own Hindsight+CocoIndex Project, kubernaut-operator/console Get Tag-Scoped Recall
 
 **Why now**: Engram itself had no `hindsight-docs`/`cocoindex-code` presence — none of this repo's

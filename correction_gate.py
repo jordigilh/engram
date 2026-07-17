@@ -78,9 +78,18 @@ def _save_cache() -> None:
     if _cache is None:
         return
     CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CACHE_PATH.with_suffix(".tmp")
+    # Per-writer tmp filename (pid + thread id): a fixed ".tmp" name races
+    # when two writers save concurrently -- either transcript-app threads in
+    # this process, or a separate process like nightly-learn.py sharing the
+    # same CACHE_PATH -- since threading.Lock() never spans processes and
+    # can't prevent that. One writer's rename() would raise FileNotFoundError
+    # after another already moved the shared tmp file away first. Observed in
+    # production 2026-07-17 (see docs/FINDINGS.md). Path.replace() is used
+    # (not rename()) so the final swap onto CACHE_PATH is still atomic even
+    # if two writers finish at nearly the same time.
+    tmp = CACHE_PATH.with_name(f"{CACHE_PATH.name}.tmp.{os.getpid()}.{threading.get_ident()}")
     tmp.write_text(json.dumps(_cache))
-    tmp.rename(CACHE_PATH)
+    tmp.replace(CACHE_PATH)
 
 
 def classify_cached(text: str) -> bool:

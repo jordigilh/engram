@@ -148,6 +148,48 @@ class TestClassifyCached:
         assert cg.classify_cached("some message") is False
 
 
+class TestSaveCacheConcurrency:
+    def test_concurrent_saves_do_not_race_on_the_same_tmp_file(self):
+        """Regression test for a real production FileNotFoundError (2026-07-17,
+        see docs/FINDINGS.md): two concurrent _save_cache() calls raced on the
+        same fixed '.tmp' filename -- one writer's rename() found the file
+        already moved away by the other. This can happen across separate
+        transcript-app threads within one cocoindex-flows.py process, or
+        across the cocoindex-flows.py and nightly-learn.py processes sharing
+        the same CACHE_PATH, since threading.Lock() never spans processes.
+
+        Calls _save_cache() directly from multiple threads without holding
+        cg._cache_lock, deliberately -- the lock only ever protected the
+        single-process case; the fix must make the tmp-file mechanism itself
+        collision-free regardless of any Python-level lock.
+        """
+        import threading
+
+        cg._cache = {}
+        errors: list[Exception] = []
+
+        def worker(n: int) -> None:
+            try:
+                for i in range(25):
+                    cg._cache[f"key-{n}-{i}"] = {"is_correction": True, "category": "x"}
+                    cg._save_cache()
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+        threads = [threading.Thread(target=worker, args=(n,)) for n in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == [], f"concurrent _save_cache() calls raised: {errors}"
+        assert cg.CACHE_PATH.exists()
+        json.loads(cg.CACHE_PATH.read_text())  # must always be valid JSON, never a partial write
+
+        leftover_tmp = list(cg.CACHE_PATH.parent.glob(f"{cg.CACHE_PATH.name}.tmp.*"))
+        assert leftover_tmp == [], f"leftover tmp files not cleaned up: {leftover_tmp}"
+
+
 def _fake_result(is_correction: bool, category: str | None, error: str | None = None):
     from types import SimpleNamespace
 

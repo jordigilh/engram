@@ -4,6 +4,15 @@ Historical record of empirical findings from running Engram in production.
 
 ## 2026-07-17: Live In-Loop Write Decision — Design De-Risked via Spikes, NOT Implemented, Review Checklist Below
 
+**Origin**: this idea came from comparing Engram against
+[`Gentleman-Programming/engram`](https://github.com/Gentleman-Programming/engram),
+a different project that happens to share the same name. That project has the
+*agent* explicitly call a `mem_save` tool to curate what gets stored, with zero
+async/inferred detection and zero LLM cost at write time. This entry explores
+borrowing its live, in-loop signal — without adopting its trust model, since
+this project's threat model (avoiding agent-hallucinated writes) requires the
+extra verification layers below that `mem_save` doesn't need.
+
 **Status: design + validation only. Zero production code changed.** `git status`
 at end of this work shows exactly three new untracked files under `spike/`
 (`evidence_span_matching_spike.py`, `groundedness_check_spike.py`,

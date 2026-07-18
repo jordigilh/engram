@@ -62,6 +62,62 @@ class TestFindRecentTranscripts:
         assert nightly_learn.find_recent_transcripts(hours=-10 ** 9) == []
 
 
+class TestProjectForTranscriptPath:
+    """Regression coverage for the 2026-07-19 fix: contradiction queue entries
+    had project=null because nothing resolved a transcript path back to
+    kubernaut/dcm/engram before calling contradiction_resolution.resolve().
+    See docs/FINDINGS.md."""
+
+    def test_resolves_kubernaut_transcript(self, nightly_learn, tmp_path, monkeypatch):
+        monkeypatch.setattr(nightly_learn, "PROJECTS_ROOT", tmp_path)
+        path = tmp_path / "Users-jgil-go-src-github-com-jordigilh-kubernaut" / "agent-transcripts" / "t1.jsonl"
+
+        assert nightly_learn.project_for_transcript_path(path) == "kubernaut"
+
+    def test_resolves_dcm_transcript(self, nightly_learn, tmp_path, monkeypatch):
+        monkeypatch.setattr(nightly_learn, "PROJECTS_ROOT", tmp_path)
+        path = tmp_path / "Users-jgil-go-src-github-com-dcm-project-cli" / "agent-transcripts" / "t1.jsonl"
+
+        assert nightly_learn.project_for_transcript_path(path) == "dcm"
+
+    def test_out_of_scope_transcript_resolves_to_none(self, nightly_learn, tmp_path, monkeypatch):
+        monkeypatch.setattr(nightly_learn, "PROJECTS_ROOT", tmp_path)
+        path = tmp_path / "Users-jgil-go-src-github-com-insights-onprem-koku" / "agent-transcripts" / "t1.jsonl"
+
+        assert nightly_learn.project_for_transcript_path(path) is None
+
+    def test_path_outside_projects_root_resolves_to_none(self, nightly_learn, tmp_path, monkeypatch):
+        monkeypatch.setattr(nightly_learn, "PROJECTS_ROOT", tmp_path / "projects")
+        path = tmp_path / "somewhere-else" / "t1.jsonl"
+
+        assert nightly_learn.project_for_transcript_path(path) is None
+
+    def test_retain_windows_forwards_project_to_resolve(self, nightly_learn, monkeypatch):
+        resolve_calls = []
+        monkeypatch.setattr(
+            nightly_learn.contradiction_resolution, "resolve",
+            lambda *a, **k: resolve_calls.append(k.get("project")) or cr.Resolution(action="retain"),
+        )
+        monkeypatch.setattr(nightly_learn, "api_post", lambda *a, **k: {"usage": {}})
+
+        nightly_learn.retain_windows(["[CORRECTION] User: we don't use HAPI"], "tid-1", project="kubernaut")
+
+        assert resolve_calls == ["kubernaut"]
+
+    def test_retain_windows_deduped_forwards_project(self, nightly_learn, monkeypatch):
+        captured = {}
+
+        def fake_retain_windows(windows, tid, project=None):
+            captured["project"] = project
+            return {"items_retained": 0, "usage": {}, "contradictions_auto_resolved": 0, "contradictions_queued": 0}
+
+        monkeypatch.setattr(nightly_learn, "retain_windows", fake_retain_windows)
+
+        nightly_learn.retain_windows_deduped(["A"], "tid-1", set(), project="dcm")
+
+        assert captured["project"] == "dcm"
+
+
 class TestRetainWindows:
     def test_non_correction_window_skips_contradiction_check(self, nightly_learn, monkeypatch):
         calls = []
@@ -159,7 +215,7 @@ class TestRetainWindows:
 class TestRetainWindowsDeduped:
     def test_new_windows_are_retained_and_hashed(self, nightly_learn, monkeypatch):
         retain_calls = []
-        monkeypatch.setattr(nightly_learn, "retain_windows", lambda windows, tid: retain_calls.append(list(windows)) or {
+        monkeypatch.setattr(nightly_learn, "retain_windows", lambda windows, tid, project=None: retain_calls.append(list(windows)) or {
             "items_retained": len(windows), "usage": {}, "contradictions_auto_resolved": 0, "contradictions_queued": 0,
         })
 
@@ -173,7 +229,7 @@ class TestRetainWindowsDeduped:
 
     def test_previously_seen_hash_is_skipped_on_second_call(self, nightly_learn, monkeypatch):
         retain_calls = []
-        monkeypatch.setattr(nightly_learn, "retain_windows", lambda windows, tid: retain_calls.append(list(windows)) or {
+        monkeypatch.setattr(nightly_learn, "retain_windows", lambda windows, tid, project=None: retain_calls.append(list(windows)) or {
             "items_retained": len(windows), "usage": {}, "contradictions_auto_resolved": 0, "contradictions_queued": 0,
         })
 

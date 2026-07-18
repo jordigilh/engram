@@ -14,6 +14,7 @@ real 100%-miss anomaly rather than a cosmetic rename.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import urllib.request
 
@@ -218,3 +219,58 @@ class TestCollectIngestionCoverageProjectScoping:
         coverage = report.collect_ingestion_coverage(project="kubernaut")
 
         assert coverage["engram_docs_indexed"] == 42
+
+
+class TestCountPendingContradictions:
+    """Regression coverage for the 2026-07-19 fix: report.py used to count
+    every line in contradictions-pending.jsonl unconditionally, so the
+    "PENDING CONTRADICTIONS" section showed the identical global total under
+    every project's report instead of a per-project breakdown. See
+    docs/FINDINGS.md.
+    """
+
+    def _write_pending(self, tmp_path, entries):
+        path = tmp_path / "contradictions-pending.jsonl"
+        with open(path, "w") as f:
+            for e in entries:
+                f.write(json.dumps(e) + "\n")
+        return path
+
+    def test_missing_file_returns_zero(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(report, "PENDING_CONTRADICTIONS_LOG", tmp_path / "does-not-exist.jsonl")
+        assert report.count_pending_contradictions() == 0
+
+    def test_no_project_filter_counts_every_entry(self, monkeypatch, tmp_path):
+        path = self._write_pending(tmp_path, [
+            {"project": "kubernaut"}, {"project": "dcm"}, {"project": None},
+        ])
+        monkeypatch.setattr(report, "PENDING_CONTRADICTIONS_LOG", path)
+
+        assert report.count_pending_contradictions() == 3
+
+    def test_project_filter_only_counts_matching_entries(self, monkeypatch, tmp_path):
+        path = self._write_pending(tmp_path, [
+            {"project": "kubernaut"}, {"project": "kubernaut"}, {"project": "dcm"}, {"project": None},
+        ])
+        monkeypatch.setattr(report, "PENDING_CONTRADICTIONS_LOG", path)
+
+        assert report.count_pending_contradictions(project="kubernaut") == 2
+        assert report.count_pending_contradictions(project="dcm") == 1
+        assert report.count_pending_contradictions(project="engram") == 0
+
+    def test_null_project_entries_excluded_from_every_project_scoped_count(self, monkeypatch, tmp_path):
+        """Legacy entries written before the fix (project=null) have no safe
+        project to backward-compat them to, unlike the effectiveness-log fix
+        -- they must not silently count toward any project's total."""
+        path = self._write_pending(tmp_path, [{"project": None}, {"project": None}])
+        monkeypatch.setattr(report, "PENDING_CONTRADICTIONS_LOG", path)
+
+        assert report.count_pending_contradictions(project="kubernaut") == 0
+        assert report.count_pending_contradictions() == 2
+
+    def test_malformed_line_is_skipped_not_fatal(self, monkeypatch, tmp_path):
+        path = tmp_path / "contradictions-pending.jsonl"
+        path.write_text('not json\n{"project": "kubernaut"}\n')
+        monkeypatch.setattr(report, "PENDING_CONTRADICTIONS_LOG", path)
+
+        assert report.count_pending_contradictions(project="kubernaut") == 1

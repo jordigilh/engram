@@ -46,6 +46,37 @@ class TestIsAllowedWorkspace:
         assert ps.is_allowed_workspace("") is False
 
 
+class TestResolveProjectLabel:
+    """Regression coverage for the 2026-07-19 fix: pending-contradiction
+    queue entries had project=null because nothing ever mapped a transcript's
+    workspace directory name back to kubernaut/dcm/engram. See
+    docs/FINDINGS.md."""
+
+    def test_kubernaut_resolves_to_kubernaut(self):
+        assert ps.resolve_project_label("Users-jgil-go-src-github-com-jordigilh-kubernaut") == "kubernaut"
+
+    def test_kubernaut_sibling_repo_resolves_to_kubernaut(self):
+        assert ps.resolve_project_label("Users-jgil-go-src-github-com-jordigilh-kubernaut-v1.5") == "kubernaut"
+        assert ps.resolve_project_label("Users-jgil-go-src-github-com-jordigilh-kubernaut-operator") == "kubernaut"
+
+    def test_dcm_resolves_to_dcm(self):
+        assert ps.resolve_project_label("Users-jgil-go-src-github-com-dcm-project-enhancements") == "dcm"
+
+    def test_engram_resolves_to_engram(self):
+        assert ps.resolve_project_label("Users-jgil-go-src-github-com-jordigilh-engram") == "engram"
+
+    def test_out_of_scope_workspace_resolves_to_none(self):
+        assert ps.resolve_project_label("Users-jgil-go-src-github-com-insights-onprem-koku") is None
+
+    def test_empty_string_resolves_to_none(self):
+        assert ps.resolve_project_label("") is None
+
+    def test_allowed_workspace_prefixes_derived_from_the_same_mapping(self):
+        """Guards against ALLOWED_WORKSPACE_PREFIXES and PROJECT_LABEL_BY_PREFIX
+        ever drifting apart (they used to be two independent lists)."""
+        assert ps.ALLOWED_WORKSPACE_PREFIXES == list(ps.PROJECT_LABEL_BY_PREFIX.keys())
+
+
 class TestTranscriptGlobPatterns:
     def test_one_pattern_per_allowed_prefix(self):
         patterns = ps.transcript_glob_patterns()

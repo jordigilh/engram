@@ -156,6 +156,60 @@ class TestProcessTranscriptContradictionBranching:
         assert retain_calls[0]["document_id"] == "transcript-tid-1-w1"
 
 
+class TestProcessTranscriptProjectTagging:
+    """Regression coverage for the 2026-07-19 fix: contradiction queue
+    entries had project=null because process_transcript() never resolved the
+    transcript's workspace directory to an onboarded project. See
+    docs/FINDINGS.md."""
+
+    def _file_under(self, transcripts_root: Path, project_dir_name: str, transcript_id: str = "tid-1") -> FakeFile:
+        f = FakeFile('{"role": "user"}', transcript_id)
+        f.file_path.path = transcripts_root / project_dir_name / "agent-transcripts" / f"{transcript_id}.jsonl"
+        return f
+
+    def test_kubernaut_transcript_resolves_to_kubernaut_project(self, cocoindex_flows, monkeypatch, tmp_path):
+        monkeypatch.setattr(cocoindex_flows, "ENGRAM_TRANSCRIPTS_DIR", tmp_path)
+        monkeypatch.setattr(cocoindex_flows, "_extract_learning_windows", lambda messages: [
+            "[CORRECTION] User: we don't use HAPI",
+        ])
+        resolve_calls = []
+        monkeypatch.setattr(cr, "resolve", lambda *a, **k: resolve_calls.append(k.get("project")) or cr.Resolution(action="retain"))
+        monkeypatch.setattr(cocoindex_flows, "hindsight_retain", lambda **kwargs: None)
+
+        file = self._file_under(tmp_path, "Users-jgil-go-src-github-com-jordigilh-kubernaut")
+        _run(cocoindex_flows.process_transcript(file))
+
+        assert resolve_calls == ["kubernaut"]
+
+    def test_out_of_scope_transcript_resolves_to_none_project(self, cocoindex_flows, monkeypatch, tmp_path):
+        monkeypatch.setattr(cocoindex_flows, "ENGRAM_TRANSCRIPTS_DIR", tmp_path)
+        monkeypatch.setattr(cocoindex_flows, "_extract_learning_windows", lambda messages: [
+            "[CORRECTION] User: we don't use HAPI",
+        ])
+        resolve_calls = []
+        monkeypatch.setattr(cr, "resolve", lambda *a, **k: resolve_calls.append(k.get("project")) or cr.Resolution(action="retain"))
+        monkeypatch.setattr(cocoindex_flows, "hindsight_retain", lambda **kwargs: None)
+
+        file = self._file_under(tmp_path, "Users-jgil-go-src-github-com-insights-onprem-koku")
+        _run(cocoindex_flows.process_transcript(file))
+
+        assert resolve_calls == [None]
+
+    def test_path_outside_transcripts_dir_resolves_to_none_project(self, cocoindex_flows, monkeypatch, tmp_path):
+        monkeypatch.setattr(cocoindex_flows, "ENGRAM_TRANSCRIPTS_DIR", tmp_path / "projects")
+        monkeypatch.setattr(cocoindex_flows, "_extract_learning_windows", lambda messages: [
+            "[CORRECTION] User: we don't use HAPI",
+        ])
+        resolve_calls = []
+        monkeypatch.setattr(cr, "resolve", lambda *a, **k: resolve_calls.append(k.get("project")) or cr.Resolution(action="retain"))
+        monkeypatch.setattr(cocoindex_flows, "hindsight_retain", lambda **kwargs: None)
+
+        file = self._file_under(tmp_path / "elsewhere", "Users-jgil-go-src-github-com-jordigilh-kubernaut")
+        _run(cocoindex_flows.process_transcript(file))
+
+        assert resolve_calls == [None]
+
+
 class TestHindsightRetain:
     def test_success_returns_parsed_json(self, cocoindex_flows, monkeypatch):
         class FakeResponse:

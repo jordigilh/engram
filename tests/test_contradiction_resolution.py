@@ -239,3 +239,44 @@ class TestResolve:
         ))
         result = cr.resolve("cursor-memory", "new statement")
         assert result.action == "auto_resolved"
+
+
+class TestProjectTagging:
+    """Regression coverage for the 2026-07-19 fix: every pending-contradiction
+    entry had project=null because resolve() never received or forwarded a
+    project value. See docs/FINDINGS.md."""
+
+    def test_queued_entry_is_tagged_with_the_given_project(self, monkeypatch):
+        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("doc-1", "old memory")])
+        monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(
+            contradicts=True, conflicting_memory_index=0, confidence=0.5, explanation="ambiguous",
+        ))
+        queue_calls = []
+        monkeypatch.setattr(cr.pending_queue, "append_pending", lambda **kwargs: queue_calls.append(kwargs))
+
+        cr.resolve("cursor-memory", "new statement", project="kubernaut")
+
+        assert queue_calls[0]["project"] == "kubernaut"
+
+    def test_queued_entry_defaults_to_none_when_no_project_given(self, monkeypatch):
+        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("doc-1", "old memory")])
+        monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(
+            contradicts=True, conflicting_memory_index=0, confidence=0.5,
+        ))
+        queue_calls = []
+        monkeypatch.setattr(cr.pending_queue, "append_pending", lambda **kwargs: queue_calls.append(kwargs))
+
+        cr.resolve("cursor-memory", "new statement")
+
+        assert queue_calls[0]["project"] is None
+
+    def test_auto_resolved_log_entry_is_tagged_with_the_given_project(self, monkeypatch):
+        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("doc-1", "old memory")])
+        monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(
+            contradicts=True, conflicting_memory_index=0, confidence=0.95, explanation="clear conflict",
+        ))
+
+        cr.resolve("cursor-memory", "new statement", project="dcm")
+
+        logged = [json.loads(line) for line in cr.AUTO_RESOLVED_LOG_PATH.read_text().splitlines()]
+        assert logged[0]["project"] == "dcm"

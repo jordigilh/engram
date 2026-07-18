@@ -105,6 +105,7 @@ def log_auto_resolved(
     explanation: str,
     mode: str,
     deleted: bool,
+    project: str | None = None,
 ) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     entry = {
@@ -117,6 +118,7 @@ def log_auto_resolved(
         "superseded_text": superseded_text[:500],
         "confidence": confidence,
         "explanation": explanation,
+        "project": project,
     }
     with open(AUTO_RESOLVED_LOG_PATH, "a") as f:
         f.write(json.dumps(entry) + "\n")
@@ -130,7 +132,7 @@ class Resolution:
     explanation: str = ""
 
 
-def resolve(bank_id: str, statement: str) -> Resolution:
+def resolve(bank_id: str, statement: str, project: str | None = None) -> Resolution:
     """Run the three-tier contradiction check for one correction-tagged window.
 
     action == "retain" or "auto_resolved": caller proceeds to retain the new
@@ -139,6 +141,11 @@ def resolve(bank_id: str, statement: str) -> Resolution:
     withheld pending human review in review-contradictions.py, which retains
     it itself on approve. Skipping this would silently re-introduce the
     "reject discards nothing" bug found on 2026-07-12 (docs/FINDINGS.md).
+
+    project (kubernaut/dcm/engram/None), if given, is stamped onto both the
+    auto-resolved log and the pending-review queue entry so downstream
+    reporting can actually filter by project -- see docs/FINDINGS.md
+    2026-07-19 ("196 pending contradictions, all project=null").
     """
     if not check_enabled():
         return Resolution(action="retain")
@@ -170,6 +177,7 @@ def resolve(bank_id: str, statement: str) -> Resolution:
         log_auto_resolved(
             bank_id, statement, conflicting_id, conflicting_text,
             result.confidence, result.explanation, mode, deleted,
+            project=project,
         )
         return Resolution(
             action="auto_resolved", superseded_document_id=conflicting_id,
@@ -182,6 +190,7 @@ def resolve(bank_id: str, statement: str) -> Resolution:
         conflicting_memory_index=idx,
         explanation=result.explanation,
         document_id=conflicting_id,
+        project=project,
     )
     return Resolution(
         action="queued", superseded_document_id=conflicting_id,

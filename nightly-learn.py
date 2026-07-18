@@ -314,6 +314,17 @@ def find_recent_transcripts(
     return sorted(results, key=lambda p: p.stat().st_mtime)
 
 
+def project_for_transcript_path(path: Path) -> str | None:
+    """Resolve a transcript file's onboarded project label (kubernaut/dcm/
+    engram), or None if it can't be resolved. Used to tag contradiction
+    queue/log entries per-project -- see docs/FINDINGS.md 2026-07-19."""
+    try:
+        project_dir_name = path.relative_to(PROJECTS_ROOT).parts[0]
+    except ValueError:
+        return None
+    return project_scope.resolve_project_label(project_dir_name)
+
+
 def parse_transcript(path: Path) -> list[dict]:
     """Parse a JSONL transcript into a list of messages."""
     messages = []
@@ -459,7 +470,7 @@ def extract_learning_windows(
     )
 
 
-def retain_windows(windows: list[str], transcript_id: str) -> dict[str, Any]:
+def retain_windows(windows: list[str], transcript_id: str, project: str | None = None) -> dict[str, Any]:
     """Send correction/instruction windows to Hindsight retain endpoint.
 
     Windows tagged [CORRECTION] (see extract_learning_windows/_build_windows)
@@ -467,6 +478,10 @@ def retain_windows(windows: list[str], transcript_id: str) -> dict[str, Any]:
     first -- see docs/FINDINGS.md. Instruction windows retain unchanged:
     check_contradiction is only meaningful once a message is confirmed as a
     correction, not a forward-looking instruction.
+
+    project (kubernaut/dcm/engram/None), if given, is forwarded to resolve()
+    so any queued/auto-resolved contradiction is tagged with which onboarded
+    project it came from (see docs/FINDINGS.md 2026-07-19).
     """
     total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     items_retained = 0
@@ -476,7 +491,7 @@ def retain_windows(windows: list[str], transcript_id: str) -> dict[str, Any]:
     for i, window in enumerate(windows):
         tags = None
         if "[CORRECTION]" in window:
-            resolution = contradiction_resolution.resolve(BANK_ID, window)
+            resolution = contradiction_resolution.resolve(BANK_ID, window, project=project)
             if resolution.action == "auto_resolved":
                 contradictions_auto_resolved += 1
                 tags = ["CORRECTION", "supersedes-prior-memory"]
@@ -583,7 +598,7 @@ def filter_and_scan(
 
 
 def retain_windows_deduped(
-    windows: list[str], transcript_id: str, seen_hashes: set
+    windows: list[str], transcript_id: str, seen_hashes: set, project: str | None = None
 ) -> dict[str, Any]:
     """Retain only windows whose content hasn't been retained before."""
     new_windows = []
@@ -603,7 +618,7 @@ def retain_windows_deduped(
             "contradictions_queued": 0,
         }
 
-    result = retain_windows(new_windows, transcript_id)
+    result = retain_windows(new_windows, transcript_id, project=project)
     result["skipped_duplicates"] = skipped
     return result
 
@@ -1340,6 +1355,7 @@ def run_hourly(watermarks: dict, seen_hashes: set) -> dict:
 
     for path, messages, start_index in candidates:
         transcript_id = path.stem
+        project = project_for_transcript_path(path)
         log.info("Processing: %s (from message %d)", transcript_id, start_index)
 
         corrections, instructions = extract_learning_windows(
@@ -1361,7 +1377,7 @@ def run_hourly(watermarks: dict, seen_hashes: set) -> dict:
 
         try:
             retain_result = retain_windows_deduped(
-                all_windows, transcript_id, seen_hashes
+                all_windows, transcript_id, seen_hashes, project=project
             )
             results["windows_retained"] += retain_result["items_retained"]
             results["skipped_duplicates"] += retain_result.get("skipped_duplicates", 0)
@@ -1459,6 +1475,7 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
         candidates = filter_and_scan(missed, watermarks)
         for path, messages, start_index in candidates:
             transcript_id = path.stem
+            project = project_for_transcript_path(path)
             log.info("Processing: %s (from message %d)", transcript_id, start_index)
 
             corrections, instructions = extract_learning_windows(
@@ -1479,7 +1496,7 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
 
             try:
                 retain_result = retain_windows_deduped(
-                    all_windows, transcript_id, seen_hashes
+                    all_windows, transcript_id, seen_hashes, project=project
                 )
                 results["windows_retained"] += retain_result["items_retained"]
                 results["skipped_duplicates"] += retain_result.get("skipped_duplicates", 0)

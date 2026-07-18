@@ -34,6 +34,7 @@ MCP_CALLS_LOG = LOG_DIR / "mcp-calls.jsonl"
 EFFECTIVENESS_LOG = LOG_DIR / "effectiveness-report.jsonl"
 RECALL_SIGNALS_LOG = LOG_DIR / "recall-signals.jsonl"
 PREFILTER_SHADOW_LOG = LOG_DIR / "prefilter-shadow.jsonl"
+PENDING_CONTRADICTIONS_LOG = LOG_DIR / "contradictions-pending.jsonl"
 TRANSCRIPTS_GLOB = os.path.expanduser("~/.cursor/projects/*/agent-transcripts/**/*.jsonl")
 PROJECTS_ROOT = Path(os.path.expanduser("~/.cursor/projects"))
 
@@ -535,7 +536,7 @@ def compute_recall_write_metrics(mcp_calls: list[dict], daily_logs: list[dict]) 
     }
 
 
-def count_pending_contradictions() -> int:
+def count_pending_contradictions(project: str | None = None) -> int:
     """Count unresolved entries in contradictions-pending.jsonl.
 
     Written by contradiction_resolution.py's three-tier check (wired into
@@ -548,14 +549,32 @@ def count_pending_contradictions() -> int:
     Reads the file directly (rather than importing spike/pending_queue.py)
     to keep report.py's system-Python-3.9 runtime decoupled from the
     spike's venv-only dependencies.
+
+    If project is given, only counts entries tagged with that project.
+    Entries written before the 2026-07-19 project-tagging fix (or any whose
+    source transcript couldn't be resolved to an onboarded project) have
+    project=null and are excluded from every project-scoped count -- there's
+    no safe default to backward-compat them to, unlike the effectiveness-log
+    fix on 2026-07-09 (see docs/FINDINGS.md), since a pending contradiction's
+    project can't be inferred from anything else in the entry itself.
     """
-    path = os.path.expanduser("~/.hindsight/logs/contradictions-pending.jsonl")
+    path = PENDING_CONTRADICTIONS_LOG
     if not os.path.exists(path):
         return 0
     count = 0
     with open(path) as f:
         for line in f:
-            if line.strip():
+            line = line.strip()
+            if not line:
+                continue
+            if project is None:
+                count += 1
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if entry.get("project") == project:
                 count += 1
     return count
 
@@ -898,7 +917,8 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
                   coverage: dict | None = None, freshness: dict | None = None,
                   mental_models: list[dict] | None = None,
                   regex_vs_haiku: dict | None = None,
-                  recall_write_metrics: dict | None = None) -> str:
+                  recall_write_metrics: dict | None = None,
+                  pending_contradictions: int | None = None) -> str:
     """Format a human-readable report."""
     lines = []
     lines.append("=" * 70)
@@ -1221,8 +1241,11 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
     else:
         lines.append("  Freshness data not available (CocoIndex not running or no logs).")
 
-    # Pending Contradictions (Semantic Correction Detection Spike, 2026-07-08)
-    pending_count = count_pending_contradictions()
+    # Pending Contradictions (Semantic Correction Detection Spike, 2026-07-08).
+    # Project-scoped count is passed in by the caller (build_report_data) as
+    # of 2026-07-19 -- see count_pending_contradictions()'s docstring for why
+    # this can no longer be computed unscoped inside this function.
+    pending_count = pending_contradictions
     if pending_count:
         lines.append("")
         lines.append("  PENDING CONTRADICTIONS")
@@ -1453,9 +1476,11 @@ def build_report_data(args, project: str) -> dict:
     regex_vs_haiku = collect_regex_vs_haiku_stats(days=args.days, project=project)
     daily_logs = load_daily_logs(days=args.days, log_suffix=pconfig["log_suffix"])
     recall_write_metrics = compute_recall_write_metrics(mcp_calls, daily_logs)
+    pending_contradictions = count_pending_contradictions(project=project)
 
     full_data = {
         "project": project,
+        "pending_contradictions": pending_contradictions,
         "period_days": args.days,
         "generated": datetime.now().isoformat(),
         "mcp_usage": mcp_stats["by_server"],
@@ -1484,6 +1509,7 @@ def build_report_data(args, project: str) -> dict:
         "freshness": freshness,
         "regex_vs_haiku": regex_vs_haiku,
         "recall_write_metrics": recall_write_metrics,
+        "pending_contradictions": pending_contradictions,
     }
 
 
@@ -1544,7 +1570,8 @@ def main():
                             freshness=data["freshness"],
                             mental_models=data["full_data"]["mental_models"],
                             regex_vs_haiku=data["regex_vs_haiku"],
-                            recall_write_metrics=data["recall_write_metrics"]))
+                            recall_write_metrics=data["recall_write_metrics"],
+                            pending_contradictions=data["pending_contradictions"]))
 
 
 if __name__ == "__main__":

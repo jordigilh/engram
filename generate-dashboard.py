@@ -10,6 +10,7 @@ Can also be run standalone: python3 generate-dashboard.py
 
 import json
 import os
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from glob import glob
 from pathlib import Path
@@ -111,8 +112,17 @@ def generate_pending_contradictions_doc(rollup_days: int = 7) -> str:
     if not pending:
         lines.append("None — nothing awaiting review right now.")
     else:
+        by_project = Counter(e.get("project") or "unresolved" for e in pending)
+        lines.append(
+            "By project: " + ", ".join(f"{proj} ({n})" for proj, n in by_project.most_common())
+        )
+        lines.append("")
         for i, e in enumerate(pending, 1):
-            lines.append(f"### {i}. {_age_str(e.get('timestamp'))} old — confidence {fmt_conf(e.get('confidence'))}")
+            proj_label = e.get("project") or "unresolved"
+            lines.append(
+                f"### {i}. {_age_str(e.get('timestamp'))} old — project: {proj_label} — "
+                f"confidence {fmt_conf(e.get('confidence'))}"
+            )
             lines.append("")
             lines.append(f"- **New statement**: {e.get('new_statement', '?')}")
             lines.append(f"- **Conflicts with**: {e.get('conflicting_memory', '?')}")

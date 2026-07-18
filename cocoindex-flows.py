@@ -805,13 +805,22 @@ async def process_transcript(file: localfs.File) -> None:
 
     windows = _extract_learning_windows(messages)
     transcript_id = file.file_path.path.stem
+    # Same string-prefix approach as the other flows in this file (see e.g.
+    # rel_path computation above) rather than Path.relative_to(), since
+    # file.file_path.path.resolve() vs. .path can differ across symlinks.
+    abs_path = str(file.file_path.path.resolve())
+    base_prefix = str(ENGRAM_TRANSCRIPTS_DIR) + "/"
+    project = None
+    if abs_path.startswith(base_prefix):
+        project_dir_name = abs_path[len(base_prefix):].split("/", 1)[0]
+        project = project_scope.resolve_project_label(project_dir_name)
 
     for i, window_text in enumerate(windows):
         if not window_text.strip():
             continue
         tags = None
         if "[CORRECTION]" in window_text:
-            resolution = contradiction_resolution.resolve("cursor-memory", window_text)
+            resolution = contradiction_resolution.resolve("cursor-memory", window_text, project=project)
             if resolution.action == "auto_resolved":
                 tags = ["CORRECTION", "supersedes-prior-memory"]
             elif resolution.action == "queued":

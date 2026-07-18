@@ -2,6 +2,53 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-19: Pending-Contradictions Backlog Reset to Zero — Only 2 of 196 Were Ever Actually Reviewed
+
+**Context**: Asked for a status update; the report showed **196 pending contradictions, 0 resolved**.
+User recalled having "already processed them" — investigated to confirm whether that memory matched
+reality before deciding what to do.
+
+**What actually happened, reconstructed from `docs/FINDINGS.md`'s own history**: the *only* real
+human review ever done was the 2 entries from the 2026-07-12 "first live run" (see that date's
+entry) — both confirmed false positives (Sonnet misreading a reinforcing instruction as a
+contradiction). That's the memory the user was recalling. Nothing has been reviewed since. The queue
+grew from those first 2 entries to 196 over the following six days (oldest entry 2026-07-16, newest
+2026-07-18 — consistent with the Haiku correction gate's steady ~4.5% correction rate feeding the
+contradiction checker daily) with zero manual triage in between. The 2026-07-14 "Lever #5" nightly
+notification (`notify_pending_contradictions_backlog()`) *did* fire correctly — confirmed in
+`launchd-stderr.log`: `"Notified: 130 pending contradictions >= threshold"` on 2026-07-18 — but a
+once-daily macOS notification is easy to dismiss without connecting it to "run
+`review-contradictions.py`," which is exactly what happened here.
+
+**Bug found while investigating (not yet fixed, logged for follow-up)**: every one of the 196 entries
+had `"project": null`. `pending_queue.append_pending()` accepts a `project` parameter, but neither
+production call site (`contradiction_resolution.resolve()`, called from both `nightly-learn.py` and
+`cocoindex-flows.py`) ever passes one — `resolve()`'s signature is `(bank_id, statement)`, and
+`bank_id` is always the literal constant `BANK_ID = "cursor-memory"` (the one shared bank both
+projects write corrections into), not a per-project value. This is why `report.py`'s
+`count_pending_contradictions()` shows the identical "196 unresolved" under all three project
+sections (kubernaut/dcm/engram) instead of a per-project breakdown — there's no project signal on
+the entries for it to filter by. Not fixed here; would need threading the source transcript's
+resolved project (same `transcript_id → project` mapping `purge-out-of-scope-memories.py` already
+builds) through `retain_windows()`/`process_transcript()` into `resolve()` into `append_pending()`.
+
+**Decision: given the size of the backlog and the specific known false-positive pattern (reinforcing
+instructions misread as contradictions) plus zero confidence the rest are clean, dropped the entire
+queue rather than manually triage 196 one at a time.** Backed up to
+`~/.hindsight/logs/contradictions-pending.jsonl.bak-20260719-001133` before clearing (all 196
+entries preserved on disk, not deleted, in case any turn out to have been worth acting on — same
+non-destructive posture as `purge-out-of-scope-memories.py`'s dry-run-first pattern). Regenerated
+`docs/PENDING_CONTRADICTIONS.md`/`docs/DASHBOARD.md` via `generate-dashboard.py`, both now correctly
+show 0 pending. No production code changed — the underlying contradiction-check pipeline is
+untouched and will start queuing fresh entries on the next correction-tagged retain.
+
+**Lesson**: a passive, once-daily OS notification is not a substitute for either (a) actually
+clearing the queue on a cadence, or (b) surfacing the backlog somewhere it's checked as part of
+existing routine (e.g. the status-update report itself, which is how this was actually caught).
+Consider lowering friction on review — 196 one-at-a-time interactive prompts is itself a reason the
+queue never gets worked down; a batch/triage-by-category mode (similar to the Haiku false-positive
+sampling done on 2026-07-09) would scale better than the current one-entry-at-a-time CLI.
+
 ## 2026-07-17: Live In-Loop Write Decision — Design De-Risked via Spikes, NOT Implemented, Review Checklist Below
 
 **Origin**: this idea came from comparing Engram against

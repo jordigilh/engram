@@ -49,6 +49,57 @@ Consider lowering friction on review — 196 one-at-a-time interactive prompts i
 queue never gets worked down; a batch/triage-by-category mode (similar to the Haiku false-positive
 sampling done on 2026-07-09) would scale better than the current one-entry-at-a-time CLI.
 
+## 2026-07-19: Fixed the `project: null` Bug — Pending/Auto-Resolved Contradictions Now Tagged Per-Project
+
+**Fix for the bug logged above.** Root cause was exactly as diagnosed: `contradiction_resolution.resolve(bank_id,
+statement)` never received or forwarded a project value, so `pending_queue.append_pending()`'s
+`project` parameter always defaulted to `None` at both production call sites
+(`nightly-learn.py`'s `retain_windows()`, `cocoindex-flows.py`'s `process_transcript()`).
+
+**Fix**: threaded project resolution through the whole call chain instead of just adding a field
+that still nothing would populate:
+- `project_scope.py`: replaced the bare `ALLOWED_WORKSPACE_PREFIXES` list with a
+  `PROJECT_LABEL_BY_PREFIX` dict (prefix → `"kubernaut"`/`"dcm"`/`"engram"`), with
+  `ALLOWED_WORKSPACE_PREFIXES` now derived from its keys so the two concerns ("is this workspace in
+  scope" and "which project does it map to") can't drift apart again. Added
+  `resolve_project_label(project_dir_name)`.
+- `contradiction_resolution.resolve()` gained a `project: str | None = None` parameter, forwarded to
+  both `pending_queue.append_pending(..., project=project)` and `log_auto_resolved(..., project=project)`
+  (the auto-resolved log had the identical gap — no `project` key at all — even though it wasn't
+  called out in the bug report; fixed for the same reason while already threading the value through).
+- `nightly-learn.py`: added `project_for_transcript_path(path)` (maps a transcript's
+  `~/.cursor/projects/<workspace_dir>/...` path back to a label via `project_scope`), called at both
+  `retain_windows_deduped()` call sites in `run_hourly()`/`run_nightly()` and threaded through
+  `retain_windows_deduped()` → `retain_windows()` → `resolve()`.
+- `cocoindex-flows.py`: `process_transcript()` derives the same label from
+  `file.file_path.path.resolve()` relative to `ENGRAM_TRANSCRIPTS_DIR`, using the same string-prefix
+  pattern already used elsewhere in that file (not `Path.relative_to()`, since `.resolve()` vs. the
+  raw `.path` can disagree across symlinks).
+- `report.py`'s `count_pending_contradictions()` gained a `project` filter parameter (entries with
+  `project=None` — i.e. anything written before this fix, or any future entry whose transcript path
+  couldn't be resolved — are excluded from every project-scoped count; there's no safe default to
+  backward-compat them to, unlike the effectiveness-log project-tagging fix on 2026-07-09, since a
+  pending contradiction's project can't be inferred from anything else in the entry). Also moved the
+  hardcoded path into a proper `PENDING_CONTRADICTIONS_LOG` module constant for testability, matching
+  `MCP_CALLS_LOG`/`EFFECTIVENESS_LOG`/etc. `format_report()` now takes the count as a parameter
+  instead of computing it unscoped internally, so each project's report section shows its own count.
+- `generate-dashboard.py`'s `docs/PENDING_CONTRADICTIONS.md` generator now shows a per-project
+  breakdown line and tags each individual pending entry with its project — previously it only ever
+  had `None`/`"?"` to display, since the underlying field was always null.
+
+**Validated**: added regression tests at every layer of the chain (`resolve()` forwards `project` to
+both the queue and the auto-resolved log; `project_for_transcript_path()` resolves kubernaut/dcm/
+out-of-scope/outside-root paths correctly; `process_transcript()` derives and forwards the same
+label; `count_pending_contradictions()` filters correctly and excludes null-project legacy entries).
+193 tests pass (up from 169 pre-fix). Ran `report.py --days 1` and `generate-dashboard.py` against
+live data post-fix — both completed without error; queue is currently empty (see prior entry) so the
+per-project breakdown will only be visible once fresh entries accumulate under the fixed code path.
+
+**Not done**: did not backfill a `project` onto the 196 entries backed up to
+`contradictions-pending.jsonl.bak-20260719-001133` — they were already judged not worth the
+per-entry review effort (see prior entry's decision to drop rather than triage), and this fix only
+prevents the bug from recurring on new entries, not retroactively.
+
 ## 2026-07-17: Live In-Loop Write Decision — Design De-Risked via Spikes, NOT Implemented, Review Checklist Below
 
 **Origin**: this idea came from comparing Engram against

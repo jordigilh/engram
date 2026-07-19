@@ -23,6 +23,7 @@ Usage:
 import argparse
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -255,14 +256,20 @@ def find_near_duplicates(memories: list[dict]) -> list[tuple[str, str, float]]:
     return pairs
 
 
+# Opt-in: set ENGRAM_GCP_PROJECT locally (never commit the real value) to
+# also dedup repeated mentions of your real Vertex AI project ID. Skipped
+# entirely when unset.
+_KNOWN_GCP_PROJECT = os.environ.get("ENGRAM_GCP_PROJECT", "")
+
+
 def find_repeated_facts(memories: list[dict]) -> dict[str, list[str]]:
     """Find factual claims restated 3+ times across memories."""
     fact_groups: dict[str, list[str]] = defaultdict(list)
 
     for m in memories:
         text = m.get("text", "").lower()
-        if "example-gcp-project" in text:
-            fact_groups["GCP project = example-gcp-project"].append(m["id"])
+        if _KNOWN_GCP_PROJECT and _KNOWN_GCP_PROJECT.lower() in text:
+            fact_groups[f"GCP project = {_KNOWN_GCP_PROJECT}"].append(m["id"])
         if "kubernaut-system" in text and "namespace" in text and len(text) < 200:
             fact_groups["kubernaut-system namespace"].append(m["id"])
         if "hapi" in text and ("deprecated" in text or "replaced" in text):

@@ -16,8 +16,11 @@ import re
 import time
 from dataclasses import dataclass
 
+# Placeholders: set the real VERTEXAI_PROJECT/GOOGLE_CLOUD_PROJECT/
+# VERTEXAI_LOCATION in your shell environment -- setdefault() only applies
+# these when they're not already set, so a real exported value always wins.
 os.environ.setdefault("VERTEXAI_PROJECT", "example-gcp-project")
-os.environ.setdefault("VERTEXAI_LOCATION", "global")
+os.environ.setdefault("VERTEXAI_LOCATION", "us-central1")
 os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "example-gcp-project")
 os.environ.setdefault(
     "GOOGLE_APPLICATION_CREDENTIALS",

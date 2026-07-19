@@ -2,6 +2,58 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-19: Real GCP Project ID Scrubbed From Git History (Not Just HEAD) After Org-Wide Leak Sweep
+
+**Context**: A separate team ran an org-wide sweep for leaked Vertex AI project identifiers across
+several repos and had already pushed a fix directly to Engram's `main` (commit `40afb75`,
+co-authored with Cursor): 3 spike scripts' hardcoded `VERTEXAI_PROJECT`/`GOOGLE_CLOUD_PROJECT`/
+`VERTEXAI_LOCATION` `os.environ.setdefault()` fallbacks replaced with generic placeholders, and
+`triage-memories.py`'s hardcoded dedup literal moved to an opt-in `ENGRAM_GCP_PROJECT` env var.
+Asked to review it.
+
+**Review findings**:
+- The code changes themselves were correct: `setdefault()` semantics preserved (a real exported
+  value always wins), placeholders are non-identifying, comments explain the behavior, all 193 tests
+  still pass. Confirmed via full-repo grep that no other file (config, docs, launchd plists) had ever
+  hardcoded the real value — `config.env.example` and the `launchd/*.plist` templates already used
+  safe placeholders (`your-gcp-project-id`, `__VERTEXAI_PROJECT__`) substituted at install time from
+  `~/.hindsight/config.env`, so this leak was isolated to exactly the 4 changed files.
+- **But the fix only scrubbed HEAD.** `git log --all -S "<real-project-id>"` found the value still
+  present in 3 earlier commits' diffs, and — worse — **in the fix commit's own message**, which
+  restated the real value in plain text ("Replace \<real-project-id\> / global hardcoded
+  fallbacks..."). Since Engram is a **public** GitHub repo (confirmed via `gh repo view`), that's a
+  live, permanent leak: scrubbing the tip of `main` does nothing to a value anyone can retrieve via
+  `git log -p`, `git blame`, or GitHub's own commit-history UI on those older commits. A commit
+  message is arguably worse than a diff here, since it's visible directly in `git log`/GitHub's
+  commit list without opening anything.
+
+**Fix**: confirmed 0 forks/stars/network on the repo (low blast radius), then rewrote history:
+1. Backed up the full repo (`git clone --mirror`) before touching anything.
+2. Made a fresh `--no-local` clone (git-filter-repo requires this, or `--force`, to guard against
+   accidentally mangling the repo you're standing in).
+3. Ran `git filter-repo --replace-text <file> --replace-message <file>` with a single literal
+   mapping (`<real-project-id>==>example-gcp-project`) — `--replace-text` handles blob content,
+   `--replace-message` (a separate flag) handles commit/tag messages, which the diffs-only fix had
+   missed entirely.
+4. Verified clean via three independent checks: `git log --all -S`, `git log --all --grep`, and a
+   brute-force `git grep` across every blob in every commit (`git rev-list --all | xargs git grep`).
+   Also diffed the full working tree between old and rewritten clones (identical modulo gitignored
+   `__pycache__`) and re-ran the test suite (193/193) to confirm the rewrite didn't corrupt anything.
+5. Force-pushed the rewritten history to `origin/main`, then hard-reset the local clone to match.
+
+**Not done**: didn't touch `spike/__pycache__/*.pyc` (stale bytecode cache with the old value baked
+in) — it's gitignored, was never committed, and Python recompiles it automatically once source
+changes, so it's not a real exposure. Didn't add test coverage for `triage-memories.py`'s dedup
+logic — it had zero coverage before this fix too; out of scope for a review of someone else's
+security patch.
+
+**Lesson**: "remove the secret from the file" and "remove the secret from the repo" are different
+tasks once anything has been pushed to a public remote — the first only stops the leak from getting
+worse, the second requires touching history (and checking commit messages specifically, not just
+diffs, since tools like `git filter-repo` require a separate flag for messages). Worth checking
+whether the other repos this same team touched in the org-wide sweep got a HEAD-only fix or an actual
+history rewrite.
+
 ## 2026-07-19: Pending-Contradictions Backlog Reset to Zero — Only 2 of 196 Were Ever Actually Reviewed
 
 **Context**: Asked for a status update; the report showed **196 pending contradictions, 0 resolved**.

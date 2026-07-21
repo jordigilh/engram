@@ -2,6 +2,61 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-21: The `project=null` Fix Was Never Live — Stale `KeepAlive` Daemon, Then a Real Bug Once Restarted
+
+**Context**: Routine status check found all 37 entries queued in `contradictions-pending.jsonl`
+since the 2026-07-19 reset still had `project: null` — the exact bug that was supposedly fixed two
+days earlier (commit `e826cc0`).
+
+**Root cause #1 — fix was never deployed to the running process.** `nightly-learn.py` runs as a
+scheduled `launchd` job: a fresh process every time, always reads the latest code from disk.
+`cocoindex-flows.py`'s `transcripts-app` (the thing that actually calls
+`contradiction_resolution.resolve()` for every live session in practice — the nightly logs
+consistently show "0 transcripts, 0 corrections" because cocoindex already got there first) runs
+as a **long-lived `KeepAlive` daemon** (`io.vectorize.cocoindex.service` / `.cocoindex.engram`,
+`RunAtLoad`+`KeepAlive`, no periodic restart). `ps -o lstart` showed both had been running
+continuously since **Jul 17, 20:18** — before the fix even existed — and a `KeepAlive` daemon only
+reloads its module once, at process start; editing the (symlinked) source file on disk does nothing
+until the process is killed and relaunched. Same gap silently applied to an unrelated fix from the
+same day (`559fcf9`, a `correction-cache.json` save race) — anything touching modules this daemon
+imports needs an explicit restart to actually take effect, and nothing enforces or reminds anyone of
+that.
+
+**Root cause #2 — the fix itself had a bug, caught only by restarting.** `launchctl kickstart -k`
+on both daemons immediately surfaced `AttributeError: 'PurePosixPath' object has no attribute
+'resolve'` in `process_transcript()`. The 2026-07-19 fix used `file.file_path.path.resolve()`, but
+per cocoindex's actual `FilePath` class (`cocoindex/resources/file.py`): `.path` is only the
+**relative** path (a bare `PurePosixPath`, no filesystem methods at all), while `.resolve()` on the
+`FilePath` object itself (not on `.path`) is what returns the absolute concrete `pathlib.Path`. The
+two other pre-existing call sites in the same file (`process_doc_file` etc.) already used the
+correct `file.file_path.resolve()` — this fix just used the wrong one. The unit test's `FakeFile`
+mock didn't catch it because it modeled `file_path` as a bare `SimpleNamespace(path=<concrete
+Path>)`, so `.path.resolve()` "worked" in the mock despite not existing on the real type. This is
+exactly the class of bug integration/E2E tests catch and unit tests with inaccurate mocks don't —
+there was no test that exercised this code path against anything resembling the real cocoindex API.
+
+**Fix**:
+1. Corrected `cocoindex-flows.py` back to `file.file_path.resolve()`, matching the two already-correct
+   call sites elsewhere in the file.
+2. Fixed `FakeFile` in `tests/test_cocoindex_flows.py` to actually mirror cocoindex's contract:
+   `.path` is a relative `PurePosixPath` (used only for `.stem`), `.resolve()` is a separate callable
+   returning the absolute `Path`. Verified the corrected test actually has teeth by temporarily
+   reintroducing the bug and confirming the 3 project-tagging tests fail with the same
+   `AttributeError` seen in production, then re-fixed and re-verified green (193/193).
+3. Restarted both daemons again (`launchctl kickstart -k`) and confirmed clean startup: no errors in
+   `cocoindex-stderr.log`, and a `claude-sonnet-4-6` LiteLLM call (the contradiction-check model)
+   fired successfully shortly after — confirming `process_transcript()` is executing end-to-end again.
+4. Left the 37 already-queued `project: null` entries alone (documented, not backfilled) — same
+   reasoning as the 2026-07-19 backlog decision: no reliable way to retroactively resolve project
+   for entries that never recorded it, and the code path producing new ones is fixed going forward.
+
+**Lesson**: when a fix touches code imported by a long-running `KeepAlive` daemon, "committed" does
+not mean "deployed" — always check `ps -o lstart` against the fix's commit timestamp, or just
+restart proactively, before declaring a fix live. Second: mocks for third-party library types should
+be verified against the real type's actual interface (or exercised in an integration test at least
+once) rather than assumed from how the code *reads* — this mock had been accepted into the codebase
+and passed CI for 2 days while being subtly wrong.
+
 ## 2026-07-19: Real GCP Project ID Scrubbed From Git History (Not Just HEAD) After Org-Wide Leak Sweep
 
 **Context**: A separate team ran an org-wide sweep for leaked Vertex AI project identifiers across

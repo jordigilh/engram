@@ -805,10 +805,14 @@ async def process_transcript(file: localfs.File) -> None:
 
     windows = _extract_learning_windows(messages)
     transcript_id = file.file_path.path.stem
-    # Same string-prefix approach as the other flows in this file (see e.g.
-    # rel_path computation above) rather than Path.relative_to(), since
-    # file.file_path.path.resolve() vs. .path can differ across symlinks.
-    abs_path = str(file.file_path.path.resolve())
+    # Same pattern as the other flows in this file (see e.g. rel_path
+    # computation above): file.file_path.path is only the *relative* path
+    # (a PurePosixPath -- no .resolve()); file.file_path.resolve() is what
+    # gives the absolute concrete Path. Mixing these up (as an earlier
+    # version of this fix did) throws AttributeError in production the
+    # instant a real cocoindex.localfs.File hits this code, since the unit
+    # test's FakeFile mock didn't model the distinction -- see docs/FINDINGS.md.
+    abs_path = str(file.file_path.resolve())
     base_prefix = str(ENGRAM_TRANSCRIPTS_DIR) + "/"
     project = None
     if abs_path.startswith(base_prefix):

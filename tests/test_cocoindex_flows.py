@@ -7,18 +7,32 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import contradiction_resolution as cr
 
 
 class FakeFile:
-    """Minimal stand-in for CocoIndex's localfs.File."""
+    """Minimal stand-in for CocoIndex's localfs.File.
 
-    def __init__(self, content: str, transcript_id: str = "tid-1"):
+    Mirrors the real cocoindex.resources.file.FilePath contract, which this
+    test previously got wrong: `.path` is the *relative* path (a PurePath --
+    no filesystem methods like .resolve()); `.resolve()` on the FilePath
+    object itself is what returns the absolute concrete Path. These are NOT
+    interchangeable -- confusing them (`.path.resolve()` instead of
+    `.resolve()`) passed this mock's old version (a bare SimpleNamespace
+    wrapping a concrete Path under `.path`) but threw AttributeError the
+    moment real production code hit it. See docs/FINDINGS.md 2026-07-21.
+    """
+
+    def __init__(self, content: str, transcript_id: str = "tid-1", abs_path: Path | None = None):
         self._content = content
-        self.file_path = SimpleNamespace(path=Path(f"/fake/{transcript_id}.jsonl"))
+        resolved = abs_path if abs_path is not None else Path(f"/fake/{transcript_id}.jsonl")
+        self.file_path = SimpleNamespace(
+            path=PurePosixPath(f"{transcript_id}.jsonl"),
+            resolve=lambda: resolved,
+        )
 
     async def read_text(self) -> str:
         return self._content
@@ -163,9 +177,8 @@ class TestProcessTranscriptProjectTagging:
     docs/FINDINGS.md."""
 
     def _file_under(self, transcripts_root: Path, project_dir_name: str, transcript_id: str = "tid-1") -> FakeFile:
-        f = FakeFile('{"role": "user"}', transcript_id)
-        f.file_path.path = transcripts_root / project_dir_name / "agent-transcripts" / f"{transcript_id}.jsonl"
-        return f
+        abs_path = transcripts_root / project_dir_name / "agent-transcripts" / f"{transcript_id}.jsonl"
+        return FakeFile('{"role": "user"}', transcript_id, abs_path=abs_path)
 
     def test_kubernaut_transcript_resolves_to_kubernaut_project(self, cocoindex_flows, monkeypatch, tmp_path):
         monkeypatch.setattr(cocoindex_flows, "ENGRAM_TRANSCRIPTS_DIR", tmp_path)

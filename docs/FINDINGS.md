@@ -2,6 +2,70 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-21 (evening): Hindsight Wouldn't Start After a Reboot — `pg0`'s Stale-PID Liveness Check
+
+**Context**: User reported "hindsight is failing to start". `hindsight-stderr.log` showed a
+`psycopg2.OperationalError: connection to server at "127.0.0.1", port 5432 failed: Connection
+refused` on every restart attempt, inside `hindsight_api.migrations.run_migrations` — the app itself
+was fine, its database just wasn't there.
+
+**Investigation, including a wrong turn**: `lsof -i :5432` showed nothing listening. First
+hypothesis: Homebrew's `postgresql@16` had been uninstalled (Cellar entry gone, no binaries on
+`PATH`) despite its data directory (`/opt/homebrew/var/postgresql@16`, last touched 2025-09-23)
+still existing — no trace of *when*/*how* this happened (no shell history, no Homebrew logs).
+Reinstalled it and started it — **wrong fix**. Hindsight doesn't use system Postgres at all; it uses
+`pg0-embedded`, a self-contained Postgres distribution (own bundled Postgres 18.1.0 binary, own data
+directory under `~/.pg0/instances/hindsight/data`, own `instance.json` tracking pid/port/creds) that
+`hindsight_api.pg0.EmbeddedPostgres` starts/manages on every app startup (default `DATABASE_URL =
+"pg0"`, resolved via `resolve_database_url()`). The `postgresql@16` reinstall was for a completely
+unrelated, never-before-used cluster; worse, starting it squatted on host port 5432 and produced a
+*different* wrong error ("role hindsight does not exist") until it was stopped again. Uninstalled it
+afterward to avoid this dead end recurring. (There's also a second, genuinely orphaned leftover at
+`~/.hindsight/data/instances/hindsight/` — 6.9GB, PG 18 data last written 2026-07-12, not referenced
+anywhere in code/config/plists — likely a relic of an earlier pg0-embedded default-path change.
+Left in place; flagged for the user to decide whether to reclaim the disk space.)
+
+**Actual root cause**: `pmset -g log` showed the Mac rebooted at **22:36:15**, ~3 minutes after
+Postgres received a clean "smart shutdown request" at 22:33:30 (visible in
+`~/.pg0/instances/hindsight/data/log/postgresql-2026-07-21.log` — a graceful shutdown consistent with
+the OS terminating background daemons before a restart, not a crash). On boot, `launchd`
+(`RunAtLoad`) restarted `hindsight-api` fresh, which calls `EmbeddedPostgres.ensure_running()` →
+`is_running()` → `pg0.info()`. That check only verifies *some* process currently holds the PID
+recorded in `~/.pg0/instances/hindsight/instance.json` (last written when Postgres actually started,
+2026-07-12) — it doesn't check that the process is actually `postgres`. After a reboot, low PIDs get
+reassigned quickly; the recorded PID (2691) had been reused by an unrelated system process
+(`TextInputMenuAgent`). So `is_running()` false-positived, `ensure_running()` skipped ever calling
+`start()` (confirmed: `pg0.py`'s "Starting embedded PostgreSQL..." log line never once appears in
+`hindsight-stdout.log`), and the app just kept retrying a connection to a database that was never
+actually launched — a crash loop that would have continued indefinitely without manual intervention.
+Reproduced directly: `pg0 start --name hindsight` (the CLI, same underlying check) refused with
+`Error: Instance already running (pid: 2691)`.
+
+**Fix**: backed up `instance.json`, corrected its `pid` field to a clearly-invalid value so the
+liveness check would fail honestly, then ran `pg0 start --name hindsight` for real. It came up as a
+*fresh* setup (Postgres 18 binary, same existing `data_dir` since that's pg0's own default — data was
+never touched, verified table-by-table afterward) but overwrote `instance.json`'s
+username/password/database to the CLI's generic defaults (`postgres`/`postgres`/`postgres`) since
+those weren't passed explicitly. Confirmed the actual `hindsight` role/database/tables were untouched
+by connecting directly (`psql -U hindsight -d hindsight`), then corrected `instance.json`'s
+credentials back to `hindsight`/`hindsight`/`hindsight` to match what `hindsight_api.pg0.py` always
+requests. Restarted `io.vectorize.hindsight.service` — clean migration run, `{"status":"healthy",
+"database":"connected"}`, worker poller and maintenance sweep all came up normally.
+
+**Not fixed (upstream bug, not ours to patch)**: `pg0-embedded`'s liveness check trusting a bare PID
+number with no identity verification (e.g. checking `/proc/<pid>/comm` or the process's command line
+contains `postgres`) is a real bug in the third-party package, not in Engram/Hindsight's own code —
+nothing to commit here beyond this writeup. Worth watching for a `pg0-embedded` release that fixes
+this, since the same failure mode will recur on every future reboot/sleep-triggered shutdown that
+happens to land while nothing has proactively restarted the embedded instance since.
+
+**Lesson**: "connection refused on 5432" doesn't necessarily mean "the expected Postgres died" — check
+which Postgres is expected first (`grep DEFAULT_DATABASE_URL`/`pg0`/embedded-db config) before
+reaching for the system package manager. And a service reporting itself "running" based on stale
+bookkeeping (PID reuse after reboot) is a general reminder that `KeepAlive`/`RunAtLoad` daemons need
+liveness checks with actual identity verification, not just existence checks — same category of bug
+as the 2026-07-21 (morning) stale-cocoindex-daemon incident below, different manifestation.
+
 ## 2026-07-21: The `project=null` Fix Was Never Live — Stale `KeepAlive` Daemon, Then a Real Bug Once Restarted
 
 **Context**: Routine status check found all 37 entries queued in `contradictions-pending.jsonl`

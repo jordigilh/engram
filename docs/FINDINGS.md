@@ -57,6 +57,13 @@ be verified against the real type's actual interface (or exercised in an integra
 once) rather than assumed from how the code *reads* — this mock had been accepted into the codebase
 and passed CI for 2 days while being subtly wrong.
 
+**Follow-up (same day)**: rather than leave the 37 `project: null` entries sitting in the queue
+indefinitely, dropped them outright (backed up to
+`contradictions-pending.jsonl.bak-untagged-20260721-084846` first). Both daemons are now confirmed
+running the fixed code, so any of these that are still live contradictions will resurface on their
+own next time cocoindex processes the relevant transcript window — this time tagged with the correct
+project. Regenerated `docs/DASHBOARD.md`/`docs/PENDING_CONTRADICTIONS.md` to reflect the empty queue.
+
 ## 2026-07-19: Real GCP Project ID Scrubbed From Git History (Not Just HEAD) After Org-Wide Leak Sweep
 
 **Context**: A separate team ran an org-wide sweep for leaked Vertex AI project identifiers across

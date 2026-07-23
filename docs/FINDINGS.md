@@ -2,6 +2,62 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-23: Nightly Run Crashed Entirely on a Transient Connection Blip — One Unguarded API Call
+
+**Context**: User asked for the status report from "yesterday's run". `launchctl list` showed both
+`io.vectorize.hindsight.nightly` and `io.vectorize.hindsight.nightly-dcm` with a last exit code of 1,
+and neither `2026-07-23.json` nor `2026-07-23-dcm.json` existed — the entire nightly pass for both
+projects had produced no output at all.
+
+**Timeline**: Both jobs are scheduled via `StartCalendarInterval` at 2:00 AM / 2:30 AM, but
+`launchd-stderr.log` / `launchd-dcm-stderr.log` showed them actually starting at **04:04:43** and
+**04:30:00** — over two hours late. `pmset -g log` showed why: **147 sleep/wake cycles since boot**
+(2026-07-21 11:36:15), and the jobs only fired once the machine next woke, which happened to land on
+a low-power "MaintenanceWake" (Power Nap) event rather than a full interactive wake. At that exact
+moment, every `GET`/`POST` to `http://localhost:8888` returned `ConnectionRefusedError: [Errno 61]` —
+Hindsight's port was transiently unreachable for roughly the first minute of each run, even though the
+underlying `hindsight-api` process (PID confirmed via `ps -o lstart`) never actually restarted across
+that window and was confirmed healthy again minutes later with no intervention. Best working theory:
+Power Nap wakes bring the CPU up but don't necessarily fully restore network stack state before
+launchd's calendar jobs fire, unlike a full user-initiated wake — not confirmed at the kernel level,
+but consistent with every other symptom (no crash, no restart, self-resolving, correlates with the
+sleep/wake count).
+
+**The transient blip alone shouldn't have mattered** — nearly every API call in `nightly-learn.py`
+already wraps `api_post()`/`api_get()` in try/except and logs a warning-and-continue on failure
+(stats collection, reflect, recall probes all did exactly that in the logs, and the run kept going:
+transcripts were found, corrections were analyzed, effectiveness stats were computed with real
+numbers). **The actual bug**: the final phase of `run_nightly()` — the loop that refreshes every
+mental model — called `api_post()` directly with no try/except, the one place in the whole file that
+didn't follow the file's own established defensive pattern. Because `api_post()` always re-raises
+(`HTTPError`/`URLError`) by design (so its callers can choose how to handle failure), that single
+unguarded call threw an unhandled exception through `main()` and killed the entire process — discarding
+every effectiveness/session/probe metric that had already been successfully computed earlier in that
+same run, for both projects, on top of losing the mental-model refreshes themselves.
+
+**Fix**: wrapped the mental-model refresh loop in the same `try/except (HTTPError, URLError):
+log.warning(...); continue` pattern already used everywhere else in the file
+(`nightly-learn.py`, `run_nightly()`, ~line 1628). Deployed instantly since `~/.hindsight/nightly-learn.py`
+is a symlink into this repo — no service restart needed, since `launchd` invokes `python3
+nightly-learn.py` fresh on each scheduled run rather than running a long-lived daemon.
+
+**Backfill**: rather than wait for tonight's scheduled run, manually re-ran
+`nightly-learn.py --mode nightly --project kubernaut` and `--project dcm` by hand once Hindsight's API
+was confirmed healthy. Both completed cleanly (`2026-07-23.json`, `2026-07-23-dcm.json`,
+`docs/DASHBOARD.md`, `docs/PENDING_CONTRADICTIONS.md` all regenerated) — no data gap in the historical
+record. `launchctl list` continues to show the stale exit-code-1 from the 4 AM failure until tonight's
+run overwrites it; this is cosmetic (launchd only remembers the last invocation it itself started) and
+not a sign of an ongoing problem.
+
+**Not fixed (environmental, not code)**: the underlying cause of *why* the loopback connection was
+refused for that first minute after a Power-Nap-triggered wake remains unconfirmed — this is the same
+class of "networking not fully back yet right after sleep/wake" issue documented elsewhere in this file
+for Vertex AI/GitHub over Wi-Fi, just manifesting on loopback this time. 147 sleep/wake cycles in under
+48 hours is unusually high and worth keeping an eye on (lid-open/close pattern, or a misbehaving Power
+Nap trigger) since it directly caused both the 2-hour scheduling delay and the connectivity window that
+exposed this bug. The defensive-coding fix above means this class of transient blip can no longer take
+down an entire nightly run regardless of root cause, which was the actionable part.
+
 ## 2026-07-21 (evening): Hindsight Wouldn't Start After a Reboot — `pg0`'s Stale-PID Liveness Check
 
 **Context**: User reported "hindsight is failing to start". `hindsight-stderr.log` showed a

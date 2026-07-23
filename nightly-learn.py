@@ -1627,10 +1627,14 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
     models_to_refresh = pconfig["mental_models"]
     for bank, model_ids in models_to_refresh.items():
         for model_id in model_ids:
-            resp = api_post(
-                f"/v1/default/banks/{bank}/mental-models/{model_id}/refresh",
-                {},
-            )
+            try:
+                resp = api_post(
+                    f"/v1/default/banks/{bank}/mental-models/{model_id}/refresh",
+                    {},
+                )
+            except (HTTPError, URLError) as e:
+                log.warning("  %s/%s: refresh failed: %s", bank, model_id, e)
+                continue
             if resp and "error" not in resp:
                 log.info("  %s/%s: refresh triggered", bank, model_id)
             else:

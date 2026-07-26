@@ -2,6 +2,50 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-26: Upgraded `hindsight-api` 0.8.4→0.8.5 and `cocoindex` 1.0.16→1.0.18
+
+**Why**: Routine release check turned up two concrete reasons to upgrade rather than just take
+the latest for its own sake:
+
+- **`hindsight-api` 0.8.5 ships our own deadlock-fix saga.** PR #2529 (the fix originally
+  submitted from this project, see the 2026-07-1x deadlock investigation entries below) was
+  closed as superseded by the maintainer's own follow-up, **PR #2534** ("catch the #2529 sweep
+  deadlock in continuous perf, and drive dropped passes to zero"), merged upstream 2026-07-20 and
+  shipped in the 0.8.5 release (2026-07-22). 0.8.5 also bundles a second, independent deadlock fix
+  (**PR #2570**, "Fix chunk delete deadlock ordering").
+- **`cocoindex` 1.0.17 has an actual security fix**: pyo3 0.27→0.29 upgrade to resolve security
+  advisories, plus a Postgres fix directly relevant to our pgvector usage ("recursively strip
+  NUL/U+0000 from array and composite bindings"). 1.0.18 (current latest) adds only
+  lower-priority features/docs on top (Dart tree-sitter grammar, `cocoindex show` inspection
+  improvements).
+
+**Upgrade procedure** (matches the documented runbook in `docs/INSTALL.md`):
+```
+uv pip install --python ~/.hindsight/venv/bin/python -U cocoindex
+uv pip install --python ~/.hindsight/venv/bin/python -U 'hindsight-api[all]'
+```
+Note: the second command printed `warning: The package hindsight-api==0.8.5 does not have an
+extra named 'all'` — benign; the `[all]` extras group was apparently restructured/removed in this
+release, but `hindsight-api-slim` is an unconditional (non-extra) dependency of `hindsight-api`,
+so it upgraded to 0.8.5 regardless. Confirmed via `uv pip show`: `cocoindex==1.0.18`,
+`hindsight-api==0.8.5`, `hindsight-api-slim==0.8.5`.
+
+**Rollout**: restarted `io.vectorize.cocoindex.service`, `io.vectorize.cocoindex.engram`, and
+`io.vectorize.cocoindex.dcm` first (lower risk, no DB migrations) — all three reconnected to a
+healthy Hindsight API cleanly. Then restarted `io.vectorize.hindsight.service` via `launchctl
+kickstart -k`; `hindsight-stdout.log` showed `Database migrations completed successfully`
+followed by normal startup. One transient `asyncpg.exceptions.ForeignKeyViolationError` on
+`observation_history` appeared in stderr during the restart window itself — this is an in-flight
+worker task getting SIGTERM'd mid-transaction by the forced restart, not a migration/upgrade
+regression (confirmed: `/health` returned `{"status":"healthy","database":"connected"}` within
+seconds, and subsequent `graph_maintenance` runs — the exact code path PR #2534 patches —
+completed cleanly with real work done, e.g. `relink_units_processed: 48, relink_links_added:
+1489`, no deadlock errors).
+
+**Not done**: no version pins exist anywhere in this repo for either package (`docs/INSTALL.md`
+intentionally documents unpinned `pip install`/`uv pip install`), so there's nothing to bump in
+git beyond this findings entry.
+
 ## 2026-07-23: Nightly Run Crashed Entirely on a Transient Connection Blip — One Unguarded API Call
 
 **Context**: User asked for the status report from "yesterday's run". `launchctl list` showed both

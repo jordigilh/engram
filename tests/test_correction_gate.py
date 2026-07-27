@@ -139,13 +139,36 @@ class TestClassifyCached:
 
         assert cg.classify_cached(text) is True
 
-    def test_error_result_is_treated_as_not_a_correction_and_cached_as_such(self, monkeypatch):
+    def test_error_result_is_treated_as_not_a_correction_but_not_cached(self, monkeypatch):
+        """Regression test for the 2026-07-27 fix: a transient/config failure
+        (e.g. the region misconfiguration that made every production
+        classify_correction() call fail with FAILED_PRECONDITION -- see
+        docs/FINDINGS.md) must not be permanently baked into the disk cache
+        as a definitive "not a correction" for this exact text. Each call
+        gets its own (uncached) False while the underlying error persists,
+        and a call made after the error clears must retry Haiku rather than
+        trusting a poisoned cache entry.
+        """
+        calls = []
         monkeypatch.setattr(
             cg, "classify_correction",
-            lambda text: _fake_result(is_correction=True, category=None, error="timeout"),
+            lambda text: calls.append(text) or _fake_result(is_correction=True, category=None, error="timeout"),
         )
         # is_correction=True but error is set -> classify_cached must still return False.
         assert cg.classify_cached("some message") is False
+        assert not cg.CACHE_PATH.exists(), "error results must not be written to the disk cache"
+
+        # Simulate the underlying failure clearing: a second call with the
+        # exact same text must call classify_correction again (not silently
+        # return a cached False), and this time succeed and get cached.
+        monkeypatch.setattr(
+            cg, "classify_correction",
+            lambda text: calls.append(text) or _fake_result(is_correction=True, category="methodology"),
+        )
+        assert cg.classify_cached("some message") is True
+        assert calls == ["some message", "some message"], "expected classify_correction called on every error, not just once"
+        on_disk = json.loads(cg.CACHE_PATH.read_text())
+        assert len(on_disk) == 1
 
 
 class TestSaveCacheConcurrency:

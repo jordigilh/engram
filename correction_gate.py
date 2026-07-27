@@ -111,7 +111,22 @@ def classify_cached(text: str) -> bool:
             return bool(cached["is_correction"])
 
     result = classify_correction(text)
-    is_corr = bool(result.is_correction and not result.error)
+    if result.error:
+        # Do NOT cache API/transport failures (e.g. a misconfigured Vertex AI
+        # region, rate limiting, timeouts) as a definitive "not a
+        # correction" -- classify_cached()'s cache has no TTL or
+        # error-awareness, so a transient failure would otherwise be
+        # permanently baked in as a false negative for this exact text,
+        # surviving long after the underlying failure is fixed. Observed in
+        # production 2026-07-27: every launchd job reaching this module had
+        # VERTEXAI_LOCATION unset, defaulting classify_correction() to a
+        # region where the model returned FAILED_PRECONDITION on every call
+        # -- see docs/FINDINGS.md. Returning (uncached) False here means a
+        # failure is silently treated as "not a correction" for *this* call
+        # only; the next call with the same text will retry Haiku instead of
+        # trusting a poisoned cache entry.
+        return False
+    is_corr = bool(result.is_correction)
 
     with _cache_lock:
         cache = _load_cache()

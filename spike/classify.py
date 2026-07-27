@@ -19,8 +19,20 @@ from dataclasses import dataclass
 # Placeholders: set the real VERTEXAI_PROJECT/GOOGLE_CLOUD_PROJECT/
 # VERTEXAI_LOCATION in your shell environment -- setdefault() only applies
 # these when they're not already set, so a real exported value always wins.
+#
+# "global" (not a specific region like "us-central1"): matches
+# ~/.hindsight/config.env's VERTEXAI_LOCATION, hindsight-api's own working
+# config for the exact same model. Confirmed 2026-07-27 that
+# claude-haiku-4-5@20251001 returns FAILED_PRECONDITION ("not servable in
+# region us-central1") when called with the old "us-central1" default --
+# none of the launchd jobs that reach this module (nightly-learn.py's
+# hourly/nightly runs, cocoindex-flows.py) set VERTEXAI_LOCATION themselves,
+# so every classify_correction()/check_contradiction() call in production
+# had been silently hitting that error since correction_gate.py went live,
+# with failures cached as false negatives (see classify_cached() fix and
+# docs/FINDINGS.md 2026-07-27).
 os.environ.setdefault("VERTEXAI_PROJECT", "example-gcp-project")
-os.environ.setdefault("VERTEXAI_LOCATION", "us-central1")
+os.environ.setdefault("VERTEXAI_LOCATION", "global")
 os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "example-gcp-project")
 os.environ.setdefault(
     "GOOGLE_APPLICATION_CREDENTIALS",

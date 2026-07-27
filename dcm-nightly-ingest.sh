@@ -23,6 +23,7 @@ declare -a REPO_MAP=(
   "DCM_K8S_CONTAINER_SP_DIR=k8s-container-service-provider"
   "DCM_ACM_CLUSTER_SP_DIR=acm-cluster-service-provider"
   "DCM_THREE_TIER_SP_DIR=three-tier-app-demo-service-provider"
+  "DCM_OSAC_SP_DIR=osac-service-provider"
   "DCM_UTILITIES_DIR=utilities"
   "DCM_SHARED_WORKFLOWS_DIR=shared-workflows"
 )

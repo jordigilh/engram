@@ -71,6 +71,10 @@ DCM_THREE_TIER_SP_DIR = pathlib.Path(os.environ.get(
     "DCM_THREE_TIER_SP_DIR",
     os.path.expanduser("~/go/src/github.com/dcm-project/three-tier-app-demo-service-provider"),
 ))
+DCM_OSAC_SP_DIR = pathlib.Path(os.environ.get(
+    "DCM_OSAC_SP_DIR",
+    os.path.expanduser("~/go/src/github.com/dcm-project/osac-service-provider"),
+))
 DCM_UTILITIES_DIR = pathlib.Path(os.environ.get(
     "DCM_UTILITIES_DIR",
     os.path.expanduser("~/go/src/github.com/dcm-project/utilities"),
@@ -85,6 +89,7 @@ ISSUES_REPOS = os.environ.get(
     "dcm-project/dcm,dcm-project/control-plane,dcm-project/cli,"
     "dcm-project/kubevirt-service-provider,dcm-project/k8s-container-service-provider,"
     "dcm-project/acm-cluster-service-provider,dcm-project/three-tier-app-demo-service-provider,"
+    "dcm-project/osac-service-provider,"
     "dcm-project/utilities,dcm-project/dcm-project.github.io,dcm-project/enhancements,"
     "dcm-project/shared-workflows,dcm-project/quadlet-deploy",
 ).split(",")
@@ -594,6 +599,7 @@ async def code_main(
     k8s_container_sp_dir: pathlib.Path,
     acm_cluster_sp_dir: pathlib.Path,
     three_tier_sp_dir: pathlib.Path,
+    osac_sp_dir: pathlib.Path,
     utilities_dir: pathlib.Path,
     shared_workflows_dir: pathlib.Path,
 ) -> None:
@@ -661,6 +667,7 @@ async def code_main(
         (k8s_container_sp_dir, "dcm-k8s-container-sp"),
         (acm_cluster_sp_dir, "dcm-acm-cluster-sp"),
         (three_tier_sp_dir, "dcm-three-tier-sp"),
+        (osac_sp_dir, "dcm-osac-sp"),
         (utilities_dir, "dcm-utilities"),
     ]
 
@@ -703,6 +710,7 @@ code_app = coco.App(
     k8s_container_sp_dir=DCM_K8S_CONTAINER_SP_DIR,
     acm_cluster_sp_dir=DCM_ACM_CLUSTER_SP_DIR,
     three_tier_sp_dir=DCM_THREE_TIER_SP_DIR,
+    osac_sp_dir=DCM_OSAC_SP_DIR,
     utilities_dir=DCM_UTILITIES_DIR,
     shared_workflows_dir=DCM_SHARED_WORKFLOWS_DIR,
 )
@@ -784,6 +792,7 @@ def main():
     log.info("  K8s Container SP:    %s", DCM_K8S_CONTAINER_SP_DIR)
     log.info("  ACM Cluster SP:      %s", DCM_ACM_CLUSTER_SP_DIR)
     log.info("  Three-tier SP:       %s", DCM_THREE_TIER_SP_DIR)
+    log.info("  OSAC SP dir:         %s", DCM_OSAC_SP_DIR)
     log.info("  Utilities dir:       %s", DCM_UTILITIES_DIR)
     log.info("  Shared workflows:    %s", DCM_SHARED_WORKFLOWS_DIR)
     log.info("  Issues repos:        %s", ", ".join(ISSUES_REPOS))

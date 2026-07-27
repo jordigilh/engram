@@ -2,6 +2,90 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-27: Every Production Haiku Correction-Detection Call Had Been Failing — Missing `VERTEXAI_PROJECT` in launchd Envs, Not Just the Wrong Region
+
+**Context**: Investigating the 0% recall-adoption dip surfaced a `backfill-effectiveness.py`
+dry run in which every Haiku correction-classification call failed with
+`litellm...AnthropicError: Publisher Model ... is not servable in region us-central1`. That
+looked like a simple region misconfiguration and `spike/classify.py`'s `VERTEXAI_LOCATION`
+`setdefault()` was changed from `us-central1` to `global` to fix it (confirmed working via a
+manual test using the interactive shell's ambient GCP env).
+
+**That fix was necessary but not sufficient — a much bigger bug was hiding underneath it.**
+Re-testing `classify_correction()` with a genuinely clean environment (no ambient shell
+exports at all, matching what a launchd job actually sees) surfaced a *different* error:
+`403 PERMISSION_DENIED: Permission denied on resource project example-gcp-project`. That
+placeholder value comes from `spike/classify.py`'s own `os.environ.setdefault("VERTEXAI_PROJECT",
+"example-gcp-project")` — the generic placeholder substituted in commit `40afb75` when the real
+project ID was scrubbed from this public repo (see the 2026-07-19/21 entries below). The
+`setdefault()` design assumes the real value is already exported in the calling process's
+environment (documented right above it in `spike/classify.py`) — true for an interactive shell
+that happens to have `ANTHROPIC_VERTEX_PROJECT_ID` (a *different* env var name that some litellm
+code paths fall back to) set, but **false for every launchd job**.
+
+**Root cause, confirmed by inspecting every `launchd/*.plist` `EnvironmentVariables` block**:
+- `io.vectorize.hindsight.service.plist` (the API server) and `io.vectorize.prefilter-shadow-trial.plist`
+  *did* set `VERTEXAI_PROJECT`/`GOOGLE_CLOUD_PROJECT`/`VERTEXAI_LOCATION` correctly (via the
+  existing `__VERTEXAI_PROJECT__` sed-substitution pattern in `docs/INSTALL.md`).
+- `io.vectorize.hindsight.nightly.plist`, `io.vectorize.hindsight.hourly.plist`,
+  `io.vectorize.hindsight.nightly-dcm.plist`, and all three `io.vectorize.cocoindex.*.plist`
+  jobs had **no Vertex AI env vars at all**. Every `nightly-learn.py` and `cocoindex-flows.py`
+  process — i.e. the actual production write path for retain/correction-detection, as opposed to
+  the shadow-trial's own isolated, correctly-configured job — ran with the fake placeholder
+  project, and every `classify_correction()`/`check_contradiction()` call inside it had been
+  hitting a hard 403 since `correction_gate.py` went live.
+
+**Compounding bug**: `correction_gate.py`'s `classify_cached()` cached *every* result from
+`classify_correction()`, including error results, with no error-awareness or TTL. So each 403
+failure got permanently baked into `~/.hindsight/logs/correction-cache.json` as `is_correction:
+false` for that exact message text — a silent, permanent false negative that would never be
+retried even after the underlying config was fixed. The cache had grown to 35,660 entries (91%
+`False`); the `True` entries are unaffected by this bug (a 403 always yields `is_correction=False`
+before this fix, so `True` entries in the cache are provably genuine), but the `False` entries were
+an unknowable mix of real non-corrections and outage-poisoned false negatives.
+
+**Fix** (four parts):
+1. `spike/classify.py`: `VERTEXAI_LOCATION` default changed `us-central1` → `global` (confirmed
+   working for `claude-haiku-4-5@20251001`, matching `~/.hindsight/config.env`'s working config
+   for the same model).
+2. `correction_gate.py`: `classify_cached()` no longer caches a result when `classify_correction()`
+   returns an error — each call gets an uncached `False` for *that* call only, so the next call
+   with the same text retries Haiku instead of trusting a poisoned cache entry.
+3. **New**: `with-config-env.sh`, a shared launchd wrapper (mirroring `start.sh`'s existing
+   `set -a; source config.env; set +a` pattern) that every LLM-touching `launchd/*.plist` now
+   runs through as the first `ProgramArguments` entry, injecting `config.env` into the process
+   environment **at runtime** instead of baking `VERTEXAI_PROJECT`/model names into any plist —
+   including the local, non-git ones under `~/Library/LaunchAgents/`. Applied to all 8 affected
+   plists: `hindsight.service`, `hindsight.nightly`, `hindsight.hourly`, `hindsight.nightly-dcm`,
+   `cocoindex.service`, `cocoindex.engram`, `cocoindex.dcm`, `prefilter-shadow-trial`. This also
+   retired the old `__VERTEXAI_PROJECT__` sed-substitution pattern in `docs/INSTALL.md` — no
+   plist, committed or local, contains any LLM/project configuration now; `config.env` is the
+   single source of truth. `docs/INSTALL.md` and `config.env.example` updated accordingly
+   (`config.env.example` also gained the `FORCE_CPU`/`DB_POOL_*` keys that had only ever existed
+   hardcoded in the local plist, never in the example).
+4. Backed up and cleared `correction-cache.json` (35,660 entries) so classification restarts
+   fresh under the fixed config rather than continuing to trust unreliable cached `False` results.
+
+**Verification**: `~/.hindsight/with-config-env.sh env` (via `env -i` with only `HOME`/`PATH` —
+no ambient shell exports) confirmed `VERTEXAI_PROJECT`/`GOOGLE_CLOUD_PROJECT`/`VERTEXAI_LOCATION`/
+`GOOGLE_APPLICATION_CREDENTIALS` are all correctly populated at runtime; a subsequent
+`classify_correction()` call in that same clean environment succeeded (`error=None`,
+correctly classified a real test correction as `is_correction=True,
+category=convention_violation`). All 8 plists reloaded via `launchctl bootout`+`bootstrap`; all
+long-running (`KeepAlive`) services (`hindsight.service`, `cocoindex.service`, `cocoindex.engram`)
+confirmed `running` and `hindsight-api` `/health` returned 200 post-reload. 214/214 tests pass,
+including a rewritten `test_error_result_is_treated_as_not_a_correction_but_not_cached` regression
+test.
+
+**Impact / open question**: it is not yet known how long this had been broken or how many real
+corrections were silently dropped from the production retain pipeline as a result — the shadow
+trial's own numbers (e.g. the regex-vs-Haiku comparison, prompt v1→v2 tuning) are unaffected since
+that job had its own correctly-configured plist all along. This is a strong argument for the
+`with-config-env.sh` consolidation: a single source of truth removes an entire class of
+"one plist out of eight was configured differently" bugs going forward.
+
+---
+
 ## 2026-07-26: Upgraded `hindsight-api` 0.8.4→0.8.5 and `cocoindex` 1.0.16→1.0.18
 
 **Why**: Routine release check turned up two concrete reasons to upgrade rather than just take

@@ -341,6 +341,64 @@ def parse_transcript(path: Path) -> list[dict]:
     return messages
 
 
+def extract_mcp_tool_call(block: dict) -> tuple[str, str] | None:
+    """Return (tool_name, server_or_namespace) if block is an MCP tool call.
+
+    Cursor changed its MCP dispatch mechanism around 2026-07-23: the legacy
+    "CallMcpTool" tool_use (input={"toolName": ..., "server": ...}) was
+    replaced by a generic "CallDynamicTool" wrapper (input={"namespace": ...,
+    "toolName": ...}) used for both MCP-backed tools *and* first-party Cursor
+    tools (Task, WebSearch, TodoWrite, etc., under namespace="cursor"). Every
+    transcript-parsing recall/bank-usage heuristic that only recognized
+    "CallMcpTool" silently saw has_recall=False for every session recorded
+    after the cutover -- recall adoption looked like it crashed to 0% when it
+    hadn't. Handling both shapes here keeps that from recurring if Cursor
+    changes the wrapper again. See docs/FINDINGS.md 2026-07-27.
+    """
+    name = block.get("name", "")
+    inp = block.get("input", {})
+    if name == "CallMcpTool":
+        return inp.get("toolName", ""), inp.get("server", "")
+    if name == "CallDynamicTool":
+        return inp.get("toolName", ""), inp.get("namespace", "")
+    return None
+
+
+def effective_tool_name(block: dict) -> str:
+    """Return the tool name to use for productive/exploration classification.
+
+    First-party Cursor tools (Task, WebSearch, TodoWrite, ...) are dispatched
+    through "CallDynamicTool" with namespace="cursor" -- unwrap those so
+    PRODUCTIVE_TOOLS/EXPLORATION_TOOLS membership checks key off the real
+    tool name (e.g. "Task") instead of the generic wrapper name. MCP-backed
+    calls (recall, gopls, etc.) are handled separately by
+    extract_mcp_tool_call() and are left as "CallDynamicTool" here since they
+    aren't in either set.
+    """
+    name = block.get("name", "")
+    if name == "CallDynamicTool" and block.get("input", {}).get("namespace") == "cursor":
+        return block.get("input", {}).get("toolName", name)
+    return name
+
+
+def resolve_recalled_bank(server_or_namespace: str, recall_banks: set[str]) -> str | None:
+    """Map a recall call's server/namespace to one of recall_banks, or None.
+
+    Legacy "CallMcpTool" calls carried the raw bank name directly in
+    "server" (e.g. "hindsight-docs"). The new "CallDynamicTool" wrapper
+    carries a workspace-qualified namespace instead (e.g.
+    "project-0-kubernaut-hindsight-docs" or "user-hindsight"). Match longest
+    bank name first so e.g. "hindsight-docs" doesn't get shadowed by the
+    shorter "hindsight".
+    """
+    for bank in sorted(recall_banks, key=len, reverse=True):
+        if server_or_namespace == bank or server_or_namespace == f"user-{bank}":
+            return bank
+        if server_or_namespace.endswith(f"-{bank}"):
+            return bank
+    return None
+
+
 def extract_user_text(msg: dict) -> str:
     """Extract plain text from a user message."""
     content = msg.get("message", {}).get("content", [])
@@ -1099,16 +1157,16 @@ def analyze_mcp_effectiveness(
                 if isinstance(content, list):
                     for block in content:
                         if isinstance(block, dict) and block.get("type") == "tool_use":
-                            name = block.get("name", "")
-                            if name == "CallMcpTool":
-                                inp = block.get("input", {})
-                                tool = inp.get("toolName", "")
+                            name = effective_tool_name(block)
+                            mcp_call = extract_mcp_tool_call(block)
+                            if mcp_call:
+                                tool, server = mcp_call
                                 if "recall" in tool.lower():
                                     has_recall = True
                                     turn_has_recall = True
-                                    server = inp.get("server", "")
-                                    if server in RECALL_BANKS:
-                                        banks_recalled.add(server)
+                                    bank = resolve_recalled_bank(server, RECALL_BANKS)
+                                    if bank:
+                                        banks_recalled.add(bank)
                                     if first_recall_turn is None:
                                         first_recall_turn = turn_idx
                             if name in PRODUCTIVE_TOOLS:

@@ -274,3 +274,85 @@ class TestCountPendingContradictions:
         monkeypatch.setattr(report, "PENDING_CONTRADICTIONS_LOG", path)
 
         assert report.count_pending_contradictions(project="kubernaut") == 1
+
+
+class TestExtractMcpToolCall:
+    """Direct unit tests for extract_mcp_tool_call(), mirroring the identical
+    helper in nightly-learn.py (keep both in sync)."""
+
+    def test_legacy_call_mcp_tool_shape(self):
+        block = {"type": "tool_use", "name": "CallMcpTool",
+                  "input": {"toolName": "recall", "server": "hindsight-docs"}}
+        assert report.extract_mcp_tool_call(block) == ("recall", "hindsight-docs")
+
+    def test_dynamic_call_shape(self):
+        block = {"type": "tool_use", "name": "CallDynamicTool",
+                  "input": {"namespace": "project-0-kubernaut-hindsight-docs", "toolName": "recall"}}
+        assert report.extract_mcp_tool_call(block) == ("recall", "project-0-kubernaut-hindsight-docs")
+
+    def test_direct_tool_returns_none(self):
+        block = {"type": "tool_use", "name": "Shell", "input": {}}
+        assert report.extract_mcp_tool_call(block) is None
+
+
+class TestAnalyzeTokenConsumptionRecallDetection:
+    """Regression guard for the 2026-07-27 fix: analyze_token_consumption()'s
+    has_recall detection only recognized the legacy "CallMcpTool" tool_use
+    wrapper. Cursor's ~2026-07-23 switch to the generic "CallDynamicTool"
+    wrapper (input={"namespace": ..., "toolName": ...}) made every session
+    recorded afterward look like it never used recall -- see
+    docs/FINDINGS.md 2026-07-27.
+    """
+
+    def _write_transcript(self, path, recall_block):
+        messages = [
+            {"role": "user", "message": {"role": "user", "content": [{"type": "text", "text": "hi there, please help"}]}},
+            {"role": "assistant", "message": {"role": "assistant", "content": [recall_block]}},
+            {"role": "user", "message": {"role": "user", "content": [{"type": "text", "text": "thanks"}]}},
+        ]
+        with open(path, "w") as f:
+            for m in messages:
+                f.write(json.dumps(m) + "\n")
+
+    def _setup_transcripts_dir(self, monkeypatch, tmp_path):
+        project_dir = tmp_path / "Users-jgil-go-src-github-com-jordigilh-kubernaut" / "agent-transcripts"
+        project_dir.mkdir(parents=True)
+        monkeypatch.setattr(report, "TRANSCRIPTS_GLOB", str(tmp_path / "*" / "agent-transcripts" / "**" / "*.jsonl"))
+        monkeypatch.setattr(report, "PROJECTS_ROOT", tmp_path)
+        return project_dir
+
+    def test_legacy_call_mcp_tool_is_detected_as_recall(self, monkeypatch, tmp_path):
+        project_dir = self._setup_transcripts_dir(monkeypatch, tmp_path)
+        self._write_transcript(project_dir / "legacy.jsonl", {
+            "type": "tool_use", "name": "CallMcpTool",
+            "input": {"toolName": "recall", "server": "hindsight-docs"},
+        })
+
+        result = report.analyze_token_consumption(days=7)
+
+        assert result["with_recall"]["sessions"] == 1
+        assert result["without_recall"]["sessions"] == 0
+
+    def test_call_dynamic_tool_is_detected_as_recall(self, monkeypatch, tmp_path):
+        project_dir = self._setup_transcripts_dir(monkeypatch, tmp_path)
+        self._write_transcript(project_dir / "dynamic.jsonl", {
+            "type": "tool_use", "name": "CallDynamicTool",
+            "input": {"namespace": "project-0-kubernaut-hindsight-docs", "toolName": "recall"},
+        })
+
+        result = report.analyze_token_consumption(days=7)
+
+        assert result["with_recall"]["sessions"] == 1
+        assert result["without_recall"]["sessions"] == 0
+
+    def test_call_dynamic_tool_non_recall_tool_is_not_detected_as_recall(self, monkeypatch, tmp_path):
+        project_dir = self._setup_transcripts_dir(monkeypatch, tmp_path)
+        self._write_transcript(project_dir / "gopls.jsonl", {
+            "type": "tool_use", "name": "CallDynamicTool",
+            "input": {"namespace": "project-0-kubernaut-gopls", "toolName": "go_symbol_references"},
+        })
+
+        result = report.analyze_token_consumption(days=7)
+
+        assert result["with_recall"]["sessions"] == 0
+        assert result["without_recall"]["sessions"] == 1

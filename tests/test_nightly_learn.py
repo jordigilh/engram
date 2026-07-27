@@ -478,6 +478,200 @@ class TestRecallBanksPerProject:
         assert result["exploration_efficiency"]["with_cocoindex"]["sessions"] == 1
 
 
+class TestCallDynamicToolRecallDetection:
+    """Regression guard for the 2026-07-27 fix: Cursor replaced the legacy
+    "CallMcpTool" tool_use wrapper with a generic "CallDynamicTool" wrapper
+    (input={"namespace": ..., "toolName": ...}) around 2026-07-23. Every
+    session recorded through this new shape silently looked like it never
+    called recall, driving reported recall adoption to 0% even though real
+    usage was unaffected -- see docs/FINDINGS.md 2026-07-27. These tests pin
+    both the legacy and new shapes so a future Cursor change can't silently
+    repeat this.
+    """
+
+    def _write_transcript(self, path, recall_block, extra_blocks=None):
+        # analyze_mcp_effectiveness() skips any transcript with fewer than 6
+        # messages, so pad to that minimum regardless of what's under test.
+        assistant_content = [recall_block] + (extra_blocks or [])
+        messages = [
+            {"role": "user", "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]}},
+            {"role": "assistant", "message": {"role": "assistant", "content": assistant_content}},
+            {"role": "user", "message": {"role": "user", "content": [{"type": "text", "text": "ok"}]}},
+            {"role": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Write", "input": {}},
+            ]}},
+            {"role": "user", "message": {"role": "user", "content": [{"type": "text", "text": "thanks"}]}},
+            {"role": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Read", "input": {}},
+            ]}},
+        ]
+        with open(path, "w") as f:
+            for m in messages:
+                f.write(json.dumps(m) + "\n")
+
+    def test_legacy_call_mcp_tool_still_detected(self, nightly_learn, tmp_path, monkeypatch):
+        monkeypatch.setattr(nightly_learn, "is_correction", lambda text: False)
+        path = tmp_path / "legacy.jsonl"
+        self._write_transcript(path, {
+            "type": "tool_use", "name": "CallMcpTool",
+            "input": {"toolName": "recall", "server": "hindsight-docs"},
+        })
+
+        result = nightly_learn.analyze_mcp_effectiveness(
+            [path], project="kubernaut", report_date=nightly_learn.date(2026, 7, 27),
+        )
+
+        assert result["exploration_efficiency"]["with_recall"]["sessions"] == 1
+
+    def test_call_dynamic_tool_project_scoped_namespace_is_detected(self, nightly_learn, tmp_path, monkeypatch):
+        """namespace="project-0-kubernaut-hindsight-docs" must resolve to the
+        raw bank "hindsight-docs", not go undetected or get miscounted.
+        Bank resolution itself is pinned directly in
+        TestExtractMcpToolCall::test_resolve_recalled_bank_matches_longest_suffix_first."""
+        monkeypatch.setattr(nightly_learn, "is_correction", lambda text: False)
+        path = tmp_path / "dynamic-project-scoped.jsonl"
+        self._write_transcript(path, {
+            "type": "tool_use", "name": "CallDynamicTool",
+            "input": {"namespace": "project-0-kubernaut-hindsight-docs", "toolName": "recall"},
+        })
+
+        result = nightly_learn.analyze_mcp_effectiveness(
+            [path], project="kubernaut", report_date=nightly_learn.date(2026, 7, 27),
+        )
+
+        assert result["exploration_efficiency"]["with_recall"]["sessions"] == 1
+
+    def test_call_dynamic_tool_global_user_namespace_is_detected(self, nightly_learn, tmp_path, monkeypatch):
+        """namespace="user-hindsight" (global, non-project-scoped bank) must
+        still be detected as a recall call."""
+        monkeypatch.setattr(nightly_learn, "is_correction", lambda text: False)
+        path = tmp_path / "dynamic-user-scoped.jsonl"
+        self._write_transcript(path, {
+            "type": "tool_use", "name": "CallDynamicTool",
+            "input": {"namespace": "user-hindsight", "toolName": "recall"},
+        })
+
+        result = nightly_learn.analyze_mcp_effectiveness(
+            [path], project="kubernaut", report_date=nightly_learn.date(2026, 7, 27),
+        )
+
+        assert result["exploration_efficiency"]["with_recall"]["sessions"] == 1
+
+    def test_call_dynamic_tool_cocoindex_code_bank_counts_as_cocoindex_usage(self, nightly_learn, tmp_path, monkeypatch):
+        monkeypatch.setattr(nightly_learn, "is_correction", lambda text: False)
+        path = tmp_path / "dynamic-cocoindex.jsonl"
+        self._write_transcript(path, {
+            "type": "tool_use", "name": "CallDynamicTool",
+            "input": {"namespace": "project-0-kubernaut-v1.5-cocoindex-code", "toolName": "recall"},
+        })
+
+        result = nightly_learn.analyze_mcp_effectiveness(
+            [path], project="kubernaut", report_date=nightly_learn.date(2026, 7, 27),
+        )
+
+        assert result["exploration_efficiency"]["with_cocoindex"]["sessions"] == 1
+
+    def test_call_dynamic_tool_non_recall_tool_does_not_count_as_recall(self, nightly_learn, tmp_path, monkeypatch):
+        """A gopls call routed through CallDynamicTool must not be mistaken
+        for a recall call just because it shares the wrapper name."""
+        monkeypatch.setattr(nightly_learn, "is_correction", lambda text: False)
+        path = tmp_path / "dynamic-gopls.jsonl"
+        self._write_transcript(path, {
+            "type": "tool_use", "name": "CallDynamicTool",
+            "input": {"namespace": "project-0-kubernaut-gopls", "toolName": "go_symbol_references"},
+        })
+
+        result = nightly_learn.analyze_mcp_effectiveness(
+            [path], project="kubernaut", report_date=nightly_learn.date(2026, 7, 27),
+        )
+
+        assert result["exploration_efficiency"]["with_recall"]["sessions"] == 0
+        assert result["exploration_efficiency"]["without_recall"]["sessions"] == 1
+
+    def test_call_dynamic_tool_cursor_namespace_task_is_classified_as_exploration(self, nightly_learn, tmp_path, monkeypatch):
+        """Task/WebSearch are dispatched via CallDynamicTool(namespace="cursor")
+        -- must still be recognized as EXPLORATION_TOOLS by their unwrapped
+        toolName, not silently ignored because the wrapper name isn't in the
+        set."""
+        monkeypatch.setattr(nightly_learn, "is_correction", lambda text: False)
+        path = tmp_path / "dynamic-cursor-task.jsonl"
+        messages = [
+            {"role": "user", "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]}},
+            {"role": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "CallDynamicTool",
+                 "input": {"namespace": "cursor", "toolName": "Task"}},
+            ]}},
+            {"role": "user", "message": {"role": "user", "content": [{"type": "text", "text": "ok"}]}},
+            {"role": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Write", "input": {}},
+            ]}},
+            {"role": "user", "message": {"role": "user", "content": [{"type": "text", "text": "thanks"}]}},
+            {"role": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Read", "input": {}},
+            ]}},
+        ]
+        with open(path, "w") as f:
+            for m in messages:
+                f.write(json.dumps(m) + "\n")
+
+        result = nightly_learn.analyze_mcp_effectiveness(
+            [path], project="kubernaut", report_date=nightly_learn.date(2026, 7, 27),
+        )
+
+        # No recall call in this transcript, so it lands in without_recall;
+        # the Task call (unwrapped from CallDynamicTool) must still count as
+        # one exploration action before the productive Write turn.
+        assert result["exploration_efficiency"]["without_recall"]["avg_exploration_before_productive"] == 1
+
+
+class TestExtractMcpToolCall:
+    """Direct unit tests for the extract_mcp_tool_call/effective_tool_name/
+    resolve_recalled_bank helpers introduced by the 2026-07-27 fix, isolated
+    from the full analyze_mcp_effectiveness() pipeline."""
+
+    def test_extract_mcp_tool_call_legacy_shape(self, nightly_learn):
+        block = {"type": "tool_use", "name": "CallMcpTool",
+                  "input": {"toolName": "recall", "server": "hindsight-docs"}}
+        assert nightly_learn.extract_mcp_tool_call(block) == ("recall", "hindsight-docs")
+
+    def test_extract_mcp_tool_call_dynamic_shape(self, nightly_learn):
+        block = {"type": "tool_use", "name": "CallDynamicTool",
+                  "input": {"namespace": "user-hindsight", "toolName": "recall"}}
+        assert nightly_learn.extract_mcp_tool_call(block) == ("recall", "user-hindsight")
+
+    def test_extract_mcp_tool_call_returns_none_for_direct_tool(self, nightly_learn):
+        block = {"type": "tool_use", "name": "Shell", "input": {}}
+        assert nightly_learn.extract_mcp_tool_call(block) is None
+
+    def test_effective_tool_name_unwraps_cursor_namespace(self, nightly_learn):
+        block = {"type": "tool_use", "name": "CallDynamicTool",
+                  "input": {"namespace": "cursor", "toolName": "WebSearch"}}
+        assert nightly_learn.effective_tool_name(block) == "WebSearch"
+
+    def test_effective_tool_name_leaves_mcp_calls_wrapped(self, nightly_learn):
+        block = {"type": "tool_use", "name": "CallDynamicTool",
+                  "input": {"namespace": "user-hindsight", "toolName": "recall"}}
+        assert nightly_learn.effective_tool_name(block) == "CallDynamicTool"
+
+    def test_effective_tool_name_passes_through_direct_tools(self, nightly_learn):
+        block = {"type": "tool_use", "name": "Shell", "input": {}}
+        assert nightly_learn.effective_tool_name(block) == "Shell"
+
+    def test_resolve_recalled_bank_matches_longest_suffix_first(self, nightly_learn):
+        banks = {"hindsight", "hindsight-docs", "hindsight-issues"}
+        assert nightly_learn.resolve_recalled_bank(
+            "project-0-kubernaut-v1.5-hindsight-docs", banks
+        ) == "hindsight-docs"
+
+    def test_resolve_recalled_bank_matches_user_prefix(self, nightly_learn):
+        banks = {"hindsight", "hindsight-docs"}
+        assert nightly_learn.resolve_recalled_bank("user-hindsight", banks) == "hindsight"
+
+    def test_resolve_recalled_bank_returns_none_for_non_bank_namespace(self, nightly_learn):
+        banks = {"hindsight", "hindsight-docs"}
+        assert nightly_learn.resolve_recalled_bank("project-0-kubernaut-gopls", banks) is None
+
+
 class TestProjectConfigsEngram:
     """The engram PROJECT_CONFIGS entry added during the 2026-07-15 Engram
     onboarding -- pins its shape so a future edit can't silently drop a

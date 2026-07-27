@@ -103,6 +103,26 @@ CORRECTION_PATTERNS = [
 ]
 
 
+def extract_mcp_tool_call(block: dict) -> tuple[str, str] | None:
+    """Return (tool_name, server_or_namespace) if block is an MCP tool call.
+
+    Keep in sync with the identical helper in nightly-learn.py. Cursor
+    changed its MCP dispatch mechanism around 2026-07-23: the legacy
+    "CallMcpTool" tool_use (input={"toolName": ..., "server": ...}) was
+    replaced by a generic "CallDynamicTool" wrapper (input={"namespace": ...,
+    "toolName": ...}). Recall detection here only recognized "CallMcpTool",
+    so every session recorded after the cutover silently looked like it had
+    zero recall usage -- see docs/FINDINGS.md 2026-07-27.
+    """
+    name = block.get("name", "")
+    inp = block.get("input", {})
+    if name == "CallMcpTool":
+        return inp.get("toolName", ""), inp.get("server", "")
+    if name == "CallDynamicTool":
+        return inp.get("toolName", ""), inp.get("namespace", "")
+    return None
+
+
 def load_jsonl(path: Path, days: int = 7) -> list[dict]:
     """Load JSONL entries from the last N days."""
     if not path.exists():
@@ -817,10 +837,9 @@ def analyze_token_consumption(days: int = 7, workspace_prefixes: list[str] | Non
                                     msg_text += t
                                 elif btype == "tool_use":
                                     tool_calls += 1
-                                    if block.get("name") == "CallMcpTool":
-                                        inp = block.get("input", {})
-                                        if "recall" in inp.get("toolName", "").lower():
-                                            has_recall = True
+                                    mcp_call = extract_mcp_tool_call(block)
+                                    if mcp_call and "recall" in mcp_call[0].lower():
+                                        has_recall = True
 
                         total_chars += msg_chars
 

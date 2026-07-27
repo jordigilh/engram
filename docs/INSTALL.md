@@ -69,11 +69,29 @@ This sources `~/.hindsight/config.env` and runs the native `hindsight-api` binar
 > Do not run both simultaneously — they bind the same port (8888).
 
 For production, install as a launchd service (auto-start on login, auto-restart
-on crash):
+on crash). First install the shared env wrapper — **every** launchd plist that
+runs a process needing LLM config (`hindsight-api` itself, `nightly-learn.py`,
+`cocoindex-flows.py`, `prefilter-shadow-trial.py`) launches through this wrapper
+instead of having `VERTEXAI_PROJECT`/`GOOGLE_CLOUD_PROJECT`/model names baked into
+the plist:
 
 ```bash
-sed -e "s|__HOME__|$HOME|g" \
-    -e "s|__VERTEXAI_PROJECT__|$(grep VERTEXAI_PROJECT ~/.hindsight/config.env | cut -d= -f2)|g" \
+cp with-config-env.sh ~/.hindsight/with-config-env.sh
+chmod +x ~/.hindsight/with-config-env.sh
+```
+
+> **Why not hardcode it into the plist?** `~/.hindsight/config.env` is the only
+> place these values should ever live — plists under `launchd/` are committed to
+> this (public) repo, so nothing project/LLM-specific gets baked in at generation
+> time. `with-config-env.sh` sources `config.env` fresh into the process
+> environment every time launchd starts the job, so it's read once, in one
+> place, always current. See [FINDINGS.md](FINDINGS.md) 2026-07-27 for the
+> production incident this replaced (launchd jobs silently running against a
+> nonexistent placeholder GCP project because the value was missing from their
+> environment entirely).
+
+```bash
+sed "s|__HOME__|$HOME|g" \
     launchd/io.vectorize.hindsight.service.plist \
     > ~/Library/LaunchAgents/io.vectorize.hindsight.service.plist
 

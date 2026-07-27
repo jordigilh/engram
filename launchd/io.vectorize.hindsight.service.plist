@@ -6,32 +6,16 @@
     <string>io.vectorize.hindsight.service</string>
     <key>ProgramArguments</key>
     <array>
+        <string>__HOME__/.hindsight/with-config-env.sh</string>
         <string>__HOME__/.hindsight/venv/bin/hindsight-api</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>HINDSIGHT_API_PORT</key>
-        <string>8888</string>
-        <key>HINDSIGHT_API_LLM_PROVIDER</key>
-        <string>litellm</string>
-        <key>HINDSIGHT_API_LLM_MODEL</key>
-        <string>vertex_ai/claude-sonnet-4-6</string>
-        <key>HINDSIGHT_API_RETAIN_LLM_PROVIDER</key>
-        <string>litellm</string>
-        <key>HINDSIGHT_API_RETAIN_LLM_MODEL</key>
-        <string>vertex_ai/claude-haiku-4-5@20251001</string>
-        <key>HINDSIGHT_API_EMBEDDINGS_PROVIDER</key>
-        <string>local</string>
-        <key>HINDSIGHT_API_RERANKER_PROVIDER</key>
-        <string>local</string>
-        <key>VERTEXAI_PROJECT</key>
-        <string>__VERTEXAI_PROJECT__</string>
-        <key>VERTEXAI_LOCATION</key>
-        <string>global</string>
-        <key>GOOGLE_CLOUD_PROJECT</key>
-        <string>__VERTEXAI_PROJECT__</string>
-        <key>GOOGLE_APPLICATION_CREDENTIALS</key>
-        <string>__HOME__/.config/gcloud/application_default_credentials.json</string>
+        <!-- All LLM configuration (provider/model choices, VERTEXAI_PROJECT,
+             GOOGLE_CLOUD_PROJECT, pool sizes, etc.) lives exclusively in
+             ~/.hindsight/config.env and is sourced at process start by
+             with-config-env.sh -- never duplicated here. This file is
+             committed to a public repo; config.env is not. -->
         <key>PATH</key>
         <string>__HOME__/.hindsight/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>

@@ -6,6 +6,7 @@
     <string>io.vectorize.cocoindex.dcm</string>
     <key>ProgramArguments</key>
     <array>
+        <string>__HOME__/.hindsight/with-config-env.sh</string>
         <string>__HOME__/.hindsight/dcm-nightly-ingest.sh</string>
     </array>
     <key>StartCalendarInterval</key>

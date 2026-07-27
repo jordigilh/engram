@@ -6,6 +6,7 @@
     <string>io.vectorize.cocoindex.service</string>
     <key>ProgramArguments</key>
     <array>
+        <string>__HOME__/.hindsight/with-config-env.sh</string>
         <string>__HOME__/.hindsight/venv/bin/python3</string>
         <string>__HOME__/.hindsight/cocoindex-flows.py</string>
         <string>--mode</string>

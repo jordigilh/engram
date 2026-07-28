@@ -222,6 +222,54 @@ class TestProcessTranscriptProjectTagging:
 
         assert resolve_calls == [None]
 
+    def test_project_tag_is_written_onto_retained_item(self, cocoindex_flows, monkeypatch, tmp_path):
+        """Regression for the 2026-07-27 gap: retain_windows() in
+        nightly-learn.py got tagged with [project] the same day this file's
+        parallel process_transcript() retain call did not, so cocoindex-path
+        transcripts (e.g. same-day dcm-project/osac-service-provider,
+        kubernaut-v1-5 work) kept landing in cursor-memory untagged even
+        though the workspace resolved cleanly. See docs/FINDINGS.md."""
+        monkeypatch.setattr(cocoindex_flows, "ENGRAM_TRANSCRIPTS_DIR", tmp_path)
+        monkeypatch.setattr(cocoindex_flows, "_extract_learning_windows", lambda messages: [
+            "[INSTRUCTION] User: always write tests first",
+        ])
+        retain_calls = []
+        monkeypatch.setattr(cocoindex_flows, "hindsight_retain", lambda **kwargs: retain_calls.append(kwargs))
+
+        file = self._file_under(tmp_path, "Users-jgil-go-src-github-com-dcm-project-osac-service-provider")
+        _run(cocoindex_flows.process_transcript(file))
+
+        assert retain_calls[0]["tags"] == ["dcm"]
+
+    def test_no_project_means_no_tags_backward_compat(self, cocoindex_flows, monkeypatch, tmp_path):
+        monkeypatch.setattr(cocoindex_flows, "ENGRAM_TRANSCRIPTS_DIR", tmp_path)
+        monkeypatch.setattr(cocoindex_flows, "_extract_learning_windows", lambda messages: [
+            "[INSTRUCTION] User: always write tests first",
+        ])
+        retain_calls = []
+        monkeypatch.setattr(cocoindex_flows, "hindsight_retain", lambda **kwargs: retain_calls.append(kwargs))
+
+        file = self._file_under(tmp_path, "Users-jgil-go-src-github-com-insights-onprem-koku")
+        _run(cocoindex_flows.process_transcript(file))
+
+        assert retain_calls[0]["tags"] is None
+
+    def test_project_tag_combined_with_supersedes_tag_on_auto_resolved(self, cocoindex_flows, monkeypatch, tmp_path):
+        monkeypatch.setattr(cocoindex_flows, "ENGRAM_TRANSCRIPTS_DIR", tmp_path)
+        monkeypatch.setattr(cocoindex_flows, "_extract_learning_windows", lambda messages: [
+            "[CORRECTION] User: we don't use HAPI",
+        ])
+        monkeypatch.setattr(cr, "resolve", lambda *a, **k: cr.Resolution(
+            action="auto_resolved", superseded_document_id="old-doc", confidence=0.95,
+        ))
+        retain_calls = []
+        monkeypatch.setattr(cocoindex_flows, "hindsight_retain", lambda **kwargs: retain_calls.append(kwargs))
+
+        file = self._file_under(tmp_path, "Users-jgil-go-src-github-com-jordigilh-kubernaut")
+        _run(cocoindex_flows.process_transcript(file))
+
+        assert retain_calls[0]["tags"] == ["kubernaut", "CORRECTION", "supersedes-prior-memory"]
+
 
 class TestHindsightRetain:
     def test_success_returns_parsed_json(self, cocoindex_flows, monkeypatch):

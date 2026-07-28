@@ -822,11 +822,16 @@ async def process_transcript(file: localfs.File) -> None:
     for i, window_text in enumerate(windows):
         if not window_text.strip():
             continue
-        tags = None
+        # tags: [project] if known, same as nightly-learn.py's retain_windows()
+        # (see docs/FINDINGS.md 2026-07-27 -- that fix only touched
+        # retain_windows(); this parallel CocoIndex-side retain path kept
+        # writing untagged facts to cursor-memory for another day of live
+        # traffic until this mirror fix).
+        tags: list[str] = [project] if project else []
         if "[CORRECTION]" in window_text:
             resolution = contradiction_resolution.resolve("cursor-memory", window_text, project=project)
             if resolution.action == "auto_resolved":
-                tags = ["CORRECTION", "supersedes-prior-memory"]
+                tags += ["CORRECTION", "supersedes-prior-memory"]
             elif resolution.action == "queued":
                 # Withheld from retain pending human review (pending_queue.py's
                 # contract: "never auto-retained"). review-contradictions.py
@@ -837,7 +842,7 @@ async def process_transcript(file: localfs.File) -> None:
             content=window_text,
             document_id=f"transcript-{transcript_id}-w{i}",
             metadata={"source": "cocoindex-transcript", "transcript_id": transcript_id},
-            tags=tags,
+            tags=tags or None,
         )
 
 

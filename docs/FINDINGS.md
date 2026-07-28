@@ -250,6 +250,40 @@ logged across two separate audit trails (`off-topic-purge-audit.jsonl` for the 4
 `leaked-secret-purge.jsonl` for the 6). The remaining ~312 untagged documents are left as-is per the
 original decision above (genuinely generic content, or ambiguous jargon not worth a forced call).
 
+## 2026-07-28: Transient DNS Outage During Nightly Start Window — `reflect()` Failed for Both Projects, Mental Model Refresh Was Unaffected
+
+**Trigger**: Routine "status report from last night's run" check. Both `hindsight.nightly` (kubernaut)
+and `hindsight.nightly-dcm` jobs completed without crashing, but `reflect_result` in both
+`2026-07-28.json`/`2026-07-28-dcm.json` showed `{"error": "<urlopen error [Errno 61] Connection
+refused>"}`.
+
+**Root cause**: `hindsight-api` was crash-looping (repeated "Application startup failed. Exiting.")
+from before 15:07 until 15:30 today, caused by transient DNS resolution failures reaching
+`oauth2.googleapis.com` and HuggingFace's hub (`nodename nor servname provided, or not known`) —
+the same network blip responsible for a handful of transient LLM-call errors in that afternoon's
+memory-tagging backfill scripts (see the two entries above). Both nightly jobs happened to start
+their bank-stats/reflect/recall-probe phase inside that exact 23-minute window, so all three failed
+with connection-refused for both projects. `reflect()`'s failure is caught and stored as
+`{"error": ...}` (see `nightly-learn.py`'s existing try/except, added after the 2026-07-26
+unguarded-API-call crash) rather than crashing the job, so everything downstream — transcript scan,
+mental model refresh, triage, dedup, dashboard/pending-contradictions regen — ran normally once the
+API recovered by 15:30, all still inside the same ~44-minute run. Confirmed via
+`launchd-stderr.log`/`launchd-dcm-stderr.log`: every configured mental model (`kubernaut-issues/*`,
+`cursor-memory/*` incl. all 4 kubernaut-scoped ones, `kubernaut-docs/*` for kubernaut;
+`dcm-docs/*`/`dcm-issues/*`/`cursor-memory/dcm-*` for dcm) shows "refresh triggered" at 15:31-15:32
+(dcm) and 15:50-15:51 (kubernaut) — well after the API had recovered.
+
+**Net impact was narrower than it first looked**: only the single, bank-scoped `reflect()` call (a
+one-shot "top 3 recurring correction patterns" query against `cursor-memory`, unrelated to mental
+model consolidation despite running in the same phase of the script) was actually missed — mental
+model refresh, the more consequential nightly step, was unaffected.
+
+**Fix**: manually re-ran `nl.reflect()` once the API was confirmed healthy and patched the result
+directly into both `2026-07-28.json` and `2026-07-28-dcm.json` (`reflect_result` +
+`reflect_backfilled_at` marker) so the historical record isn't missing that night's correction-pattern
+synthesis. No code change needed — the existing try/except already degrades gracefully exactly as
+designed; this was a genuine transient environmental outage, not a bug.
+
 ## 2026-07-27: Every Production Haiku Correction-Detection Call Had Been Failing — Missing `VERTEXAI_PROJECT` in launchd Envs, Not Just the Wrong Region
 
 **Context**: Investigating the 0% recall-adoption dip surfaced a `backfill-effectiveness.py`

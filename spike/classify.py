@@ -218,6 +218,69 @@ def classify_project_from_content(text: str, model: str = HAIKU_MODEL, retries: 
     )
 
 
+_OFF_TOPIC_SYSTEM_PROMPT = """You are auditing a single stored fact from a shared cross-project memory bank that is meant to hold content ONLY from three onboarded projects -- kubernaut (Go Kubernetes remediation/AIOps platform), dcm (Go OpenShift deployment-config/service-provider catalog platform), engram (Python Hindsight/CocoIndex memory-tooling pipeline) -- plus genuinely universal software-engineering lessons that could apply to any project (general coding hygiene, generic testing advice, generic project-management/UX habits).
+
+Decide whether this fact is CONFIRMED OFF-TOPIC: clearly and specifically about a DIFFERENT, named software project/product/codebase that is NOT kubernaut/dcm/engram and is NOT a generic/universal lesson. Look for hard, specific evidence: a named unrelated repo/product (e.g. "koku", "insights-onprem"), a technology/business domain inconsistent with all three projects (e.g. a Django-based billing/usage-rating system, an unrelated SaaS product), or an explicit statement identifying a different repository/organization.
+
+Default to NOT off-topic when uncertain -- this bank is allowed to hold generic advice, and mis-flagging a genuinely useful universal fact for deletion is a worse outcome than leaving an ambiguous fact alone. Only flag when you have specific, concrete evidence of a different, unrelated project.
+
+Respond with ONLY a JSON object, no other text:
+{"off_topic": true or false, "identified_project": "short name or null", "confidence": 0.0-1.0, "reasoning": "one short phrase"}"""
+
+
+@dataclass
+class OffTopicClassificationResult:
+    off_topic: bool
+    identified_project: str | None
+    confidence: float
+    reasoning: str
+    raw: str
+    latency_s: float
+    error: str | None = None
+
+
+def classify_off_topic_content(text: str, model: str = HAIKU_MODEL, retries: int = 2) -> OffTopicClassificationResult:
+    """Narrower, higher-bar sibling of classify_project_from_content(): instead
+    of asking 'which of our 3 projects is this', asks 'is this CONFIRMED to be
+    about some other, unrelated project entirely'. Used only to flag deletion
+    candidates from the untagged cursor-memory backlog -- see
+    purge-confirmed-off-topic-memories.py and docs/FINDINGS.md."""
+    import litellm
+
+    prompt = f"Fact:\n{text[:1000]}"
+    t0 = time.time()
+    last_err = None
+    for attempt in range(retries + 1):
+        try:
+            resp = litellm.completion(
+                model=model,
+                messages=[
+                    {"role": "system", "content": _OFF_TOPIC_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=150,
+                temperature=0,
+                timeout=30,
+            )
+            raw = resp.choices[0].message.content
+            parsed = _extract_json(raw)
+            return OffTopicClassificationResult(
+                off_topic=bool(parsed.get("off_topic", False)),
+                identified_project=parsed.get("identified_project"),
+                confidence=float(parsed.get("confidence", 0.0)),
+                reasoning=parsed.get("reasoning", ""),
+                raw=raw,
+                latency_s=time.time() - t0,
+            )
+        except Exception as e:
+            last_err = e
+            time.sleep(1.5 * (attempt + 1))
+    return OffTopicClassificationResult(
+        off_topic=False, identified_project=None, confidence=0.0, reasoning="", raw="",
+        latency_s=time.time() - t0, error=str(last_err),
+    )
+
+
 def check_contradiction(
     new_statement: str,
     existing_memories: list[str],

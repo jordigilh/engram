@@ -2,6 +2,27 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-28: Low W30/W31 Session Volume Explained by PTO + Frequent Host Shutdowns, Not Reduced Engagement or a Regression
+
+**Context**: While reviewing whether Engram is reducing tokens/corrections, the weekly trend showed
+small and volatile sample sizes (6, 41, 7 sessions across W29-W31) alongside a corrections/session
+figure that couldn't be cleanly attributed to real behavior change vs. the concurrent regex→Haiku and
+Haiku v1→v2 correction-detection fixes (see 2026-07-09 and 2026-07-27 entries below). User clarified:
+the past two weeks were largely PTO, and the host running Hindsight/CocoIndex was shut down often
+during that period — both directly reduce the number of real coding sessions available to measure,
+independent of anything about Engram's effectiveness.
+
+**Implication for reading the trend**: the low/volatile weekly session counts in this window are an
+**activity-volume artifact** (fewer sessions existed to sample from), layered on top of the already-
+known **detection-methodology artifact** (what counts as "a correction" changed twice mid-window).
+Neither the corrections/session trend nor the productivity-density trend for W30-W31 should be read as
+a signal about whether Engram got better or worse over this period — there isn't yet a clean window of
+normal usage under the current (v2) classifier to draw that conclusion from.
+
+**Follow-up**: re-check the corrections/session and productivity-density trend once ~2 weeks of normal
+(non-PTO, host-up) usage have accumulated under the v2 `classify_correction` prompt, rather than by
+calendar weeks alone.
+
 ## 2026-07-27: `cursor-memory`'s Shared Mental Models Were ~100% Kubernaut-Specific — DCM Recall Polluted With FedRAMP Content
 
 **Trigger**: A DCM session reported "The hindsight recall returned unrelated project conventions

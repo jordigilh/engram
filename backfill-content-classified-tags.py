@@ -1,19 +1,31 @@
 #!/usr/bin/env python3
-"""One-off backfill: tag cursor-memory documents that have NO transcript
-lineage to trace (mostly `triage-rearrange` documents whose upstream source
-document -- the one that actually carried a transcript_id -- was already
-deleted by an earlier triage-memories.py pass; see docs/FINDINGS.md
-2026-07-27) using content-based LLM classification instead of the
-transcript-path resolution backfill-memory-tags.py uses for the rest of the
-backlog.
+"""One-off backfill: tag cursor-memory documents that backfill-memory-tags.py's
+transcript-path resolution (plan_retags()) could NOT resolve, using
+content-based LLM classification instead.
+
+Two distinct sub-populations land here, for different reasons:
+  - No `transcript_id` at all (mostly `triage-rearrange` documents whose
+    upstream source document -- the one that actually carried a
+    transcript_id -- was already deleted by an earlier triage-memories.py
+    pass; confirmed 0/390 `original_doc` references still resolve).
+  - Transcript_id present, but its workspace resolved to `"empty-window"`
+    (no Cursor folder open at all) or an out-of-scope workspace. Despite the
+    name, sampling 12 random "empty-window" documents on 2026-07-27 found
+    every single one full of clear per-project signal (kubernaut PR/issue
+    URLs, "kubernaut-operator", "SP CRD", GA-gate checklists, etc) -- the
+    "no folder open" workspace label reflects a Cursor UI/session-recording
+    quirk, not an actual absence of project context. These are just as
+    viable for content classification as the no-transcript_id bucket, so
+    both are handled by one pass here rather than writing them off as
+    permanently unattributable.
 
 This is intentionally a *lower-confidence, best-effort* pass: reading a
-fact's own text for project signals is far weaker evidence than the
-transcript-path lineage used elsewhere, so results below --min-confidence
-(default 0.75) are left untagged rather than force a guess -- a wrong tag
-would incorrectly exclude/include a fact from the wrong project's recall,
-which is worse than leaving it unscoped. Every classification (applied or
-not) is appended to an audit log for manual review.
+fact's own text for project signals is weaker evidence than transcript-path
+lineage, so results below --min-confidence (default 0.75) are left untagged
+rather than force a guess -- a wrong tag would incorrectly exclude/include a
+fact from the wrong project's recall, which is worse than leaving it
+unscoped. Every classification (applied or not) is appended to an audit log
+for manual review.
 
 Usage:
     python3 backfill-content-classified-tags.py [--dry-run] [--min-confidence 0.75]
@@ -50,16 +62,17 @@ HINDSIGHT_URL = "http://localhost:8888"
 AUDIT_LOG = Path(os.path.expanduser("~/.hindsight/logs/content-classification-audit.jsonl"))
 
 
-def plan_content_targets(documents: list[dict]) -> list[dict]:
-    """Pure planning function: documents with no tags AND no transcript_id
-    at all -- i.e. the ones plan_retags() in backfill-memory-tags.py can
-    never resolve, because there's no lineage left to trace."""
+def plan_content_targets(documents: list[dict], resolvable_ids: set[str]) -> list[dict]:
+    """Pure planning function: every untagged document NOT in
+    `resolvable_ids` (the set backfill-memory-tags.py's plan_retags() can
+    already resolve via transcript-path lineage). Covers both the
+    no-transcript_id bucket and the "empty-window"/out-of-scope-workspace
+    bucket -- see module docstring for why both are worth attempting."""
     targets = []
     for doc in documents:
         if doc.get("tags"):
             continue
-        meta = doc.get("document_metadata") or {}
-        if meta.get("transcript_id"):
+        if doc["id"] in resolvable_ids:
             continue
         targets.append(doc)
     return targets
@@ -83,10 +96,14 @@ def main():
     ap.add_argument("--min-confidence", type=float, default=0.75)
     args = ap.parse_args()
 
+    print("Indexing transcript files on disk...")
+    tid_to_workspace = bmt.build_transcript_workspace_index()
+
     print(f"Fetching documents from bank '{args.bank}'...")
     documents = bmt.fetch_all_documents(args.bank)
-    targets = plan_content_targets(documents)
-    print(f"  {len(targets)} documents with no transcript lineage to classify by content")
+    resolvable_ids = {item["document_id"] for item in bmt.plan_retags(documents, tid_to_workspace)}
+    targets = plan_content_targets(documents, resolvable_ids)
+    print(f"  {len(targets)} documents not resolvable by transcript-path -- classifying by content")
 
     if args.dry_run:
         print("--dry-run: showing first 5 targets only, no LLM calls made.")

@@ -25,35 +25,49 @@ class TestPlanContentTargets:
     def test_document_with_no_transcript_id_is_a_target(self):
         docs = [{"id": "d1", "tags": [], "document_metadata": {"source": "triage-rearrange"}}]
 
-        targets = bcct.plan_content_targets(docs)
+        targets = bcct.plan_content_targets(docs, resolvable_ids=set())
 
         assert [d["id"] for d in targets] == ["d1"]
 
-    def test_document_with_transcript_id_is_not_a_target(self):
+    def test_transcript_resolvable_document_is_not_a_target(self):
         """Those belong to backfill-memory-tags.py's transcript-path resolution instead."""
         docs = [{"id": "d1", "tags": [], "document_metadata": {"transcript_id": "t1"}}]
 
-        targets = bcct.plan_content_targets(docs)
+        targets = bcct.plan_content_targets(docs, resolvable_ids={"d1"})
 
         assert targets == []
+
+    def test_empty_window_document_is_a_target(self):
+        """Despite the name, 'empty-window' transcripts often carry real
+        per-project signal in their own text (see module docstring) -- so
+        unlike backfill-memory-tags.py's plan_retags(), this planner does NOT
+        exclude them; it's up to the classifier + confidence gate to decide."""
+        docs = [{"id": "d1", "tags": [], "document_metadata": {"transcript_id": "t1"}}]
+
+        # plan_retags() would never resolve this one (empty-window workspace),
+        # so it's absent from resolvable_ids.
+        targets = bcct.plan_content_targets(docs, resolvable_ids=set())
+
+        assert [d["id"] for d in targets] == ["d1"]
 
     def test_already_tagged_document_is_not_a_target(self):
         docs = [{"id": "d1", "tags": ["kubernaut"], "document_metadata": {}}]
 
-        targets = bcct.plan_content_targets(docs)
+        targets = bcct.plan_content_targets(docs, resolvable_ids=set())
 
         assert targets == []
 
     def test_mixed_batch(self):
         docs = [
             {"id": "needs-classification", "tags": [], "document_metadata": {"source": "triage-rearrange"}},
+            {"id": "empty-window-doc", "tags": [], "document_metadata": {"transcript_id": "t2"}},
             {"id": "has-lineage", "tags": [], "document_metadata": {"transcript_id": "t1"}},
             {"id": "already-tagged", "tags": ["dcm"], "document_metadata": {}},
         ]
 
-        targets = bcct.plan_content_targets(docs)
+        targets = bcct.plan_content_targets(docs, resolvable_ids={"has-lineage"})
 
-        assert [d["id"] for d in targets] == ["needs-classification"]
+        assert {d["id"] for d in targets} == {"needs-classification", "empty-window-doc"}
 
 
 class TestShouldApplyTag:

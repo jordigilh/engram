@@ -8,6 +8,7 @@ does and why, see the [root README](../README.md).
 - [How It Works](#how-it-works)
 - [Key Design Decisions](#key-design-decisions)
 - [Architecture](#architecture)
+- [Hindsight vs. CocoIndex: Division of Labor](#hindsight-vs-cocoindex-division-of-labor)
 - [Knowledge Graph and Mental Models](#knowledge-graph-and-mental-models)
 - [How Correction Detection Works](#how-correction-detection-works)
 - [Backup and Restore](#backup-and-restore)
@@ -151,6 +152,62 @@ graph TB
 | `kubernaut-docs` | Published architecture, API, operations docs | `chunks` | $0 (embeddings only) |
 | `kubernaut-issues` | GitHub issues + PRs: requirements, decisions, known bugs, design reviews | `chunks` | $0 (embeddings only) |
 | `code-index` | Codebase semantic chunks (Go functions, types, blocks) | `tree-sitter + dense embed + BM25 tsvector` | $0 (local embeddings) |
+
+---
+
+## Hindsight vs. CocoIndex: Division of Labor
+
+Hindsight and CocoIndex sit at different layers of the same pipeline and their
+capabilities barely overlap — they are complementary, not substitutable for
+one another.
+
+| Capability | Hindsight | CocoIndex |
+|---|---|---|
+| **Core job** | Memory: judge what's worth remembering, store it, reason about it, serve it back | Ingestion: detect what changed at the source, keep the index fresh |
+| **LLM involved** | Yes — Haiku extracts durable facts from raw windows (`retain`), Sonnet synthesizes mental models (`reflect`) | No — pure local embeddings (`all-MiniLM-L6-v2`) + tree-sitter parsing, zero LLM cost |
+| **Storage it owns** | `cursor-memory`, `kubernaut-docs`, `kubernaut-issues` banks (its own schema/API) | `code-index` pgvector table only (self-managed table in the same Postgres instance) |
+| **Retrieval it serves** | `recall` — semantic vector search + local reranker over distilled facts | Hybrid dense + BM25 (RRF fusion) — good for exact identifiers *and* concepts |
+| **Higher-order reasoning** | Mental models (synthesizes many facts into a coherent doc), contradiction detection/resolution, project tagging | None — it doesn't synthesize or judge, it just chunks and indexes |
+| **Freshness mechanism** | None built-in — needs something to call `retain` (nightly batch or CocoIndex) | File-watching / 5-min polling — the reason docs/issues/code went from nightly-batch to sub-hour/sub-minute fresh |
+| **Code-aware chunking** | None (would chunk by paragraph/token count) | Tree-sitter AST parsing — chunks by function/type/method boundary |
+
+**Relationship, not overlap**: for three of CocoIndex's four flows (docs, issues,
+transcripts), CocoIndex is purely the ingestion/freshness layer — it detects a
+change, chunks and embeds it, then calls Hindsight's `retain` API, which owns
+storage and serves it back out over its own MCP tools (`hindsight`,
+`hindsight-docs`, `hindsight-issues`). For the fourth flow (code), CocoIndex is
+fully independent end to end — it writes into its own `code-index` table and
+serves queries itself via `cocoindex_search`/`engram_code_search`; Hindsight
+has no visibility into that data at all.
+
+**Could one replace the other?** No, not cleanly in either direction:
+
+- **CocoIndex replacing Hindsight** would leave a searchable log of raw,
+  un-distilled chunks — losing the things that make it a *memory* system
+  rather than a search index: turning a messy multi-message correction
+  exchange into a durable, generalized fact, synthesizing many facts into a
+  coherent mental model, and detecting/resolving when a new correction
+  contradicts something already stored. This isn't hypothetical: CocoIndex's
+  own transcripts flow (regex-based, no LLM) is explicitly a *supplement*,
+  not a replacement, for the nightly Hindsight-based learning pipeline — it
+  can't do that extraction/reflection work itself.
+- **Hindsight replacing CocoIndex** for code search would be a real downgrade.
+  Hindsight's zero-cost `chunks` extraction mode could technically hold code,
+  but it lacks tree-sitter-aware chunking (chunk boundaries could land
+  mid-function) and, more importantly, BM25/lexical retrieval — dense-only
+  search is weak at "find the exact function `ParseConfig`," which is exactly
+  what hybrid RRF fusion was built for. Hindsight also has no file-watching of
+  its own; something still has to notice a source changed and call `retain`.
+
+The short version: CocoIndex is the freshness + structural-indexing layer in
+front of three of Hindsight's banks, plus a fully independent hybrid search
+engine for the one content type (code) that needs AST-aware chunking and
+exact-identifier matching Hindsight was never built to do. Remove CocoIndex
+and Hindsight still works, just back to stale nightly-batch ingestion and zero
+code search. Remove Hindsight and CocoIndex still works for code search, but
+`cursor-memory`/docs/issues lose all LLM-based judgment, becoming a dumb,
+ever-growing chunk store with no forgetting, synthesis, or contradiction
+handling.
 
 ### Security Boundary
 

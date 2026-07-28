@@ -2,6 +2,93 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-27: `cursor-memory`'s Shared Mental Models Were ~100% Kubernaut-Specific — DCM Recall Polluted With FedRAMP Content
+
+**Trigger**: A DCM session reported "The hindsight recall returned unrelated project conventions
+(kubernaut/FedRAMP) — not applicable here." This is distinct from the 2026-07-13
+`ALLOWED_WORKSPACE_PREFIXES` fix (which stopped *out-of-scope* workspaces like `koku` from feeding
+`cursor-memory`) — this pollution was coming from **inside** the three onboarded projects
+(kubernaut/dcm/engram) themselves, which `cursor-memory` is intentionally shared across for
+universal coding-hygiene lessons.
+
+**Diagnosis**: Pulled the actual content of `cursor-memory`'s 4 core auto-refreshing mental models
+(`testing-methodology`, `coding-conventions`, `architecture-decisions`, `workflow-preferences`) —
+all 4 had **zero tags** and, on inspection, `testing-methodology`'s ~4,700-word synthesized document
+was almost entirely kubernaut/Go-specific: Ginkgo/Gomega exclusively, `go build`/`golangci-lint`,
+CRD regeneration, *100 Go Mistakes* checklist, and — the reported issue — FedRAMP/NIST-800-53/SOC2
+control-mapping requirements baked into 4+ separate sections (mandatory plan sections, GA readiness
+audit dimensions, confidence thresholds, formal test plan template). None of that applies to DCM
+(Go, but no FedRAMP mandate) or Engram (Python/pytest). A `recall()` probe with the exact
+mandatory-gate query ("project methodology, workflow, conventions") independently confirmed the
+same thing at the raw-fact level: of ~50 results, the large majority were kubernaut-specific
+(FedRAMP/NIST-800-53/SOC2 control mapping, Ginkgo/BDD test IDs, workflow-selection CRD design), all
+untagged.
+
+Root cause, two layers, both stemming from the same gap — **nothing in the retain pipeline ever
+tagged a fact with which project it came from**:
+1. `nightly-learn.py`'s `retain_windows()` receives a `project` parameter (kubernaut/dcm/engram,
+   forwarded from `project_for_transcript_path()` since the 2026-07-19 contradiction-queue fix) but
+   only used it to pass to `contradiction_resolution.resolve()` — it was never written onto the
+   retained item's own `tags` field. Every fact in `cursor-memory`, from any project, has always
+   been untagged.
+2. The 4 mental models' refresh `trigger` had no tag-based input filtering either
+   (`tag_groups: null`), so even a hypothetically-tagged fact set wouldn't have changed which facts
+   fed the reflect() call that builds these documents.
+
+**Constraint discovered while designing the fix**: existing facts can never be retagged
+retroactively. Checked both the MCP `update_memory` tool and the underlying REST
+`PATCH /v1/default/banks/{bank_id}/memories/{memory_id}` endpoint directly (`UpdateMemoryRequest`
+schema) — neither supports a `tags` field at all; only `text`/`context`/`occurred_start`/
+`occurred_end`/`fact_type`/`entities`/`state` (invalidate/revert) can be edited post-hoc. Tags can
+only be set once, at `retain` time. This means the ~19+ (likely more) already-retained
+kubernaut/FedRAMP-specific raw facts identified during triage can never be tagged or excluded from
+recall after the fact — only new pollution can be stopped, not the existing backlog.
+
+**Fix** (four parts, confirmed against the live `hindsight-api` at `localhost:8888`):
+1. **`nightly-learn.py`**: `retain_windows()` now writes `tags=[project]` (plus any existing
+   `CORRECTION`/`supersedes-prior-memory` tags) onto every retained `cursor-memory` item when a
+   project is known. Regression tests added (`TestRetainWindowsProjectTagging`, 4 cases covering
+   plain instructions, no-project backward compat, combination with the auto-resolved
+   `supersedes-prior-memory` tag, and corrections with no contradiction). 218/218 tests pass.
+2. **Tagged the 4 existing mental models** `["kubernaut"]` via direct `PATCH
+   /v1/default/banks/cursor-memory/mental-models/{id}` (the MCP `update_mental_model` tool doesn't
+   expose the full `trigger` object, only `name`/`source_query`/`max_tokens`/`tags`/
+   `trigger_refresh_after_consolidation` — needed the REST API directly to also set
+   `trigger.tags_match: "any"` on each, preserving their existing `mode`/`refresh_after_consolidation`
+   settings). `tags_match: "any"` is required here specifically *because* all the rich pre-fix
+   content is untagged — `MentalModelTrigger`'s documented default of `all_strict` when a model has
+   tags ("security isolation") would have emptied out 6+ weeks of legitimate kubernaut history the
+   moment the `["kubernaut"]` tag was added, since none of it carries that tag. `tags_match: "any"`
+   explicitly opts back into "tagged-OR-untagged", which is the correct semantics for a model that's
+   *labeled* kubernaut-only going forward but still wants its full untagged legacy corpus.
+3. **Created 8 new tag-isolated mental models** — `dcm-{testing-methodology,coding-conventions,
+   architecture-decisions,workflow-preferences}` and the `engram-` equivalents — each
+   `tags=["dcm"]`/`["engram"]` with the trigger's `tags_match` left at its default (`all_strict` when
+   tags are set), i.e. **strict** isolation: only facts carrying that exact project tag feed these
+   models, ever. Verified via `list_mental_models`/`get_mental_model` immediately after creation:
+   `dcm-testing-methodology`'s first refresh returned `based_on_counts: {world: 0, experience: 0,
+   observation: 0, mental-models: 3}` (the 3 being its own DCM sibling models, not kubernaut's) —
+   confirms zero kubernaut leakage, at the cost of starting empty until DCM/Engram accumulate their
+   own tagged content post-fix. Wired into `nightly-learn.py`'s `PROJECT_CONFIGS["dcm"]["mental_models"]`
+   / `["engram"]["mental_models"]` under a `"cursor-memory"` key (mirroring kubernaut's existing
+   entry) so they refresh nightly in addition to their `refresh_after_consolidation: true` trigger.
+4. **Updated recall guidance** in all `hindsight-memory.mdc` rule files (kubernaut's global copy at
+   `~/.cursor/rules/`, engram's own, DCM's canonical copy plus all 13 sibling DCM repos via a scripted
+   replace) to: (a) pass `tags: ["<project>"]` on the mandatory-gate `recall()` call against
+   `cursor-memory`, and (b) explicitly fetch the project's own 4 tag-scoped mental models via
+   `get_mental_model` as authoritative context, replacing the old (DCM-absent, engram-only)
+   "manually judge what's project-agnostic" mitigation.
+
+**Known limitation / explicit tradeoff, documented in every updated rule file**: this fixes the
+problem *going forward only*. The pre-existing untagged backlog (kubernaut's FedRAMP content
+included) is permanently untaggable via any exposed Hindsight API, so an **unscoped** `recall()`
+call (omitting `tags`) against `cursor-memory` can still surface it. The isolation guarantee only
+holds when the caller explicitly passes `tags: ["<project>"]` — which is now the mandatory default
+in every rule file, but is an opt-in per-call parameter, not a bank-level enforcement. DCM's and
+Engram's newly-created tag-scoped mental models will also read as sparse/empty for a while (no
+existing tagged content to draw from) until enough new project-tagged corrections/instructions
+accumulate through normal nightly retain.
+
 ## 2026-07-27: Every Production Haiku Correction-Detection Call Had Been Failing — Missing `VERTEXAI_PROJECT` in launchd Envs, Not Just the Wrong Region
 
 **Context**: Investigating the 0% recall-adoption dip surfaced a `backfill-effectiveness.py`

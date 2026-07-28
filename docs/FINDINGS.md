@@ -199,6 +199,57 @@ off-topic (e.g. Django/koku) documents within the 359 remains a possible narrow 
 distinct, lower-stakes decision from the tagging work done here and wasn't executed without an
 explicit ask.
 
+**Update (later same evening): ran that narrow off-topic cleanup — and caught a classifier
+false-positive risk plus a live leaked secret along the way.**
+
+Added `purge-confirmed-off-topic-memories.py` (content-based sibling of `purge-out-of-scope-memories.py`,
+which only handles transcript-resolvable documents): a new, higher-bar `classify_off_topic_content()`
+in `spike/classify.py` (min confidence 0.85 vs. tagging's 0.75, since deletion is irreversible) audits
+each of the 356 still-untagged documents and asks "is this CONFIRMED to be about a different, named,
+unrelated project" rather than "which of our 3 projects is this". Dry run flagged **85/356 (24%)**.
+
+**Manual review before executing found the classifier over-flagging bare acronyms/internal jargon it
+simply didn't recognize as "confirmed off-topic":** 34 of the 85 were vague labels like `RO`
+("Requirement/Rule Orchestration"), `WE`, `AA`/`KA`, `HAPI`, `AF`, `BR-ORCH-*`, `BR-INTERACTIVE-010`,
+and "GA Readiness Audit" — several of which strongly resemble kubernaut's own internal component
+names (Remediation Orchestrator, Workflow Engine, AI Analysis) rather than external systems; the
+model's own "default to not off-topic when uncertain" instruction didn't hold in practice for jargon
+it lacked context to place. Manual full-text read of even the "concrete/named" bucket caught 3 more:
+`Cursor` (the IDE itself — cross-project infra, and literally Engram's own subject matter),
+`FleetConfig` (plausibly DCM's own fleet-control-plane concept, given an already-tagged DCM document
+elsewhere references "FMC serves as the fleet control plane"), and `AEP`/`spectral` (generic
+API-linting tooling any of the 3 projects could plausibly use). Presented the full breakdown to the
+user via `AskQuestion` rather than executing blind; user chose the conservative option.
+
+**Executed only a manually-curated 47-document subset** — every one backed by an explicit repo
+name, URL, or PR/branch reference for a genuinely different, unrelated project: `koku` (20, cost
+management platform — matches the exact out-of-scope workspace already known from the 2026-07-13
+`purge-out-of-scope-memories.py` incident), `kessel`/`Kessel` (7), `insights-onprem` (3), `kagenti`
+(2, explicit GitHub PR links), `RHDH`/Red Hat Developer Hub (2), `insights-rbac`, `AuthBridge`/
+`OpenShell`, `goose` (explicit PR #1682/branch name), `AWX`, `ros-ocp-backend`, `parodos`,
+`holmesgpt-api`, `Kuadrant`, `community-operators`, `cost-onprem`/`CMMO`. Deleted via direct
+`contradiction_resolution.delete_document()` calls against the exact 47 IDs (not a fresh classifier
+re-run, to guarantee the curated list — not a possibly-different reproduction of it — is what gets
+deleted). 47/47 succeeded. The 34 bare-acronym/vague-label documents plus `Cursor`/`FleetConfig`/
+`AEP`-`spectral` were left untouched.
+
+**Separately, one flagged document (`triage-4bdf77c8-...`) turned out to contain the actual leaked
+GCP project ID (`itpc-gcp-eco-eng-claude`) in cleartext** — the same value already purged from this
+repo's git history (see the 2026-07-19/21 entries). Rather than fold it into the routine off-topic
+batch delete, scanned the *entire* live bank's chunk text (not just the untagged backlog) for that
+literal string and found **6 documents total**, not just the 1 the classifier happened to flag —
+the other 5 were tagged (in-scope, since the conversations were genuinely about configuring
+Engram/kubernaut's own Vertex AI setup) and so were invisible to an off-topic-only sweep. All 6
+deleted via a separate one-off script/log (`~/.hindsight/logs/leaked-secret-purge.jsonl`), and a
+full re-scan of the resulting 3,445-document bank confirmed zero remaining occurrences of the
+string. This closes a gap the original git-history purge couldn't reach: retained memory content is
+a separate store from git history and needed its own remediation pass.
+
+**Final bank state after both purges**: 3,445 total documents (down from 3,492), all 53 deletions
+logged across two separate audit trails (`off-topic-purge-audit.jsonl` for the 47,
+`leaked-secret-purge.jsonl` for the 6). The remaining ~312 untagged documents are left as-is per the
+original decision above (genuinely generic content, or ambiguous jargon not worth a forced call).
+
 ## 2026-07-27: Every Production Haiku Correction-Detection Call Had Been Failing — Missing `VERTEXAI_PROJECT` in launchd Envs, Not Just the Wrong Region
 
 **Context**: Investigating the 0% recall-adoption dip surfaced a `backfill-effectiveness.py`

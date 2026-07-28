@@ -539,7 +539,18 @@ def retain_windows(windows: list[str], transcript_id: str, project: str | None =
 
     project (kubernaut/dcm/engram/None), if given, is forwarded to resolve()
     so any queued/auto-resolved contradiction is tagged with which onboarded
-    project it came from (see docs/FINDINGS.md 2026-07-19).
+    project it came from (see docs/FINDINGS.md 2026-07-19). It is also written
+    onto every retained item's own `tags` field -- see docs/FINDINGS.md
+    2026-07-27 ("DCM recall polluted by kubernaut/FedRAMP content"): cursor-memory
+    is a deliberately shared bank across kubernaut/dcm/engram for universal
+    coding-hygiene lessons, but until this fix every retained fact was
+    untagged, so project-specific content (e.g. kubernaut's FedRAMP/NIST-800-53
+    control-mapping requirements) was indistinguishable from genuinely
+    universal conventions and surfaced in every other project's recall/mental
+    models. Tagging at write time is the only point in the pipeline where this
+    is fixable -- Hindsight's memory-curation API (PATCH .../memories/{id}) has
+    no tags field, so existing untagged facts can never be retagged
+    retroactively; this only stops the pollution from growing going forward.
     """
     total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     items_retained = 0
@@ -547,12 +558,12 @@ def retain_windows(windows: list[str], transcript_id: str, project: str | None =
     contradictions_queued = 0
 
     for i, window in enumerate(windows):
-        tags = None
+        tags: list[str] = [project] if project else []
         if "[CORRECTION]" in window:
             resolution = contradiction_resolution.resolve(BANK_ID, window, project=project)
             if resolution.action == "auto_resolved":
                 contradictions_auto_resolved += 1
-                tags = ["CORRECTION", "supersedes-prior-memory"]
+                tags += ["CORRECTION", "supersedes-prior-memory"]
             elif resolution.action == "queued":
                 contradictions_queued += 1
                 # Withheld from retain pending human review (pending_queue.py's
@@ -847,6 +858,12 @@ PROJECT_CONFIGS = {
         "mental_models": {
             "dcm-docs": ("dcm-architecture", "dcm-enhancements", "dcm-api-contracts"),
             "dcm-issues": ("active-priorities", "known-bugs"),
+            # Tag-isolated (tags=["dcm"], strict match) sibling of kubernaut's
+            # cursor-memory models below -- created 2026-07-27 after the
+            # existing 4 shared models were found to be ~100% kubernaut/
+            # FedRAMP-specific despite having no tags at all, polluting DCM's
+            # recall. See docs/FINDINGS.md.
+            "cursor-memory": ("dcm-workflow-preferences", "dcm-architecture-decisions", "dcm-testing-methodology", "dcm-coding-conventions"),
         },
         "probes": [
             ("dcm-docs", "DCM architecture and service provider model"),
@@ -878,6 +895,10 @@ PROJECT_CONFIGS = {
         "banks": ["cursor-memory", "engram-docs"],
         "mental_models": {
             "engram-docs": ("engram-architecture", "engram-operations"),
+            # Tag-isolated (tags=["engram"], strict match) sibling of
+            # kubernaut's/dcm's cursor-memory models -- see docs/FINDINGS.md
+            # 2026-07-27.
+            "cursor-memory": ("engram-workflow-preferences", "engram-architecture-decisions", "engram-testing-methodology", "engram-coding-conventions"),
         },
         "probes": [
             ("engram-docs", "Haiku correction gate and contradiction resolution design"),

@@ -118,6 +118,50 @@ class TestProjectForTranscriptPath:
         assert captured["project"] == "dcm"
 
 
+class TestRetainWindowsProjectTagging:
+    """Regression coverage for the 2026-07-27 fix: cursor-memory is a shared
+    bank across kubernaut/dcm/engram, but retained items carried no project
+    tag, so project-specific content (e.g. kubernaut's FedRAMP/NIST-800-53
+    requirements) was indistinguishable from genuinely universal conventions
+    and polluted every other project's recall. See docs/FINDINGS.md."""
+
+    def test_project_tag_added_to_plain_instruction_window(self, nightly_learn, monkeypatch):
+        posted = []
+        monkeypatch.setattr(nightly_learn, "api_post", lambda path, payload: posted.append(payload) or {"success": True, "items_count": 1, "usage": {}})
+
+        nightly_learn.retain_windows(["[INSTRUCTION] User: always write tests first"], "tid-1", project="dcm")
+
+        assert posted[0]["items"][0]["tags"] == ["dcm"]
+
+    def test_no_project_means_no_tags_backward_compat(self, nightly_learn, monkeypatch):
+        posted = []
+        monkeypatch.setattr(nightly_learn, "api_post", lambda path, payload: posted.append(payload) or {"success": True, "items_count": 1, "usage": {}})
+
+        nightly_learn.retain_windows(["[INSTRUCTION] User: always write tests first"], "tid-1")
+
+        assert "tags" not in posted[0]["items"][0]
+
+    def test_project_tag_combined_with_supersedes_tag_on_auto_resolved(self, nightly_learn, monkeypatch):
+        monkeypatch.setattr(cr, "resolve", lambda *a, **k: cr.Resolution(
+            action="auto_resolved", superseded_document_id="old-doc", confidence=0.95,
+        ))
+        posted = []
+        monkeypatch.setattr(nightly_learn, "api_post", lambda path, payload: posted.append(payload) or {"success": True, "items_count": 1, "usage": {}})
+
+        nightly_learn.retain_windows(["[CORRECTION] User: we don't use HAPI"], "tid-1", project="kubernaut")
+
+        assert posted[0]["items"][0]["tags"] == ["kubernaut", "CORRECTION", "supersedes-prior-memory"]
+
+    def test_project_tag_added_even_when_correction_has_no_contradiction(self, nightly_learn, monkeypatch):
+        monkeypatch.setattr(cr, "resolve", lambda *a, **k: cr.Resolution(action="retain"))
+        posted = []
+        monkeypatch.setattr(nightly_learn, "api_post", lambda path, payload: posted.append(payload) or {"success": True, "items_count": 1, "usage": {}})
+
+        nightly_learn.retain_windows(["[CORRECTION] User: we don't use HAPI"], "tid-1", project="engram")
+
+        assert posted[0]["items"][0]["tags"] == ["engram"]
+
+
 class TestRetainWindows:
     def test_non_correction_window_skips_contradiction_check(self, nightly_learn, monkeypatch):
         calls = []

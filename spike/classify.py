@@ -149,6 +149,75 @@ def classify_correction(text: str, model: str = HAIKU_MODEL, retries: int = 2) -
     )
 
 
+_PROJECT_SYSTEM_PROMPT = """You are classifying a single stored fact from an AI coding assistant's cross-project memory bank, to determine which software project it most likely originated from.
+
+The three candidate projects:
+- "kubernaut": a Go-based Kubernetes remediation/AIOps platform. Signals: CRDs, controllers, Ginkgo/Gomega tests, FedRAMP/NIST-800-53/SOC2 compliance, remediation workflows, signal processing, AI Analysis, "kubernaut", operator/console/demo-scenarios repos.
+- "dcm": a Go-based service-provider/catalog platform for deployment configuration management (OpenShift-based). Signals: service providers (kubevirt/k8s-container/acm-cluster/three-tier/osac), placement policy, catalog items, control-plane, CLI, "DCM" or "dcm-project".
+- "engram": a Python-based Hindsight/CocoIndex memory-tooling pipeline. Signals: nightly-learn.py, cocoindex-flows.py, retain/recall, correction_gate, contradiction_resolution, pytest, launchd plists for hindsight/cocoindex.
+
+Only classify as one of these three if the fact contains a clear, specific signal uniquely tied to that project (a named technology, file, CRD, or concept from the list above, or an explicit project/repo name mention). If the fact is generic (applies to any Go/Python project) or you genuinely cannot tell, respond with "generic" and do NOT guess -- a wrong guess mis-scopes the fact into the wrong project's recall, which is worse than leaving it unscoped.
+
+Respond with ONLY a JSON object, no other text:
+{"project": "kubernaut" | "dcm" | "engram" | "generic", "confidence": 0.0-1.0, "reasoning": "one short phrase"}"""
+
+
+@dataclass
+class ProjectClassificationResult:
+    project: str | None  # kubernaut/dcm/engram, or None for generic/uncertain
+    confidence: float
+    reasoning: str
+    raw: str
+    latency_s: float
+    error: str | None = None
+
+
+def classify_project_from_content(text: str, model: str = HAIKU_MODEL, retries: int = 2) -> ProjectClassificationResult:
+    """Content-based fallback for facts with no transcript lineage to trace
+    (e.g. triage-rearrange documents whose upstream source document was
+    already deleted -- see docs/FINDINGS.md 2026-07-27). Lower-confidence
+    than transcript-path resolution since it's reading tea leaves from the
+    fact's own text rather than a hard source-of-truth link; callers should
+    apply a confidence threshold and leave low-confidence/"generic" results
+    untagged rather than force a guess."""
+    import litellm
+
+    prompt = f"Fact:\n{text[:1000]}"
+    t0 = time.time()
+    last_err = None
+    for attempt in range(retries + 1):
+        try:
+            resp = litellm.completion(
+                model=model,
+                messages=[
+                    {"role": "system", "content": _PROJECT_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=150,
+                temperature=0,
+                timeout=30,
+            )
+            raw = resp.choices[0].message.content
+            parsed = _extract_json(raw)
+            project = parsed.get("project")
+            if project == "generic":
+                project = None
+            return ProjectClassificationResult(
+                project=project,
+                confidence=float(parsed.get("confidence", 0.0)),
+                reasoning=parsed.get("reasoning", ""),
+                raw=raw,
+                latency_s=time.time() - t0,
+            )
+        except Exception as e:
+            last_err = e
+            time.sleep(1.5 * (attempt + 1))
+    return ProjectClassificationResult(
+        project=None, confidence=0.0, reasoning="", raw="",
+        latency_s=time.time() - t0, error=str(last_err),
+    )
+
+
 def check_contradiction(
     new_statement: str,
     existing_memories: list[str],

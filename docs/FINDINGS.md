@@ -149,6 +149,56 @@ traffic retained mid-backfill, already correctly tagged by the 2026-07-27 `retai
 correctly-untagged (469 empty-window + ~251 low-confidence content + a handful of same-day new
 arrivals not yet triaged).
 
+**Update (same evening): two more gaps found while asking "can the remaining 729 be attributed?"**
+
+1. **"Empty-window" was the wrong assumption to write off.** Sampling 12 random empty-window
+   documents found every single one full of clear per-project signal (`jordigilh/kubernaut` PR/issue
+   URLs, "kubernaut-operator", "SP CRD", GA-gate checklists) — the workspace label reflects a Cursor
+   session-recording quirk (no folder open *at that moment*, e.g. a duplicate/orphaned copy of a
+   transcript that also exists correctly-attributed elsewhere), not an actual absence of project
+   context in the conversation itself. `backfill-content-classified-tags.py`'s `plan_content_targets()`
+   was widened to target every untagged document NOT resolvable by `backfill-memory-tags.py`'s
+   `plan_retags()` — covering both the no-`transcript_id` bucket and the empty-window bucket in one
+   pass — rather than treating "workspace unresolvable" as "permanently unattributable."
+2. **`cocoindex-flows.py`'s `process_transcript()` never got the `retain_windows()` project-tagging
+   fix.** It resolves `project` and forwards it to `contradiction_resolution.resolve()`, but never
+   wrote it onto the retained item's own `tags` — a second, independent retain path with the exact
+   same gap the original fix closed, just not in the file that was actually being read that day. Caught
+   because 9 same-day `dcm-project/osac-service-provider` and `kubernaut-v1-5` documents showed up
+   untagged despite a cleanly resolvable workspace — new pollution being generated in real time even
+   after the "fix" landed. Patched to build `tags = [project] if project else []` the same way
+   `retain_windows()` does (3 new regression tests), and restarted `io.vectorize.cocoindex.service`
+   (confirmed via the `~/.hindsight/cocoindex-flows.py` symlink that this is the daemon serving the
+   file) so the fix is live for future traffic. The 9 pre-existing untagged documents were swept up by
+   a normal `backfill-memory-tags.py` re-run once the underlying transcripts existed on disk.
+
+**Result of running the widened content classifier against the full un-resolvable backlog (708
+documents this pass, some already having failed classification in the earlier 395-doc pass and
+correctly re-attempted)**: 484 more documents tagged (309 kubernaut, 28 dcm, 3 engram from the main
+run, +4 kubernaut from a cleanup re-run), for **628 total tagged via content classification** across
+both passes. 12 documents hit a *different* failure mode than the earlier run's transient DNS
+errors — Haiku occasionally responds with prose instead of the required JSON object when a fact's
+own text contains an embedded code block or quoted conversation that confuses it into "explaining"
+rather than classifying; all 12 are logged as errors (not force-tagged) and were not worth chasing
+further for a one-off backfill.
+
+**Final bank state**: 3,133/3,492 documents tagged (**89.7%**, up from the initial 79% after the
+first backfill), 359 left untagged. Manually sampling the final 359 confirms the conservative
+confidence gate is doing its job correctly — nearly all are genuinely project-agnostic (UX/roadmap
+preferences, generic Go/Kubernetes patterns, generic project-management instructions) or, in a
+handful of cases, from a conversation about an entirely different, never-onboarded project (e.g. a
+Django-migration discussion, presumably `koku`/`insights-onprem` bleeding through an empty-window
+session — the same category `purge-out-of-scope-memories.py` already handles for
+transcript-resolvable documents, just not reachable by that script's transcript-path check here).
+**Decision: leave the 359 as-is, do not bulk-delete.** `cursor-memory`'s explicit design intent is a
+shared bank for universal coding-hygiene lessons (see `docs/NEW_PROJECT_SETUP.md`), so untagged-but-
+genuinely-generic is the *correct* end state, not leftover noise — and `purge-out-of-scope-memories.py`
+already established the precedent of only deleting *confirmed* out-of-scope content, never deleting
+merely because attribution is uncertain. Identifying and removing the small number of confirmed
+off-topic (e.g. Django/koku) documents within the 359 remains a possible narrow follow-up, but is a
+distinct, lower-stakes decision from the tagging work done here and wasn't executed without an
+explicit ask.
+
 ## 2026-07-27: Every Production Haiku Correction-Detection Call Had Been Failing — Missing `VERTEXAI_PROJECT` in launchd Envs, Not Just the Wrong Region
 
 **Context**: Investigating the 0% recall-adoption dip surfaced a `backfill-effectiveness.py`

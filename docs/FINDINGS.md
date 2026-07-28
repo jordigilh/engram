@@ -89,6 +89,66 @@ Engram's newly-created tag-scoped mental models will also read as sparse/empty f
 existing tagged content to draw from) until enough new project-tagged corrections/instructions
 accumulate through normal nightly retain.
 
+**Update (later same day): the "permanently untaggable" constraint above was wrong — retagged the
+entire resolvable backlog.** The earlier diagnosis checked `PATCH /v1/default/banks/{bank_id}/
+memories/{memory_id}` (memory-level) and correctly found no `tags` field there. It did not check
+the sibling **document-level** endpoint, `PATCH /v1/default/banks/{bank_id}/documents/{document_id}`,
+which does accept `tags` and (confirmed empirically) propagates to every memory unit derived from
+that document. This reopens the "existing backlog is permanently untagged" tradeoff — most of it can
+in fact be fixed retroactively.
+
+Surveyed all 3,485 pre-existing `cursor-memory` documents by resolving each one's
+`document_metadata.transcript_id` back to the Cursor workspace that produced it (same lookup
+`project_for_transcript_path()` uses going forward), then to a project via
+`project_scope.resolve_project_label()`:
+- **2,608 resolvable** — has a `transcript_id`, the transcript file is still on disk, and its
+  workspace maps to an onboarded project (2,592 kubernaut, 15 dcm, 1 engram).
+- **863 not resolvable**, two distinct reasons that need different handling:
+  - **469 "empty-window" sessions** — a blank Cursor window with no folder open at all. There is no
+    project to attribute these to, ever; this is correct/expected untagged state, not a gap.
+  - **395 no `transcript_id` at all** (`triage-rearrange`/`user-instruction` documents). Traced why:
+    an earlier `triage-memories.py` pass had already deleted each one's upstream source document
+    (the one that actually carried the `transcript_id`) after rewriting it — confirmed 0/390
+    `original_doc` references in `document_metadata` still resolve to a live document. No amount of
+    transcript-lineage tracing can recover these; they need a different signal.
+
+**Part 1 — transcript-path retag (`backfill-memory-tags.py`, new script)**: pure planning function
+`plan_retags()` (unit tested, 8 cases: kubernaut/dcm resolution, already-tagged/no-transcript_id/
+missing-file/empty-window/out-of-scope-workspace all correctly skipped, mixed batch) computes the
+plan from a transcript index + the current document list; a thin `apply_retag()` does the actual
+PATCH. `--dry-run` first confirmed the plan matched the survey exactly (2,608 docs, same
+per-project breakdown), then a live run retagged **all 2,608 in 67s with 0 failures**. Re-running
+`--dry-run` immediately after confirms idempotency (plans 0 further changes) since already-tagged
+documents are always skipped.
+
+**Part 2 — content-based classification for the un-traceable 395 (`backfill-content-classified-tags.py`,
+new script, using a new `classify_project_from_content()` in `spike/classify.py`)**: since these
+have no transcript lineage, fall back to classifying the fact's own text with Haiku against a prompt
+that requires a specific named signal per project (kubernaut: CRDs/Ginkgo/FedRAMP/SP; dcm: service
+providers/OSAC/placement policy/control-plane; engram: nightly-learn/cocoindex/retain-recall) and
+returns `"generic"` rather than guess when the signal is generic or absent — deliberately biased
+against false positives, since a wrong guess mis-scopes a fact into the wrong project's isolated
+recall, which is worse than leaving it unscoped. A `--min-confidence` gate (default 0.75, unit tested
+via `should_apply_tag()`, 5 cases including the exact-boundary and error cases) only applies a tag
+when Haiku both picked a real project and cleared the confidence bar. Every classification — applied
+or not — is appended to an audit log (`~/.hindsight/logs/content-classification-audit.jsonl`) for
+manual review. Result on the live backlog: **144 tagged** (133 kubernaut, 10 dcm, 1 engram) and
+**251 left untagged** (generic or below the confidence gate) out of 395 — the conservative default
+correctly declined to guess on the majority. 4 calls hit a transient DNS error on the first run
+(`nodename nor servname provided`); a second run (the script is idempotent — only re-targets
+still-untagged documents) resolved all 4 with no further errors, landing them in "left untagged"
+rather than forcing a guess.
+
+**Verification**: `recall(query="project conventions and architecture decisions", tags=["dcm"],
+tags_match="all_strict")` against the live bank now returns exclusively DCM-tagged results (OSAC
+service provider, `dcm-project/enhancements`, control-plane/environment-agent phasing) — zero
+kubernaut/FedRAMP content, confirming the isolation guarantee now holds for raw-fact recall too, not
+just the mental models. Final bank state: 3,487 total documents, 2,744 project-tagged (2,724
+kubernaut / 18 dcm / 2 engram — the small excess over the 2,608+144=2,752 backfilled count is live
+traffic retained mid-backfill, already correctly tagged by the 2026-07-27 `retain_windows()` fix), 729
+correctly-untagged (469 empty-window + ~251 low-confidence content + a handful of same-day new
+arrivals not yet triaged).
+
 ## 2026-07-27: Every Production Haiku Correction-Detection Call Had Been Failing — Missing `VERTEXAI_PROJECT` in launchd Envs, Not Just the Wrong Region
 
 **Context**: Investigating the 0% recall-adoption dip surfaced a `backfill-effectiveness.py`

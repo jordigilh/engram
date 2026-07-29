@@ -243,7 +243,7 @@ Hindsight uses a three-tier system for serving context during recall:
 ```mermaid
 flowchart TB
     T1["Tier 1 — Mental Models\nSynthesized documents · Checked first · Returned directly if matched"]
-    T2["Tier 2 — Entity Graph\nCo-occurrence link expansion · 600 candidates/query · Related concepts"]
+    T2["Tier 2 — Entity Graph\nCo-occurrence link expansion · candidate count set by `budget` (100/300/1000 low/mid/high) · Related concepts"]
     T3["Tier 3 — Raw Facts\nSemantic + BM25 + temporal retrieval · RRF fusion + reranker"]
 
     T1 -->|"no match"| T2 -->|"expand"| T3
@@ -260,6 +260,8 @@ flowchart TB
 ### Entity Graph
 
 Hindsight automatically builds a knowledge graph through entity extraction on every `retain` call. Entities (services, concepts, patterns) are tracked with co-occurrence edges. During recall, the `link_expansion` retriever traverses these edges to find related facts that wouldn't match the query directly.
+
+`link_expansion` is a **single-hop** expansion from semantic seeds (entity co-occurrence + precomputed semantic kNN + causal links) — not a multi-hop, decay-weighted traversal. Its candidate budget is set by the same `budget` (low/mid/high → 100/300/1000 candidates for this bank) that every other retrieval method (semantic, BM25, temporal) shares; there is no Tier-2-specific or per-query knob for hop count or decay (confirmed against the live API schema and Hindsight's own source — see `docs/FINDINGS.md` 2026-07-29, issue [#6](https://github.com/jordigilh/engram/issues/6)).
 
 ### Mental Models
 

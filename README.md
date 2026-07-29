@@ -69,6 +69,10 @@ cd engram
 ```
 
 Then follow the [Installation Guide](docs/INSTALL.md) (takes ~15 minutes).
+On Linux/Fedora/RHEL, use [`docs/INSTALL-linux.md`](docs/INSTALL-linux.md) instead
+for the platform-specific steps (containerized Hindsight via Podman Quadlets,
+native batch scripts via systemd timers) — the rest of the guide applies
+unchanged on either platform.
 
 ## Architecture
 
@@ -201,7 +205,8 @@ Key metrics to watch:
 
 | Doc | Content |
 |-----|---------|
-| [Installation Guide](docs/INSTALL.md) | Full setup, prerequisites, verification |
+| [Installation Guide](docs/INSTALL.md) | Full setup, prerequisites, verification (macOS-native Hindsight) |
+| [Linux/Fedora/RHEL Installation](docs/INSTALL-linux.md) | Platform-specific steps: containerized Hindsight (Podman Quadlet), systemd timers |
 | [Customizing the Rule](docs/INSTALL.md#customizing-the-rule) | Ready-made rules for Go, Python, Rust, TypeScript, or any stack |
 | [Architecture & Internals](docs/README.md) | Design decisions, knowledge graph, correction detection |
 | [CocoIndex Operations](docs/COCOINDEX.md) | Flow catalog, running modes, monitoring, troubleshooting |

@@ -1,0 +1,123 @@
+# Podman Quadlet unit for the Hindsight service, containerized on Linux.
+#
+# Why containerized on Linux but native on macOS: see the "Decided
+# architecture" section of GitHub issue #9 and docs/FINDINGS.md 2026-07-29
+# ("Resolved #9's Open Design Question"). Short version -- Podman on macOS
+# runs containers inside a managed, occasionally-recreated Linux VM, putting
+# a long-lived stateful service's data at risk of that VM's lifecycle. On
+# Linux, Podman runs containers directly on the host kernel -- no VM, no
+# extra lifecycle -- so the container path is the *simpler* choice there,
+# not just an acceptable one.
+#
+# Validated end-to-end on RHEL 9.0 (Podman 4.9.4) 2026-07-29 -- see
+# docs/FINDINGS.md "#9 Spiked on Real Hardware" entry: image builds, boots,
+# runs its own embedded Postgres+pgvector (pg0) inside the container,
+# real Vertex AI retain -> recall round-trip, AND true data persistence
+# across container destroy/recreate cycles via the Volume= line below
+# (confirmed via the app's own "Existing pg0 data directory detected" log
+# line + a bank surviving two full stop/rm/recreate cycles).
+#
+# Re-validated a second time under GENUINE rootless Podman (a real non-root
+# user, not root's own `systemctl --user` instance) 2026-07-29 -- see
+# docs/FINDINGS.md "#9 Rootless + Batch-Script Runtime Gaps Closed" entry.
+# Rootless Podman's default UID mapping sends host uid 1000 to CONTAINER
+# uid 0, not container uid 1000 -- so a host directory `chown`'d to
+# 1000:1000 shows up owned by uid 0 *inside* the container, and the
+# non-root `hindsight` process (container uid 1000) gets a silent
+# `Permission denied` writing to it. Confirmed directly: without
+# UserNS=keep-id the mounted dir showed as "0 0" from inside the
+# container; with it, "1000 1000" and a real write succeeded.
+#
+# IMPORTANT -- UserNS=keep-id is ROOTLESS-ONLY, not a harmless default:
+# tested it under rootful Podman (a system-level Quadlet / root-run
+# service) too, and it fails outright there (`crun: mount sysfs to /sys:
+# Operation not permitted`) rather than being a no-op. So it's commented
+# out below by default, matching what was actually validated end-to-end
+# first (rootful, via root's own `systemctl --user` instance -- which is
+# still rootful Podman since the invoking UID is 0 regardless of the
+# `--user`/`--system` systemd scope). If you're deploying as a genuine
+# non-root user (rootless Podman -- the more common real-world case, and
+# the one this file's own install instructions below describe), uncomment
+# the UserNS=keep-id line; if deploying as a system-level Quadlet run by
+# root, leave it commented out.
+#
+# Install (user-level Quadlet, mirrors launchd's per-user LaunchAgents --
+# no root needed -- this is the rootless path, so uncomment UserNS=keep-id
+# in the [Container] section below before copying):
+#   loginctl enable-linger $USER   # user-level systemd units otherwise stop
+#                                  # at logout -- see docs/INSTALL-linux.md
+#   mkdir -p ~/.config/containers/systemd
+#   cp quadlet/hindsight.container ~/.config/containers/systemd/
+#   mkdir -p ~/.hindsight-linux/pg0-data
+#   # container runs as non-root uid 1000 (`hindsight`) internally -- a
+#   # bind-mounted host dir needs matching perms, not just SELinux :Z
+#   # relabeling (bit us during the spike: "Permission denied" on a
+#   # root-owned 600 credentials file read by uid 1000 in-container):
+#   chown 1000:1000 ~/.hindsight-linux/pg0-data
+#   chmod 644 ~/.config/gcloud/application_default_credentials.json
+#   podman build -t localhost/engram-hindsight:latest -f Dockerfile .
+#   systemctl --user daemon-reload
+#   systemctl --user start hindsight.service
+#   systemctl --user enable hindsight.service   # auto-start on login
+#
+# Verify:
+#   curl -s http://localhost:8888/health | python3 -m json.tool
+#
+# Config: HINDSIGHT_API_PORT, VERTEXAI_PROJECT, model names, etc. all come
+# from ~/.hindsight/config.env (EnvironmentFile= below) -- same single
+# source of truth as the macOS native install's with-config-env.sh, so
+# nothing project/LLM-specific is ever baked into this file (which, like
+# every file under quadlet/ and launchd/, is committed to a public repo).
+
+[Unit]
+Description=Hindsight Agent Memory service (Podman container, Linux)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=localhost/engram-hindsight:latest
+ContainerName=hindsight
+EnvironmentFile=%h/.hindsight/config.env
+# Local ONNX embeddings/reranker, CPU-only -- no GPU required (validated on
+# a GPU-less RHEL box; the model runs comfortably on CPU given a modern
+# multi-core host). Override in config.env if a CUDA-capable host is
+# available and ONNX GPU support is added later.
+Environment=HINDSIGHT_API_EMBEDDINGS_PROVIDER=local
+Environment=HINDSIGHT_API_RERANKER_PROVIDER=local
+Environment=HINDSIGHT_API_EMBEDDINGS_LOCAL_FORCE_CPU=true
+Environment=HINDSIGHT_API_RERANKER_LOCAL_FORCE_CPU=true
+# Always the in-container mount path, regardless of what config.env sets
+# for this on macOS (which may point at a path that doesn't exist inside
+# the container) -- mirrors with-config-env.sh's identical override for
+# the native install, same reason.
+Environment=GOOGLE_APPLICATION_CREDENTIALS=/creds/adc.json
+# Uncomment for ROOTLESS deployment (regular non-root user) -- see the UID-
+# mapping note above. Leave commented out for a rootful/system-level
+# Quadlet, where it actively breaks container startup rather than no-op'ing.
+#UserNS=keep-id
+Volume=%h/.config/gcloud/application_default_credentials.json:/creds/adc.json:ro,Z
+# Persistent pg0 data dir -- see chown note above. Path confirmed via
+# `podman exec ... find / -iname '*pg0*'` during the 2026-07-29 spike.
+Volume=%h/.hindsight-linux/pg0-data:/home/hindsight/.pg0:Z
+# Network=host was what was actually end-to-end validated during the spike
+# (retain/recall/persistence all confirmed under it). Standard bridge
+# networking + PublishPort=8888:8888 is expected to work identically on a
+# clean, dedicated host and is the more conventional/isolated choice, but
+# was NOT independently re-validated after the spike switched to
+# Network=host to work around a stale-firewall-rule conflict specific to
+# the (shared, multi-runtime) test box -- see docs/FINDINGS.md. If you're
+# on a clean host, try switching to PublishPort=8888:8888 first; fall back
+# to Network=host (uncomment below, remove PublishPort) if retain/recall
+# calls fail with DNS/connection errors and `podman run --network=host`
+# fixes it -- that pattern means something else on the host (commonly a
+# leftover Docker/CNI firewall rule) is blocking the Podman bridge, not a
+# problem with Hindsight itself.
+PublishPort=8888:8888
+# Network=host
+
+[Service]
+Restart=always
+TimeoutStartSec=180
+
+[Install]
+WantedBy=default.target

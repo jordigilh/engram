@@ -1,0 +1,25 @@
+# systemd unit (native, Linux) -- runs the full nightly-learn.py pass
+# (correction extraction, contradiction resolution, consolidation).
+# Direct analog of launchd/io.vectorize.hindsight.nightly.plist.
+#
+# See engram-hindsight-hourly.service for why this runs natively (via the
+# same `uv`-managed venv as macOS) rather than containerized.
+#
+# Install (user-level, mirrors launchd's per-user LaunchAgents):
+#   cp systemd/engram-hindsight-nightly.{service,timer} ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now engram-hindsight-nightly.timer
+
+[Unit]
+Description=Engram nightly learning pass
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/.hindsight
+EnvironmentFile=%h/.hindsight/config.env
+Environment=GOOGLE_APPLICATION_CREDENTIALS=%h/.config/gcloud/application_default_credentials.json
+ExecStart=%h/.hindsight/venv/bin/python3 %h/.hindsight/nightly-learn.py --mode nightly
+StandardOutput=append:%h/.hindsight/logs/launchd-stdout.log
+StandardError=append:%h/.hindsight/logs/launchd-stderr.log

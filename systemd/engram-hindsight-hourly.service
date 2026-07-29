@@ -1,0 +1,39 @@
+# systemd unit (native, Linux) -- runs nightly-learn.py in retain-only mode
+# every hour. Direct analog of launchd/io.vectorize.hindsight.hourly.plist.
+#
+# Runs NATIVELY, not containerized -- unlike hindsight.container (the
+# Hindsight service itself). The macOS install already proves the batch
+# scripts don't need the host's system Python: `uv venv ~/.hindsight/venv
+# --python 3.14` (see docs/INSTALL.md step 4) creates a hermetic,
+# version-pinned interpreter independent of whatever Python the OS ships.
+# The same `uv venv --python 3.14` command works identically on Linux, so
+# there is no host-Python-version reason to containerize these scripts here
+# (an earlier note in the #9 spike findings speculated otherwise before this
+# was checked against the actual macOS install steps -- see
+# docs/FINDINGS.md 2026-07-29 for the correction).
+#
+# Install (user-level, mirrors launchd's per-user LaunchAgents):
+#   mkdir -p ~/.config/systemd/user
+#   cp systemd/engram-hindsight-hourly.{service,timer} ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now engram-hindsight-hourly.timer
+
+[Unit]
+Description=Engram hourly retain-only pass
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/.hindsight
+EnvironmentFile=%h/.hindsight/config.env
+# Always the real ADC default path, regardless of what (if anything)
+# config.env sets for this -- mirrors with-config-env.sh's identical
+# override in the macOS launchd path, same reason: config.env's
+# GOOGLE_APPLICATION_CREDENTIALS may point elsewhere (e.g. a service
+# account key path) that doesn't exist on this machine. A later
+# Environment= line overrides the same key from EnvironmentFile=.
+Environment=GOOGLE_APPLICATION_CREDENTIALS=%h/.config/gcloud/application_default_credentials.json
+ExecStart=%h/.hindsight/venv/bin/python3 %h/.hindsight/nightly-learn.py --mode hourly
+StandardOutput=append:%h/.hindsight/logs/hourly-stdout.log
+StandardError=append:%h/.hindsight/logs/hourly-stderr.log

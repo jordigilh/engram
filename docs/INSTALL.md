@@ -1,5 +1,12 @@
 # Installation Guide
 
+> **On Linux/Fedora/RHEL?** This guide covers the macOS-native install
+> (Hindsight runs as a bare process, no container). See
+> [`INSTALL-linux.md`](INSTALL-linux.md) instead for the platform-specific
+> steps (containerized Hindsight via Podman Quadlets, batch scripts via
+> systemd timers) — steps 1–3 and 7 onward below are identical on both
+> platforms and that guide links back here for them.
+
 ## Prerequisites
 
 - macOS (tested on Mac Studio M2 Max, 32GB RAM)

@@ -1,0 +1,33 @@
+# systemd unit (native, Linux) -- long-running CocoIndex continuous sync
+# (docs, code, issues, transcripts). Direct analog of
+# launchd/io.vectorize.cocoindex.service.plist.
+#
+# Runs natively via the same `uv`-managed venv as the hourly/nightly units --
+# see engram-hindsight-hourly.service for rationale. ENGRAM_DOCS_DIR,
+# ENGRAM_CODE_DIR, etc. are read from ~/.hindsight/config.env
+# (EnvironmentFile= below), same as docs/INSTALL.md step 16 documents for
+# macOS -- keep values there, not hardcoded here, so nothing
+# project-specific is baked into this (public repo) file.
+#
+# Install (user-level, mirrors launchd's per-user LaunchAgents):
+#   cp systemd/engram-cocoindex.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now engram-cocoindex.service
+
+[Unit]
+Description=CocoIndex continuous sync (docs, code, issues, transcripts)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.hindsight
+EnvironmentFile=%h/.hindsight/config.env
+Environment=GOOGLE_APPLICATION_CREDENTIALS=%h/.config/gcloud/application_default_credentials.json
+ExecStart=%h/.hindsight/venv/bin/python3 %h/.hindsight/cocoindex-flows.py --mode live
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:%h/.hindsight/logs/cocoindex-stdout.log
+StandardError=append:%h/.hindsight/logs/cocoindex-stderr.log
+
+[Install]
+WantedBy=default.target

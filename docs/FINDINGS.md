@@ -2,6 +2,168 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-29 (same day, eleventh follow-up): #9 Rootless + Batch-Script Runtime Gaps Closed — Found and Fixed a Real Bug in the Just-Shipped Quadlet
+
+**Context**: right after implementing #9, a confidence self-assessment flagged
+three specific, honestly-scored gaps rather than declaring victory: the
+shipped Quadlet's default networking path was never actually proven to
+complete a health check (only its `Network=host` fallback was), the 5
+systemd batch-script units were syntax-checked but never actually executed,
+and every prior test ran as root's own `systemctl --user` instance —
+**rootful** Podman, not genuine rootless (the real deployment target for a
+regular end-user). The user said "spike" — close those gaps empirically
+rather than leave them as caveats.
+
+**Rootless Podman — found a real bug before it shipped to a user**:
+`helios08` had an existing, unused `test` account (uid 1000, `/etc/subuid`
+already provisioned) — created its home dir, installed `uv`, built the image
+rootless (`su - test -c 'podman build ...'`). Checked the actual UID mapping
+directly (`podman unshare cat /proc/self/uid_map`): container uid 0 → host
+uid 1000 (`test`), container uid 1+ → host uid 100000+. Ran the container and
+inspected the bind-mounted `pg0` directory from inside: a host directory
+`chown`'d `1000:1000` (per the Quadlet's own documented instructions) showed
+up owned **`0 0`** inside the container — because host uid 1000 maps to
+*container* uid 0, not container uid 1000. The non-root `hindsight` process
+(container uid 1000) would get a silent `Permission denied` writing to it.
+This is a real bug that had already been committed in the Quadlet file
+before this check.
+
+**Fix verified, then a second wrong claim caught before shipping it either**:
+added `UserNS=keep-id` and confirmed the mount now shows `1000 1000` inside
+the container, with a real write succeeding. First instinct was to write it
+into the Quadlet unconditionally with a comment calling it "a harmless no-op
+under rootful Podman" — checked that claim directly before committing it
+too, and it's false: `podman run --userns=keep-id` under literal root
+(rootful) fails outright (`crun: mount sysfs to /sys: Operation not
+permitted`), it does not no-op. `UserNS=keep-id` is rootless-only. Fixed by
+shipping it **commented out by default** (matching the config that was
+actually validated first, under root's rootful `systemctl --user` instance),
+with instructions to uncomment it specifically for rootless deployment —
+which `docs/INSTALL-linux.md`'s own install steps now do via `sed`, since
+that guide's documented "no root needed" path *is* the rootless path.
+
+Ran the full stack rootless end to end after the fix: Quadlet deployed to
+`~/.config/containers/systemd/` as `test` (non-root), started via `test`'s
+own `systemctl --user` instance (confirmed via cgroup path
+`user-1000.slice/user@1000.service/...`, not `user-0.slice`), health check
+passed, a real retain → LLM extraction → recall round-trip succeeded, and a
+bank survived a `systemctl --user restart` (container destroy/recreate)
+under rootless mapping too. Full cleanup after: bank deleted, service
+stopped/disabled, credentials `shred -u`'d, image removed, `test`'s home
+directory removed, linger disabled.
+
+**Batch scripts — zero runtime evidence before this, now real end-to-end
+proof**: installed `uv`, ran `uv venv ~/.hindsight/venv --python 3.14` as
+the `test` user (confirming this hermetic-Python claim from the previous
+entry works identically on Linux, not just in theory), symlinked the actual
+production scripts (`nightly-learn.py`, `correction_gate.py`,
+`contradiction_resolution.py`, `project_scope.py`, `spike/`) from a copy of
+the repo. Crafted one synthetic transcript matching the real Cursor JSONL
+schema (`{"role":"user","message":{"content":[{"type":"text","text":...}]}}`)
+under a workspace directory name matching `project_scope.py`'s allowlist,
+containing an unambiguous correction statement. Ran
+`~/.hindsight/venv/bin/python3 nightly-learn.py --mode hourly` for real: it
+found the transcript, called Haiku via LiteLLM/Vertex AI (a real network
+call, not mocked), detected 1 correction, and retained it into the
+rootless-containerized Hindsight service from the test above — proving the
+native-script-to-containerized-service integration works, not just each
+piece in isolation. Confirmed the fact was recallable, then invalidated the
+2 curatable memories (the 2 derived "observation" memories can't be
+individually curated by design — see `contradiction_resolution.py`'s
+`invalidate_memory` docstring — but recall dropped to 0 results regardless,
+confirming clean removal from a user-visible standpoint) and removed the
+synthetic transcript, venv, and symlinks.
+
+**Confidence revision** (previous entry's self-scored table): rootless
+deployment moves from ~35% ("never tested genuine rootless") to high
+confidence with one concrete, now-fixed bug found in the process — a better
+outcome than a clean pass would have been, since a clean pass on an
+untested path is weaker evidence than a caught-and-fixed bug on that same
+path. Batch-script units move from ~55% ("syntax-only") to high confidence
+for the specific script tested (`nightly-learn.py --mode hourly`); the
+nightly/cocoindex variants remain syntax-verified only, not independently
+executed. The bridge-networking default (`PublishPort=8888:8888`, no
+`Network=host`) remains the one gap not re-attempted here — still resting on
+the inference that it works on a clean host, not a direct measurement.
+
+## 2026-07-29 (same day, tenth follow-up): #9 Implemented — Quadlet Unit, systemd Timers, `docs/INSTALL-linux.md`, and a Correction to the Spike's Own Containerization Recommendation
+
+**Context**: following the successful spike (previous entry below), the user
+confirmed proceeding with full implementation: a Podman Quadlet unit for the
+Hindsight service, systemd `.service`/`.timer` units for the batch scripts,
+and Linux install docs.
+
+**Correction to the spike findings before building anything**: the spike's
+own comment leaned toward containerizing `nightly-learn.py`/`cocoindex-flows.py`
+"since host's stock Python predates 3.10+." Re-reading `docs/INSTALL.md` step
+4 before implementing showed this was wrong — the macOS install already uses
+`uv venv ~/.hindsight/venv --python 3.14`, a **hermetic, host-independent**
+interpreter, not the system Python. The exact same command works identically
+on Linux, so there was never a host-Python-version reason to containerize
+these scripts. Caught this before writing code, not after — the batch
+scripts run natively via the same `uv`-managed venv as macOS, scheduled with
+systemd timers instead of launchd. Only the core Hindsight service itself is
+containerized, per the "Decided architecture" entry from the initial issue
+filing.
+
+**Deliverables, each independently validated via real systemd on
+`helios08` (RHEL 9.0), not just written and assumed to work**:
+
+1. **`quadlet/hindsight.container`** — Podman Quadlet unit for the Hindsight
+   service.
+   - Deployed to `~/.config/containers/systemd/` and confirmed the Quadlet
+     generator (`/usr/libexec/podman/quadlet`) parses it into a real
+     systemd unit with zero errors (`systemctl --user status` showed
+     `Loaded: loaded (...; generated)`).
+   - **Data persistence, the one claim from the spike that was never
+     actually tested** (the spike ran fully ephemeral): found `pg0`'s data
+     directory inside the container at `/home/hindsight/.pg0` via `podman
+     exec ... find`, bind-mounted a host directory there
+     (`chown 1000:1000` — the container's non-root `hindsight` user), then
+     proved persistence directly: created a bank, destroyed and recreated
+     the container twice, confirmed the bank still existed both times. The
+     app's own startup log ("✅ Existing pg0 data directory detected") is
+     independent corroborating evidence, not just the API check.
+   - **Re-discovered the spike's DNS/firewall issue in a new context**:
+     starting the Quadlet under standard bridge networking + `PublishPort=`
+     reproduced the exact same symptom the original build hit (`oauth2.
+     googleapis.com` DNS resolution failing only inside the container,
+     `ss` showing the port bound but `curl` timing out) — confirming this
+     is a real, reproducible property of this specific host's stale
+     firewall rules, not a one-off build-time fluke. Toggled the unit to
+     `Network=host` and confirmed it resolves cleanly, then ran a full
+     retain → LLM extraction → entity-graph → recall round-trip through the
+     **systemd-managed** service (not raw `podman run` this time) to close
+     the loop. Both networking modes are documented in the unit file's
+     comments with which one was actually end-to-end validated (`Network=host`)
+     vs. expected-to-work-but-not-independently-retested (`PublishPort=`).
+2. **`systemd/engram-hindsight-{hourly,nightly}.{service,timer}` and
+   `systemd/engram-cocoindex.service`** — native systemd equivalents of
+   `launchd/io.vectorize.hindsight.{hourly,nightly}.plist` and
+   `io.vectorize.cocoindex.service.plist`. All five unit files verified with
+   `systemd-analyze verify --user` on `helios08` (clean pass once a stub
+   `venv/bin/python3` existed to satisfy the executable-path check — that
+   check is unrelated to unit-file syntax, which was already zero-error
+   before the stub).
+3. **`docs/INSTALL-linux.md`** — new file, structurally parallel to
+   `INSTALL.md` per issue #9's acceptance criteria, covering only the
+   platform-specific steps (prerequisites, Quadlet install, systemd timer
+   setup) and pointing back to `INSTALL.md` steps 1–3/7–18 for everything
+   platform-agnostic (Cursor config, CocoIndex, docs/issues ingestion).
+   Cross-linked from `README.md` and `docs/INSTALL.md`.
+
+**Cleanup**: test bank deleted, Quadlet unit removed from `helios08`,
+`systemctl --user disable`d, `loginctl disable-linger` reverted, credentials
+`shred -u`'d, `~/.hindsight-linux` test data directory removed, temporary
+`localhost/engram-hindsight:latest` tag removed (the underlying
+`engram-hindsight-spike:latest` image built during the original spike is
+kept, matching that entry's own decision).
+
+**Acceptance criteria status** (see issue #9): all four checked —
+Dockerfile currency confirmed (prior entry), Quadlet unit built and
+validated, systemd timer units built and validated, `docs/INSTALL-linux.md`
+written, `docs/FINDINGS.md` updated (this entry).
+
 ## 2026-07-29 (same day, ninth follow-up): #9 Spiked on Real Hardware — Full Retain/Recall Round-Trip Validated on RHEL 9/Podman
 
 **Context**: #9 (Linux/Fedora support) had its architecture already resolved (native

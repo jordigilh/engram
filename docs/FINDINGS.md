@@ -2,6 +2,54 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-29 (same day, eighth follow-up): #7 Closed — Measured the Actual Incidence Rate Before Building, Found ~0.008%
+
+**Context**: #7 (commitment/follow-up tracking + `alerts.py`) was next in line as a
+"Big Bet" per the original prioritization, unblocked by #1's schema-support finding
+earlier the same day. Started TDD implementation: `COMMITMENT_PATTERNS`/
+`is_commitment()` in `nightly-learn.py` (mirroring `is_instruction()`'s regex-only
+style — a new, unproven signal, ship conservatively rather than mirroring
+Haiku-backed correction detection) and the 3-tuple `extract_learning_windows()`
+change, both fully tested and passing (91 tests, zero regressions).
+
+**Stopped mid-implementation on user request for a confidence score**, with the
+explicit framing "my goal is quality, not quantity." Rather than guess, ran the
+already-built `is_commitment()` detector against the full real transcript corpus —
+76,106 user messages across 1,140 sessions, all three onboarded projects, entire
+history.
+
+**Result: 4 unique qualifying matches, ever** (0.008% hit rate; 6 raw hits, 2 were
+duplicate transcript copies from a known Cursor session-recording quirk — see
+2026-07-27 entry below). At least one of the 4 is a conditional in-session fallback
+("if you can't reach due to quay.io issues, let me know and I'll follow up"), not
+really an outstanding TODO — the genuine signal is thinner still.
+
+**Comparison to the correction-detection baseline that justified a similar-shaped
+build**: 16 real corrections in 7 days, 630 Haiku-confirmed across one 14-day/
+3,873-message window (2026-07-08 entry). Corrections occur roughly three orders of
+magnitude more often than the commitment/follow-up pattern this issue targeted.
+
+**Conclusion**: the failure mode #7 exists to solve — dropped follow-ups/promises —
+essentially doesn't occur in this project's actual usage pattern. Closed (not just
+deferred, unlike #4) with the measured number attached to the issue. Reverted the
+`is_commitment()`/`COMMITMENT_PATTERNS`/window-plumbing changes rather than merging
+unused detection surface — same precedent as the #4 revert.
+
+**Broader takeaway**: this is the second time this session an issue died on
+contact with measurement rather than review debate (#6's upstream ask, #4's
+on-demand retain, now #7) — reinforces confirming actual incidence/need *before*
+investing in build-out, not after, whenever a cheap measurement is possible (here:
+a two-minute regex scan over existing transcripts, reusing code already written for
+the RED/GREEN cycle instead of throwing it away).
+
+**Also surfaced during the same check-in**: a real Linux test target exists
+(`ssh helios08`, RHEL 9.0, Podman 4.9.4 with the Quadlet generator present, 40
+cores/250GB RAM/3.5TB free, ports 8888/5432 free, SELinux enforcing) — materially
+upgrades #9's feasibility assessment, which had been scored low specifically for
+lacking a test machine. See follow-up entry once #9 work starts.
+
+---
+
 ## 2026-07-29 (same day, seventh follow-up): #1 Implemented — Hindsight Already Had the Non-Destructive Supersede Mechanism, No Upstream Ask Needed
 
 **Trigger**: User requested implementation of [#1](https://github.com/jordigilh/engram/issues/1)

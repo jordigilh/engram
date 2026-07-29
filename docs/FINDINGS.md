@@ -187,7 +187,7 @@ before implementation began, so the historical "why" isn't lost the way the pre-
 100% of `nightly-learn.py`'s existing `extract_learning_windows()`/`retain_windows_deduped()`
 pipeline against exactly one resolved transcript path, updating watermarks/hashes afterward so the
 next hourly/nightly run doesn't double-process it. `docs/README.md` gained an "On-Demand Retain"
-subsection. Commit `c164962`.
+subsection. Commit `c164962`. **Later reverted before push — see the sixth follow-up entry below.**
 
 **#5 outcome**: [`fallback_extract.py`](https://github.com/jordigilh/engram/issues/5) — regex-based
 entity (CamelCase/acronym/Capitalized-Phrase)/topic(repo-vocabulary)/salience heuristic extraction,
@@ -202,7 +202,8 @@ Vertex AI/hindsight-api recovers. `report.py` gained `count_fallback_backlog()` 
 
 **Both issues left open** (not closed) pending the user's own verification/merge decision, consistent
 with how this repo has handled issue-to-implementation so far — this file and the commits are the
-source of truth for what shipped, not issue state.
+source of truth for what shipped, not issue state. **Update, same day**: #5 was verified and pushed;
+#4 was reverted before push — see the sixth follow-up entry below.
 
 ## 2026-07-29 (same day, fourth follow-up): Spike-First Tier Resolved — #6 (Graph Expansion Tuning) Answered "No" via Live API/Source Inspection, #8 (LOCOMO) Answered "Feasible but Low-Value as Scoped"
 
@@ -247,6 +248,16 @@ Researched LoCoMo's actual methodology (`snap-research/locomo`, ACL 2024, Mahara
 **Impact analysis** (from `recall_boost.py`'s own tuned `BOOST_LEVELS`, calibrated by the Hindsight team against real recall traces — incidentally using their own LoCoMo bank as the calibration corpus, a small callback to the #8 spike above): `low` mainly rescues borderline graph candidates from the reranker's 300-candidate cutoff (e.g. a graph-rank-~150 candidate that would otherwise fall just below it); `medium` promotes graph candidates into the middle of the pool (~rank 60) and lets them compete with weak/moderate semantic matches; `high` makes the graph arm dominate the candidate pool, beating all but strong direct semantic matches. All three trade some direct-match precision for more graph-linked recall.
 
 **Decision**: don't file upstream, don't enable the env var. Two independent reasons converged: (a) the per-request framing has weak precedent (discouraged twice by the same maintainer, most recently 5 days before this investigation), and even the more defensible bank-level framing rests on an unreviewed, unfollowed-through solo note, not a real commitment; (b) more fundamentally, **there is no measured evidence of a graph-visibility problem in this repo's own recall today** — unlike the #2805/#2841 reporters, who had a diagnosed, concrete symptom motivating their ask. Enabling a boost speculatively, with no observed deficiency to correct, would trade precision for noise for no evidenced benefit. Revisit only if a future recall-quality investigation on this repo's own banks actually surfaces graph-linked content being under-ranked.
+
+## 2026-07-29 (same day, sixth follow-up): #4 Reverted During Verification — Built, Then Tabled Pending Evidence of Actual Need
+
+**Trigger**: user asked to verify the Phase 1 work (#4, #5) before pushing 6 local commits to `origin/main`. Verification (full test suite, 132/132 targeted tests + 253 total passing, no new failures beyond the known 35 pre-existing unrelated errors; diffstat review) passed cleanly for both. But when asked directly *why `retain-now.py` was needed*, re-examining #4's own (already-corrected) rationale surfaced that its remaining justification was thin: not a latency fix (the hourly job already solves that), but a determinism/insurance mechanism for a specific moment — a correction landing seconds before a context-window compaction — whose actual frequency in practice was never measured, only hypothesized by analogy to tstockham96/engram's `checkpoint()` tool.
+
+**Decision**: keep #5 (fallback resilience — the gap it closes, a bare `except Exception` silently losing a window on any transient API failure with zero recovery path, is concretely real and was already occurring, not hypothetical), but revert #4. Reasoning: #4's cost was low (a thin wrapper, no new extraction logic) but so is its evidenced benefit — no observed instance of "a correction was lost because it fell between the hourly ticks" has actually happened in this repo's own operating history. Building speculative insurance for an unquantified risk inverts this repo's own stated preference (seen elsewhere in this session: declining to enable `RECALL_STRATEGY_BOOSTS` without a measured problem to fix) for evidence-driven scope over anticipatory scope. Explicit instruction: table #4 until a concrete instance surfaces that demonstrates the gap actually matters, then implement narrowly for that.
+
+**Mechanics of the revert**: removed `retain-now.py` and `tests/test_retain_now.py` entirely; removed the `retain_now` fixture from `conftest.py`; removed the "On-Demand Retain" subsection from `docs/README.md`. **Kept** the Key Design Decisions row correction (hourly job already retains within ~1-2h) — that's an independent factual correction to stale documentation, true regardless of whether `retain-now.py` ships. Full suite re-verified after the revert: 243 passed (down from 253, the 10 removed `test_retain_now.py` cases), same 35 pre-existing unrelated errors, no new failures.
+
+**Issue #4 left open on GitHub**, not closed — this is a deferral pending evidence, not a rejection of the idea. A comment records the decision and the concrete bar for revisiting it (an actual observed instance of a correction falling between hourly ticks and being lost).
 
 ## 2026-07-28: Low W30/W31 Session Volume Explained by PTO + Frequent Host Shutdowns, Not Reduced Engagement or a Regression
 

@@ -43,22 +43,6 @@ def cocoindex_flows() -> ModuleType:
 
 
 @pytest.fixture(scope="session")
-def retain_now(nightly_learn: ModuleType) -> ModuleType:
-    """retain-now.py (2026-07-29, GitHub issue #4) loads its own independent
-    copy of nightly-learn.py via importlib -- the same hyphenated-sibling
-    pattern review-contradictions.py uses for cocoindex-flows.py (see the
-    review_contradictions fixture's docstring below for the full rationale).
-    Swap in the canonical nightly_learn fixture instance so tests can
-    monkeypatch nightly_learn's functions (api_post, contradiction_resolution,
-    etc.) and have retain-now.py's calls actually observe the patches,
-    instead of silently calling into an unpatched second copy.
-    """
-    module = load_hyphenated_module("retain-now.py", "retain_now")
-    module.nightly_learn = nightly_learn
-    return module
-
-
-@pytest.fixture(scope="session")
 def review_contradictions(cocoindex_flows: ModuleType) -> ModuleType:
     """review-contradictions.py does its own independent importlib exec of
     cocoindex-flows.py internally. CocoIndex registers global ContextKeys

@@ -41,7 +41,7 @@ flowchart LR
 | Decision | Rationale |
 |----------|-----------|
 | **Recall-only during sessions** | Zero token cost, pure local vector search (~600ms) |
-| **Retain in nightly batch** | Avoids hitting token quotas during work hours |
+| **Retain in periodic batches (hourly + nightly)** | Hourly (`--mode hourly`, 2h window) keeps latency to ~1-2h; nightly is the catch-all plus reflect/probes/triage. `retain-now.py` adds an on-demand, single-session path on top of both for deterministic, immediate retain (e.g. before a context-window compaction) — see [How Correction Detection Works](#how-correction-detection-works) |
 | **Haiku 4.5 for extraction** | 10x cheaper than Sonnet for structured pattern extraction |
 | **Sonnet 4.6 for reflection** | Complex reasoning about what patterns are effective |
 | **Correction and instruction-focused** | Learns from corrections and explicit instructions |
@@ -329,6 +329,20 @@ For each correction, a **window** of surrounding context is extracted (2 message
 Hindsight extracts: *"Build architecture must be linux/amd64 for staging deployments. Container registry is quay.io, not ghcr.io."*
 
 Next session, when the user asks to deploy, recall surfaces this pattern.
+
+### On-Demand Retain (`retain-now.py`)
+
+The hourly/nightly jobs above are periodic sweeps across every onboarded workspace, fired on a fixed clock tick — they aren't tied to any particular session. `retain-now.py` adds a deterministic, immediate alternative scoped to exactly one transcript, for moments where waiting for the next tick isn't good enough (e.g. right before a context-window compaction):
+
+```bash
+python3 retain-now.py --session <transcript-id-or-path> [--project kubernaut|dcm|engram]
+```
+
+- `--session` accepts either a bare transcript id (its file's stem — the script searches for it under `~/.cursor/projects/*/agent-transcripts/**/`) or a direct file path.
+- `--project` overrides auto-resolution from the transcript's workspace path, for cases where that resolution isn't reliable (e.g. a moved/renamed transcript file).
+- It reuses `nightly-learn.py`'s extraction, contradiction-resolution, and watermark/hash-dedup logic unchanged, and updates the same shared watermark/hash state files afterward — so the next hourly/nightly sweep correctly sees this transcript's already-retained content and doesn't reprocess it.
+
+Exits `1` if `--session` can't be resolved to a file; `0` on success, with a one-line summary printed to stdout.
 
 ---
 

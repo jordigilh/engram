@@ -107,6 +107,53 @@ unverified platform-support assumptions), landing in the same "Big Bet" tier as 
 prioritization canvas (score 1 — schedule after the discovery-step work, not blocking, not urgent).
 The canvas and this table are both updated to include it.
 
+## 2026-07-29 (same day, second follow-up): Resolved #9's Open Design Question — Why Native Won on macOS, and Why Container Is Right on Linux
+
+**Trigger**: user supplied the previously-missing reason behind `migrate-to-native.sh`'s
+container→native migration, closing the exact gap issue #9's risk section had flagged ("this
+should be resolved as a documentation gap regardless of which path is chosen").
+
+**The explanation**: Podman on macOS does not run containers on the host kernel at all — macOS
+(XNU) has no Linux namespaces/cgroups, so Podman provisions a Linux VM (`podman machine`, via
+QEMU/AppleHV) and every container actually runs inside that VM. That VM is a managed, occasionally
+recreated entity — upgrades, corruption recovery, and resource reconfiguration commonly involve
+`podman machine rm` + `podman machine init` — so a long-lived stateful service like Hindsight's
+embedded Postgres data risks being tied to that VM's lifecycle rather than surviving independently
+of it, unless every byte lives on a carefully-maintained host bind-mount. That's the real reason
+native process won on macOS: it has no VM layer, hence no intermediate lifecycle to accidentally
+reset.
+
+On Linux, this risk **does not exist**: Podman/Docker run containers directly on the host kernel, so
+a bind-mounted volume is just a host directory — there's no separate VM disk to lose independently
+of the host. The same tradeoff that favored native on macOS therefore favors the container path on
+Linux, not merely tolerates it.
+
+**A second, previously-unstated consequence**: this also substantially de-risks the "does
+`pg0`/ONNX even run on Linux" question that issue #9 originally treated as unverified and requiring
+its own feasibility spike. Container images are Linux userspace regardless of host OS — so if the
+`Dockerfile`-built image ran successfully under Podman-on-macOS (i.e., inside that Linux VM) before
+the 2026-07 native migration, its `pg0`/ONNX backend was already running on Linux the whole time.
+The remaining unknown narrows from "does this work on Linux at all" to "does the *current*
+`Dockerfile` still build and run against today's `hindsight-api`" — a currency check, not a
+viability spike.
+
+**Resolution — platform-conditional architecture, not a global A-vs-B choice**: macOS stays native
+(unchanged, no regression risk); Linux/Fedora uses the existing (currently dormant) `Dockerfile` as
+its target deployment, with Podman **Quadlets** (`.container` unit files, auto-generated into
+systemd services) as the idiomatic way to run it as a managed service on Fedora specifically.
+Whether the CocoIndex/nightly-learn Python scripts should also be containerized on Linux was left as
+an explicit open scoping question — the VM-recreation risk that justifies containerizing the
+*stateful* Hindsight service doesn't obviously extend to those mostly-stateless batch/poll jobs, so
+the simpler default is native Python + systemd timers for those, revisited only if a concrete reason
+to containerize them shows up.
+
+**Outcome**: issue #9's body rewritten to reflect the resolved architecture (no longer presented as
+an open "Path A vs. Path B" decision), with a comment added recording the rationale verbatim for
+traceability independent of this file. Complexity re-rated Medium (down from High) in the
+prioritization canvas — the biggest source of uncertainty is gone — moving its score from +1 to +2,
+tied with #2/#7 while remaining in the "Big Bet" tier given the real implementation work still ahead
+(Quadlet units, systemd timers, a new install doc).
+
 ## 2026-07-28: Low W30/W31 Session Volume Explained by PTO + Frequent Host Shutdowns, Not Reduced Engagement or a Regression
 
 **Context**: While reviewing whether Engram is reducing tokens/corrections, the weekly trend showed

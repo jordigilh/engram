@@ -2,6 +2,76 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-29 (same day, ninth follow-up): #9 Spiked on Real Hardware — Full Retain/Recall Round-Trip Validated on RHEL 9/Podman
+
+**Context**: #9 (Linux/Fedora support) had its architecture already resolved (native
+on macOS, container on Linux) but zero execution validation and no known test
+target — scored ~15-20% confidence for that reason. During the #7 confidence-score
+check-in, the user surfaced a real, accessible Linux box (`ssh helios08`,
+`helios08.lab.eng.tlv2.redhat.com`) with the explicit framing "my interest is in
+what can bring value" — a materially different situation from "speculative
+future-proofing," so the issue was re-spiked rather than left at its prior score.
+
+**Machine profile**: RHEL 9.0 (Fedora/RHEL-family, matches the issue's target),
+Podman 4.9.4-dev, systemd 250, Podman's Quadlet generator present and wired
+(`/usr/lib/systemd/system-generators/podman-system-generator` — the exact mechanism
+#9 proposed), 40 cores/250GB RAM/3.5TB free disk, no GPU (Matrox management-only —
+CPU/ONNX embeddings only), ports 8888/5432 free, SELinux enforcing.
+
+**Spike sequence**:
+1. Copied the unmodified `Dockerfile` to the box, built it with `podman build`.
+   Base image (`ghcr.io/vectorize-io/hindsight:latest`) pulled fine; the second
+   layer (`uv pip install google-cloud-aiplatform`) initially failed with a DNS
+   resolution error reaching PyPI.
+2. **Diagnosed as a host-specific issue, not a Fedora/RHEL/Podman/Hindsight
+   problem**: this shared lab box also runs Docker and libvirt, and `nft list
+   ruleset` showed stale Docker/CNI-installed nftables rules (`CNI-ADMIN` chain,
+   `oifname "podman1" ... drop`) interfering with Podman's own netavark-managed
+   bridge — the host itself resolved/reached `pypi.org` fine (`curl` from the host
+   got HTTP 200), only traffic originating *inside* a Podman container was
+   affected. `podman run --network=host` (bypasses the bridge entirely) confirmed
+   this diagnosis and unblocked the build immediately. Worth a callout in install
+   docs for anyone with a similar mixed-runtime host; not a blocker on a clean
+   Fedora/RHEL box.
+3. Container boot test (no real credentials): loaded config, logged provider
+   settings correctly, then **correctly refused to start** with a clean
+   `ValueError: LLM API key is required` — validation working as intended, not a
+   defect.
+4. **Full round-trip test with real Vertex AI credentials** (temporarily copied to
+   the box via `scp`, removed with `shred -u` immediately after, per explicit user
+   instruction): container boots, runs its own embedded Postgres + pgvector via
+   Alembic migrations inside the container, `/health` →
+   `{"status":"healthy","database":"connected"}`. Also ships a previously
+   undocumented bundled Control Plane UI on port 9999. `PUT` bank → `POST` retain
+   (real Vertex AI extraction, 3,806 tokens, produced an `observation` + a `world`
+   fact plus a 6-entity graph) → `POST` recall (found both facts, correct
+   semantic/reranker scores, entities intact) → `DELETE` bank (9 records cleaned
+   up). Every layer of the stack — Postgres/pgvector, ONNX embeddings, Vertex AI
+   extraction, entity-graph construction, recall scoring — works unmodified on
+   Linux/Podman.
+5. **One real gotcha found**: the container runs as non-root `hindsight` (uid
+   1000) internally. A host-mounted credentials file needs to be group/world-
+   readable (or chowned to match) — SELinux `:Z` relabeling alone isn't enough;
+   first attempt failed with `Permission denied: '/creds/adc.json'` until the
+   file's Unix permission bits were relaxed.
+
+**Conclusion**: updated confidence from ~55-65% (pre-spike, architecture-only) to
+**~85-90%**. The one concrete unknown the issue itself flagged — "does the current
+Dockerfile still build and run against today's hindsight-api" — is answered yes,
+end to end, not just at the boot level. Remaining work is packaging (Quadlet unit
+file, install-doc section) plus one open scoping decision: whether
+`nightly-learn.py`/`cocoindex-flows.py`/`cocoindex-search.py` should also run
+containerized on Linux rather than natively — leaning yes, since the target host's
+stock Python (3.9.18) predates this codebase's `X | None` type-hint syntax
+(3.10+), and containerizing sidesteps host-Python-version risk entirely rather than
+requiring a pinned interpreter install per target machine.
+
+Built image (`localhost/engram-hindsight-spike:latest`, 4.88GB) was left on
+`helios08` for follow-up work; the test bank, container, and copied credentials
+were all removed at the end of the spike.
+
+---
+
 ## 2026-07-29 (same day, eighth follow-up): #7 Closed — Measured the Actual Incidence Rate Before Building, Found ~0.008%
 
 **Context**: #7 (commitment/follow-up tracking + `alerts.py`) was next in line as a

@@ -276,6 +276,50 @@ class TestCountPendingContradictions:
         assert report.count_pending_contradictions(project="kubernaut") == 1
 
 
+class TestCountFallbackBacklog:
+    """fallback-retained.jsonl (GitHub issue #5): windows that fell back to
+    local heuristic extraction because hindsight-api's retain call failed
+    transiently. Mirrors TestCountPendingContradictions's per-project
+    scoping contract."""
+
+    def _write_fallback(self, tmp_path, entries):
+        path = tmp_path / "fallback-retained.jsonl"
+        with open(path, "w") as f:
+            for e in entries:
+                f.write(json.dumps(e) + "\n")
+        return path
+
+    def test_missing_file_returns_zero(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(report, "FALLBACK_RETAINED_LOG", tmp_path / "fallback-retained.jsonl")
+
+        assert report.count_fallback_backlog() == 0
+
+    def test_no_project_filter_counts_every_entry(self, monkeypatch, tmp_path):
+        path = self._write_fallback(tmp_path, [
+            {"project": "kubernaut"}, {"project": "engram"}, {"project": None},
+        ])
+        monkeypatch.setattr(report, "FALLBACK_RETAINED_LOG", path)
+
+        assert report.count_fallback_backlog() == 3
+
+    def test_project_filter_only_counts_matching_entries(self, monkeypatch, tmp_path):
+        path = self._write_fallback(tmp_path, [
+            {"project": "engram"}, {"project": "engram"}, {"project": "kubernaut"},
+        ])
+        monkeypatch.setattr(report, "FALLBACK_RETAINED_LOG", path)
+
+        assert report.count_fallback_backlog(project="engram") == 2
+        assert report.count_fallback_backlog(project="kubernaut") == 1
+        assert report.count_fallback_backlog(project="dcm") == 0
+
+    def test_malformed_line_is_skipped_not_fatal(self, monkeypatch, tmp_path):
+        path = tmp_path / "fallback-retained.jsonl"
+        path.write_text('not json\n{"project": "engram"}\n')
+        monkeypatch.setattr(report, "FALLBACK_RETAINED_LOG", path)
+
+        assert report.count_fallback_backlog(project="engram") == 1
+
+
 class TestExtractMcpToolCall:
     """Direct unit tests for extract_mcp_tool_call(), mirroring the identical
     helper in nightly-learn.py (keep both in sync)."""

@@ -3,16 +3,19 @@ contradiction branching in retain_windows() (regression for the 2026-07-13
 bug where "queued" items were retained immediately, before human review),
 hash-based dedup in retain_windows_deduped(), dedup_graph()'s newest-wins
 duplicate removal, find_recent_transcripts()'s workspace_prefixes filtering
-(regression for the Fix 1b project-scoping change), and
+(regression for the Fix 1b project-scoping change),
 analyze_mcp_effectiveness()'s context_loading_tokens computation (the
 "tokens burned before first productive action" metric surfaced in report.py
-and DASHBOARD.md as of 2026-07-14).
+and DASHBOARD.md as of 2026-07-14), and the fallback-extraction buffering
+that engages when api_post() fails transiently (GitHub issue #5).
 """
 from __future__ import annotations
 
 import json
+from urllib.error import HTTPError, URLError
 
 import contradiction_resolution as cr
+import fallback_extract
 import project_scope
 
 
@@ -254,6 +257,153 @@ class TestRetainWindows:
 
         result = nightly_learn.retain_windows(["[CORRECTION] User: we don't use HAPI"], "tid-1")
         assert result["items_retained"] == 0
+
+
+class TestRetainWindowsFallback:
+    """No-LLM fallback extraction (GitHub issue #5): hindsight-api's Haiku
+    extraction is server-side, not local (see docs/FINDINGS.md 2026-07-29) --
+    retain_windows() can't wrap a local Haiku call, but it can (and today
+    doesn't) recover from a transient api_post() failure instead of silently
+    dropping the window. Transient transport failures buffer locally via
+    fallback_extract.record_fallback(); genuinely unexpected exceptions do
+    NOT, per the issue's "not all exceptions" acceptance criterion.
+    """
+
+    def test_http_error_buffers_window_via_fallback_extract(self, nightly_learn, monkeypatch, tmp_path):
+        monkeypatch.setattr(cr, "resolve", lambda *a, **k: cr.Resolution(action="retain"))
+        monkeypatch.setattr(fallback_extract, "FALLBACK_LOG_PATH", tmp_path / "fallback-retained.jsonl")
+
+        def raise_http_error(path, payload):
+            raise HTTPError(path, 503, "Service Unavailable", {}, None)
+
+        monkeypatch.setattr(nightly_learn, "api_post", raise_http_error)
+
+        result = nightly_learn.retain_windows(["[CORRECTION] User: we don't use HAPI"], "tid-1", project="engram")
+
+        assert result["items_retained"] == 0
+        assert result["fallback_used"] == 1
+        backlog = fallback_extract.load_backlog()
+        assert len(backlog) == 1
+        assert backlog[0]["transcript_id"] == "tid-1"
+        assert backlog[0]["project"] == "engram"
+        assert backlog[0]["tags"] == ["fallback-extraction"]
+
+    def test_url_error_buffers_window_via_fallback_extract(self, nightly_learn, monkeypatch, tmp_path):
+        monkeypatch.setattr(cr, "resolve", lambda *a, **k: cr.Resolution(action="retain"))
+        monkeypatch.setattr(fallback_extract, "FALLBACK_LOG_PATH", tmp_path / "fallback-retained.jsonl")
+
+        def raise_url_error(path, payload):
+            raise URLError("connection refused")
+
+        monkeypatch.setattr(nightly_learn, "api_post", raise_url_error)
+
+        result = nightly_learn.retain_windows(["[CORRECTION] User: we don't use HAPI"], "tid-1")
+
+        assert result["fallback_used"] == 1
+        assert len(fallback_extract.load_backlog()) == 1
+
+    def test_non_transient_exception_is_not_buffered_as_fallback(self, nightly_learn, monkeypatch, tmp_path):
+        """A bug in this repo's own code (e.g. a KeyError from a malformed
+        response) must not be silently treated as a Vertex-AI-outage case --
+        it's logged and the window is skipped, same as before, but never
+        reaches fallback_extract.record_fallback()."""
+        monkeypatch.setattr(cr, "resolve", lambda *a, **k: cr.Resolution(action="retain"))
+        monkeypatch.setattr(fallback_extract, "FALLBACK_LOG_PATH", tmp_path / "fallback-retained.jsonl")
+
+        def raise_value_error(path, payload):
+            raise ValueError("unexpected response shape")
+
+        monkeypatch.setattr(nightly_learn, "api_post", raise_value_error)
+
+        result = nightly_learn.retain_windows(["[CORRECTION] User: we don't use HAPI"], "tid-1")
+
+        assert result["items_retained"] == 0
+        assert result["fallback_used"] == 0
+        assert fallback_extract.load_backlog() == []
+
+    def test_regression_preexisting_runtime_error_still_caught_not_buffered(self, nightly_learn, monkeypatch, tmp_path):
+        """Guards the pre-existing test_api_post_exception_is_caught_and_logged
+        behavior: a plain RuntimeError must still result in items_retained==0
+        (nothing crashes the batch), but per the corrected design it must not
+        be misclassified as a transient/fallback-eligible failure either."""
+        monkeypatch.setattr(cr, "resolve", lambda *a, **k: cr.Resolution(action="retain"))
+        monkeypatch.setattr(fallback_extract, "FALLBACK_LOG_PATH", tmp_path / "fallback-retained.jsonl")
+
+        def raise_runtime_error(path, payload):
+            raise RuntimeError("network down")
+
+        monkeypatch.setattr(nightly_learn, "api_post", raise_runtime_error)
+
+        result = nightly_learn.retain_windows(["[CORRECTION] User: we don't use HAPI"], "tid-1")
+
+        assert result["items_retained"] == 0
+        assert result["fallback_used"] == 0
+
+    def test_fallback_used_defaults_to_zero_on_clean_batch(self, nightly_learn, monkeypatch):
+        monkeypatch.setattr(cr, "resolve", lambda *a, **k: cr.Resolution(action="retain"))
+        monkeypatch.setattr(nightly_learn, "api_post", lambda path, payload: {"success": True, "items_count": 1, "usage": {}})
+
+        result = nightly_learn.retain_windows(["[CORRECTION] User: we don't use HAPI"], "tid-1")
+
+        assert result["fallback_used"] == 0
+
+
+class TestReprocessFallbackBacklog:
+    """--mode reprocess-fallback (GitHub issue #5): retries buffered entries
+    once hindsight-api's Vertex AI dependency may have recovered, keeping
+    only the still-failing ones."""
+
+    def test_empty_backlog_is_a_no_op(self, nightly_learn, monkeypatch, tmp_path):
+        monkeypatch.setattr(fallback_extract, "FALLBACK_LOG_PATH", tmp_path / "fallback-retained.jsonl")
+
+        result = nightly_learn.reprocess_fallback_backlog()
+
+        assert result == {"attempted": 0, "recovered": 0, "still_failing": 0}
+
+    def test_successful_retry_removes_entry_from_backlog(self, nightly_learn, monkeypatch, tmp_path):
+        monkeypatch.setattr(fallback_extract, "FALLBACK_LOG_PATH", tmp_path / "fallback-retained.jsonl")
+        fallback_extract.record_fallback("[CORRECTION] User: statement A", "tid-1", "engram", {}, "reason1")
+        monkeypatch.setattr(nightly_learn, "api_post", lambda path, payload: {"success": True, "items_count": 1, "usage": {}})
+
+        result = nightly_learn.reprocess_fallback_backlog()
+
+        assert result == {"attempted": 1, "recovered": 1, "still_failing": 0}
+        assert fallback_extract.load_backlog() == []
+
+    def test_still_failing_entry_remains_buffered(self, nightly_learn, monkeypatch, tmp_path):
+        monkeypatch.setattr(fallback_extract, "FALLBACK_LOG_PATH", tmp_path / "fallback-retained.jsonl")
+        fallback_extract.record_fallback("[CORRECTION] User: statement A", "tid-1", "engram", {}, "reason1")
+
+        def raise_http_error(path, payload):
+            raise HTTPError(path, 503, "down", {}, None)
+
+        monkeypatch.setattr(nightly_learn, "api_post", raise_http_error)
+
+        result = nightly_learn.reprocess_fallback_backlog()
+
+        assert result == {"attempted": 1, "recovered": 0, "still_failing": 1}
+        assert len(fallback_extract.load_backlog()) == 1
+
+    def test_mixed_backlog_only_prunes_recovered_entries(self, nightly_learn, monkeypatch, tmp_path):
+        monkeypatch.setattr(fallback_extract, "FALLBACK_LOG_PATH", tmp_path / "fallback-retained.jsonl")
+        fallback_extract.record_fallback("A", "tid-1", "engram", {}, "reason1")
+        fallback_extract.record_fallback("B", "tid-2", "engram", {}, "reason2")
+        outcomes = iter([{"success": True, "items_count": 1, "usage": {}}, None])
+
+        def fake_post(path, payload):
+            outcome = next(outcomes)
+            if outcome is None:
+                raise HTTPError(path, 503, "down", {}, None)
+            return outcome
+
+        monkeypatch.setattr(nightly_learn, "api_post", fake_post)
+
+        result = nightly_learn.reprocess_fallback_backlog()
+
+        assert result == {"attempted": 2, "recovered": 1, "still_failing": 1}
+        remaining = fallback_extract.load_backlog()
+        assert len(remaining) == 1
+        assert remaining[0]["window"] == "B"
 
 
 class TestRetainWindowsDeduped:

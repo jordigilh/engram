@@ -300,6 +300,53 @@ nightly pipeline doesn't double-process.
 
 Results are appended to `~/.hindsight/logs/triage-report.jsonl` with per-run breakdowns.
 
+## Fallback Extraction Backlog
+
+`nightly-learn.py`'s `retain_windows()` calls hindsight-api to run its
+server-side (Haiku-based) extraction on every correction/instruction window.
+Before GitHub issue #5, a transient failure of that call (Vertex AI outage,
+timeout, network blip) silently dropped the window — the bare `except
+Exception` logged an error and moved on, with no recovery path.
+
+`fallback_extract.py` closes that gap: `HTTPError`/`URLError`/`TimeoutError`
+specifically (not every exception — see its module docstring) are now
+buffered locally as a cheap, offline heuristic extraction (entity/topic/
+salience regexes, no LLM call) instead of being lost outright.
+
+### Checking the backlog
+
+```bash
+python3 report.py
+```
+
+surfaces a `FALLBACK-EXTRACTED (Vertex AI unavailable on hindsight-api)`
+section whenever the backlog is nonzero (see `count_fallback_backlog()`).
+
+### Reprocessing
+
+Once hindsight-api's Vertex AI dependency has recovered, retry every
+buffered entry against the real extraction pipeline:
+
+```bash
+python3 nightly-learn.py --mode reprocess-fallback
+```
+
+Entries that succeed are removed from the backlog; entries that still fail
+remain buffered for the next pass.
+
+### Healthy indicators
+
+- **Backlog at or near 0**: hindsight-api's retain path is healthy
+- **Backlog shrinks after `--mode reprocess-fallback`**: recovery is working as designed
+
+### Warning signs
+
+- **Backlog growing across multiple nightly runs**: Vertex AI or
+  hindsight-api may be down/misconfigured — check hindsight-api's own logs,
+  not just this repo's
+- **`--mode reprocess-fallback` leaves `still_failing` unchanged run over
+  run**: the underlying outage hasn't actually resolved yet
+
 ## Log File Locations
 
 | File | Content | Written by |
@@ -308,6 +355,7 @@ Results are appended to `~/.hindsight/logs/triage-report.jsonl` with per-run bre
 | `~/.hindsight/logs/effectiveness-report.jsonl` | Daily effectiveness metrics | Nightly script |
 | `~/.hindsight/logs/recall-signals.jsonl` | Bank stats + recall probes | Nightly script |
 | `~/.hindsight/logs/triage-report.jsonl` | Memory triage results | Nightly script |
+| `~/.hindsight/logs/fallback-retained.jsonl` | Locally-buffered windows whose retain call to hindsight-api failed transiently | `fallback_extract.py` (via `nightly-learn.py`) |
 | `~/.hindsight/logs/YYYY-MM-DD.json` | Full daily report | Nightly script |
 
 ## CocoIndex-Aware Metrics

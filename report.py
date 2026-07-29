@@ -35,6 +35,7 @@ EFFECTIVENESS_LOG = LOG_DIR / "effectiveness-report.jsonl"
 RECALL_SIGNALS_LOG = LOG_DIR / "recall-signals.jsonl"
 PREFILTER_SHADOW_LOG = LOG_DIR / "prefilter-shadow.jsonl"
 PENDING_CONTRADICTIONS_LOG = LOG_DIR / "contradictions-pending.jsonl"
+FALLBACK_RETAINED_LOG = LOG_DIR / "fallback-retained.jsonl"
 TRANSCRIPTS_GLOB = os.path.expanduser("~/.cursor/projects/*/agent-transcripts/**/*.jsonl")
 PROJECTS_ROOT = Path(os.path.expanduser("~/.cursor/projects"))
 
@@ -599,6 +600,36 @@ def count_pending_contradictions(project: str | None = None) -> int:
     return count
 
 
+def count_fallback_backlog(project: str | None = None) -> int:
+    """Count entries in fallback-retained.jsonl -- windows that fell back to
+    local heuristic extraction because hindsight-api's retain call failed
+    transiently (fallback_extract.py, GitHub issue #5). A nonzero, growing
+    count is a visibility signal that Vertex AI may be down/misconfigured on
+    hindsight-api's side; resolve with `python3 nightly-learn.py --mode
+    reprocess-fallback`. Mirrors count_pending_contradictions()'s per-project
+    scoping and malformed-line-is-skipped-not-fatal conventions.
+    """
+    path = FALLBACK_RETAINED_LOG
+    if not os.path.exists(path):
+        return 0
+    count = 0
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if project is None:
+                count += 1
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if entry.get("project") == project:
+                count += 1
+    return count
+
+
 def collect_regex_vs_haiku_stats(days: int = 7, project: str | None = None) -> dict | None:
     """Compare the CORRECTION_PATTERNS regex list against Haiku's direct
     classification, using the Semantic Correction Detection Spike's ongoing
@@ -937,7 +968,8 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
                   mental_models: list[dict] | None = None,
                   regex_vs_haiku: dict | None = None,
                   recall_write_metrics: dict | None = None,
-                  pending_contradictions: int | None = None) -> str:
+                  pending_contradictions: int | None = None,
+                  fallback_backlog: int | None = None) -> str:
     """Format a human-readable report."""
     lines = []
     lines.append("=" * 70)
@@ -1274,6 +1306,20 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
             "run: python3 review-contradictions.py"
         )
 
+    # Fallback-extraction backlog (GitHub issue #5, 2026-07-29): windows
+    # buffered locally because hindsight-api's retain call failed
+    # transiently. Surfaced here so a growing backlog is noticed rather than
+    # silently degrading quality indefinitely -- see fallback_extract.py.
+    fallback_count = fallback_backlog
+    if fallback_count:
+        lines.append("")
+        lines.append("  FALLBACK-EXTRACTED (Vertex AI unavailable on hindsight-api)")
+        lines.append("  " + "-" * 66)
+        lines.append(
+            f"  {fallback_count} buffered locally -- "
+            "run: python3 nightly-learn.py --mode reprocess-fallback"
+        )
+
     # Recall/write ratios (Phase 3 of the Haiku correction gate rollout, 2026-07-12)
     if recall_write_metrics and recall_write_metrics.get("total_recall_calls"):
         rwm = recall_write_metrics
@@ -1496,10 +1542,12 @@ def build_report_data(args, project: str) -> dict:
     daily_logs = load_daily_logs(days=args.days, log_suffix=pconfig["log_suffix"])
     recall_write_metrics = compute_recall_write_metrics(mcp_calls, daily_logs)
     pending_contradictions = count_pending_contradictions(project=project)
+    fallback_backlog = count_fallback_backlog(project=project)
 
     full_data = {
         "project": project,
         "pending_contradictions": pending_contradictions,
+        "fallback_backlog": fallback_backlog,
         "period_days": args.days,
         "generated": datetime.now().isoformat(),
         "mcp_usage": mcp_stats["by_server"],
@@ -1529,6 +1577,7 @@ def build_report_data(args, project: str) -> dict:
         "regex_vs_haiku": regex_vs_haiku,
         "recall_write_metrics": recall_write_metrics,
         "pending_contradictions": pending_contradictions,
+        "fallback_backlog": fallback_backlog,
     }
 
 
@@ -1590,7 +1639,8 @@ def main():
                             mental_models=data["full_data"]["mental_models"],
                             regex_vs_haiku=data["regex_vs_haiku"],
                             recall_write_metrics=data["recall_write_metrics"],
-                            pending_contradictions=data["pending_contradictions"]))
+                            pending_contradictions=data["pending_contradictions"],
+                            fallback_backlog=data["fallback_backlog"]))
 
 
 if __name__ == "__main__":

@@ -33,6 +33,7 @@ from urllib.error import HTTPError, URLError
 
 import correction_gate
 import contradiction_resolution
+import fallback_extract
 import project_scope
 
 HINDSIGHT_URL = "http://localhost:8888"
@@ -551,11 +552,22 @@ def retain_windows(windows: list[str], transcript_id: str, project: str | None =
     is fixable -- Hindsight's memory-curation API (PATCH .../memories/{id}) has
     no tags field, so existing untagged facts can never be retagged
     retroactively; this only stops the pollution from growing going forward.
+
+    On api_post() failure: hindsight-api's Haiku extraction runs server-side
+    (see fallback_extract.py's module docstring), so a transient failure
+    there surfaces here as an HTTPError/URLError/TimeoutError. Those are
+    buffered locally via fallback_extract.record_fallback() instead of being
+    silently dropped -- see docs/FINDINGS.md 2026-07-29 and GitHub issue #5.
+    Any other exception is NOT treated as a transient/Vertex-AI-outage case
+    (per the issue's "not all exceptions" acceptance criterion) -- it's
+    logged and the window is skipped, same resilience as before this fix,
+    just not misclassified or buffered.
     """
     total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     items_retained = 0
     contradictions_auto_resolved = 0
     contradictions_queued = 0
+    fallback_used = 0
 
     for i, window in enumerate(windows):
         tags: list[str] = [project] if project else []
@@ -593,15 +605,73 @@ def retain_windows(windows: list[str], transcript_id: str, project: str | None =
                 usage = result.get("usage", {})
                 for k in total_usage:
                     total_usage[k] += usage.get(k, 0)
+        except (HTTPError, URLError, TimeoutError) as e:
+            extracted = fallback_extract.extract(window)
+            fallback_extract.record_fallback(window, transcript_id, project, extracted, reason=str(e))
+            fallback_used += 1
+            log.warning(
+                "Retain failed for window %d of %s (buffered locally, fallback-extracted): %s",
+                i, transcript_id, e,
+            )
         except Exception as e:
-            log.warning("Retain failed for window %d of %s: %s", i, transcript_id, e)
+            log.error(
+                "Unexpected error retaining window %d of %s (not a transient failure, not buffered): %s",
+                i, transcript_id, e,
+            )
 
     return {
         "items_retained": items_retained,
         "usage": total_usage,
         "contradictions_auto_resolved": contradictions_auto_resolved,
         "contradictions_queued": contradictions_queued,
+        "fallback_used": fallback_used,
     }
+
+
+def reprocess_fallback_backlog() -> dict[str, int]:
+    """Retry every locally-buffered fallback-extraction entry (see
+    fallback_extract.py) now that hindsight-api's Vertex AI dependency may
+    have recovered. Entries that succeed are removed; entries that still
+    fail remain buffered for the next --mode reprocess-fallback pass. See
+    docs/FINDINGS.md 2026-07-29 and GitHub issue #5."""
+    backlog = fallback_extract.load_backlog()
+    if not backlog:
+        return {"attempted": 0, "recovered": 0, "still_failing": 0}
+
+    remaining = []
+    recovered = 0
+    for entry in backlog:
+        window = entry.get("window", "")
+        transcript_id = entry.get("transcript_id", "unknown")
+        project = entry.get("project")
+
+        item: dict[str, Any] = {
+            "content": window,
+            "metadata": {
+                "source": "cursor-transcript",
+                "transcript_id": transcript_id,
+                "window": "reprocessed-from-fallback",
+            },
+        }
+        if project:
+            item["tags"] = [project]
+        payload = {"items": [item]}
+
+        recovered_this_entry = False
+        try:
+            result = api_post(f"/v1/default/banks/{BANK_ID}/memories", payload)
+            if result.get("success"):
+                recovered_this_entry = True
+        except (HTTPError, URLError, TimeoutError) as e:
+            log.warning("Reprocess-fallback still failing for %s: %s", transcript_id, e)
+
+        if recovered_this_entry:
+            recovered += 1
+        else:
+            remaining.append(entry)
+
+    fallback_extract.save_backlog(remaining)
+    return {"attempted": len(backlog), "recovered": recovered, "still_failing": len(remaining)}
 
 
 def filter_and_scan(
@@ -1814,9 +1884,11 @@ def main():
     parser = argparse.ArgumentParser(description="Hindsight learning pipeline")
     parser.add_argument(
         "--mode",
-        choices=["hourly", "nightly", "both"],
+        choices=["hourly", "nightly", "both", "reprocess-fallback"],
         default="both",
-        help="Run mode: hourly (retain only), nightly (reflect+probes), both (default)",
+        help="Run mode: hourly (retain only), nightly (reflect+probes), both (default), "
+             "reprocess-fallback (retry fallback-retained.jsonl entries buffered when "
+             "hindsight-api's retain call failed transiently -- see GitHub issue #5)",
     )
     parser.add_argument(
         "--project",
@@ -1835,6 +1907,13 @@ def main():
 
         if args.mode in ("nightly", "both"):
             run_nightly(watermarks, seen_hashes, project=args.project)
+
+        if args.mode == "reprocess-fallback":
+            result = reprocess_fallback_backlog()
+            log.info(
+                "Reprocess-fallback: %d attempted, %d recovered, %d still failing",
+                result["attempted"], result["recovered"], result["still_failing"],
+            )
     finally:
         save_watermarks(watermarks)
         save_retained_hashes(seen_hashes)

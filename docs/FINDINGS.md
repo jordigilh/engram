@@ -154,6 +154,56 @@ prioritization canvas — the biggest source of uncertainty is gone — moving i
 tied with #2/#7 while remaining in the "Big Bet" tier given the real implementation work still ahead
 (Quadlet units, systemd timers, a new install doc).
 
+## 2026-07-29 (same day, third follow-up): Phase 1 of the Enhancement Backlog — #4 and #5 Implemented, Both Premises Corrected During Planning
+
+**Trigger**: user asked to plan and implement "Phase 1" of the prioritization canvas's Quick Wins
+tier (#4, #5) — the two issues rated no dependencies, ship first. Full TDD (RED→GREEN→REFACTOR) per
+issue, as two separate commits.
+
+**Both issues' original write-ups turned out to rest on a stale or incorrect premise** — caught by
+re-reading the actual current code/config before implementing, not by the user:
+
+- **#4** assumed corrections wait for the next 2 AM nightly run (next-day latency). Stale:
+  `launchd/io.vectorize.hindsight.hourly.plist` already runs `nightly-learn.py --mode hourly` every
+  hour against a rolling 2h window, so corrections are already retained within ~1-2h today, not
+  overnight — `docs/README.md`'s "Retain in nightly batch" Key Design Decisions row predates that
+  hourly job and was stale too. Re-framed the real remaining gap as **determinism + session-scoping**
+  (force-retain *this* transcript right now, e.g. before a context-compaction event or before ending
+  a session with uncommitted corrections) rather than latency.
+- **#5** assumed a local, client-side Haiku call in `nightly-learn.py`'s retain path that could be
+  wrapped with a fallback. Incorrect: hindsight-api runs its own structured-pattern extraction
+  server-side (configured by `HINDSIGHT_API_RETAIN_LLM_MODEL`) — there is no local LLM call to wrap.
+  What *is* local and real: `retain_windows()`'s bare `except Exception` silently dropped a window
+  whenever `api_post()` failed, with zero recovery path. Re-framed #5 as a **local recovery buffer**:
+  narrow the catch to `HTTPError`/`URLError`/`TimeoutError` specifically (a genuine transient-outage
+  signature, not "any exception"), run a cheap offline heuristic extraction on the window instead of
+  losing it, and buffer it for replay once hindsight-api recovers.
+
+Both issue bodies and a corresponding GitHub comment were updated in-place to record the correction
+before implementation began, so the historical "why" isn't lost the way the pre-hourly-job
+`docs/README.md` row nearly was.
+
+**#4 outcome**: [`retain-now.py`](https://github.com/jordigilh/engram/issues/4) — a thin CLI reusing
+100% of `nightly-learn.py`'s existing `extract_learning_windows()`/`retain_windows_deduped()`
+pipeline against exactly one resolved transcript path, updating watermarks/hashes afterward so the
+next hourly/nightly run doesn't double-process it. `docs/README.md` gained an "On-Demand Retain"
+subsection. Commit `c164962`.
+
+**#5 outcome**: [`fallback_extract.py`](https://github.com/jordigilh/engram/issues/5) — regex-based
+entity (CamelCase/acronym/Capitalized-Phrase)/topic(repo-vocabulary)/salience heuristic extraction,
+mirroring `tstockham96/engram`'s `src/extract.ts` in spirit but tuned to this repo's own domain
+vocabulary; `record_fallback()`/`load_backlog()`/`save_backlog()` manage
+`~/.hindsight/logs/fallback-retained.jsonl` with the same tmp-then-rename atomicity as
+`nightly-learn.py`'s own `save_watermarks()`. `nightly-learn.py` gained
+`reprocess_fallback_backlog()` and `--mode reprocess-fallback` to retry buffered entries once
+Vertex AI/hindsight-api recovers. `report.py` gained `count_fallback_backlog()` and a
+`FALLBACK-EXTRACTED` report section so a growing backlog is a visible signal, not a silent one.
+`docs/METRICS.md` gained a "Fallback Extraction Backlog" section. Commit `fd1b570`.
+
+**Both issues left open** (not closed) pending the user's own verification/merge decision, consistent
+with how this repo has handled issue-to-implementation so far — this file and the commits are the
+source of truth for what shipped, not issue state.
+
 ## 2026-07-28: Low W30/W31 Session Volume Explained by PTO + Frequent Host Shutdowns, Not Reduced Engagement or a Regression
 
 **Context**: While reviewing whether Engram is reducing tokens/corrections, the weekly trend showed

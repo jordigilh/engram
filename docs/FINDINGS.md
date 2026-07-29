@@ -2,6 +2,77 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-29 (same day, seventh follow-up): #1 Implemented — Hindsight Already Had the Non-Destructive Supersede Mechanism, No Upstream Ask Needed
+
+**Trigger**: User requested implementation of [#1](https://github.com/jordigilh/engram/issues/1)
+("Preserve supersession history instead of hard-deleting contradicted memories"), the highest-priority
+Big Bet from the 2026-07-29 prioritization. #1's own acceptance criteria opened with a discovery step:
+confirm whether Hindsight's memory/document API supports a non-destructive "supersede" state
+transition.
+
+**Finding — decisively yes, and better than the issue speculated**: unlike #6 (closed as "not possible
+locally, upstream request considered and declined"), this discovery step resolved in this repo's
+favor on the first look at the live OpenAPI schema. Hindsight has a memory-level (not document-level)
+curation endpoint that had gone unnoticed until now:
+
+```
+PATCH /v1/default/banks/{bank_id}/memories/{memory_id}
+{"state": "invalidated", "reason": "superseded: ..."}
+```
+
+Per `UpdateMemoryRequest`'s own schema: *"Invalidated memories are excluded from recall, consolidation,
+and graph maintenance but kept for audit. [...] Reversible"* (revert via `{"state": "valid"}`). The
+schema's own example uses "superseded" as the use case. Confirmed live end-to-end against a disposable
+test bank (`engram-smoke-test-issue1`, deleted after): retain → recall finds it → PATCH invalidate →
+`GET /memories/{id}` still returns it with `state: "invalidated"` (not 404 — kept for audit) → recall
+no longer surfaces it → PATCH `{"state": "valid"}` → recall surfaces it again. Full round-trip matched
+the schema's claims exactly.
+
+**Bonus finding — a real granularity bug, independent of hard-vs-soft delete**: `RecallResult` has a
+required `id` field (the individual fact/memory-level identifier) *and* a separate, optional
+`document_id` field (the source document a fact was extracted from). `spike/hindsight_client.py`'s
+`recall()` had only ever captured `document_id` (per its own 2026-07-12 fix note), and
+`contradiction_resolution.py`'s `delete_document()` operated on that document ID — meaning auto-resolve
+deleted the *entire source document* of a conflicting fact, not just the fact itself. If a document had
+3 extracted facts and only 1 conflicted, all 3 were destroyed. Switching to memory-level `PATCH` fixes
+both problems as one change: soft/reversible, *and* correctly scoped to the single conflicting fact.
+
+**Confirmed NOT supported**: a true point-in-time "what was true as of date X" recall (#1's proposed
+enhancement #3). `RecallRequest.query_timestamp` only anchors relative-date parsing and recency
+scoring — it does not filter by validity window; invalidating a memory removes it from all future
+recall regardless of query time. Tabled per the same evidence-driven-scope standard applied to #4
+earlier the same day: no observed need yet. The JSONL-log-reconstruction fallback #1 already proposed
+remains the documented path if that need arises.
+
+**Implementation** (TDD: RED → GREEN → REFACTOR, per project methodology):
+- `spike/hindsight_client.py`: `recall()` now returns `(memory_id, document_id, text)` triples instead
+  of `(document_id, text)` pairs.
+- `contradiction_resolution.py`: new `invalidate_memory(bank_id, memory_id, reason)` mirrors
+  `delete_document()`'s retry/error-handling shape, calling the PATCH above. `resolve()`'s live-mode
+  auto-resolve path now calls this instead of `delete_document()`. `Resolution`, the auto-resolved
+  JSONL log, and the pending-review queue entry all gained a `superseded_memory_id`/`memory_id` field
+  alongside the existing `superseded_document_id`/`document_id` (kept for context/backward compat). The
+  log's `deleted` boolean is renamed `invalidated` (semantically accurate; `generate-dashboard.py` reads
+  the new field with a fallback to the old one for historical entries still inside the rollup window).
+- `review-contradictions.py`: the human `[a]pprove` path was fixed identically — it had the *same* bug
+  (hard-deleting the conflicting document on approve). Decided to fix both paths in this pass rather
+  than auto-resolve only, since they're the same underlying supersede operation and leaving the
+  human-reviewed path as the more destructive of the two would have been a worse asymmetry than the
+  one #1 set out to fix. Falls back to the legacy `delete_document(document_id)` path for pending
+  entries queued before this fix (no `memory_id` recorded yet), matching the existing
+  missing-`document_id` fallback pattern already in that script.
+- `spike/pending_queue.py`: `append_pending()` gained a `memory_id` parameter.
+- Untouched by design: `delete_document()` itself, and its two other callers
+  (`purge-confirmed-off-topic-memories.py`, `purge-out-of-scope-memories.py`) — those delete genuinely
+  off-topic/out-of-scope junk, not a once-true fact being superseded, so a hard delete remains correct
+  there.
+
+**Outcome**: auto-resolve mistakes (and mistaken human approvals) are now recoverable, not silent
+permanent data loss — the stated goal of #1 — with no upstream Hindsight change required. This also
+de-risks moving `ENGRAM_CONTRADICTION_AUTO_MODE` from `shadow` to `live`, since a false positive is no
+longer destructive. #7 (commitment/pending-item tracking), which shared #1's discovery-step dependency
+per the 2026-07-29 prioritization note below, is now unblocked by this same finding.
+
 ## 2026-07-29: Comparative Analysis Against tstockham96/engram — 8 Enhancement Opportunities Filed
 
 **Trigger**: User asked for a comparison between this project and

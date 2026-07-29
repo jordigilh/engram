@@ -126,6 +126,8 @@ def generate_pending_contradictions_doc(rollup_days: int = 7) -> str:
             lines.append("")
             lines.append(f"- **New statement**: {e.get('new_statement', '?')}")
             lines.append(f"- **Conflicts with**: {e.get('conflicting_memory', '?')}")
+            if e.get("memory_id"):
+                lines.append(f"- **Conflicting memory_id**: `{e['memory_id']}`")
             if e.get("document_id"):
                 lines.append(f"- **Conflicting document_id**: `{e['document_id']}`")
             lines.append(f"- **Explanation**: {e.get('explanation', '?')}")
@@ -140,19 +142,26 @@ def generate_pending_contradictions_doc(rollup_days: int = 7) -> str:
     else:
         shadow_count = sum(1 for e in recent_auto_resolved if e.get("mode") == "shadow")
         live_count = sum(1 for e in recent_auto_resolved if e.get("mode") == "live")
-        lines.append(f"- **Shadow mode** (logged only, nothing deleted): {shadow_count}")
-        lines.append(f"- **Live mode** (old memory actually deleted): {live_count}")
+        lines.append(f"- **Shadow mode** (logged only, nothing changed): {shadow_count}")
+        lines.append(
+            "- **Live mode** (old memory invalidated -- soft, reversible, excluded from recall "
+            f"but not destroyed; see GitHub issue #1): {live_count}"
+        )
         lines.append("")
-        lines.append("| When | Mode | Deleted | Confidence | Superseded document_id | Statement |")
-        lines.append("|------|------|--------:|-----------:|-------------------------|-----------|")
+        lines.append("| When | Mode | Invalidated | Confidence | Superseded memory_id | Statement |")
+        lines.append("|------|------|------------:|-----------:|------------------------|-----------|")
         for e in sorted(recent_auto_resolved, key=lambda x: x.get("timestamp", ""), reverse=True):
             stmt = (e.get("statement", "") or "")[:80].replace("|", "\\|")
+            # "invalidated" (2026-07-29+, GitHub issue #1) supersedes the older "deleted" key
+            # (pre-fix entries hard-deleted the whole source document instead).
+            invalidated = e.get("invalidated", e.get("deleted"))
+            memory_id = e.get("superseded_memory_id", e.get("superseded_document_id", "?"))
             lines.append(
                 f"| {_age_str(e.get('timestamp'))} ago"
                 f" | {e.get('mode', '?')}"
-                f" | {'yes' if e.get('deleted') else 'no'}"
+                f" | {'yes' if invalidated else 'no'}"
                 f" | {fmt_conf(e.get('confidence'))}"
-                f" | `{e.get('superseded_document_id', '?')}`"
+                f" | `{memory_id}`"
                 f" | {stmt} |"
             )
     lines.append("")

@@ -1,5 +1,14 @@
 """Tests for contradiction_resolution.py's three-tier resolve() and its
-delete_document()/env-parsing helpers.
+delete_document()/invalidate_memory()/env-parsing helpers.
+
+2026-07-29 (GitHub issue #1): recall() now returns (memory_id, document_id,
+text) triples (see test_hindsight_client.py). Live-mode auto-resolve and
+queued-for-review paths now use invalidate_memory() -- a non-destructive,
+reversible PATCH .../memories/{memory_id} {"state": "invalidated"} -- instead
+of delete_document(), which hard-deletes the entire source document (every
+fact in it, not just the conflicting one). delete_document() itself is
+unchanged and still used by the genuinely-destructive purge-*-memories.py
+scripts; this file keeps its existing TestDeleteDocument coverage for that.
 """
 from __future__ import annotations
 
@@ -81,6 +90,10 @@ class TestAutoMode:
 
 
 class TestDeleteDocument:
+    """delete_document() itself is unchanged -- still the correct tool for
+    purge-*-memories.py's genuinely destructive off-topic/out-of-scope
+    cleanup, which is not a supersession operation."""
+
     def test_success_returns_true(self, monkeypatch):
         monkeypatch.setattr(cr, "urlopen", lambda req, timeout=10: None)
         assert cr.delete_document("cursor-memory", "doc-1") is True
@@ -127,6 +140,69 @@ class TestDeleteDocument:
         assert cr.delete_document("cursor-memory", "doc-1", retries=1) is False
 
 
+class TestInvalidateMemory:
+    """invalidate_memory() -- the non-destructive, reversible supersede
+    mechanism added for GitHub issue #1. PATCH .../memories/{memory_id}
+    {"state": "invalidated", "reason": ...}. Mirrors delete_document()'s
+    retry/error-handling shape for consistency."""
+
+    def test_success_returns_true(self, monkeypatch):
+        captured = {}
+
+        def fake_urlopen(req, timeout=10):
+            captured["method"] = req.get_method()
+            captured["url"] = req.full_url
+            captured["body"] = json.loads(req.data)
+            return None
+
+        monkeypatch.setattr(cr, "urlopen", fake_urlopen)
+        assert cr.invalidate_memory("cursor-memory", "mem-1", reason="superseded: new fact") is True
+        assert captured["method"] == "PATCH"
+        assert captured["url"] == "http://localhost:8888/v1/default/banks/cursor-memory/memories/mem-1"
+        assert captured["body"] == {"state": "invalidated", "reason": "superseded: new fact"}
+
+    def test_404_returns_false_without_retry(self, monkeypatch):
+        calls = {"count": 0}
+
+        def fake_urlopen(req, timeout=10):
+            calls["count"] += 1
+            raise HTTPError(req.full_url, 404, "not found", None, None)
+
+        monkeypatch.setattr(cr, "urlopen", fake_urlopen)
+        assert cr.invalidate_memory("cursor-memory", "mem-1", reason="x") is False
+        assert calls["count"] == 1
+
+    def test_transient_error_retries_then_succeeds(self, monkeypatch):
+        calls = {"count": 0}
+
+        def fake_urlopen(req, timeout=10):
+            calls["count"] += 1
+            if calls["count"] < 2:
+                raise URLError("connection reset")
+            return None
+
+        monkeypatch.setattr(cr, "urlopen", fake_urlopen)
+        monkeypatch.setattr(cr.time, "sleep", lambda *_: None)
+        assert cr.invalidate_memory("cursor-memory", "mem-1", reason="x", retries=2) is True
+        assert calls["count"] == 2
+
+    def test_exhausts_retries_and_returns_false(self, monkeypatch):
+        def always_fails(req, timeout=10):
+            raise URLError("connection reset")
+
+        monkeypatch.setattr(cr, "urlopen", always_fails)
+        monkeypatch.setattr(cr.time, "sleep", lambda *_: None)
+        assert cr.invalidate_memory("cursor-memory", "mem-1", reason="x", retries=2) is False
+
+    def test_non_404_http_error_retries_then_fails(self, monkeypatch):
+        def always_500(req, timeout=10):
+            raise HTTPError(req.full_url, 500, "server error", None, None)
+
+        monkeypatch.setattr(cr, "urlopen", always_500)
+        monkeypatch.setattr(cr.time, "sleep", lambda *_: None)
+        assert cr.invalidate_memory("cursor-memory", "mem-1", reason="x", retries=1) is False
+
+
 class TestResolve:
     def test_disabled_returns_retain_without_calling_recall(self, monkeypatch):
         monkeypatch.setenv("ENGRAM_CONTRADICTION_CHECK", "off")
@@ -145,7 +221,7 @@ class TestResolve:
         assert result.action == "retain"
 
     def test_check_contradiction_error_returns_retain(self, monkeypatch):
-        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("doc-1", "old memory")])
+        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("mem-1", "doc-1", "old memory")])
         monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(
             contradicts=False, error="timeout",
         ))
@@ -153,13 +229,13 @@ class TestResolve:
         assert result.action == "retain"
 
     def test_no_contradiction_returns_retain(self, monkeypatch):
-        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("doc-1", "old memory")])
+        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("mem-1", "doc-1", "old memory")])
         monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(contradicts=False))
         result = cr.resolve("cursor-memory", "some statement")
         assert result.action == "retain"
 
     def test_contradicts_with_null_index_returns_retain(self, monkeypatch):
-        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("doc-1", "old memory")])
+        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("mem-1", "doc-1", "old memory")])
         monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(
             contradicts=True, conflicting_memory_index=None, confidence=0.99,
         ))
@@ -167,53 +243,75 @@ class TestResolve:
         assert result.action == "retain"
 
     def test_contradicts_with_out_of_range_index_returns_retain(self, monkeypatch):
-        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("doc-1", "old memory")])
+        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("mem-1", "doc-1", "old memory")])
         monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(
             contradicts=True, conflicting_memory_index=5, confidence=0.99,
         ))
         result = cr.resolve("cursor-memory", "some statement")
         assert result.action == "retain"
 
-    def test_high_confidence_auto_resolves_in_shadow_mode_without_deleting(self, monkeypatch):
+    def test_high_confidence_auto_resolves_in_shadow_mode_without_invalidating(self, monkeypatch):
         monkeypatch.delenv("ENGRAM_CONTRADICTION_AUTO_MODE", raising=False)  # default shadow
-        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("doc-1", "old memory")])
+        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("mem-1", "doc-1", "old memory")])
         monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(
             contradicts=True, conflicting_memory_index=0, confidence=0.95, explanation="clear conflict",
         ))
-        delete_calls = []
-        monkeypatch.setattr(cr, "delete_document", lambda *a, **k: delete_calls.append(a) or True)
+        invalidate_calls = []
+        monkeypatch.setattr(cr, "invalidate_memory", lambda *a, **k: invalidate_calls.append((a, k)) or True)
 
         result = cr.resolve("cursor-memory", "new statement")
 
         assert result.action == "auto_resolved"
+        assert result.superseded_memory_id == "mem-1"
         assert result.superseded_document_id == "doc-1"
-        assert delete_calls == [], "shadow mode must never call delete_document"
+        assert invalidate_calls == [], "shadow mode must never call invalidate_memory"
 
         logged = [json.loads(line) for line in cr.AUTO_RESOLVED_LOG_PATH.read_text().splitlines()]
         assert len(logged) == 1
         assert logged[0]["mode"] == "shadow"
-        assert logged[0]["deleted"] is False
+        assert logged[0]["invalidated"] is False
+        assert logged[0]["superseded_memory_id"] == "mem-1"
+        assert logged[0]["superseded_document_id"] == "doc-1"
 
-    def test_high_confidence_auto_resolves_in_live_mode_and_deletes(self, monkeypatch):
+    def test_high_confidence_auto_resolves_in_live_mode_and_invalidates(self, monkeypatch):
         monkeypatch.setenv("ENGRAM_CONTRADICTION_AUTO_MODE", "live")
-        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("doc-1", "old memory")])
+        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("mem-1", "doc-1", "old memory")])
         monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(
             contradicts=True, conflicting_memory_index=0, confidence=0.95, explanation="clear conflict",
         ))
+        invalidate_calls = []
+        monkeypatch.setattr(cr, "invalidate_memory", lambda *a, **k: invalidate_calls.append((a, k)) or True)
         delete_calls = []
         monkeypatch.setattr(cr, "delete_document", lambda *a, **k: delete_calls.append(a) or True)
 
         result = cr.resolve("cursor-memory", "new statement")
 
         assert result.action == "auto_resolved"
-        assert delete_calls == [("cursor-memory", "doc-1")]
+        assert len(invalidate_calls) == 1
+        args, kwargs = invalidate_calls[0]
+        assert args == ("cursor-memory", "mem-1")
+        assert "new statement" in kwargs["reason"]
+        assert delete_calls == [], "live mode must invalidate, not hard-delete, the superseded memory"
 
         logged = [json.loads(line) for line in cr.AUTO_RESOLVED_LOG_PATH.read_text().splitlines()]
         assert logged[0]["mode"] == "live"
-        assert logged[0]["deleted"] is True
+        assert logged[0]["invalidated"] is True
+
+    def test_live_mode_invalidate_failure_is_logged_as_not_invalidated(self, monkeypatch):
+        monkeypatch.setenv("ENGRAM_CONTRADICTION_AUTO_MODE", "live")
+        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("mem-1", "doc-1", "old memory")])
+        monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(
+            contradicts=True, conflicting_memory_index=0, confidence=0.95, explanation="clear conflict",
+        ))
+        monkeypatch.setattr(cr, "invalidate_memory", lambda *a, **k: False)
+
+        cr.resolve("cursor-memory", "new statement")
+
+        logged = [json.loads(line) for line in cr.AUTO_RESOLVED_LOG_PATH.read_text().splitlines()]
+        assert logged[0]["invalidated"] is False
 
     def test_low_confidence_queues_for_human_review(self, monkeypatch):
-        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("doc-1", "old memory")])
+        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("mem-1", "doc-1", "old memory")])
         monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(
             contradicts=True, conflicting_memory_index=0, confidence=0.5, explanation="ambiguous",
         ))
@@ -223,17 +321,19 @@ class TestResolve:
         result = cr.resolve("cursor-memory", "new statement")
 
         assert result.action == "queued"
+        assert result.superseded_memory_id == "mem-1"
         assert result.superseded_document_id == "doc-1"
         assert len(queue_calls) == 1
         assert queue_calls[0]["new_statement"] == "new statement"
         assert queue_calls[0]["conflicting_memory"] == "old memory"
         assert queue_calls[0]["conflicting_memory_index"] == 0
+        assert queue_calls[0]["memory_id"] == "mem-1"
         assert queue_calls[0]["document_id"] == "doc-1"
 
     def test_confidence_exactly_at_threshold_auto_resolves(self, monkeypatch):
         """confidence >= threshold, boundary case."""
         monkeypatch.setenv("ENGRAM_CONTRADICTION_AUTO_THRESHOLD", "0.9")
-        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("doc-1", "old memory")])
+        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("mem-1", "doc-1", "old memory")])
         monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(
             contradicts=True, conflicting_memory_index=0, confidence=0.9,
         ))
@@ -247,7 +347,7 @@ class TestProjectTagging:
     project value. See docs/FINDINGS.md."""
 
     def test_queued_entry_is_tagged_with_the_given_project(self, monkeypatch):
-        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("doc-1", "old memory")])
+        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("mem-1", "doc-1", "old memory")])
         monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(
             contradicts=True, conflicting_memory_index=0, confidence=0.5, explanation="ambiguous",
         ))
@@ -259,7 +359,7 @@ class TestProjectTagging:
         assert queue_calls[0]["project"] == "kubernaut"
 
     def test_queued_entry_defaults_to_none_when_no_project_given(self, monkeypatch):
-        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("doc-1", "old memory")])
+        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("mem-1", "doc-1", "old memory")])
         monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(
             contradicts=True, conflicting_memory_index=0, confidence=0.5,
         ))
@@ -271,7 +371,7 @@ class TestProjectTagging:
         assert queue_calls[0]["project"] is None
 
     def test_auto_resolved_log_entry_is_tagged_with_the_given_project(self, monkeypatch):
-        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("doc-1", "old memory")])
+        monkeypatch.setattr(cr, "recall", lambda *a, **k: [("mem-1", "doc-1", "old memory")])
         monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(
             contradicts=True, conflicting_memory_index=0, confidence=0.95, explanation="clear conflict",
         ))

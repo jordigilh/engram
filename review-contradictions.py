@@ -6,9 +6,12 @@ Lists each entry in ~/.hindsight/logs/contradictions-pending.jsonl (new
 statement vs. the existing memory it appears to conflict with, plus the
 model's explanation) and lets you:
 
-  [a]pprove  -- delete the conflicting memory, retain the new statement into
-               cursor-memory (tagged as superseding it), and remove from the
-               queue
+  [a]pprove  -- invalidate the conflicting memory (non-destructive,
+               reversible -- see contradiction_resolution.invalidate_memory()),
+               retain the new statement into cursor-memory (tagged as
+               superseding it), and remove from the queue. Entries queued
+               before 2026-07-29 (GitHub issue #1) have no memory_id and
+               fall back to the legacy delete_document(document_id) path.
   [r]eject   -- discard the new statement, keep the existing memory, remove
                from the queue
   [s]kip     -- leave it in the queue for next time
@@ -27,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "spike"))
 from pending_queue import load_pending, remove_pending  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from contradiction_resolution import delete_document  # noqa: E402
+from contradiction_resolution import delete_document, invalidate_memory  # noqa: E402
 
 # cocoindex-flows.py has a hyphen, so it can't be `import`ed normally.
 _spec = importlib.util.spec_from_file_location(
@@ -81,12 +84,20 @@ def main() -> int:
             if not _HAS_RETAIN:
                 print("Cannot approve: hindsight_retain unavailable in this environment. Skipping.")
                 continue
-            old_id = entry.get("document_id")
-            if old_id:
-                deleted = delete_document("cursor-memory", old_id)
-                print(f"{'Deleted' if deleted else 'Could not delete (already gone or not found)'} superseded memory {old_id}.")
+            memory_id = entry.get("memory_id")
+            old_doc_id = entry.get("document_id")
+            if memory_id:
+                reason = f"superseded: {entry['new_statement'][:200]}"
+                invalidated = invalidate_memory("cursor-memory", memory_id, reason=reason)
+                print(f"{'Invalidated' if invalidated else 'Could not invalidate (already gone or not found)'} superseded memory {memory_id}.")
+            elif old_doc_id:
+                deleted = delete_document("cursor-memory", old_doc_id)
+                print(
+                    f"{'Deleted' if deleted else 'Could not delete (already gone or not found)'} superseded memory "
+                    f"{old_doc_id} (queued before the invalidate fix -- legacy document-level delete)."
+                )
             else:
-                print("No document_id on this entry (queued before the supersede fix) -- old memory left in place.")
+                print("No memory_id or document_id on this entry (queued before the supersede fix) -- old memory left in place.")
             result = _cf.hindsight_retain(
                 bank_id="cursor-memory",
                 content=entry["new_statement"],
@@ -94,7 +105,7 @@ def main() -> int:
                 metadata={
                     "source": "review-contradictions",
                     "supersedes": entry.get("conflicting_memory"),
-                    "supersedes_document_id": old_id,
+                    "supersedes_document_id": old_doc_id,
                 },
                 tags=["CORRECTION", "supersedes-prior-memory"],
             )

@@ -13,15 +13,24 @@ from urllib.request import Request, urlopen
 HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
 
 
-def recall(bank: str, query: str, max_results: int = 5, retries: int = 2) -> list[tuple[str, str]]:
-    """Return up to max_results (document_id, text) pairs relevant to query.
+def recall(bank: str, query: str, max_results: int = 5, retries: int = 2) -> list[tuple[str, str | None, str]]:
+    """Return up to max_results (memory_id, document_id, text) triples relevant to query.
 
     Fixed 2026-07-12: this previously parsed a "chunks" key that the live
     hindsight-api response never populates (always {}) -- the real payload
     shape is {"results": [...]}, matching nightly-learn.py's own
-    measure_recall_quality(). Confirmed against a live recall that "document_id"
-    per result is the same ID accepted by DELETE /v1/default/banks/{bank}/
-    documents/{document_id} (see docs/FINDINGS.md).
+    measure_recall_quality().
+
+    Changed 2026-07-29 (GitHub issue #1): previously returned (document_id, text)
+    pairs only. RecallResult's "id" field is the individual fact/memory-level
+    identifier accepted by PATCH /v1/default/banks/{bank}/memories/{memory_id}
+    (contradiction_resolution.invalidate_memory()) -- distinct from the
+    optional "document_id" field naming the source document a fact was
+    extracted from. Conflating the two previously meant contradiction
+    resolution's auto-resolve/approve paths deleted a conflicting memory's
+    *entire source document* (every fact in it) instead of just the one
+    conflicting fact. "id" is required per the RecallResult schema; "document_id"
+    is optional and defaults to None when absent.
     """
     import time
 
@@ -44,8 +53,8 @@ def recall(bank: str, query: str, max_results: int = 5, retries: int = 2) -> lis
             return []
 
     results_list = result.get("results", [])
-    pairs = []
+    triples = []
     for r in results_list:
-        if isinstance(r, dict) and r.get("text") and r.get("document_id"):
-            pairs.append((r["document_id"], r["text"]))
-    return pairs[:max_results]
+        if isinstance(r, dict) and r.get("text") and r.get("id"):
+            triples.append((r["id"], r.get("document_id"), r["text"]))
+    return triples[:max_results]

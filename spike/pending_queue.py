@@ -19,6 +19,7 @@ def append_pending(
     conflicting_memory: str,
     conflicting_memory_index: int | None,
     explanation: str,
+    memory_id: str | None = None,
     document_id: str | None = None,
     project: str | None = None,
 ) -> dict:
@@ -28,6 +29,7 @@ def append_pending(
         "conflicting_memory": conflicting_memory,
         "conflicting_memory_index": conflicting_memory_index,
         "explanation": explanation,
+        "memory_id": memory_id,
         "document_id": document_id,
         "project": project,
         "timestamp": datetime.now(timezone.utc).isoformat(),

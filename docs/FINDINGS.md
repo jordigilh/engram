@@ -61,6 +61,52 @@ re-deriving this analysis:
 memory schema supports a non-`active` status transition beyond hard delete) — resolve that
 investigation once and apply to both rather than duplicating it.
 
+**Prioritization (same day)**: user asked for the 8 issues to be ranked by impact and complexity.
+Built a scored matrix (Impact×2 − Complexity, each on a 1–3 scale) as a canvas
+(`enhancement-issues-prioritization.canvas.tsx`) rather than a chat table, since it's a standalone
+analytical artifact. Result: Quick Wins (ship first, no dependencies) = #4, #5; Big Bets (high impact,
+real complexity, share the #1/#7 discovery-step dependency above) = #1, #7; Nice-to-Have (schedule
+when capacity allows) = #2, #3; Spike First (validate feasibility before committing further work) =
+#6, #8.
+
+## 2026-07-29 (same day, follow-up): Filed #9 — Linux/Fedora Support, a Gap Identified But Not Filed in the Original Batch
+
+**Trigger**: User requested a 9th issue for Linux/Fedora support after the original 8 were filed and
+prioritized. This traces back to the "Portability / cross-platform" item flagged in the very first
+comparison response earlier the same day but deliberately left out of the initial batch of 8 (it
+wasn't inspired by a mechanism *in* tstockham96/engram the way #1–#8 were — tstockham96/engram is
+cross-platform by construction, so there was nothing to port from it; it's a standalone gap in this
+repo, surfaced by contrast rather than by example).
+
+**Diagnosis — confirmed macOS coupling is deeper than "just launchd"**: before filing, verified the
+actual scope rather than assuming. Found: (1) all 9 `launchd/*.plist` files have no systemd
+equivalent; (2) `docs/INSTALL.md`'s Prerequisites section opens with "macOS (tested on Mac Studio M2
+Max...)" and assumes Homebrew throughout; (3) Hindsight's embedded Postgres (`pg0`) and `MPS/ONNX`
+embedding backend have never been run on Linux — Linux viability is genuinely unverified, not just
+undocumented; (4) **this project used to run in a container and deliberately migrated away** —
+`migrate-to-native.sh` is a still-present one-shot script that exports/re-imports all memory banks
+from a **Podman**-run Hindsight container to the native macOS install, ending in `podman stop
+hindsight`. The *reason* for that migration (likely embedding performance or avoiding container
+overhead, given the MPS-acceleration architecture that followed) was never written down in this file
+— a gap now called out explicitly in issue #9's risk section so it doesn't get rediscovered the hard
+way a second time before anyone reintroduces a container-based Linux path.
+
+**Notable finding**: a `Dockerfile` still exists in the repo (undocumented, unused by
+`docs/INSTALL.md`), layering `google-cloud-aiplatform` onto a maintained upstream
+`ghcr.io/vectorize-io/hindsight:latest` image. Since Fedora ships Podman by default and this
+project's prior container deployment already used Podman, reviving that path — rather than building
+systemd parity for all 9 launchd plists from scratch — may be the cheaper route specifically for
+Fedora. Filed as two explicit candidate paths (native systemd parity vs. reviving the container path)
+with a feasibility spike as the required first step for either.
+
+**Outcome**: [#9](https://github.com/jordigilh/engram/issues/9) filed with the same
+Summary/Source/Current-Behavior/Proposed-Enhancement/Risks/Acceptance-Criteria structure as #1–#8.
+Rated Impact=Medium (real, user-requested; mitigates the single-host-availability problem already
+noted in the 2026-07-28 entry below), Complexity=High (touches nearly every operational script, two
+unverified platform-support assumptions), landing in the same "Big Bet" tier as #1/#7 in the
+prioritization canvas (score 1 — schedule after the discovery-step work, not blocking, not urgent).
+The canvas and this table are both updated to include it.
+
 ## 2026-07-28: Low W30/W31 Session Volume Explained by PTO + Frequent Host Shutdowns, Not Reduced Engagement or a Regression
 
 **Context**: While reviewing whether Engram is reducing tokens/corrections, the weekly trend showed

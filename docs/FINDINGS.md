@@ -2,6 +2,65 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-29: Comparative Analysis Against tstockham96/engram — 8 Enhancement Opportunities Filed
+
+**Trigger**: User asked for a comparison between this project and
+[tstockham96/engram](https://github.com/tstockham96/engram) — an unrelated, same-named, independently
+developed npm package ("Universal memory layer for AI agents... knowledge graphs, consolidation, and
+spreading activation") — to identify overlaps and enhancement opportunities. No prior relationship
+between the two projects; the name collision is coincidental.
+
+**Method**: Read this repo's own architecture docs (`README.md`, `docs/README.md`) plus a shallow
+clone of `tstockham96/engram` (`README.md`, `package.json`, and source: `types.ts`, `temporal.ts`,
+`extract.ts`, `store.ts`, `vault.ts`, `embeddings.ts`, `brief.ts`, `claude-watcher.ts`). Cross-checked
+proposed findings against this repo's actual code (`contradiction_resolution.py`) before writing them
+up, to avoid recommending something already implemented (confirmed, e.g., that local contradiction
+resolution runs at retain-time via Sonnet `check_contradiction()` but **hard-deletes** the superseded
+document in live mode — see issue #1 below — rather than marking it superseded).
+
+**Conclusion — same problem, different architectures**: both projects tackle "give AI agents memory
+that survives across sessions," but jordigilh/engram is a Python orchestration layer around an
+external Hindsight (Postgres/pgvector) service plus CocoIndex ingestion, macOS-only, nightly-batch LLM
+cost model (Vertex AI Haiku/Sonnet, ~$0.12/night), multi-bank + tag-isolated, with hybrid
+tree-sitter/BM25/dense code search and GitHub issue/PR ingestion that tstockham96/engram has no
+equivalent of. tstockham96/engram is a self-contained TypeScript/SQLite npm package (`engram-sdk`),
+cross-platform, per-call LLM cost model (pluggable Gemini/OpenAI/Anthropic), single shared vault
+across all projects/agents, with several mechanisms this repo lacks: true bi-temporal versioning
+(`validFrom`/`validUntil` + point-in-time `asOf` queries), write-time contradiction detection blended
+into every `recall()` via spreading activation (tunable hops/decay/entity-hops), a synthesized `ask()`
+tool with graded confidence/evidence-quality, a docs-vs-vault `audit()` tool, on-demand `checkpoint()`
+retain (not nightly-only), a no-LLM regex fallback extractor, first-class `pending`/`fulfilled`
+commitment tracking with an `alerts()` aggregation query, and a published external benchmark score
+(LOCOMO: 80.0% vs. Mem0's 66.9%) instead of purely self-referential trend metrics.
+
+**Overlaps confirmed**: both frame flat markdown memory (CLAUDE.md-style) as the baseline to beat;
+both do episodic-facts → distilled-knowledge consolidation (retain/reflect vs.
+episodic/consolidate/semantic); both do LLM-verified contradiction detection with
+auto-resolve-above-threshold / queue-below-threshold semantics; both build an entity/knowledge graph;
+both passively ingest agent transcripts; both inject context at session start; both self-measure
+effectiveness (weekly trend dashboard vs. LOCOMO benchmark); both are MIT-licensed, local-first, no
+telemetry.
+
+**Outcome**: 8 enhancement opportunities filed as GitHub issues (this repo previously had zero —
+first issues created), each with full context, source-repo reference implementation, proposed
+approach, expected impact, risks, and acceptance criteria so they're implementable later without
+re-deriving this analysis:
+
+| # | Title | Notes |
+|---|-------|-------|
+| [#1](https://github.com/jordigilh/engram/issues/1) | Preserve supersession history instead of hard-deleting contradicted memories (bi-temporal model) | Highest priority — directly de-risks the existing shadow→live auto-resolve rollout already tracked in the 2026-07-12/07-26 entries below |
+| [#2](https://github.com/jordigilh/engram/issues/2) | Add synthesized `ask()` tool with confidence + evidence-quality grading | Additive; must stay opt-in to preserve the zero-LLM-cost recall guarantee |
+| [#3](https://github.com/jordigilh/engram/issues/3) | Add docs-drift `audit` tool cross-checking `docs/*.md` against current mental models/facts | Same category of problem `check-rule-sync.py` already solves for code, applied to prose |
+| [#4](https://github.com/jordigilh/engram/issues/4) | Add on-demand same-day retain path for corrections (checkpoint-style, not nightly-only) | Reuses ~100% of existing `nightly-learn.py` extraction logic with a narrower scope |
+| [#5](https://github.com/jordigilh/engram/issues/5) | Add no-LLM fallback extraction for retain resilience when Vertex AI is unavailable | Closes the gap between "recoverable after total loss" and "resilient to a transient outage" |
+| [#6](https://github.com/jordigilh/engram/issues/6) | Investigate exposing tunable entity-graph spreading/expansion parameters on recall | Gated on what the external Hindsight API actually supports — may resolve to an upstream feature request |
+| [#7](https://github.com/jordigilh/engram/issues/7) | Add first-class commitment/pending-item tracking + proactive alerts query | Distinct failure mode from corrections — dropped follow-ups aren't measured today |
+| [#8](https://github.com/jordigilh/engram/issues/8) | Evaluate adopting an external memory-recall benchmark (e.g. LOCOMO) for cross-system comparability | Research spike first — LOCOMO targets general conversational memory, fit for a coding-assistant pipeline is unconfirmed |
+
+**Follow-up**: issues #1 and #7 both depend on the same underlying discovery task (whether Hindsight's
+memory schema supports a non-`active` status transition beyond hard delete) — resolve that
+investigation once and apply to both rather than duplicating it.
+
 ## 2026-07-28: Low W30/W31 Session Volume Explained by PTO + Frequent Host Shutdowns, Not Reduced Engagement or a Regression
 
 **Context**: While reviewing whether Engram is reducing tokens/corrections, the weekly trend showed

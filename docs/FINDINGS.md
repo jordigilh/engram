@@ -2,6 +2,58 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-29 (same day, twelfth follow-up): #10 Spiked — 7-Case Pilot Ground-Truth Benchmark Run Against Live `engram-docs`, Zero Misses But Real Rank Spread
+
+**Context**: after closing #9's bookkeeping (and #5's — both had shipped code but were
+never actually closed on GitHub), user asked "what's pending" and then to spike #10
+(internal ground-truth recall-quality benchmark, the decided alternative to LOCOMO
+from #8) before committing to the full 15-30 case implementation.
+
+**Method**: curated 7 pilot "query → expected fact" cases directly from real
+`docs/FINDINGS.md` content already ingested into the live `engram-docs` bank
+(via CocoIndex), covering a spread of topics and ages: the macOS→native
+migration rationale, #7's closure rationale, #1's `invalidate_memory`
+mechanism, #6's `HINDSIGHT_API_RECALL_STRATEGY_BOOSTS` scope finding, #8's
+LOCOMO rejection rationale, the `helios08` DNS/firewall root cause, and #4's
+deferral rationale. Ran each query against the live bank via the
+`hindsight-docs` MCP tool's `recall()` (real semantic+keyword+reranker
+pipeline, not mocked) and checked whether the expected fact appeared in the
+results and at what rank.
+
+**Result: 7/7 hit, zero misses, but a real rank spread (not a rank-1
+ceiling)**:
+
+| Case | Topic | Best rank of expected fact |
+|------|-------|----:|
+| 1 | macOS→native migration rationale | 5 |
+| 2 | #7 closure rationale | **1** |
+| 3 | `invalidate_memory` mechanism | 2 |
+| 4 | `RECALL_STRATEGY_BOOSTS` scope | **1** |
+| 5 | LOCOMO rejection rationale | 2 |
+| 6 | `helios08` DNS/firewall root cause | 4 |
+| 7 | #4 deferral rationale | 4 |
+
+**Why this result matters more than a clean pass would have**: a benchmark
+where every case lands at rank 1 has no discriminating value (a ceiling
+effect — it couldn't detect regression even if recall quality degraded). A
+benchmark where everything misses would mean recall is broken, a different
+problem entirely. Landing in between — real content found every time, but at
+varying, non-trivial ranks (1 through 10) — is exactly the signal profile
+that makes an MRR-style score meaningful to track release-over-release: there
+is headroom in both directions (ranks could improve or regress as the corpus
+grows, entity/document counts change, or ranking config changes), so the
+score can actually move and mean something.
+
+**Conclusion**: #10 is confirmed both mechanically feasible (the existing
+`recall()` MCP tool against the live `engram-docs` bank is sufficient
+infrastructure, no new API surface needed) and substantively valuable (real,
+non-degenerate signal on real content, not a hypothetical). Recommend
+proceeding to the full implementation per the issue's acceptance criteria:
+curate the full 15-30 case fixture, add a scoring function (hit-rate + MRR)
+extending `run_observability_probes()`'s shape, and surface it in
+`report.py`/`docs/METRICS.md` distinct from the self-referential weekly-trend
+metrics.
+
 ## 2026-07-29 (same day, eleventh follow-up): #9 Rootless + Batch-Script Runtime Gaps Closed — Found and Fixed a Real Bug in the Just-Shipped Quadlet
 
 **Context**: right after implementing #9, a confidence self-assessment flagged

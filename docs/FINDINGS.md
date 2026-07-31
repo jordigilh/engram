@@ -2,6 +2,90 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-31 (same day, follow-up): Dug Into the Two Flagged Anomalies — a Report-Timing Artifact and a Real Bug That Was Inflating Pending Contradictions by 61%
+
+**Context**: user asked to "dig in" on the two minor items flagged in the
+last-24h status report: the `Issues` freshness showing "STALE" at 5.2-5.3
+min against a 5-min target, and the pending-contradictions count jumping
+352→426 for kubernaut overnight.
+
+**Finding 1 — freshness "STALE" is a report-timing artifact, not a real
+staleness problem**: `ISSUES_POLL_INTERVAL` defaults to exactly 300s (5 min),
+and the poll loop is `poll → process → sleep(300s) → repeat`
+(`cocoindex-flows.py`'s `_issues_poll_loop()`), so the true cycle period is
+always `processing_time + 300s` — strictly *more* than 300s. `report.py`'s
+freshness verdict (`verdict_targets = {"issues": ("< 5 min", 5.0 / 60)}`)
+sets the healthy threshold at exactly the sleep interval with zero margin
+for that processing time, guaranteeing the staleness reading will tip over
+5 min during the tail of every single cycle. Compounding this,
+`collect_freshness_stats()` reads one shared, unparameterized log
+(`~/.hindsight/logs/cocoindex-stderr.log`) fed by a single global issues
+poller shared across all three projects' `-issues` banks — `report.py`
+computes each project's section sequentially (kubernaut, then dcm, then
+engram), so "now" crept forward a few seconds between sections while the
+underlying last-poll timestamp stayed fixed, explaining why kubernaut read
+5.0 min ("Healthy") while dcm/engram (computed moments later) read 5.2-5.3
+min ("STALE") off the *exact same* underlying poll event. Not fixed today
+(purely cosmetic/threshold-tuning, no functional impact) — noting the root
+cause here in case it causes false-alarm chasing again; a real fix would
+either loosen the target to something like 7-8 min or measure staleness
+from poll-*start* instead of poll-*complete*.
+
+**Finding 2 — a real bug: `pending_queue.append_pending()` had zero dedup,
+and `cocoindex-flows.py`'s live transcript re-scanning was hitting it
+constantly**: `cocoindex-flows.py`'s `process_transcript()` runs on every
+CocoIndex file-watch event (i.e. on every new message written to an active
+session) and does a **full re-read and re-scan of the entire transcript
+from scratch** each time — no watermark or hash-based dedup, unlike
+`nightly-learn.py`'s hourly/nightly sweep. For every `[CORRECTION]` window
+found, it calls `contradiction_resolution.resolve()` again, which (via the
+exact same code path `nightly-learn.py` also uses) calls
+`pending_queue.append_pending()` unconditionally on a "queued" verdict —
+with no check for "is this exact contradiction already sitting in the
+queue." Confirmed directly in the live data: one single real correction
+("Assistant: I see there's already an `auth:` block in the chart
+values...", conflicting with an existing "chart already supports auth
+config" memory) had been queued **104 separate times** between 2026-07-27
+and 2026-07-30, timestamps clustering in bursts of 1-30 minutes apart —
+exactly the pattern of one long-lived kubernaut session getting re-scanned
+on every subsequent message. Across the whole queue: **456 total entries,
+only 178 distinct** once deduplicated on `(new_statement, memory_id)` — 278
+duplicates (61%) were pure noise from this bug, not a real backlog.
+
+**Fix**: added a dedup check to `pending_queue.append_pending()` itself
+(not just to the cocoindex-flows.py caller), so the fix protects every
+current and future caller of `contradiction_resolution.resolve()`, not only
+the one that happened to trigger it most visibly. Skips appending and
+returns the existing entry if one already matches on
+`(new_statement, memory_id)`; a genuinely different conflicting memory for
+the same restated statement, or a different statement conflicting with the
+same memory, still gets its own entry (both are legitimately distinct
+review items). Added 5 regression tests in `tests/test_pending_queue.py`,
+including one that replays the exact 104-call production scenario and
+asserts it collapses to a single queue entry. Backed up the live queue to
+`contradictions-pending.jsonl.bak-dedup-20260731` before deduplicating it
+in place: 456 → 178 entries (kubernaut 426→174, dcm 10→3, engram 19→1),
+then regenerated `docs/DASHBOARD.md`/`docs/PENDING_CONTRADICTIONS.md` from
+the corrected queue.
+
+**What this doesn't fix**: `cocoindex-flows.py`'s underlying lack of a
+watermark for the transcript flow is unchanged — it will keep re-extracting
+and re-checking every correction in a session's history on every new
+message for as long as that session stays open, calling `resolve()` (and
+thus `recall()` + a contradiction-check LLM call) far more often than
+necessary. The dedup fix stops the *symptom* (duplicate queue entries) but
+not the *underlying waste* (repeated recall/LLM calls for content already
+resolved or already queued). A proper fix would give the transcript flow
+its own watermark/seen-hashes tracking like `nightly-learn.py` already has
+— filed as a follow-up, not implemented today given the immediate ask was
+about the queue count, not the compute cost.
+
+**Revised assessment of the 174 remaining kubernaut pending contradictions**:
+this is now a trustworthy number (each entry is a genuinely distinct
+flagged conflict), not artificially inflated — still a real backlog worth a
+`review-contradictions.py` pass, but 4x smaller than the pre-cleanup count
+suggested.
+
 ## 2026-07-31: Comparative Analysis Against mem0ai/mem0 — Thin Overlap With Open Backlog, No New Issues Filed
 
 **Trigger**: user asked for a comparison between this project and

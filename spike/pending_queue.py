@@ -23,6 +23,24 @@ def append_pending(
     document_id: str | None = None,
     project: str | None = None,
 ) -> dict:
+    """Append a flagged contradiction to the pending-review queue.
+
+    Deduplicates on (new_statement, memory_id) before appending -- see
+    docs/FINDINGS.md 2026-07-31. cocoindex-flows.py's live transcript
+    watcher re-reads and re-scans the WHOLE transcript file from scratch on
+    every file-change event (no watermark, unlike nightly-learn.py's
+    hourly/nightly hash+position tracking), so a correction sitting anywhere
+    in an actively-growing session gets re-extracted and re-checked against
+    the same conflicting memory on every subsequent message written to that
+    same session -- confirmed in production: one real contradiction was
+    queued 104 times over 3 days from a single long-lived kubernaut session.
+    Without this guard, every caller of contradiction_resolution.resolve()
+    is exposed to the same risk, not just cocoindex-flows.py.
+    """
+    for existing in load_pending():
+        if existing.get("new_statement") == new_statement and existing.get("memory_id") == memory_id:
+            return existing
+
     entry = {
         "id": str(uuid.uuid4()),
         "new_statement": new_statement,

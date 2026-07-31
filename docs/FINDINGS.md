@@ -2,6 +2,137 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-31: Comparative Analysis Against mem0ai/mem0 — Thin Overlap With Open Backlog, No New Issues Filed
+
+**Trigger**: user asked for a comparison between this project and
+[mem0ai/mem0](https://github.com/mem0ai/mem0) — the most widely-used open-source
+agent-memory library (32k+ stars, Apache 2.0, backed by a company offering a
+hosted "Platform" tier) — to identify overlaps and enhancement opportunities,
+the same exercise previously run against tstockham96/engram (see the entry
+below).
+
+**Method**: shallow-cloned `mem0ai/mem0` and read its core `mem0/memory/main.py`
+(3,787 lines — the `Memory`/`AsyncMemory` classes), `mem0/utils/scoring.py`
+(hybrid-score fusion), `mem0/utils/entity_extraction.py` (spaCy-based entity
+extraction), `mem0/configs/prompts.py` (extraction prompt), `mem0/memory/storage.py`
+(SQLite history/audit log), plus the top-level README and provider directory
+counts (`mem0/llms/` = 19 providers, `mem0/embeddings/` = 15, `mem0/vector_stores/`
+= 28). Cross-checked two candidate findings against this repo's live Hindsight
+instance (OpenAPI schema at `/openapi.json`) before writing them up, same
+discipline as the tstockham96 comparison.
+
+**Conclusion — different problem shape, not a competing point solution**: mem0
+is a generic, pluggable, provider-agnostic memory *SDK* built for multi-tenant
+products (many end-users, each with `user_id`/`agent_id`/`run_id`-partitioned
+memory, embeddable in any app via 19 LLM backends × 15 embedders × 28 vector
+stores, with an optional hosted "Platform" and a self-hosted server offering
+auth/dashboard/Docker-Compose deploy). This repo is a single-developer,
+single-Cursor-agent pipeline purpose-built around one fixed provider stack
+(Hindsight + Vertex AI Haiku/Sonnet + local ONNX embeddings), with project-tag
+partitioning instead of end-user partitioning. The two solve adjacent but
+distinctly-shaped problems, which narrowed the useful-overlap surface
+considerably compared to the tstockham96 comparison.
+
+**Notable architectural divergence — mem0 removed graph-DB memory**: mem0's
+own README announces a "New Memory Algorithm (April 2026)" that replaced an
+older, heavier Neo4j-backed graph-memory mode (confirmed absent from the
+current `Memory` class — no `graph_store`/`enable_graph` references remain in
+`main.py`) with: (1) single-pass **ADD-only** extraction — one LLM call, no
+UPDATE/DELETE, "memories accumulate; nothing is overwritten"; (2) **zero-LLM
+entity extraction** via spaCy (proper nouns, quoted text, noun compounds) used
+only for a lightweight post-hoc retrieval boost, not a traversable graph; and
+(3) an explicit, documented additive score-fusion formula (`score_and_rank()`
+in `mem0/utils/scoring.py`): `combined = (semantic + bm25_normalized +
+entity_boost) / max_possible`, with an optional `explain=True` returning the
+full per-signal breakdown. This is directionally the same conclusion this repo
+already reached independently in issue [#6](https://github.com/jordigilh/engram/issues/6)
+(closed 2026-07-29: multi-hop, decay-weighted graph traversal wasn't worth
+chasing) — a second, much larger project independently arrived at "cheap
+multi-signal fusion beats a real graph" for this class of system. No action
+needed; this corroborates a decision already made rather than surfacing a gap.
+
+**Where mem0 is architecturally worse than this repo, not better**: mem0's
+*automatic* pipeline (the `add()` → `_add_to_vector_store()` path used for
+conversational ingestion) does no contradiction detection at write time at
+all — by design, per the README ("nothing is overwritten"), it relies purely
+on retrieval-time ranking (recency, entity/keyword boosts) to surface the
+"right" version when two ADD-only facts conflict. Its only true delete path is
+`delete()`/`_delete_memory()`, a manual, explicit, hard vector-store delete
+(vector actually removed; a `history` SQLite row records the event but the
+fact itself is not recoverable via the API — no `state: valid` revert exists).
+This repo's [#1](https://github.com/jordigilh/engram/issues/1) work (2026-07-29:
+non-destructive `invalidate_memory` via `PATCH .../memories/{id}` with
+`state: valid` revert) is strictly more capable than mem0's own delete
+semantics on this specific axis. Also independently corroborating: mem0's
+`_add_to_vector_store()` carries a recent fix-comment explaining that a silent
+`except Exception: return []` around the extraction LLM call was replaced
+with a re-raised typed `LLMError`, specifically so callers "can implement
+provider fallback / retry" instead of conflating "LLM unavailable" with "LLM
+extracted nothing" — the exact failure class this repo's
+[#5](https://github.com/jordigilh/engram/issues/5) (no-LLM fallback extraction,
+implemented 2026-07-29) was built to survive. A second, independent project
+hit the identical failure mode and reached for the same category of fix
+(typed-error-plus-fallback), which is reassuring convergent validation of #5's
+design, not a new gap.
+
+**One genuinely new capability found, assessed as a poor fit for this repo's
+domain — not filed**: mem0 supports a real `expiration_date`/TTL field set at
+extraction time (e.g., "user is traveling next week" → auto-expires after the
+trip), with `search(show_expired=False)` silently excluding lapsed memories
+with no contradiction or correction required to trigger it. Checked this
+repo's live Hindsight schema (`UpdateMemoryRequest`, `MemoryItem` via
+`/openapi.json`) to see if an equivalent already exists: Hindsight has
+`occurred_start`/`occurred_end` (when a fact **was true**, informational) and
+the `state: invalidated` curation flag (2026-07-29, issue #1), but nothing
+that auto-excludes a memory from recall once a future calendar date passes —
+genuinely absent here. Assessed against this repo's actual content, though:
+the facts this pipeline extracts (corrections, coding conventions,
+architecture decisions, past bugs) are essentially never calendar-bound the
+way mem0's target domain (personal-assistant facts like travel plans or
+sprint deadlines) is — a convention doesn't "expire next Tuesday," it stays
+true until an explicit contradiction supersedes it, which #1 already handles.
+Filing a feature request for a mechanism with no plausible matching content in
+this repo's own extraction patterns would repeat the exact mistake #6 and #7
+were closed to avoid — proposing/building against a hypothetical need instead
+of a measured one. Not filed; flagged here in case `commitment_windows`-style
+work (see the closed #7 entry above) is ever revisited with genuinely
+date-bound content.
+
+**Other overlaps confirmed, no gap either direction**: both do hybrid
+semantic+keyword retrieval with score fusion (mem0: semantic+BM25+entity,
+additive; this repo/Hindsight: semantic+BM25+temporal+link_expansion, RRF +
+reranker — a superset); both attach entities to memories for retrieval
+boosting; both keep a durable audit trail of memory-level changes (mem0's
+SQLite `history` table vs. this repo's `auto-resolved.jsonl` / pending-queue
+logs plus Hindsight's own invalidate-with-reason); both are MIT/Apache-2.0,
+local-first-capable, no forced telemetry. Features present in mem0 with no
+credible engram use case: multi-tenant `user_id`/`agent_id`/`run_id`
+partitioning (this repo's project-tag scoping already serves the equivalent
+single-owner/multi-project need), a hosted dashboard+auth self-hosted server
+(this repo has no multi-user surface to protect), 19-provider/15-embedder/
+28-vector-store pluggability (this repo is intentionally a fixed, validated
+stack, not a general SDK), and a zero-friction CLI "agent signup" onboarding
+flow (solves distribution-to-third-party-products, not applicable to a
+single-repo internal tool).
+
+**Outcome**: **no new GitHub issues filed.** Unlike the tstockham96 comparison
+(8 issues filed from a project with several structurally missing mechanisms —
+bi-temporal queries, `ask()`, commitment tracking, etc.), this comparison's
+overlap surface was almost entirely either (a) already covered by this repo's
+existing open backlog ([#2](https://github.com/jordigilh/engram/issues/2)
+`ask()`-with-confidence, [#3](https://github.com/jordigilh/engram/issues/3)
+docs-drift audit, [#10](https://github.com/jordigilh/engram/issues/10) internal
+recall benchmark — mem0 does none of these either, so no new angle to add),
+(b) already resolved in this repo's favor (contradiction detection at write
+time, non-destructive invalidate, typed-error LLM-fallback resilience), or (c)
+a poor domain fit (TTL/expiration) or inapplicable given the very different
+product shape (multi-tenancy, hosted dashboard, provider pluggability). Given
+the user's explicit "my goal is quality, not quantity" directive
+(2026-07-29, re: #7), manufacturing issues from surface-level feature parity
+without a measured local need would repeat exactly the mistake #6/#7's
+closures corrected for. If a genuine gap surfaces later with supporting
+evidence, it can be filed then.
+
 ## 2026-07-30 (same day, follow-up): The Token-Cost "503.6% Increase With Recall" Number Is a Structural Whole-Session Confound, Not a Sample-Size Problem — Confirmed and Report Recaptioned
 
 **Context**: reviewing the report above, user pushed back specifically on the

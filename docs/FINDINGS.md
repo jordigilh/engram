@@ -2,6 +2,182 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-30 (same day, follow-up): The Token-Cost "503.6% Increase With Recall" Number Is a Structural Whole-Session Confound, Not a Sample-Size Problem — Confirmed and Report Recaptioned
+
+**Context**: reviewing the report above, user pushed back specifically on the
+token-cost finding: recall should *reduce* inference (curated context instead
+of grepping the whole codebase), so a 503.6% increase with recall "should be
+subjective at this point" — the real signal is recall-adoption rate, not raw
+token deltas.
+
+**Confirmed by reading the code, not just re-asserting the caveat**: both
+`report.py`'s `analyze_token_cost()` and `nightly-learn.py`'s
+`analyze_mcp_effectiveness()` bucket a session into "with recall" the moment
+`has_recall` is set — a single boolean flipped True if recall fires at
+**any** turn, anywhere in the session:
+
+```870:873:report.py
+                                elif btype == "tool_use":
+                                    tool_calls += 1
+                                    mcp_call = extract_mcp_tool_call(block)
+                                    if mcp_call and "recall" in mcp_call[0].lower():
+                                        has_recall = True
+```
+
+`tokens_per_request` then divides the session's **entire** token count by its
+user-message count (`approx_tokens // max(user_msgs, 1)`), with no
+before/after-recall split. This means:
+
+- A session must have enough turns for recall to plausibly fire at all
+  before it can ever land in the "with recall" bucket — trivial one-shot
+  sessions structurally cannot get there, and dominate "without recall" by
+  construction, not because they represent "the same task done without
+  memory assistance."
+- Every token in a "with recall" session — including exploration, test runs,
+  and back-and-forth on parts of the task that have nothing to do with the
+  recall call itself — gets attributed to that bucket's average.
+- **More samples do not fix this.** It's a selection bias baked into how the
+  two groups are defined, not statistical noise that shrinks with n. A
+  larger sample would just make the same structurally-biased comparison more
+  precisely wrong.
+
+**Recall's actual effect is measured elsewhere in the same report, correctly**:
+`EXPLORATION EFFICIENCY` (avg exploration tool calls before the first
+productive action, with vs. without recall) isolates the thing recall is
+actually supposed to change — replacing grep/glob discovery with curated
+context — without inheriting the whole-session confound, because it stops
+counting at first productive action rather than averaging over the entire
+session.
+
+**Fix applied**: recaptioned `report.py`'s `TOKEN COST ANALYSIS` section —
+"Token efficiency: N% saving/increase" (implies causality) became "Tokens/
+request delta: N% higher/lower with recall" (states the correlation without
+claiming recall caused it), and added a permanent (non-sample-size-gated)
+caveat directly in the report output pointing at this exact structural
+issue and redirecting to `EXPLORATION EFFICIENCY` as the metric that
+actually isolates recall's effect. The raw numbers are still shown — they're
+not meaningless, just not a recall cost/savings comparison — so nothing was
+hidden, only mislabeled.
+
+**Revised assessment**: token consumption comparisons between with/without-
+recall sessions should not be used to argue Engram is making sessions
+cheaper *or* more expensive, at any sample size, under the current whole-
+session bucketing. The unconfounded, trustworthy signals remain recall
+adoption (95.5-100%) and proactive recall (50-77.3%) from the prior entry,
+plus exploration efficiency once enough without-recall sessions exist to
+compare against (today's data has only 1-2 without-recall sessions per
+project, too few to read that comparison yet either). A real fix to make the
+token-cost table meaningful would require per-recall-call before/after
+token accounting (tokens spent in the N turns immediately following a
+recall call vs. a matched non-recall baseline) rather than whole-session
+bucketing — filed as a follow-up idea, not implemented today.
+
+## 2026-07-30: Recall/Effectiveness Report Requested — Found and Fixed a Real `run_nightly()` Project-Mislabeling Bug Along the Way
+
+**Context**: user asked for a report of "yesterday's" (2026-07-29) recall and
+effectiveness results, to assess whether the current approach is sound and
+effective. The previous night's `StartCalendarInterval` nightly jobs for
+kubernaut and dcm had also missed their 2:00/2:30 AM windows (same
+brief-sleep issue as prior days — see recurring note below), so both were
+manually triggered first to catch up, then `report.py` was run to pull the
+numbers.
+
+**Bug found while backfilling**: `run_nightly(project=...)`'s "missed
+transcripts" catch-all loop reassigned the function's own `project`
+parameter to each transcript's own resolved project
+(`project = project_for_transcript_path(path)`, intended only to tag that
+one transcript's retained corrections correctly). Python has no block
+scoping, so once the loop finished, `project` held whichever transcript was
+processed *last* — not the project the run was actually invoked for. Both
+manually-triggered runs today had my own live Cursor chat transcript (in
+this very engram session) swept up as a "missed" transcript and processed
+last, clobbering `project` to `"engram"` in both the kubernaut and the dcm
+run. The corrupted value only leaked into the *human-readable log line* and
+the `"project"` field persisted to `effectiveness-report.jsonl` (and thus
+into `report.py`'s per-project breakdown) — `workspace_prefixes` itself
+(computed from `pconfig` **before** the loop) was unaffected, so the actual
+transcript filtering/scoping for `mcp_usage` and session stats stayed
+correct throughout. Confirmed via the run logs:
+```
+=== Nightly processing started (project=kubernaut) ===
+...
+  Scoped to 16/21 transcripts for project=engram   ← should say kubernaut
+=== Nightly processing started (project=dcm) ===
+...
+  Scoped to 0/21 transcripts for project=engram    ← should say dcm
+```
+
+**Fix**: renamed the loop-local variable to `transcript_project` in
+`nightly-learn.py`'s `run_nightly()`, leaving the outer `project` parameter
+untouched for the rest of the function (`run_hourly()` has the same-looking
+line but no `project` parameter to clobber, so it was never at risk). Added
+two regression tests (`TestRunNightlyProjectClobbering`) that reproduce the
+exact scenario — a "kubernaut" and a "dcm" invocation each with one
+"missed" transcript that resolves to `"engram"` — and assert the
+effectiveness project label survives; both fail against the pre-fix code
+(`'engram' == 'dcm'` mismatch) and pass after. The two mislabeled
+`effectiveness-report.jsonl` entries from today's backfill were removed and
+reconstructed with the correct project label from the (otherwise-correct)
+per-project daily report JSON already on disk, rather than re-running the
+expensive Haiku-based session analysis a second time.
+
+**Recall/effectiveness numbers (last 3 days, covering 2026-07-27 through
+today, since yesterday alone is too thin a sample on its own)**:
+
+| Metric | Kubernaut | DCM |
+|---|---:|---:|
+| Recall adoption | 95.5% | 100.0% (n=2 sessions) |
+| Proactive recall (no user prompt) | 77.3% | 50.0% (n=2) |
+| Sessions with recall / without | 21 / 1 | 2 / 0 |
+| Corrections/session (with recall) | 1.96 | 6.50 (n=2, noisy) |
+| Rework % | 22.3% | 41.0% (n=2, noisy) |
+| First productive turn | 2.4 | 1.0 (n=2) |
+| MCP hit rate | 96.0% (100 calls) | 100.0% (23 calls) |
+| Context-loading tokens (before first productive action) | 393 avg | 64 avg |
+
+Engram itself has no effectiveness data yet — it has never had its own
+scheduled nightly job (`project_transcripts` recall/session analysis), only
+shared `cursor-memory` tagging and its own `engram-docs`/`engram-issues`
+mental models; MCP usage (47 calls, 95.7% hit rate) is tracked but the
+recall-adoption/proactive-recall/session-stats sections all read "no data
+yet."
+
+**A genuine nuance worth flagging honestly, not glossing over**: kubernaut's
+token-cost-analysis section shows sessions *with* recall using **503.6% more
+tokens per request** than the single without-recall session (2,511 vs. 416
+avg tokens/request) and 196% more tool calls. This is very likely a
+confound, not recall making things worse — the n=1 "without recall" sample
+is a trivial/short session, while sessions with recall skew toward the
+large/complex end of session_distribution (11 of 21 kubernaut sessions with
+recall are "Large >100K", vs. the single without-recall session being
+"Trivial <5K"). A single trivial session isn't a valid baseline for "what
+would this session have cost without recall" — but it's also true that this
+report can't currently produce a same-complexity with/without comparison,
+so the token-cost table should not be read as "recall costs 5x more" without
+that caveat. This mirrors the same with/without-recall selection-bias
+concern already on record for the "74% fewer corrections" figure (see the
+2026-07-28 entry above and the corrections/token-reduction discussion from
+the "is Engram reducing tokens" review).
+
+**Assessment — is the current approach sound and effective?** The core
+adoption mechanics look solid and are not confounded the way the
+corrections/token numbers are: recall adoption (95.5-100%) and proactive
+recall (50-77.3%) are both healthy and don't depend on a fragile
+before/after comparison — they're a direct count of "did the agent recall
+without being told to," which recently-fixed detection bugs (regex→Haiku,
+Haiku v1→v2 prompt) don't touch. MCP hit rates (96-100%) confirm recalls are
+returning usable results, not empty misses. Where the data is genuinely too
+thin to call yet: DCM's whole effectiveness picture rests on 2 sessions, and
+kubernaut's corrections/rework/token-cost numbers remain confounded by (a)
+the ongoing PTO/host-shutdown low-volume period (2026-07-28 entry) and (b)
+the with/without-recall session-size selection bias just described. Recommend
+continuing to track recall-adoption/proactive-recall (the unconfounded
+metrics) weekly, and holding off on any conclusion about
+corrections/token-cost reduction until there's a same-week, similar-size-
+distribution with/without-recall comparison — which realistically won't
+exist until recall-adoption naturally dips below 100% again or a controlled
+comparison is deliberately constructed.
+
 ## 2026-07-29 (same day, twelfth follow-up): #10 Spiked — 7-Case Pilot Ground-Truth Benchmark Run Against Live `engram-docs`, Zero Misses But Real Rank Spread
 
 **Context**: after closing #9's bookkeeping (and #5's — both had shipped code but were

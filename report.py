@@ -1384,12 +1384,13 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
         if token_stats.get("token_efficiency_pct") is not None:
             pct = token_stats["token_efficiency_pct"]
             delta = token_stats["token_efficiency_delta"]
-            direction = "fewer" if delta > 0 else "more"
-            lines.append(f"  Token efficiency: {abs(delta):,} {direction} tokens/request ({abs(pct):.1f}% {'saving' if pct > 0 else 'increase'})")
+            direction = "lower" if delta > 0 else "higher"
+            lines.append(f"  Tokens/request delta: {abs(delta):,} {direction} with recall ({abs(pct):.1f}%)")
 
         if token_stats.get("tool_call_efficiency_pct") is not None:
             tc_pct = token_stats["tool_call_efficiency_pct"]
-            lines.append(f"  Tool call efficiency: {abs(tc_pct):.1f}% {'fewer' if tc_pct > 0 else 'more'} tool calls with recall")
+            direction = "fewer" if tc_pct > 0 else "more"
+            lines.append(f"  Tool calls/request delta: {abs(tc_pct):.1f}% {direction} with recall")
 
         total_waste = token_stats.get("total_correction_cost_tokens", 0)
         if total_waste > 0:
@@ -1406,10 +1407,25 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
             clt_cost_usd = clt_total * 3 / 1_000_000
             lines.append(f"    (est. ${clt_cost_usd:.3f} at Sonnet 4.6 input rates)")
 
+        # Structural caveat, not a sample-size one -- see docs/FINDINGS.md
+        # 2026-07-30. `has_recall` is a whole-session flag (recall happened at
+        # ANY turn), and tokens/request divides the WHOLE session's tokens by
+        # its user-message count. A session needs enough turns for recall to
+        # plausibly ever fire, so "with recall" structurally skews toward
+        # longer/more complex sessions regardless of what recall itself cost
+        # or saved. This table is not a valid "recall costs/saves N tokens"
+        # comparison at any sample size -- see EXPLORATION EFFICIENCY above
+        # for the metric that actually isolates recall's effect (exploration
+        # calls before first productive action).
         lines.append("")
+        lines.append("  Caveat: 'with recall' is whole-session (recall fired at any turn),")
+        lines.append("  not per-request -- this table conflates recall usage with session")
+        lines.append("  length/complexity and is not a valid cost/savings comparison at")
+        lines.append("  any sample size. See EXPLORATION EFFICIENCY above for the metric")
+        lines.append("  that isolates recall's actual effect.")
         if wr["sessions"] < 5:
-            lines.append("  Note: Small sample size for recall sessions. Metrics will stabilize")
-            lines.append("  after 20+ sessions with recall active (~1 week of normal use).")
+            lines.append("  Note: sample size is also small; corrections/session and")
+            lines.append("  correction-cost figures above will stabilize with more data.")
     else:
         lines.append("  No transcript data available for token analysis.")
 

@@ -1624,7 +1624,18 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
         candidates = filter_and_scan(missed, watermarks)
         for path, messages, start_index in candidates:
             transcript_id = path.stem
-            project = project_for_transcript_path(path)
+            # NOTE: intentionally a distinct name from the outer `project`
+            # function parameter -- this is the *transcript's own* resolved
+            # project (for correctly tagging its retained corrections), which
+            # is not necessarily the same project this run_nightly() call was
+            # invoked for (e.g. a transcript from another onboarded project's
+            # workspace can appear here since find_recent_transcripts() above
+            # scans across all onboarded projects, not just this one). Reusing
+            # the outer `project` name here previously clobbered it for the
+            # rest of the function, corrupting the "project" field written to
+            # effectiveness-report.jsonl below with whichever transcript was
+            # processed last -- see docs/FINDINGS.md 2026-07-30.
+            transcript_project = project_for_transcript_path(path)
             log.info("Processing: %s (from message %d)", transcript_id, start_index)
 
             corrections, instructions = extract_learning_windows(
@@ -1645,7 +1656,7 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
 
             try:
                 retain_result = retain_windows_deduped(
-                    all_windows, transcript_id, seen_hashes, project=project
+                    all_windows, transcript_id, seen_hashes, project=transcript_project
                 )
                 results["windows_retained"] += retain_result["items_retained"]
                 results["skipped_duplicates"] += retain_result.get("skipped_duplicates", 0)

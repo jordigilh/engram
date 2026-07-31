@@ -1092,3 +1092,97 @@ class TestMaybeRefreshMentalModelsOnTopicShift:
 
         assert result["triggered"] is False
         assert "error" in result["reason"]
+
+
+class TestRunNightlyProjectClobbering:
+    """Regression for the 2026-07-30 bug: run_nightly(project="kubernaut")'s
+    "missed transcripts" catch-all loop reassigned its own `project`
+    parameter to each transcript's own resolved project (needed to tag that
+    transcript's retained corrections correctly), which leaked past the loop
+    and corrupted the "project" field written to effectiveness-report.jsonl
+    (and the project passed to analyze_mcp_effectiveness()) with whichever
+    transcript happened to be processed last -- not the project the run was
+    actually invoked for. See docs/FINDINGS.md."""
+
+    def _stub_common(self, nightly_learn, monkeypatch, tmp_path, transcript_projects):
+        """transcript_projects: list of per-"missed"-transcript resolved
+        projects, in processing order -- the last one is what leaked in the
+        pre-fix code."""
+        paths = []
+        for i, _ in enumerate(transcript_projects):
+            p = tmp_path / f"t{i}.jsonl"
+            p.write_text("{}")
+            paths.append(p)
+
+        monkeypatch.setattr(nightly_learn, "collect_bank_stats", lambda project: {})
+        monkeypatch.setattr(nightly_learn, "find_recent_transcripts", lambda **k: paths)
+        monkeypatch.setattr(
+            nightly_learn, "filter_and_scan",
+            lambda missed, watermarks: [(p, [], 0) for p in missed],
+        )
+        monkeypatch.setattr(
+            nightly_learn, "extract_learning_windows",
+            lambda messages, start_index=0: (["[CORRECTION] User: placeholder"], []),
+        )
+        project_iter = iter(transcript_projects)
+        monkeypatch.setattr(
+            nightly_learn, "project_for_transcript_path",
+            lambda path: next(project_iter),
+        )
+        monkeypatch.setattr(
+            nightly_learn, "retain_windows_deduped",
+            lambda *a, **k: {"items_retained": 1, "usage": {}},
+        )
+        monkeypatch.setattr(nightly_learn, "reflect", lambda: {})
+        monkeypatch.setattr(nightly_learn, "run_observability_probes", lambda *a, **k: [])
+        monkeypatch.setattr(nightly_learn, "api_post", lambda *a, **k: {"success": True})
+
+        captured = {}
+
+        def fake_analyze(project_transcripts, workspace_prefixes=None, project=None):
+            captured["project"] = project
+            return {
+                "mcp_usage": {},
+                "effectiveness": {
+                    "sessions_with_recall": 0, "sessions_without_recall": 0,
+                    "corrections_per_session_with_recall": 0.0,
+                    "corrections_per_session_without_recall": 0.0,
+                },
+                "proactive_recall": {},
+                "session_distribution": {},
+                "recall_session_stats": {},
+                "weekly_trend": [],
+                "exploration_efficiency": {},
+            }
+
+        monkeypatch.setattr(nightly_learn, "analyze_mcp_effectiveness", fake_analyze)
+        return captured
+
+    def test_regression_effectiveness_project_matches_invoked_project_not_last_transcript(
+        self, nightly_learn, tmp_path, monkeypatch,
+    ):
+        """The exact real-world scenario: run_nightly(project="kubernaut") is
+        invoked, but one of the "missed" transcripts it sweeps up along the
+        way (e.g. the operator's own live Cursor session) resolves to
+        "engram". The final effectiveness project label must stay
+        "kubernaut" -- not flip to whatever was processed last."""
+        captured = self._stub_common(
+            nightly_learn, monkeypatch, tmp_path,
+            transcript_projects=["kubernaut", "engram"],
+        )
+
+        nightly_learn.run_nightly({}, set(), project="kubernaut")
+
+        assert captured["project"] == "kubernaut"
+
+    def test_regression_dcm_project_survives_engram_transcript_processed_last(
+        self, nightly_learn, tmp_path, monkeypatch,
+    ):
+        captured = self._stub_common(
+            nightly_learn, monkeypatch, tmp_path,
+            transcript_projects=["engram"],
+        )
+
+        nightly_learn.run_nightly({}, set(), project="dcm")
+
+        assert captured["project"] == "dcm"

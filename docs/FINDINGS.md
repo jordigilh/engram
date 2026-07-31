@@ -2,6 +2,88 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-07-31 (same day, second follow-up): Fixed the Underlying Waste Flagged Above — `cocoindex-flows.py`'s Transcript Flow Now Has a Watermark
+
+**Context**: direct follow-up to the "What this doesn't fix" section of the
+entry immediately below. The dedup fix stopped duplicate pending-contradiction
+*entries*, but explicitly did not stop the *cause*: `process_transcript()` was
+still re-extracting and re-checking every message in a transcript's full
+history on every single new message written to that session, since it had no
+concept of "already scanned." User's instruction: "we should not have
+regressions: we should only consume what's new (watermark what's done)."
+
+**Fix**: gave the live transcript flow its own watermark, mirroring
+`nightly-learn.py`'s existing `watermarks.json` pattern (which the nightly
+sweep already had) but in its own file — `~/.hindsight/logs/cocoindex-transcript-watermarks.json`,
+keyed by `transcript_id` — deliberately kept separate from
+`nightly-learn.py`'s state, since the two flows track independent progress
+(nightly's sweep is a catch-all for whatever the live flow *didn't* get to,
+not the same consumer) and sharing one file could let either one silently
+skip content the other never actually processed.
+
+Three changes in `cocoindex-flows.py`:
+1. `_extract_learning_windows()` gained a `start_index` parameter (mirrors
+   `nightly-learn.py`'s `extract_learning_windows(..., start_index=)`):
+   context windows are still built from the *full* message list (so a new
+   signal right at the watermark boundary still gets correct before-context),
+   but only messages at raw index `>= start_index` are treated as candidate
+   signals — already-scanned corrections/instructions earlier in the
+   transcript are never re-emitted.
+2. `process_transcript()` now loads the transcript's watermark before
+   extracting, passes `start_index=prev_message_count`, and — after
+   processing — advances the watermark to the current message count
+   (regardless of whether any windows were found, so a signal-free tail
+   doesn't get rescanned forever either, same rationale as
+   `nightly-learn.py`'s `filter_and_scan()`). Reads/writes are guarded by an
+   `asyncio.Lock` since CocoIndex can process multiple transcripts'
+   file-change events concurrently on the same event loop and they'd
+   otherwise race on the shared watermark file.
+3. **Also had to fix document IDs**: the old scheme
+   (`transcript-{id}-w{enumerate_index}`) assumed `windows` always started
+   from position 0 of the *same, full* list on every call. Once
+   `_extract_learning_windows()` only returns *new* windows per invocation,
+   that positional index resets to 0 every time — a second call's first new
+   window would have silently reused `-w0` and overwritten an unrelated,
+   already-retained window from an earlier call in Hindsight (upsert-by-
+   document-id). Replaced with a stable id derived from a SHA-1 digest of
+   the window's own text (`_window_document_id()`), which only collides on
+   identical content — the correct, idempotent behavior — regardless of
+   which batch it was extracted in.
+
+**Testing**: added `TestExtractLearningWindowsStartIndex` (4 tests covering
+the start_index filter and before-context preservation at the boundary) and
+`TestProcessTranscriptWatermarking` (7 tests covering first-call
+start_index=0, watermark persistence, the exact "grown transcript only scans
+new tail" production scenario, independent watermarks per transcript_id, a
+shrunk/rewritten-file clamp guard, and the document-id collision regression)
+to `tests/test_cocoindex_flows.py`. Updated all existing
+`_extract_learning_windows` mocks (13 call sites) to accept the new
+`start_index` kwarg and switched their document-id assertions from hardcoded
+`-w0`/`-w1`/`-w2` strings to `cocoindex_flows._window_document_id(...)` calls.
+Added an autouse fixture isolating `TRANSCRIPT_WATERMARKS_PATH` to a
+per-test `tmp_path` — the `cocoindex_flows` module fixture is session-scoped,
+so without it, watermark state would leak into the real state file and bleed
+across unrelated tests. Full suite: 304 passed.
+
+**Deployed**: `~/.hindsight/cocoindex-flows.py` is a symlink to this repo's
+copy, so no separate deploy step was needed; restarted
+`io.vectorize.cocoindex.service` (the process running `cocoindex-flows.py
+--mode live`) to load the new code. Confirmed live:
+`~/.hindsight/logs/cocoindex-transcript-watermarks.json` was created on
+startup with `message_count` entries for every currently-active transcript.
+
+**Impact**: an actively-growing session's transcript flow now does O(new
+messages) work per file-change event instead of O(total messages in the
+session so far) — no more re-running `is_correction()`/`is_instruction()`
+classification or `contradiction_resolution.resolve()` (recall + an LLM
+contradiction check) against content that was already resolved, queued, or
+found to have no signal on a prior pass. Combined with the same-day dedup fix
+in `pending_queue.py`, both the symptom (duplicate queue entries) and the
+root cause (redundant re-scanning) from the "104 duplicate entries over 3
+days" incident are now closed.
+
+---
+
 ## 2026-07-31 (same day, follow-up): Dug Into the Two Flagged Anomalies — a Report-Timing Artifact and a Real Bug That Was Inflating Pending Contradictions by 61%
 
 **Context**: user asked to "dig in" on the two minor items flagged in the

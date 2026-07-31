@@ -14,7 +14,9 @@ Runs as a single long-lived process via launchd. Supports backfill and live mode
 """
 
 import argparse
+import asyncio
 import dataclasses
+import hashlib
 import json
 import logging
 import os
@@ -81,6 +83,43 @@ COCOINDEX_DB = pathlib.Path(os.environ.get(
     "COCOINDEX_DB",
     os.path.expanduser("~/.hindsight/cocoindex.db"),
 ))
+
+# Per-transcript watermark (message_count already scanned) for the live
+# transcript-app flow -- see docs/FINDINGS.md 2026-07-31. CocoIndex's
+# live=True file-watcher re-triggers process_transcript() with the file's
+# FULL current content on every write, not just the delta, so without this
+# the whole transcript (including corrections already extracted and
+# resolved/queued many times before) got re-scanned and re-checked against
+# Hindsight on every single new message in an active session -- one real
+# contradiction was queued 104 times over 3 days from a single long-lived
+# session before pending_queue.append_pending() grew its own dedup guard.
+# This watermark stops the re-extraction/re-check at the source instead of
+# only de-duplicating its symptom. Mirrors nightly-learn.py's
+# watermarks.json (size + message_count), but kept in its own file: the two
+# flows track independent progress (nightly-learn.py's hourly/nightly sweep
+# is a separate catch-all, not the same consumer), so sharing one file would
+# let either one silently skip content the other never actually processed.
+TRANSCRIPT_WATERMARKS_PATH = pathlib.Path(os.path.expanduser(
+    "~/.hindsight/logs/cocoindex-transcript-watermarks.json"
+))
+_transcript_watermarks_lock = asyncio.Lock()
+
+
+def _load_transcript_watermarks() -> dict:
+    if TRANSCRIPT_WATERMARKS_PATH.exists():
+        try:
+            return json.loads(TRANSCRIPT_WATERMARKS_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            log.warning("Corrupt cocoindex-transcript-watermarks.json, starting fresh")
+    return {}
+
+
+def _save_transcript_watermarks(watermarks: dict) -> None:
+    TRANSCRIPT_WATERMARKS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = TRANSCRIPT_WATERMARKS_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(watermarks, indent=2))
+    tmp.rename(TRANSCRIPT_WATERMARKS_PATH)
+
 
 PG_POOL: coco.ContextKey[Any] = coco.ContextKey("pg_pool")
 
@@ -737,10 +776,18 @@ def _extract_assistant_text(msg: dict) -> str:
     return "\n".join(texts).strip()
 
 
-def _extract_learning_windows(messages: list[dict], window: int = 2) -> list[str]:
-    """Extract 5-message learning windows around corrections/instructions."""
+def _extract_learning_windows(messages: list[dict], window: int = 2, start_index: int = 0) -> list[str]:
+    """Extract 5-message learning windows around corrections/instructions.
+
+    start_index: only emit windows for signal messages at raw `messages`
+    indices >= start_index (already-scanned messages, per the caller's
+    watermark) -- context is still drawn from the full `messages` list so a
+    new signal right at the watermark boundary still gets proper
+    before-context. See docs/FINDINGS.md 2026-07-31 and
+    nightly-learn.py's extract_learning_windows(), which this mirrors.
+    """
     parsed = []
-    for msg in messages:
+    for raw_idx, msg in enumerate(messages):
         role = msg.get("role", "")
         if role == "user":
             text = _extract_user_text(msg)
@@ -749,6 +796,7 @@ def _extract_learning_windows(messages: list[dict], window: int = 2) -> list[str
                     "role": "user", "text": text,
                     "is_correction": _is_correction(text),
                     "is_instruction": _is_instruction(text),
+                    "raw_idx": raw_idx,
                 })
         elif role == "assistant":
             text = _extract_assistant_text(msg)
@@ -756,11 +804,12 @@ def _extract_learning_windows(messages: list[dict], window: int = 2) -> list[str
                 parsed.append({
                     "role": "assistant", "text": text[:400],
                     "is_correction": False, "is_instruction": False,
+                    "raw_idx": raw_idx,
                 })
 
     signal_indices = [
         i for i, m in enumerate(parsed)
-        if m["is_correction"] or m["is_instruction"]
+        if (m["is_correction"] or m["is_instruction"]) and m["raw_idx"] >= start_index
     ]
 
     windows = []
@@ -783,6 +832,22 @@ def _extract_learning_windows(messages: list[dict], window: int = 2) -> list[str
     return windows
 
 
+def _window_document_id(transcript_id: str, window_text: str) -> str:
+    """Stable, content-derived document id for a learning window.
+
+    Deliberately NOT based on the window's position in the (now
+    watermark-sliced, see below) `windows` list: once process_transcript()
+    only extracts *new* windows per invocation, a positional index would
+    restart at 0 on every call and silently collide with -- overwriting --
+    an unrelated, already-retained window from an earlier call. A digest of
+    the window's own text is stable regardless of which batch it was
+    extracted in and only collides on identical content (which is the
+    correct, idempotent behavior: memo=True style de-dup, not data loss).
+    """
+    digest = hashlib.sha1(window_text.encode("utf-8")).hexdigest()[:16]
+    return f"transcript-{transcript_id}-w{digest}"
+
+
 @coco.fn(memo=True)
 async def process_transcript(file: localfs.File) -> None:
     """Parse a JSONL transcript and push learning windows to Hindsight."""
@@ -803,8 +868,25 @@ async def process_transcript(file: localfs.File) -> None:
     if not messages:
         return
 
-    windows = _extract_learning_windows(messages)
     transcript_id = file.file_path.path.stem
+
+    # Watermark gate -- see docs/FINDINGS.md 2026-07-31. CocoIndex's
+    # live=True watcher re-delivers the transcript's FULL current content on
+    # every write (not a diff), so without tracking how many messages we've
+    # already scanned for THIS transcript_id, every new message in a
+    # long-lived session re-triggers is_correction()/is_instruction()
+    # classification and (for corrections) a fresh Hindsight contradiction
+    # check against the WHOLE history again, not just the new tail.
+    async with _transcript_watermarks_lock:
+        prev_count = _load_transcript_watermarks().get(transcript_id, {}).get("message_count", 0)
+
+    # A transcript can only grow (messages are appended, never rewritten in
+    # place), but guard against a shrunk/rewritten file anyway by clamping
+    # to 0 rather than passing a start_index past the end of `messages`.
+    start_index = prev_count if prev_count <= len(messages) else 0
+
+    windows = _extract_learning_windows(messages, start_index=start_index)
+
     # Same pattern as the other flows in this file (see e.g. rel_path
     # computation above): file.file_path.path is only the *relative* path
     # (a PurePosixPath -- no .resolve()); file.file_path.resolve() is what
@@ -819,7 +901,7 @@ async def process_transcript(file: localfs.File) -> None:
         project_dir_name = abs_path[len(base_prefix):].split("/", 1)[0]
         project = project_scope.resolve_project_label(project_dir_name)
 
-    for i, window_text in enumerate(windows):
+    for window_text in windows:
         if not window_text.strip():
             continue
         # tags: [project] if known, same as nightly-learn.py's retain_windows()
@@ -840,10 +922,23 @@ async def process_transcript(file: localfs.File) -> None:
         hindsight_retain(
             bank_id="cursor-memory",
             content=window_text,
-            document_id=f"transcript-{transcript_id}-w{i}",
+            document_id=_window_document_id(transcript_id, window_text),
             metadata={"source": "cocoindex-transcript", "transcript_id": transcript_id},
             tags=tags or None,
         )
+
+    # Advance the watermark past everything we just scanned, whether or not
+    # it produced any windows -- mirrors nightly-learn.py's filter_and_scan(),
+    # which updates the watermark "regardless (we've scanned these
+    # messages)" so a signal-free tail doesn't get rescanned forever either.
+    if len(messages) > prev_count:
+        async with _transcript_watermarks_lock:
+            watermarks = _load_transcript_watermarks()
+            watermarks[transcript_id] = {
+                "message_count": len(messages),
+                "last_processed": datetime.now().isoformat(),
+            }
+            _save_transcript_watermarks(watermarks)
 
 
 @coco.fn

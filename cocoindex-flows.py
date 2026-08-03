@@ -44,26 +44,34 @@ logging.basicConfig(
 log = logging.getLogger("cocoindex-flows")
 
 HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
+# Defaults point at the branch-scoped read-only mirrors (see
+# watch-mirrors-config.sh), NOT the live dev clones under
+# ~/go/src/github.com/jordigilh/ -- see docs/FINDINGS.md 2026-08-03. Watching
+# the live clones meant every branch checkout during routine PR work was
+# misread as a real content delta, triggering a full hindsight_retain() +
+# Sonnet consolidation pass per touched file. These are only defaults (the
+# launchd plist sets the same values explicitly); kept in sync so a manual
+# `python3 cocoindex-flows.py` invocation without env vars is also safe.
 ENGRAM_DOCS_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_DOCS_DIR",
-    os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-docs/docs"),
+    os.path.expanduser("~/.hindsight/watch/kubernaut-docs/docs"),
 ))
 ENGRAM_CODE_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_CODE_DIR",
-    os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut"),
+    os.path.expanduser("~/.hindsight/watch/kubernaut"),
 ))
 ENGRAM_CODE_DOCS_DIR = ENGRAM_CODE_DIR / "docs"
 ENGRAM_OPERATOR_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_OPERATOR_DIR",
-    os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-operator"),
+    os.path.expanduser("~/.hindsight/watch/kubernaut-operator"),
 ))
 ENGRAM_CONSOLE_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_CONSOLE_DIR",
-    os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-console"),
+    os.path.expanduser("~/.hindsight/watch/kubernaut-console"),
 ))
 ENGRAM_SCENARIOS_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_SCENARIOS_DIR",
-    os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-demo-scenarios"),
+    os.path.expanduser("~/.hindsight/watch/kubernaut-demo-scenarios"),
 ))
 ENGRAM_TRANSCRIPTS_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_TRANSCRIPTS_DIR",

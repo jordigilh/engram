@@ -39,9 +39,14 @@ log = logging.getLogger("engram-cocoindex-flows")
 
 HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
 
+# Default points at the branch-scoped read-only mirror (see
+# watch-mirrors-config.sh), not the live dev clone -- see docs/FINDINGS.md
+# 2026-08-03. Currently a zero-cost future-proof (engram is worked on via
+# direct commits to main today, no branch churn), kept in sync with the
+# launchd plist's explicit env var so a manual invocation is also safe.
 ENGRAM_REPO_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_REPO_DIR",
-    os.path.expanduser("~/go/src/github.com/jordigilh/engram"),
+    os.path.expanduser("~/.hindsight/watch/engram"),
 ))
 
 PG_DSN = os.environ.get(

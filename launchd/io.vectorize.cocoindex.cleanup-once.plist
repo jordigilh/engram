@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- One-shot: fires at the next 3:00 AM, then self-removes from inside
+         cleanup-kubernaut-docs-issues.sh so it never runs a second night.
+         See docs/FINDINGS.md 2026-08-03. -->
+    <key>Label</key>
+    <string>io.vectorize.cocoindex.cleanup-once</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.hindsight/cleanup-kubernaut-docs-issues.sh</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOME__/.hindsight/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>__HOME__/.hindsight</string>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.hindsight/logs/kubernaut-docs-issues-cleanup-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.hindsight/logs/kubernaut-docs-issues-cleanup-stderr.log</string>
+</dict>
+</plist>

@@ -14,18 +14,26 @@
     </array>
     <key>EnvironmentVariables</key>
     <dict>
+        <!-- These five point at the read-only branch-scoped mirrors from
+             watch-mirrors-config.sh (kept in sync by refresh-watch-mirrors.sh
+             via launchd/io.vectorize.cocoindex.watch-sync.plist), NOT the
+             live dev clones under ~/go/src/github.com/jordigilh/. See
+             docs/FINDINGS.md 2026-08-03: watching the live clones meant
+             every branch checkout during routine PR work was misread as a
+             real content delta, triggering a full hindsight_retain() +
+             Sonnet consolidation pass per touched file. -->
         <key>ENGRAM_DOCS_DIR</key>
-        <string>__HOME__/go/src/github.com/jordigilh/kubernaut-docs/docs</string>
+        <string>__HOME__/.hindsight/watch/kubernaut-docs/docs</string>
         <key>ENGRAM_CODE_DIR</key>
-        <string>__HOME__/go/src/github.com/jordigilh/kubernaut</string>
+        <string>__HOME__/.hindsight/watch/kubernaut</string>
         <key>ENGRAM_TRANSCRIPTS_DIR</key>
         <string>__HOME__/.cursor/projects</string>
         <key>ENGRAM_OPERATOR_DIR</key>
-        <string>__HOME__/go/src/github.com/jordigilh/kubernaut-operator</string>
+        <string>__HOME__/.hindsight/watch/kubernaut-operator</string>
         <key>ENGRAM_CONSOLE_DIR</key>
-        <string>__HOME__/go/src/github.com/jordigilh/kubernaut-console</string>
+        <string>__HOME__/.hindsight/watch/kubernaut-console</string>
         <key>ENGRAM_SCENARIOS_DIR</key>
-        <string>__HOME__/go/src/github.com/jordigilh/kubernaut-demo-scenarios</string>
+        <string>__HOME__/.hindsight/watch/kubernaut-demo-scenarios</string>
         <key>ENGRAM_ISSUES_REPOS</key>
         <string>jordigilh/kubernaut,jordigilh/kubernaut-operator,jordigilh/kubernaut-console,jordigilh/kubernaut-demo-scenarios</string>
         <key>HINDSIGHT_URL</key>

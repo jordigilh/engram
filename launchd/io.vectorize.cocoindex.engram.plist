@@ -14,8 +14,14 @@
     </array>
     <key>EnvironmentVariables</key>
     <dict>
+        <!-- Points at the read-only branch-scoped mirror from
+             watch-mirrors-config.sh, not the live dev clone -- see
+             docs/FINDINGS.md 2026-08-03. Currently a zero-cost future-proof:
+             engram is worked on via direct commits to main (no branch
+             churn today), but the mirror mechanism is generic/config-driven
+             so this is a one-line entry rather than a special case. -->
         <key>ENGRAM_REPO_DIR</key>
-        <string>__HOME__/go/src/github.com/jordigilh/engram</string>
+        <string>__HOME__/.hindsight/watch/engram</string>
         <key>HINDSIGHT_URL</key>
         <string>http://localhost:8888</string>
         <key>COCOINDEX_PG_URL</key>

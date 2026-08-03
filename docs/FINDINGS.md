@@ -2,6 +2,162 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-08-03: Runaway CocoIndex Re-ingestion From Branch-Switching Churn — Live Dev Clones Replaced With Branch-Scoped Mirrors
+
+**Context**: woke up to `kubernaut-docs` unconsolidated memory units spiking
+7,594 → 43,972 in 15 minutes, `kubernaut-issues` showing the same continuous
+churn, and `hindsight-stdout-blue.log` full of `Extract facts:` / `no
+unchanged chunks... falling back to full retain` lines — each one paying a
+real Vertex AI Sonnet consolidation call. Immediately stopped all three
+kubernaut-family/dcm/engram CocoIndex `launchd` jobs (`io.vectorize.
+cocoindex.service`, `.engram`, `.dcm`) via `launchctl bootout` to cut off new
+spend while root-causing.
+
+**Where Sonnet actually sits in the pipeline** (came up mid-investigation,
+worth recording since it shaped the fix): `cocoindex-flows.py`'s own
+`process_doc_file`/`process_issue` never call an LLM directly — they do plain
+character-based chunking (`_split_text`) and push raw text to
+`hindsight_retain()` over HTTP. Every `slow llm call` line in
+`hindsight-stdout-blue.log` is tagged `scope=consolidation,
+model=litellm/vertex_ai/claude-sonnet-4-6` — Sonnet is invoked **server-side,
+inside `hindsight-api`**, exclusively for the background consolidation worker
+that merges/dedupes/synthesizes raw retained chunks into curated
+observations and mental models. Retain-time fact extraction is a separate,
+much faster call (~3.4s for one chunk vs. 15-70s for a consolidation batch),
+consistent with a lighter model. So the cost is structural: anything that
+causes redundant re-`retain()`s of unchanged content pays for redundant
+Sonnet consolidation on top, even though CocoIndex itself never touches an
+LLM for docs/issues.
+
+**Root cause — traced via exact file-count matching, not inference.** Found
+`docs/architecture/decisions/DD-AUDIT-003-...md` had an mtime of 06:15 AM
+today despite `git status` being clean and the last real commit dated
+2026-08-02 20:16 — the file's *content* hadn't changed, only its mtime.
+`find docs -name "*.md" -newermt "06:00" ! -newermt "06:30" | wc -l` returned
+**135** — the exact same count as the "falling back to full retain" events
+logged in that window. `git reflog` for the live kubernaut clone showed why:
+
+```
+06:15:41 checkout: moving from fix/1861-vertex-ai-explicit-credentials to main
+06:15:42 pull origin main --quiet: Fast-forward
+06:18:44 checkout: moving from main to fix/1869-sre-persona-approval-visibility-rbac
+06:20:19 commit: fix(apifrontend): ... (#1869)
+```
+
+Routine automated branch-switching (PR work) touches the mtime of every file
+that differs between whichever two branches were involved in each checkout —
+`cocoindex-flows.py`'s `docs_app`/`code_app` used
+`localfs.walk_dir(..., live=True)` pointed directly at the **live, actively
+branch-switched dev clones** (`~/go/src/github.com/jordigilh/kubernaut`,
+`-operator`, `-console`, `-demo-scenarios`, `-docs`). CocoIndex correctly
+detected the touched mtimes as "changed" and reprocessed them, but the delta
+was branch-switching noise, not real content evolution — a `strategy:
+"exact"` no-op-if-unchanged flag in `hindsight_retain()` calls was also
+silently never registered in `hindsight-api`'s config, so every one of these
+resubmissions fell all the way through to a full delta-diff and, per the
+`no unchanged chunks` log line, `hindsight-api`'s own diff also failed to
+recognize the resubmitted content as identical.
+
+**Fix — stop watching the live checkout entirely, watch dedicated
+branch-scoped mirrors instead.** Checked `cocoindex/connectors/` first: no
+native git-ref source exists, only `localfs`/`postgres`/`surrealdb`. So the
+fix is at the git level, not CocoIndex's:
+
+- `watch-mirrors-config.sh` — single source of truth, a `name|live_clone|
+  branch|mirror_path` array. 6 entries: `kubernaut`, `kubernaut-operator`,
+  `kubernaut-console`, `kubernaut-demo-scenarios`, `kubernaut-docs` (all
+  `main` — `release/v1.5` was considered and explicitly dropped: it's
+  diverged enough that `main` is now authoritative, and other repos' release
+  branches are already covered via issue tracking), plus `engram` itself.
+- `watch-mirrors-lib.sh` — `ensure_mirror()`: `git fetch origin <branch>`,
+  then either `git worktree add --detach <mirror_path> origin/<branch>`
+  (first run) or `git -C <mirror_path> reset --hard origin/<branch>`
+  (subsequent runs). Sourced by both `setup-watch-mirrors.sh` (one-time
+  bootstrap) and `refresh-watch-mirrors.sh` (periodic sync, new
+  `io.vectorize.cocoindex.watch-sync.plist`, every 600s) so they can't drift
+  apart.
+- **Why `reset --hard` on a single branch actually fixes the "unknown
+  delta" problem, not just relocates it**: `git checkout` between two
+  *divergent* branches touches the mtime of every file that differs between
+  them — which can be huge and has nothing to do with real content
+  evolution. `git reset --hard` moving *forward along one branch's linear
+  history* only rewrites the mtime of files whose blob actually changed in
+  the new commits. Watching mirrors that only ever fast-forward `main` turns
+  "file changed" back into a real, trustworthy content signal, by
+  construction — no CocoIndex-side patching needed.
+- `ENGRAM_DOCS_DIR`/`ENGRAM_CODE_DIR`/`ENGRAM_OPERATOR_DIR`/
+  `ENGRAM_CONSOLE_DIR`/`ENGRAM_SCENARIOS_DIR` (in `io.vectorize.cocoindex.
+  service.plist`) and `ENGRAM_REPO_DIR` (in `io.vectorize.cocoindex.
+  engram.plist`) now point at `~/.hindsight/watch/<repo>` instead of the
+  live clones — and the same paths were made the *default* fallback in
+  `cocoindex-flows.py`/`engram-cocoindex-flows.py` (previously only the
+  plists overrode the unsafe live-clone defaults; a manual `python3
+  cocoindex-flows.py` invocation would have silently used them).
+- `code_app` was brought into the same fix, not just `docs_app`, despite
+  costing no LLM calls: `code_embeddings` turned out to have zero true
+  duplicate `(filepath, chunk_index)` rows (real primary key, clean
+  upserts — the largest per-file chunk counts, e.g. 1,919 for
+  `oas_json_gen.go`, are legitimate: that generated file is 1.29MB/50,534
+  lines, verified against the live checkout), so the risk there was never
+  storage bloat — it was `engram_code_search` relevance silently drifting
+  toward whichever feature branch happened to be checked out at the last
+  reprocessing, not "current main."
+- **`engram` itself was triaged, not just assumed safe** because it's
+  smaller: `engram-cocoindex-flows.py` has the structurally identical
+  `walk_dir(ENGRAM_REPO_DIR, live=True)` pattern. It shows zero symptom
+  today only because its `git reflog` has zero branch checkouts (`commit:`/
+  `reset:`/`commit (amend)` only — engram is worked on via direct commits to
+  `main`) and zero `falling back to full retain` occurrences in its logs.
+  That safety is behavioral, not architectural, and will evaporate the
+  moment engram's own workflow adopts feature branches — so it was added to
+  `watch-mirrors-config.sh` now, as a zero-cost future-proof, rather than
+  deferred.
+- **Verified the actual fix, not just the restart**: after redeploying,
+  checked out `main` and back to the original feature branch in the *live*
+  kubernaut clone (the exact churn pattern that caused this morning's
+  incident) and confirmed zero new `docs_app`/`code_app` activity in
+  `cocoindex-stderr.log` — only the unrelated scheduled issues-poll. The
+  mirror at `~/.hindsight/watch/kubernaut` never moved.
+
+**Database size, measured directly (not guessed) — confirms months of this
+churn already landed in the corpus.** Hindsight's own tables total **~9.2GB**:
+`memory_links` 6534MB (dominant — relationship/co-occurrence edges scale with
+every duplicate memory unit, compounding faster than linear), `memory_units`
+2032MB, `llm_requests` 220MB, `unit_entities` 142MB, `documents` 131MB,
+`chunks` 119MB, `entity_cooccurrences` 72MB. `kubernaut-docs`: 142,178 memory
+units for only 40,406 distinct `document_id`s (~3.5x redundancy).
+`kubernaut-issues`: 60,762 units for 15,226 distinct `document_id`s (~4x).
+Note `kubernaut-issues`' redundancy has a **different, still-open** root
+cause than docs: `issues_app` polls the GitHub API every 300s, never touches
+local filesystem state, so it was never subject to the branch-churn bug
+above — its `process_issue` is already `@coco.fn(memo=True)`, so the
+redundancy most likely comes from `hindsight-api`'s same broken
+"no-unchanged-chunks → full retain" fallback firing on *genuinely* updated
+issues/PRs (new comments, label/state changes) over the weeks this pipeline
+has run, not from CocoIndex resubmitting identical content. The mirror fix
+does not address this — flagged as a follow-up (registering a real `"exact"`
+strategy in `hindsight-api`, or fixing its delta-diff, would).
+
+**Cleanup scheduled off-hours, not run immediately.** Clearing
+`kubernaut-docs`/`kubernaut-issues` (`DELETE /v1/default/banks/{bank_id}/
+memories` — confirmed via `hindsight-api`'s own OpenAPI spec, backs
+`clear_memories`) does *not* by itself cause CocoIndex to resubmit anything:
+`@coco.fn(memo=True)` memoization in `cocoindex.db` tracks "already
+processed" independently of `hindsight-api`'s state, so a cleared bank stays
+empty until `cocoindex.db` is also reset. That's safe for `code_app`
+(idempotent `pgvector` upserts) and `transcript_app` (protected by its own
+separate watermark file, see 2026-07-31 entry — unaffected by resetting
+`cocoindex.db`), but for `docs`/`issues` a real reset means re-extracting
+~55K documents from scratch, which empties both banks for the duration
+(potentially hours) — and both are on kubernaut's *mandatory* recall list.
+Rather than run this mid-morning, wrote `cleanup-kubernaut-docs-issues.sh`
+(stop the service, clear both banks, back up and reset `cocoindex.db`, run
+`cocoindex-flows.py --mode backfill --apps docs issues`, restart the
+service) and scheduled it via a new one-shot `io.vectorize.cocoindex.
+cleanup-once.plist` (`StartCalendarInterval` 3:00 AM) that self-removes
+(`launchctl bootout` + `rm` its own plist) after running once, so it never
+fires a second night.
+
 ## 2026-08-02: Zero-Downtime Blue/Green Restart for `hindsight-api` — And a Real Connection-Leak Bug Found Along the Way
 
 **Context**: direct follow-up to 2026-07-07's "Cursor shows the MCP as down

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.vectorize.hindsight.proxy</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.hindsight/venv/bin/python3</string>
+        <string>__HOME__/.hindsight/hindsight-proxy.py</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- This is the ONLY process that ever binds port 8888. It is
+             intentionally never touched by io.vectorize.hindsight.restart --
+             that's the entire point (see hindsight-proxy.py's docstring and
+             docs/FINDINGS.md 2026-08-02). No LLM/DB config needed, so unlike
+             the hindsight-api service plists this does not source
+             config.env via with-config-env.sh. -->
+        <key>PATH</key>
+        <string>__HOME__/.hindsight/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.hindsight/logs/hindsight-proxy-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.hindsight/logs/hindsight-proxy-stderr.log</string>
+</dict>
+</plist>

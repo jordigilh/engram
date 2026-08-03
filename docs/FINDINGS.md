@@ -2,6 +2,404 @@
 
 Historical record of empirical findings from running Engram in production.
 
+## 2026-08-02: Zero-Downtime Blue/Green Restart for `hindsight-api` — And a Real Connection-Leak Bug Found Along the Way
+
+**Context**: direct follow-up to 2026-07-07's "Cursor shows the MCP as down
+every morning" (not fully solved) and the intervening work to move the
+nightly restart from a stale-cached 3pm/2pm trigger to a clean 1am
+(`UserEventAgent` was holding a stale calendar-trigger cache; killing and
+letting it respawn fixed the schedule itself — separate from this entry).
+Fixing *when* the restart happens didn't fix the actual complaint: whenever
+it fires, Cursor's HTTP MCP client to `hindsight`/`hindsight-docs`/
+`hindsight-issues` (all served by the same `hindsight-api` process on
+`:8888`) drops and never auto-retries, staying disabled until a manual
+reload — regardless of the hour. Before building anything, checked whether
+the restart was even still *necessary* at the current heap level: 11h into
+that day's uptime, RSS was 410MB (vs. the 17GB crisis and even the 1GB
+post-fix baseline from 2026-06-26) — strong evidence the GPU/pool-size fixes
+from that entry already did the heavy lifting and the *blind daily* restart
+is overkill most days. User's call: keep the schedule as-is, but make the
+restart's *impact* zero instead of reducing its frequency.
+
+**Fix, part 1 — architecture**: `hindsight-api` no longer binds `:8888`
+directly. It now runs as a **blue/green pair** (`io.vectorize.hindsight.
+service-{blue,green}.plist`, internal ports 18888/18889, exactly one loaded
+at a time) behind `hindsight-proxy.py` — a ~90-line stdlib-only asyncio TCP
+proxy that is the *only* thing that ever binds `:8888` and is never touched
+by the restart job. `hindsight-blue-green-restart.sh` (invoked by
+`io.vectorize.hindsight.restart.plist` in place of the old `pkill -f
+hindsight-api`) does a real make-before-break swap: start a fresh instance
+on the standby color, wait for it to pass a readiness gate, flip the proxy's
+active-backend state file (`~/.hindsight/state/active-backend.port`, re-read
+per new TCP connection), drain the old instance for 10s, tear it down. Port
+8888 never refuses a connection at any point.
+
+**Fix, part 2 — the readiness gate had to be stricter than "`/health` says
+200"**: first live test looked broken — port 8888 (and the backend
+*directly*, bypassing the proxy entirely) went fully unresponsive for
+60-70s, well after the swap script had already declared victory and moved
+on. Root cause was **not** the proxy: `hindsight-api` passes `/health`
+almost immediately on startup, then its in-process worker claims a startup
+burst of recovered/pending tasks up to `HINDSIGHT_API_WORKER_MAX_SLOTS`
+(default 10) — and because no `HINDSIGHT_API_READ_DATABASE_URL` is
+configured (single embedded Postgres, no read replica), there is only **one**
+shared DB connection pool for everything: worker tasks *and* HTTP-serving
+recall/health requests. A worker claiming its full default of 10 tasks
+against a pool sized 10 (the 2026-06-26 fix) can claim every connection,
+starving incoming HTTP requests until a task completes. `/health` itself
+is cheap enough to occasionally slip through fast, which is why a single
+200 wasn't a reliable readiness signal. **Fix**: the swap script now
+requires 5 *consecutive* checks that both succeed and complete within 2s
+before declaring the standby ready (`HEALTH_TIMEOUT_S` raised 90→180s to
+give this room) — a slow/queued check resets the counter to zero.
+
+**Fix, part 3 — tuned the actual contention source**: bumped
+`HINDSIGHT_API_DB_POOL_MAX_SIZE` 10→15 and added
+`HINDSIGHT_API_WORKER_MAX_SLOTS=5` (previously unset, defaulting to 10) to
+`config.env`/`config.env.example`. 15 was picked deliberately over reverting
+to upstream's default of 100 — that default was directly responsible for
+6.6GB of the original 17GB heap leak (2026-06-26), and this repo already
+has a documented instance of "restore the old default" being the wrong
+instinct for this exact setting. 5 worker slots leaves ≥10 of 15 connections
+free for HTTP even at the worker's own claimed maximum. Confirmed via the
+worker's own `[WORKER_STATS]` log line before/after: `slots=10/10 ...
+pool: size=10 ... pending_acquires=37` (saturated) →
+`slots=5/5 ... pool: size=15 ... pending_acquires=0` (headroom) on a fresh
+restart under equivalent load.
+
+**Bug found along the way (candidate for upstream report, alongside the
+still-open #2529/#2534 from 2026-07-02/07-07)**: a Postgres backend was
+found `idle in transaction` for **19+ minutes**, permanently pinning one
+pool slot until the owning `hindsight-api` process was killed. Traced to a
+`graph_maintenance` task that failed with an `asyncpg` `TimeoutError`
+(`claim_graph_maintenance_batch` → `conn.fetch` → `bind_execute`) — the
+failure path did not roll back or release the connection. Each occurrence
+permanently shrinks the *effective* pool size until the process restarts,
+compounding any contention rather than just being a one-off slow query. Not
+yet filed upstream; worth reproducing in isolation and reporting if it
+recurs outside of artificially heavy load (see next finding for how it was
+triggered here).
+
+**Methodology lesson — the first "outage" during testing was self-inflicted,
+and it briefly looked exactly like a production bug.** Verifying the swap
+with a tight-loop curl monitor (sub-second spacing, dozens of requests in
+under two minutes, one run's monitor still finishing while the next test
+already started) drove `pending_acquires` far higher than any plausible
+real Cursor traffic pattern would, and combined with the connection-leak bug
+above to produce a genuine multi-minute full outage — which was easy to
+mis-read as "the proxy is broken" before checking `pg_stat_activity`
+directly. Switching to *gently paced* verification (single requests, 2-3s
+apart, one test run allowed to fully settle before starting the next) both
+reproduced the real, worth-fixing readiness-gate gap **and** cleanly
+confirmed zero downtime once the fixes above were in place — 135s of
+3s-spaced health checks spanning an entire live swap, zero failures.
+
+**Docs updated**: `docs/README.md` (architecture diagram + components
+table), `docs/INSTALL.md` (install steps 5/troubleshooting/upgrading/
+uninstall), `docs/COCOINDEX.md` (restart command in its pg0 troubleshooting
+section) — all previous single-`io.vectorize.hindsight.service.plist`
+references replaced with the blue/green + proxy equivalents.
+
+**Takeaways**:
+- **A liveness/health check answering fast on its own is not the same
+  question as "can this instance absorb real traffic right now."** A
+  process can be honestly healthy (DB reachable, app initialized) and still
+  be functionally saturated moments later by its *own* background work
+  competing for the same finite resource (here: one DB connection pool
+  shared between a startup task-claim burst and user-facing requests, with
+  no read/write pool separation configured). Readiness gates for any
+  make-before-break swap need to probe for sustained responsiveness, not a
+  single passing check.
+- **When a fix moved a setting away from a vendor default for a documented
+  reason (here: pool size, to fix a heap leak), don't casually 10x it back
+  toward that default to solve a new, different problem.** Re-derive a
+  number from the *current* evidence (the worker's own claimed-task ceiling)
+  instead — got the contention relief without reintroducing the leak.
+- **Synthetic load-testing a shared, stateful backend without deliberate
+  recovery time between runs can manufacture an outage that looks identical
+  to a real one.** Always check the datastore's own session/lock view
+  (`pg_stat_activity` here) before concluding a symptom is in the layer
+  you're actively testing (the proxy) rather than a downstream one.
+- **A repeated, silently-inconsistent test harness (interrupting a
+  multi-step script mid-flight) can leave *its own* infrastructure in a
+  half-migrated state** — an interrupted swap attempt left a bootstrapped
+  standby instance behind that caused an unrelated-looking `launchctl
+  bootstrap` `Input/output error` on the next attempt. Worth explicitly
+  reconciling to a known-clean state after any interrupted test, not just
+  retrying.
+
+> **Follow-up idea (not yet acted on)**: this file is now 55 dated entries /
+> ~4,000 lines spanning 2026-06-11 to today, all in one ever-growing
+> markdown file. Worth revisiting the format at some point — e.g. a
+> daily/weekly-log split (one file per period, this file becoming an index
+> or just the most recent window) instead of a single flat append-only
+> document — so it doesn't keep growing indefinitely and cost more
+> tokens/attention to search or recall from than it needs to. No action
+> taken yet; flagging so the idea isn't lost.
+
+---
+
+## 2026-07-31 (same day, fifth follow-up): Cost-Estimated the Full `koku-issues` Backfill Before Running It — Found a Real `jira-cli` Pagination Bug and a 60%-Wasteful Chunk Size Along the Way
+
+**Context**: direct follow-up to the Jira correction below. Before running
+the full historical `koku-issues` backfill (~13k items), asked for a cost
+estimate first rather than just launching it — consistent with the
+measure-before-committing pattern from #7's closure.
+
+**Bug found: `jira-cli`'s `--paginate` is broken at this project's scale.**
+`jira issue list --raw --paginate <offset>:100` (with or without
+`--order-by key`) silently returned the same page over and over past a few
+thousand records — my dedup-safety-net logging caught it fetching "new"
+pages up to offset 26,900+ against a project Jira's own
+`/rest/api/3/search/approximate-count` endpoint reports as exactly **7,793**
+issues. This is a jira-cli limitation against Jira Cloud's newer
+token-cursor-only `/search/jql` endpoint (classic `startAt`/limit offset
+pagination doesn't map onto it correctly once `--order-by` engages a
+different code path, and even the default order isn't stable enough at this
+size). Not fixable via JQL tweaks. **Fix**: `_fetch_all_jira_issues()` now
+calls `POST /rest/api/3/search/jql` directly via `urllib`, using its real
+`nextPageToken`/`isLast` contract and reusing the same macOS-Keychain-sourced
+token the `jira` CLI itself uses (`_jira_token()`, replacing the abandoned
+`_jira_env()` subprocess-env-injection approach — no `jira` binary/subprocess
+call needed at all anymore for issue fetching). Verified against the full,
+real dataset: exactly 7,793 unique keys, zero duplicates, 48 seconds.
+
+**Cost estimate, calibrated from real measured data**: retain() cost is
+dominated by a large **fixed per-call overhead** (~3,550 input tokens
+regardless of content — measured from 3 real retains against near-empty
+tickets: 187-196 chars of content all cost ~3,598 input tokens), not content
+volume. Combined with `HINDSIGHT_API_RETAIN_LLM_MODEL=claude-haiku-4-5` at
+$1/$5 per M input/output tokens (Vertex AI, global endpoint):
+
+| | items | calls @ chunk_size=1200 (docs-app-inherited default) | cost @ 1200 | calls @ chunk_size=12000 | cost @ 12000 |
+|---|---|---|---|---|---|
+| Jira COST | 7,793 | 15,217 | $77.66 | 7,811 | $40.85 |
+| GitHub PRs | 5,345 | 20,647 | $106.19 | 5,953 | $33.14 |
+| **Total** | **13,138** | **35,864** | **$183.85** | **13,764** | **$73.98** |
+
+**Real finding, not just an estimate: the 1,200-char chunk size (copied from
+the docs/code apps' embedding-chunking convention) makes no sense for
+`koku-issues`.** `process_jira_issue`/`process_pr` call `hindsight_retain()`
+directly — pure LLM extraction, no embedding index — so a smaller chunk only
+multiplies the ~3,550-token fixed overhead for zero retrieval benefit.
+Bumped both to `chunk_size=12000, chunk_overlap=500` (Haiku 4.5's 200K
+context makes this trivially safe): ~60% cheaper ($183.85 → $73.98), and
+fewer/larger chunks are if anything *better* for extraction quality (less
+artificial mid-thought fragmentation). `process_doc_file` (the `koku-docs`
+app, chunk_size=800) has the same theoretical issue, but wasn't touched here
+— its corpus is far smaller (hundreds of files vs. 13k), the cost delta is
+correspondingly minor, and a docs backfill was already in progress under the
+old value when this was found; left as a candidate for a future pass.
+
+**Decision**: chunk-size fix applied now; the full backfill itself
+(~$74 estimated at the fixed chunk size) was **deliberately deferred** —
+holding off until a later session rather than running it opportunistically
+just because the cost is now known and modest.
+
+**Context**: during the "verify" step of the koku onboarding (previous entry
+below), the user pointed out that koku's issues/docs of record live in a Jira
+project named `COST` in the Red Hat Jira org, reachable via the `jira` CLI —
+not GitHub Issues. This is confirmed by koku's own README, which links
+`https://issues.redhat.com/projects/COST/` as the place to file bugs. The
+`koku-issues` CocoIndex app as originally built (previous entry, line "GitHub
+issues/PRs from `project-koku/koku` via `gh`") would have ingested a
+near-empty GitHub Issues tracker and missed the actual ~8,000-ticket backlog
+entirely.
+
+**Fix — `koku-cocoindex-flows.py`'s `koku-issues` app now pulls from two
+sources**:
+- **GitHub PRs only** (renamed `_fetch_all_issues` → `_fetch_all_prs`,
+  `KOKU_ISSUES_REPOS` → `KOKU_PR_REPOS`) — code review discussion still
+  happens on GitHub even though ticket tracking doesn't, so PRs remain worth
+  ingesting from `project-koku/koku`.
+- **Jira project `COST`** (new: `KOKU_JIRA_PROJECT`, default `"COST"`) via the
+  `jira` CLI (`ankitpokhrel/jira-cli` v1.7.0, already configured on this
+  machine at `~/.config/.jira/cloud-config.yml` with the project defaulting
+  to COST).
+
+**Gotcha #1 — `jira` is a zsh function, not a binary, when called
+interactively**: the shell alias is
+`` jira() { JIRA_AUTH_TYPE=basic JIRA_API_TOKEN=$(security find-generic-password -a jira-cli -s jira-cloud-api-token -w) command jira -c ~/.config/.jira/cloud-config.yml "$@"; } ``.
+`subprocess.run(["jira", ...])` bypasses shell functions entirely and calls
+the real `/opt/homebrew/bin/jira` binary directly — with none of that env
+injection. First attempt failed outright: `"The tool needs a Jira API token
+to function."` Fix: added `_jira_env()`, which replicates the function's
+Keychain lookup (`security find-generic-password -a jira-cli -s
+jira-cloud-api-token -w`) and passes `-c cloud-config.yml` explicitly, so the
+pipeline calls the plain binary the same way the interactive shell does.
+
+**Gotcha #2 — Jira descriptions/comments are Atlassian Document Format
+(ADF), not plain text/Markdown**: unlike GitHub's `body` field (plain
+Markdown string), Jira's `--raw` JSON returns `description` and each
+`comment.body` as a nested ADF node tree (`{"type": "paragraph", "content":
+[{"type": "text", "text": "..."}]}`, plus `mention`, `hardBreak`, `rule`,
+`codeBlock`, etc.). Added a small recursive `_adf_to_text()` flattener
+(good enough for search/retain, not a full renderer) rather than pulling in
+a dependency for it.
+
+**Bonus finding — `jira issue list --raw` already includes full description
++ comments per page**, unlike `gh issue list`'s need for a separate
+per-issue fetch for some fields: one paginated call (`--paginate
+<offset>:100`) returns everything needed, avoiding an N+1 fetch pattern
+(`jira issue view <key>` would have required one CLI invocation per ticket
+for ~8,000 tickets).
+
+**Validation**: fetched real COST tickets, flattened ADF to readable text
+(spot-checked `COST-7999`, a CVE security-tracking ticket with a "Do not
+make this issue public" embargo notice — Engram does not do embargo-aware
+filtering for Jira any more than it already does for private GitHub issues;
+this is a local, single-developer, already-authorized bank, same trust
+boundary as the rest of the pipeline), then ran 3 real tickets
+(`COST-8007/8008/8009`) through the actual `hindsight_retain()` call against
+the live `koku-issues` bank — all 3 succeeded with real Vertex AI
+extraction, and a `recall()` for "Extended Data Retention test coverage"
+correctly surfaced all 3 by content, confirming the full
+fetch→format→retain→recall path end-to-end before committing to a full
+~8,000-ticket backfill (which will take hours and a modest but real Vertex
+AI token cost — deferred to run via the scheduled continuous CocoIndex job
+rather than forced synchronously in this session, consistent with "quality
+over quantity, measure before building" per the #7 closure).
+
+**Not changed**: `nightly-learn.py`/`report.py`'s `issues_repos:
+["project-koku/koku"]` still reflects GitHub-PR-only counts for the
+ingestion-coverage metric — it does not yet also query Jira for a
+tracker-aware total. Acceptable gap for now; the coverage number will simply
+undercount relative to "everything in `koku-issues`" until/unless that
+metric is made Jira-aware too.
+
+## 2026-07-31 (same day, third follow-up): Onboarded `project-koku/koku` (Python/Django) — Full-Variant Pattern + Serena as a `gopls`-Equivalent
+
+**Context**: direct follow-up to the earlier same-day Serena investigation
+(comparing it to `gopls` and to Hindsight's own memory model). User asked to
+onboard `project-koku/koku` onto Engram with its own memory banks, and to set
+up Serena for it "in a similar fashion to gopls in kubernaut." This is the
+first *Python* project onboarded (kubernaut/dcm are Go, engram is Python but
+self-hosts the tooling) and the first to combine full Engram onboarding with
+a from-day-one Serena config.
+
+**Scope decisions (confirmed with user before implementing)**:
+- `issues_repos`: `project-koku/koku` only, not the other ~29 active repos in
+  the `project-koku` GitHub org (koku-ui, nise, koku-metrics-operator,
+  cost-mgmt-team-docs, enhancements, ...). Trivial to extend later.
+- `workspace_prefixes` / `project_scope.py`'s `PROJECT_LABEL_BY_PREFIX`: **two**
+  prefixes onboarded, not one — `Users-jgil-go-src-github-com-project-koku`
+  (the current checkout) and `Users-jgil-go-src-github-com-insights-onprem-koku`
+  (older sessions, e.g. COST-7249 work, at a differently-named local path).
+  Both point at the same fork (`jordigilh/koku`, upstream `project-koku/koku`
+  confirmed via `git remote -v`). The insights-onprem-prefixed sessions
+  predate this allowlist entirely and were previously swept into
+  `cursor-memory` as unfiltered, unlabeled pollution (see
+  `project_scope.py`'s own docstring, which calls out "koku/insights-onprem"
+  by name as one of the repos that motivated building the allowlist in the
+  first place). Onboarding both prefixes recovers that history under a real
+  `koku` label going forward instead of leaving it invisible.
+
+**What was built** (full variant per `docs/NEW_PROJECT_SETUP.md`, not the
+tag-scoped variant — koku is a wholly separate project, not a sub-repo of an
+already-onboarded one):
+- Hindsight banks `koku-docs` / `koku-issues`, plus 8 mental models: 2 on
+  `koku-docs` (`koku-architecture`, `koku-operations`), 2 on `koku-issues`
+  (`active-priorities`, `known-bugs`), and 4 tag-isolated (`tags: ["koku"]`,
+  strict) siblings on the shared `cursor-memory` bank
+  (`koku-coding-conventions`, `koku-testing-methodology`,
+  `koku-workflow-preferences`, `koku-architecture-decisions`) — applied from
+  day one rather than retrofitted later, since the 2026-07-27
+  kubernaut/dcm/engram tag-pollution fix is now the established pattern for
+  any new project.
+- `koku-cocoindex-flows.py` / `koku-cocoindex-search.py` (new files,
+  symlinked into `~/.hindsight/`): three CocoIndex apps — `koku-docs` (the
+  repo's own `docs/**/*.md` plus `README.md`/`CONTRIBUTING.md`/`AGENTS.md`),
+  `koku-issues` (GitHub issues/PRs from `project-koku/koku` via `gh`),
+  `koku-code` (`**/*.py`, excluding `migrations/`, `tests/`, venvs → pgvector
+  `cocoindex.koku_code_embeddings`, same dense+BM25+RRF hybrid search as the
+  other projects' code tables).
+- **Deviation from the DCM copy-paste template**: `dcm-cocoindex-flows.py`
+  registers `coco.ContextKey("pg_pool")` — the literal generic name that
+  `docs/NEW_PROJECT_SETUP.md`'s own "Gotcha" section warns against, because it
+  collides with the name the main `cocoindex-flows.py` already registers
+  (CocoIndex `ContextKey`s are process-global; a second registration of the
+  same name raises `ValueError` if both flow files ever load into one
+  process, e.g. pytest collection). This is a real latent bug already
+  present in `dcm-cocoindex-flows.py` today — not fixed here (out of scope
+  for this task) but `koku-cocoindex-flows.py` was written using
+  `coco.ContextKey("koku_repo_pg_pool")` per the guide's own documented
+  convention instead of copying DCM's mistake.
+- `launchd/io.vectorize.cocoindex.koku.plist`: modeled on
+  `io.vectorize.cocoindex.engram.plist` (continuous `--mode live`,
+  `KeepAlive`, env vars in-plist), **not** `io.vectorize.cocoindex.dcm.plist`.
+  DCM's plist actually runs a once-nightly `dcm-nightly-ingest.sh` wrapper
+  that shallow-clones all 12 DCM repos fresh into `/tmp` before each backfill
+  — a design forced by DCM not having persistent local checkouts of every
+  sub-repo. Koku (like engram) has one stable, persistent local checkout, so
+  the continuous-live-mode pattern is the correct fit, not DCM's
+  clone-and-backfill one. This was only discovered by reading
+  `dcm-nightly-ingest.sh` directly; the plist file alone would have been
+  misleading as a template.
+- `launchd/io.vectorize.hindsight.nightly-koku.plist`: `nightly-learn.py
+  --mode nightly --project koku` at 03:00 (kubernaut=02:00, dcm=02:30). No new
+  hourly plist: `run_hourly()` takes no `project` param — it's the shared,
+  unfiltered retain pipeline across every `project_scope.py`-allowed
+  workspace, so the existing single hourly plist picks up koku transcripts
+  automatically once its prefixes are allow-listed.
+- `PROJECT_CONFIGS["koku"]` added to both `nightly-learn.py` and `report.py`
+  (banks, mental_models, probes, recall_banks, code_bank, log_suffix,
+  workspace_prefixes, issues_repos); `--project` choices in `report.py`
+  extended to include `koku`; `koku_code_embeddings` added to the code-chunk
+  count table list.
+- `project_scope.py`'s `PROJECT_LABEL_BY_PREFIX` extended with both koku
+  prefixes. This is a genuine behavior change: `insights-onprem-koku*`
+  transcripts flip from "swept/rejected" to "allowed, labeled koku" — fixed 6
+  pre-existing tests across `tests/test_project_scope.py`,
+  `tests/test_nightly_learn.py`, `tests/test_cocoindex_flows.py`, and
+  `tests/test_backfill_memory_tags.py` that had hardcoded
+  `insights-onprem-koku` as their canonical "out of scope" fixture example
+  (swapped to a neutral `someorg-unrelated-repo` placeholder instead). Full
+  suite after the change: 261 passed, 0 new failures (47 pre-existing
+  `ModuleNotFoundError: cocoindex` collection errors in
+  `test_cocoindex_flows.py`/`test_engram_cocoindex_flows.py`/
+  `test_review_contradictions.py`, unrelated to this work — same known
+  environment gap documented in earlier entries).
+- `cursor/koku-hindsight-memory.mdc` (canonical) deployed as
+  `.cursor/rules/hindsight-memory.mdc` in all three local koku checkouts
+  (`project-koku/koku`, `insights-onprem/koku`,
+  `insights-onprem/koku-pr5933/koku` — all three are the same fork/branch
+  family). Hand-authored rather than raw `generate-mdc.sh` output, same as
+  engram/operator/console: the base template
+  (`cursor/hindsight-memory.mdc.tmpl`) predates the 2026-07-27 tag-isolation
+  gate, so DCM's actual deployed rule (used as the structural reference) is
+  itself hand-edited beyond the template. Registered in
+  `check-rule-sync.py`'s `RULE_PAIRS["koku"]` (primary checkout only — the
+  other two get the same content copied manually, not worth a `RULE_PAIRS`
+  entry each since they're the same repo/fork, not independent). The "Go
+  code: three-tier" section was replaced with a "Python code: three-tier"
+  section naming Serena (Pyright-backed) instead of `gopls`, including an
+  explicit caveat about koku's uneven type-hint coverage and heavy
+  Celery/Django-signal use limiting Serena's static-analysis value there
+  (validated empirically earlier the same day via `serena project
+  health-check`).
+- `.cursor/mcp.json` created in all three koku checkouts: same canonical
+  server names as kubernaut/dcm (`hindsight-docs`, `hindsight-issues`,
+  `cocoindex-code`) pointing at koku-specific backends, plus a `serena` entry
+  (Pyright default backend for Python, `--add-mode no-memories` to avoid
+  duplicating Hindsight's own memory system, `--open-web-dashboard false`).
+  No `gopls` entry — koku is Python. Confirmed gitignored by each repo's
+  pre-existing `.cursor/*` (except `rules/`, `commands/`) pattern, so this
+  stays local-only like the other projects' MCP configs.
+- `.serena/` added to `.gitignore` in all three koku checkouts (same
+  provisional wording used for kubernaut's identical change: "Serena MCP
+  trial (project config/cache/logs; not yet a team decision)"). Side note:
+  `insights-onprem/koku-pr5933/koku`'s working tree was missing `.gitignore`
+  entirely despite `git status` reporting a clean tree and `git show
+  HEAD:.gitignore` returning real content — a pre-existing checkout anomaly
+  on that tertiary path, unrelated to this task. Restored the file from
+  `HEAD` before appending, rather than investigating the underlying cause.
+
+**What's still pending** (not done as part of this task, tracked in
+"pending" state): running an actual CocoIndex backfill against koku's `docs/`
++ code + issues (banks/mental models exist but are empty until ingestion
+runs), and verifying `serena project health-check` + the new MCP servers
+inside a live Cursor session against `project-koku/koku`.
+
 ## 2026-07-31 (same day, second follow-up): Fixed the Underlying Waste Flagged Above — `cocoindex-flows.py`'s Transcript Flow Now Has a Watermark
 
 **Context**: direct follow-up to the "What this doesn't fix" section of the

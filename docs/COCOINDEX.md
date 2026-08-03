@@ -231,8 +231,9 @@ Hindsight recall and CocoIndex ingestion fail.
 launchctl list | grep hindsight
 curl -s http://localhost:8888/health
 
-# Restart if needed
-launchctl kickstart -k gui/$(id -u)/io.vectorize.hindsight.service
+# Restart if needed (force a health-checked blue/green swap, not a raw kill --
+# see docs/FINDINGS.md 2026-08-02 for why this matters)
+~/.hindsight/hindsight-blue-green-restart.sh
 ```
 
 ### Embedding model mismatch

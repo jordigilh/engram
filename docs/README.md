@@ -79,7 +79,8 @@ graph TB
     end
 
     subgraph engram["Hindsight (native macOS :8888)"]
-        api["FastAPI server"]
+        proxy["hindsight-proxy.py (:8888, never restarts)"]
+        api["FastAPI server (blue/green, internal :18888/:18889)"]
         pg["Embedded Postgres (pg0)"]
         emb["MPS/ONNX embeddings"]
         rerank["Local reranker"]
@@ -97,25 +98,30 @@ graph TB
     end
 
     subgraph launchd["launchd (service manager)"]
-        svc["service.plist (KeepAlive)"]
+        proxy_plist["proxy.plist (KeepAlive, never restarted)"]
+        svc["service-blue/green.plist (KeepAlive)"]
+        restart_plist["restart.plist (1 AM, blue/green swap)"]
         nightly_plist["nightly.plist (2 AM)"]
         coco_plist["cocoindex.plist (KeepAlive)"]
     end
 
-    cursor -->|"MCP HTTP ×3 banks"| api
+    cursor -->|"MCP HTTP ×3 banks"| proxy
     cursor -->|"hybrid code search"| coco_search
+    proxy -->|"active color, re-read per connection"| api
     api --> pg
     api --> emb
     api --> rerank
     litellm -->|"retain / reflect"| vertex
+    proxy_plist --> proxy
     svc --> api
+    restart_plist -->|"health-checked swap, never 8888 downtime"| svc
     nightly_plist --> nightly_script["nightly-learn.py"]
     coco_plist --> coco_flows
     nightly_script --> api
     coco_flows --> pg
     coco_flows -->|"retain API"| api
     coco_search --> pg
-```
+    ```
 
 ### Components
 
@@ -138,7 +144,9 @@ graph TB
 | MCP hook | `cursor/hooks.json` + `hooks/log-mcp-calls.sh` | Real-time MCP call logging with hit/miss |
 | CocoIndex flows | `cocoindex-flows.py` (symlinked to `~/.hindsight/`) | Incremental ingestion for docs, issues, code, transcripts |
 | Code search | `cocoindex-search.py` | MCP hybrid code search (dense + BM25 via RRF fusion) |
-| Service plist | `~/Library/LaunchAgents/io.vectorize.hindsight.service.plist` | KeepAlive + RunAtLoad |
+| Proxy | `hindsight-proxy.py` (symlinked to `~/.hindsight/`) | Sole owner of port 8888; never restarts, so Cursor's MCP connection never drops |
+| Service plists | `~/Library/LaunchAgents/io.vectorize.hindsight.service-{blue,green}.plist` | KeepAlive + RunAtLoad; exactly one active at a time, bound to an internal port (18888/18889) |
+| Restart plist | `~/Library/LaunchAgents/io.vectorize.hindsight.restart.plist` | 1 AM: runs `hindsight-blue-green-restart.sh` — health-checked blue/green swap, not a raw `pkill` |
 | Nightly plist | `~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist` | Midnight execution |
 | CocoIndex plist | `~/Library/LaunchAgents/io.vectorize.cocoindex.service.plist` | KeepAlive continuous sync |
 | Persistent storage | `~/.pg0/instances/hindsight/data/` | PostgreSQL data (survives reboots) |
@@ -344,11 +352,13 @@ All persistent data lives in `~/.pg0/instances/hindsight/data/` (PostgreSQL).
 # Backup
 tar czf ~/engram-backup-$(date +%F).tar.gz ~/.pg0/instances/hindsight/data/
 
-# Restore
-launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.service.plist
+# Restore (unload whichever color is currently active -- see
+# ~/.hindsight/state/active-backend.port, 18888=blue/18889=green)
+launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.service-blue.plist
+launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.service-green.plist
 rm -rf ~/.pg0/instances/hindsight/data/
 tar xzf ~/engram-backup-YYYY-MM-DD.tar.gz -C /
-launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.service.plist
+launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.service-blue.plist
 ```
 
 ### Transcript-based recovery (rebuild from source)

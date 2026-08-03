@@ -97,16 +97,58 @@ chmod +x ~/.hindsight/with-config-env.sh
 > nonexistent placeholder GCP project because the value was missing from their
 > environment entirely).
 
-```bash
-sed "s|__HOME__|$HOME|g" \
-    launchd/io.vectorize.hindsight.service.plist \
-    > ~/Library/LaunchAgents/io.vectorize.hindsight.service.plist
+`hindsight-api` runs as a **blue/green pair** behind a small always-on proxy,
+not as a single service — this is what lets the nightly heap-reclaim restart
+(step 15 below) happen without ever dropping Cursor's MCP connection to port
+8888 (see [FINDINGS.md](FINDINGS.md) 2026-08-02 for why). Symlink the proxy
+and swap script, then install all three plists (proxy + both colors):
 
-launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.service.plist
+```bash
+ln -sf "$(pwd)/hindsight-proxy.py" ~/.hindsight/hindsight-proxy.py
+ln -sf "$(pwd)/hindsight-blue-green-restart.sh" ~/.hindsight/hindsight-blue-green-restart.sh
+mkdir -p ~/.hindsight/state
+
+for name in proxy service-blue service-green; do
+  sed "s|__HOME__|$HOME|g" \
+      "launchd/io.vectorize.hindsight.${name}.plist" \
+      > "~/Library/LaunchAgents/io.vectorize.hindsight.${name}.plist"
+done
+
+# "blue" (internal port 18888) is the initial active color.
+echo 18888 > ~/.hindsight/state/active-backend.port
+
+launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.service-blue.plist
+launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.proxy.plist
 ```
+
+> **Why not just one `service.plist`?** A single process bound directly to
+> 8888 means the nightly restart has to unbind that port for the ~15-20s it
+> takes to come back up — and Cursor's HTTP MCP client doesn't auto-retry
+> after a drop, so every restart silently disabled the hindsight MCP tools
+> until a manual reload. With the proxy owning 8888 permanently and
+> `hindsight-blue-green-restart.sh` starting a fresh instance on the
+> *standby* color, health-checking it, and only then flipping traffic over,
+> port 8888 never refuses a connection — see
+> [FINDINGS.md](FINDINGS.md) 2026-08-02.
 
 > **Note on model names**: Sonnet 4.6 must be specified WITHOUT a version suffix on the
 > global endpoint. Haiku 4.5 works with `@20251001`.
+
+### Optional: nightly heap-reclaim restart
+
+`hindsight-api`'s Python heap grows unbounded over a long-lived process
+(see [FINDINGS.md](FINDINGS.md) 2026-06-26) — a periodic restart is the
+practical fix. Install the swap job to run nightly at 1 AM:
+
+```bash
+sed "s|__HOME__|$HOME|g" launchd/io.vectorize.hindsight.restart.plist \
+    > ~/Library/LaunchAgents/io.vectorize.hindsight.restart.plist
+
+launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.restart.plist
+```
+
+This runs `hindsight-blue-green-restart.sh` (installed in step 5 above), not
+a raw `pkill` — see that step's note for why.
 
 ## 6. Verify
 
@@ -476,15 +518,23 @@ Ensure `VERTEXAI_PROJECT` and `GOOGLE_CLOUD_PROJECT` are set in `~/.hindsight/co
 ### Reflect returns 404
 Sonnet 4.6 on the global endpoint requires the model name WITHOUT a version suffix. Use `vertex_ai/claude-sonnet-4-6`, not `vertex_ai/claude-sonnet-4-6@20250929`.
 
+### Which color is currently active?
+```bash
+cat ~/.hindsight/state/active-backend.port   # 18888 = blue, 18889 = green
+launchctl list | grep hindsight.service-      # the loaded one is active
+```
+
 ### ADC token expired
 ```bash
 gcloud auth application-default login
-launchctl kickstart -k gui/$(id -u)/io.vectorize.hindsight.service
+# Restart whichever color is currently active (see above), e.g.:
+launchctl kickstart -k gui/$(id -u)/io.vectorize.hindsight.service-blue
 ```
 
-### Manually restart the service
+### Manually force a blue/green swap
 ```bash
-launchctl kickstart -k gui/$(id -u)/io.vectorize.hindsight.service
+~/.hindsight/hindsight-blue-green-restart.sh
+tail -20 ~/.hindsight/logs/blue-green-restart.log
 ```
 
 ---
@@ -493,8 +543,12 @@ launchctl kickstart -k gui/$(id -u)/io.vectorize.hindsight.service
 
 ```bash
 uv pip install --python ~/.hindsight/venv/bin/python -U 'hindsight-api[all]'
-launchctl kickstart -k gui/$(id -u)/io.vectorize.hindsight.service
+~/.hindsight/hindsight-blue-green-restart.sh
 ```
+
+The blue/green swap above starts the new package version on the standby
+color, health-checks it, then cuts over — so the upgrade itself never drops
+Cursor's MCP connection either.
 
 Verify after upgrade:
 
@@ -587,7 +641,10 @@ When customizing, change:
 
 ```bash
 # Stop and remove all launchd services
-launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.service.plist
+launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.service-blue.plist
+launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.service-green.plist
+launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.proxy.plist
+launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.restart.plist
 launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist
 launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.issues.plist
 launchctl unload ~/Library/LaunchAgents/io.vectorize.cocoindex.service.plist

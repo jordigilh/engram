@@ -7,8 +7,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>-c</string>
-        <string>/usr/bin/pkill -f hindsight-api</string>
+        <string>__HOME__/.hindsight/hindsight-blue-green-restart.sh</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>
@@ -17,9 +16,16 @@
         <key>Minute</key>
         <integer>0</integer>
     </dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOME__/.hindsight/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
     <key>StandardOutPath</key>
-    <string>/Users/jgil/.hindsight/logs/restart-stdout.log</string>
+    <string>__HOME__/.hindsight/logs/restart-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/jgil/.hindsight/logs/restart-stderr.log</string>
+    <string>__HOME__/.hindsight/logs/restart-stderr.log</string>
 </dict>
 </plist>

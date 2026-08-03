@@ -3,11 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>io.vectorize.hindsight.service</string>
+    <string>io.vectorize.hindsight.service-blue</string>
     <key>ProgramArguments</key>
     <array>
         <string>__HOME__/.hindsight/with-config-env.sh</string>
         <string>__HOME__/.hindsight/venv/bin/hindsight-api</string>
+        <string>--port</string>
+        <string>18888</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
@@ -15,7 +17,11 @@
              GOOGLE_CLOUD_PROJECT, pool sizes, etc.) lives exclusively in
              ~/.hindsight/config.env and is sourced at process start by
              with-config-env.sh -- never duplicated here. This file is
-             committed to a public repo; config.env is not. -->
+             committed to a public repo; config.env is not. The --port flag
+             above (not HINDSIGHT_API_PORT here) is what makes this the
+             "blue" instance -- an env var would just get overwritten by
+             config.env's own HINDSIGHT_API_PORT when with-config-env.sh
+             sources it, but an explicit CLI flag always wins. -->
         <key>PATH</key>
         <string>__HOME__/.hindsight/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
@@ -30,8 +36,8 @@
     <key>ThrottleInterval</key>
     <integer>5</integer>
     <key>StandardOutPath</key>
-    <string>__HOME__/.hindsight/logs/hindsight-stdout.log</string>
+    <string>__HOME__/.hindsight/logs/hindsight-stdout-blue.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.hindsight/logs/hindsight-stderr.log</string>
+    <string>__HOME__/.hindsight/logs/hindsight-stderr-blue.log</string>
 </dict>
 </plist>

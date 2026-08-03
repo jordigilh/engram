@@ -73,7 +73,7 @@ class TestPlanRetags:
 
     def test_out_of_scope_workspace_is_skipped(self):
         docs = [_doc("d1", transcript_id="t1")]
-        tid_to_workspace = {"t1": "Users-jgil-go-src-github-com-insights-onprem-koku"}
+        tid_to_workspace = {"t1": "Users-jgil-go-src-github-com-someorg-unrelated-repo"}
 
         plan = bmt.plan_retags(docs, tid_to_workspace)
 

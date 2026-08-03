@@ -25,7 +25,7 @@ class TestFindRecentTranscripts:
         in_scope.mkdir(parents=True)
         (in_scope / "t1.jsonl").write_text("{}")
 
-        out_of_scope = tmp_path / "Users-jgil-go-src-github-com-insights-onprem-koku" / "agent-transcripts"
+        out_of_scope = tmp_path / "Users-jgil-go-src-github-com-someorg-unrelated-repo" / "agent-transcripts"
         out_of_scope.mkdir(parents=True)
         (out_of_scope / "t2.jsonl").write_text("{}")
 
@@ -85,7 +85,7 @@ class TestProjectForTranscriptPath:
 
     def test_out_of_scope_transcript_resolves_to_none(self, nightly_learn, tmp_path, monkeypatch):
         monkeypatch.setattr(nightly_learn, "PROJECTS_ROOT", tmp_path)
-        path = tmp_path / "Users-jgil-go-src-github-com-insights-onprem-koku" / "agent-transcripts" / "t1.jsonl"
+        path = tmp_path / "Users-jgil-go-src-github-com-someorg-unrelated-repo" / "agent-transcripts" / "t1.jsonl"
 
         assert nightly_learn.project_for_transcript_path(path) is None
 

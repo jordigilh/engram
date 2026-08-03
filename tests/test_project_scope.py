@@ -23,9 +23,19 @@ class TestIsAllowedWorkspace:
     def test_engram_matches(self):
         assert ps.is_allowed_workspace("Users-jgil-go-src-github-com-jordigilh-engram") is True
 
+    def test_koku_project_koku_prefix_matches(self):
+        assert ps.is_allowed_workspace("Users-jgil-go-src-github-com-project-koku-koku") is True
+
+    def test_koku_insights_onprem_prefix_matches(self):
+        """Older koku sessions used a different local path prefix (pre-dating
+        this allowlist, e.g. COST-7249 work) -- both are onboarded so past
+        koku work counts, not just the current checkout path."""
+        assert ps.is_allowed_workspace("Users-jgil-go-src-github-com-insights-onprem-koku") is True
+        assert ps.is_allowed_workspace("Users-jgil-go-src-github-com-insights-onprem-koku-pr5933") is True
+
     def test_out_of_scope_workspace_rejected(self):
-        assert ps.is_allowed_workspace("Users-jgil-go-src-github-com-insights-onprem-koku") is False
         assert ps.is_allowed_workspace("Users-jgil-go-src-github-com-redhat-developer-rhdh-plugins") is False
+        assert ps.is_allowed_workspace("Users-jgil-go-src-github-com-someorg-unrelated-repo") is False
 
     def test_empty_window_session_rejected(self):
         assert ps.is_allowed_workspace("empty-window") is False
@@ -65,8 +75,15 @@ class TestResolveProjectLabel:
     def test_engram_resolves_to_engram(self):
         assert ps.resolve_project_label("Users-jgil-go-src-github-com-jordigilh-engram") == "engram"
 
+    def test_koku_project_koku_prefix_resolves_to_koku(self):
+        assert ps.resolve_project_label("Users-jgil-go-src-github-com-project-koku-koku") == "koku"
+
+    def test_koku_insights_onprem_prefix_resolves_to_koku(self):
+        assert ps.resolve_project_label("Users-jgil-go-src-github-com-insights-onprem-koku") == "koku"
+        assert ps.resolve_project_label("Users-jgil-go-src-github-com-insights-onprem-koku-pr5933") == "koku"
+
     def test_out_of_scope_workspace_resolves_to_none(self):
-        assert ps.resolve_project_label("Users-jgil-go-src-github-com-insights-onprem-koku") is None
+        assert ps.resolve_project_label("Users-jgil-go-src-github-com-someorg-unrelated-repo") is None
 
     def test_empty_string_resolves_to_none(self):
         assert ps.resolve_project_label("") is None
@@ -93,7 +110,7 @@ class TestPurgeScriptClassification:
         (allowed_proj / "agent-transcripts").mkdir(parents=True)
         (allowed_proj / "agent-transcripts" / "transcript-abc.jsonl").write_text("{}")
 
-        disallowed_proj = tmp_path / "Users-jgil-go-src-github-com-insights-onprem-koku"
+        disallowed_proj = tmp_path / "Users-jgil-go-src-github-com-someorg-unrelated-repo"
         (disallowed_proj / "agent-transcripts").mkdir(parents=True)
         (disallowed_proj / "agent-transcripts" / "transcript-xyz.jsonl").write_text("{}")
 
@@ -104,13 +121,13 @@ class TestPurgeScriptClassification:
         mapping = purge_script.build_transcript_project_map()
 
         assert mapping["transcript-abc"] == "Users-jgil-go-src-github-com-jordigilh-engram"
-        assert mapping["transcript-xyz"] == "Users-jgil-go-src-github-com-insights-onprem-koku"
+        assert mapping["transcript-xyz"] == "Users-jgil-go-src-github-com-someorg-unrelated-repo"
         assert "some-other-dir" not in mapping.values()
 
     def test_classify_buckets_documents_correctly(self, purge_script):
         tid_to_project = {
             "transcript-in-scope": "Users-jgil-go-src-github-com-jordigilh-engram",
-            "transcript-out-of-scope": "Users-jgil-go-src-github-com-insights-onprem-koku",
+            "transcript-out-of-scope": "Users-jgil-go-src-github-com-someorg-unrelated-repo",
         }
         docs = [
             {"id": "doc-1", "document_metadata": {"transcript_id": "transcript-in-scope"}},
@@ -123,7 +140,7 @@ class TestPurgeScriptClassification:
         buckets = purge_script.classify(docs, tid_to_project)
 
         assert [d["id"] for d in buckets["to_delete"]] == ["doc-2"]
-        assert buckets["to_delete"][0]["_resolved_project"] == "Users-jgil-go-src-github-com-insights-onprem-koku"
+        assert buckets["to_delete"][0]["_resolved_project"] == "Users-jgil-go-src-github-com-someorg-unrelated-repo"
         assert {d["id"] for d in buckets["no_transcript_id"]} == {"doc-3", "doc-5"}
         assert [d["id"] for d in buckets["unresolved"]] == ["doc-4"]
 

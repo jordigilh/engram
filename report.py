@@ -82,6 +82,17 @@ PROJECT_CONFIGS = {
         "workspace_prefixes": ["Users-jgil-go-src-github-com-jordigilh-engram"],
         "log_suffix": "-engram",
     },
+    "koku": {
+        "banks": ["cursor-memory", "koku-docs", "koku-issues"],
+        # Two prefixes: current checkout path + older insights-onprem-koku*
+        # sessions that predate the allowlist -- see project_scope.py.
+        "workspace_prefixes": [
+            "Users-jgil-go-src-github-com-project-koku",
+            "Users-jgil-go-src-github-com-insights-onprem-koku",
+        ],
+        "log_suffix": "-koku",
+        "issues_repos": ["project-koku/koku"],
+    },
 }
 
 CORRECTION_PATTERNS = [
@@ -505,7 +516,7 @@ def collect_ingestion_coverage(project: str | None = None) -> dict:
 
     # Code index: row count from pgvector tables
     for table, key in [("code_embeddings", "code_chunks"), ("dcm_code_embeddings", "dcm_code_chunks"),
-                        ("engram_code_embeddings", "engram_code_chunks")]:
+                        ("engram_code_embeddings", "engram_code_chunks"), ("koku_code_embeddings", "koku_code_chunks")]:
         try:
             result = subprocess.run(
                 ["psql", "-h", "localhost", "-p", "5432", "-U", "hindsight", "-d", "hindsight",
@@ -1606,7 +1617,7 @@ def main():
                         help="Save current metrics as a baseline snapshot")
     parser.add_argument("--compare", type=str, metavar="BASELINE",
                         help="Compare current metrics against a baseline snapshot file")
-    parser.add_argument("--project", choices=["kubernaut", "dcm", "engram", "all"], default="all",
+    parser.add_argument("--project", choices=["kubernaut", "dcm", "engram", "koku", "all"], default="all",
                         help="Scope the report to one project, or 'all' for every "
                              "configured project shown separately (default: all)")
     args = parser.parse_args()

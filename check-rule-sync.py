@@ -65,6 +65,14 @@ RULE_PAIRS: dict[str, tuple[Path, Path]] = {
         REPO_ROOT / "cursor" / "console-hindsight-memory.mdc",
         HOME / "go" / "src" / "github.com" / "jordigilh" / "kubernaut-console" / ".cursor" / "rules" / "hindsight-memory.mdc",
     ),
+    # koku: primary checkout only. The other two local koku checkouts
+    # (insights-onprem/koku, insights-onprem/koku-pr5933/koku) get the same
+    # deployed content copied manually -- not worth a RULE_PAIRS entry each
+    # since they're the same fork/branch family, not independent repos.
+    "koku": (
+        REPO_ROOT / "cursor" / "koku-hindsight-memory.mdc",
+        HOME / "go" / "src" / "github.com" / "project-koku" / "koku" / ".cursor" / "rules" / "hindsight-memory.mdc",
+    ),
 }
 
 

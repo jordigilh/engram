@@ -979,6 +979,33 @@ PROJECT_CONFIGS = {
         "log_suffix": "-engram",
         "workspace_prefixes": ["Users-jgil-go-src-github-com-jordigilh-engram"],
     },
+    "koku": {
+        "banks": ["cursor-memory", "koku-docs", "koku-issues"],
+        "mental_models": {
+            "koku-docs": ("koku-architecture", "koku-operations"),
+            "koku-issues": ("active-priorities", "known-bugs"),
+            # Tag-isolated (tags=["koku"], strict match) sibling of
+            # kubernaut's/dcm's/engram's cursor-memory models -- applied from
+            # day one per the 2026-07-27 pollution fix, see docs/FINDINGS.md.
+            "cursor-memory": ("koku-workflow-preferences", "koku-architecture-decisions", "koku-testing-methodology", "koku-coding-conventions"),
+        },
+        "probes": [
+            ("koku-docs", "Koku cost-model and report-processing architecture"),
+            ("koku-docs", "masu Celery task orchestration"),
+            ("koku-issues", "open issues and active priorities"),
+        ],
+        "recall_banks": {"hindsight", "koku-docs", "koku-issues", "koku-code"},
+        "code_bank": "koku-code",
+        "log_suffix": "-koku",
+        # Two prefixes onboarded: the current checkout path and older
+        # "insights-onprem-koku"/"-pr5933" sessions that predate this
+        # allowlist -- see project_scope.py.
+        "workspace_prefixes": [
+            "Users-jgil-go-src-github-com-project-koku",
+            "Users-jgil-go-src-github-com-insights-onprem-koku",
+        ],
+        "issues_repos": ["project-koku/koku"],
+    },
 }
 
 BANKS = ["cursor-memory", "kubernaut-docs", "kubernaut-issues"]

@@ -32,6 +32,16 @@ PROJECT_LABEL_BY_PREFIX = {
     # Engram's own dev transcripts -- working on Engram itself produces
     # genuine coding-hygiene corrections too, not just kubernaut/dcm work.
     "Users-jgil-go-src-github-com-jordigilh-engram": "engram",
+    # Koku (Python/Django cost-management platform, project-koku org, fork at
+    # jordigilh/koku). Two local checkout prefixes are onboarded because real
+    # work happened under both: the current "project-koku" path and older
+    # "insights-onprem-koku"/"insights-onprem-koku-pr5933" sessions (e.g.
+    # COST-7249 work) that predate this allowlist and were previously swept
+    # into cursor-memory as unfiltered pollution -- see this module's
+    # docstring. Onboarding both recovers that history under the koku label
+    # going forward instead of leaving it unlabeled.
+    "Users-jgil-go-src-github-com-project-koku": "koku",
+    "Users-jgil-go-src-github-com-insights-onprem-koku": "koku",
 }
 
 ALLOWED_WORKSPACE_PREFIXES = list(PROJECT_LABEL_BY_PREFIX.keys())

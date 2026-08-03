@@ -224,7 +224,7 @@ class TestProcessTranscriptProjectTagging:
         monkeypatch.setattr(cr, "resolve", lambda *a, **k: resolve_calls.append(k.get("project")) or cr.Resolution(action="retain"))
         monkeypatch.setattr(cocoindex_flows, "hindsight_retain", lambda **kwargs: None)
 
-        file = self._file_under(tmp_path, "Users-jgil-go-src-github-com-insights-onprem-koku")
+        file = self._file_under(tmp_path, "Users-jgil-go-src-github-com-someorg-unrelated-repo")
         _run(cocoindex_flows.process_transcript(file))
 
         assert resolve_calls == [None]
@@ -270,7 +270,7 @@ class TestProcessTranscriptProjectTagging:
         retain_calls = []
         monkeypatch.setattr(cocoindex_flows, "hindsight_retain", lambda **kwargs: retain_calls.append(kwargs))
 
-        file = self._file_under(tmp_path, "Users-jgil-go-src-github-com-insights-onprem-koku")
+        file = self._file_under(tmp_path, "Users-jgil-go-src-github-com-someorg-unrelated-repo")
         _run(cocoindex_flows.process_transcript(file))
 
         assert retain_calls[0]["tags"] is None

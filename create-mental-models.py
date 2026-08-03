@@ -136,6 +136,79 @@ MENTAL_MODELS = [
         "max_tokens": 4096,
         "trigger": {"mode": "full", "refresh_after_consolidation": False},
     },
+    # koku-docs: Django/Python cost-management platform architecture + ops
+    {
+        "bank": "koku-docs",
+        "id": "koku-architecture",
+        "name": "Koku Architecture",
+        "source_query": "How is the Koku cost-management platform structured? Describe its Django app layout, the masu report-processing/cost-model pipeline, Celery task orchestration, and how AWS/Azure/GCP/OCP cost data flows through the system.",
+        "max_tokens": 4096,
+        "trigger": {"mode": "full", "refresh_after_consolidation": False},
+    },
+    {
+        "bank": "koku-docs",
+        "id": "koku-operations",
+        "name": "Koku Operations",
+        "source_query": "How is Koku deployed and operated? Describe local devtools setup, ephemeral environments, install steps, and release/distribution processes.",
+        "max_tokens": 4096,
+        "trigger": {"mode": "full", "refresh_after_consolidation": False},
+    },
+    # koku-issues: requirements/direction (delta, nightly refresh)
+    {
+        "bank": "koku-issues",
+        "id": "active-priorities",
+        "name": "Active Priorities",
+        "source_query": "What are the current open issues, their priorities, and what direction the project-koku/koku project is heading?",
+        "max_tokens": 4096,
+        "trigger": {"mode": "delta", "refresh_after_consolidation": False},
+    },
+    {
+        "bank": "koku-issues",
+        "id": "known-bugs",
+        "name": "Known Bugs and Workarounds",
+        "source_query": "What are the known bugs, their root causes, and any workarounds documented in koku issues?",
+        "max_tokens": 4096,
+        "trigger": {"mode": "delta", "refresh_after_consolidation": False},
+    },
+    # cursor-memory, tag-isolated (tags=["koku"], strict match) sibling of
+    # kubernaut's/dcm's/engram's own scoped models -- same 2026-07-27 fix
+    # pattern applied from day one for koku's onboarding, see docs/FINDINGS.md.
+    {
+        "bank": "cursor-memory",
+        "id": "koku-coding-conventions",
+        "name": "Koku Coding Conventions",
+        "source_query": "What are the user's coding conventions, naming patterns, and style preferences when working on koku (Python/Django)?",
+        "max_tokens": 2048,
+        "trigger": {"mode": "delta", "refresh_after_consolidation": True},
+        "tags": ["koku"],
+    },
+    {
+        "bank": "cursor-memory",
+        "id": "koku-testing-methodology",
+        "name": "Koku Testing Methodology",
+        "source_query": "What testing approach, frameworks, and patterns does the user follow when working on koku?",
+        "max_tokens": 2048,
+        "trigger": {"mode": "delta", "refresh_after_consolidation": True},
+        "tags": ["koku"],
+    },
+    {
+        "bank": "cursor-memory",
+        "id": "koku-workflow-preferences",
+        "name": "Koku Development Workflow",
+        "source_query": "What is the user's preferred development workflow, review process, and tooling when working on koku?",
+        "max_tokens": 2048,
+        "trigger": {"mode": "delta", "refresh_after_consolidation": True},
+        "tags": ["koku"],
+    },
+    {
+        "bank": "cursor-memory",
+        "id": "koku-architecture-decisions",
+        "name": "Koku Architecture Decisions",
+        "source_query": "What architectural decisions and design patterns has the user established while working on koku?",
+        "max_tokens": 4096,
+        "trigger": {"mode": "full", "refresh_after_consolidation": False},
+        "tags": ["koku"],
+    },
 ]
 
 
@@ -183,7 +256,7 @@ def refresh_model(bank: str, model_id: str) -> bool:
 
 
 def list_models():
-    banks = ["cursor-memory", "kubernaut-docs", "kubernaut-issues", "dcm-docs", "dcm-issues", "engram-docs"]
+    banks = ["cursor-memory", "kubernaut-docs", "kubernaut-issues", "dcm-docs", "dcm-issues", "engram-docs", "koku-docs", "koku-issues"]
     for bank in banks:
         result = api_request("GET", f"/v1/default/banks/{bank}/mental-models")
         items = result.get("items", [])

@@ -16,7 +16,7 @@
     <dict>
         <!-- LLM configuration comes from ~/.hindsight/config.env via
              with-config-env.sh, not hardcoded here -- see
-             io.vectorize.hindsight.service.plist for rationale. -->
+             io.vectorize.hindsight.service-blue.plist for rationale. -->
         <key>PATH</key>
         <string>__HOME__/.hindsight/venv/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
         <key>HOME</key>

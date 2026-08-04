@@ -357,12 +357,20 @@ uv pip install --python ~/.hindsight/venv/bin/python cocoindex
 ```bash
 ln -sf "$(pwd)/cocoindex-flows.py" ~/.hindsight/cocoindex-flows.py
 ln -sf "$(pwd)/cocoindex-search.py" ~/.hindsight/cocoindex-search.py
+ln -sf "$(pwd)/chunking.py" ~/.hindsight/chunking.py
 ```
 
 `cocoindex-flows.py` also imports `correction_gate.py`, `contradiction_resolution.py`,
 and `project_scope.py` directly — make sure step 9's symlinks are in place before
 running this, or CocoIndex's transcript app will fail to start with a
-`ModuleNotFoundError`.
+`ModuleNotFoundError`. It (and every other `*-cocoindex-flows.py`) also imports
+`chunking.py` — the shared, content-stable chunking module (heading-anchored doc
+splitting, comment-ordinal issue/PR splitting) that replaced each flow's own
+positional-offset `_split_text()` on 2026-08-03 to stop cascading re-embeds; see
+[FINDINGS.md](../docs/FINDINGS.md) 2026-08-03. Forgetting this symlink fails the
+same way — `ModuleNotFoundError: No module named 'chunking'` — for **every**
+onboarded project's flows (`dcm-`, `engram-`, `koku-cocoindex-flows.py` all import
+it too), not just kubernaut's.
 
 ### Configure source directories
 

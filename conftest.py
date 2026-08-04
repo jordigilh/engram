@@ -83,3 +83,19 @@ def engram_cocoindex_flows() -> ModuleType:
     next to that ContextKey() call for the full rationale.
     """
     return load_hyphenated_module("engram-cocoindex-flows.py", "engram_cocoindex_flows")
+
+
+@pytest.fixture(scope="session")
+def koku_cocoindex_flows() -> ModuleType:
+    """koku-cocoindex-flows.py (Koku onboarding). Its PG_POOL ContextKey is
+    "koku_repo_pg_pool" for the same process-global-collision reason as
+    engram_cocoindex_flows's PG_POOL above."""
+    return load_hyphenated_module("koku-cocoindex-flows.py", "koku_cocoindex_flows")
+
+
+@pytest.fixture(scope="session")
+def dcm_cocoindex_flows() -> ModuleType:
+    """dcm-cocoindex-flows.py (DCM onboarding). PG_POOL was renamed from the
+    generic "pg_pool" to "dcm_repo_pg_pool" (2026-08-03) specifically to
+    unblock this fixture -- see the comment next to that ContextKey() call."""
+    return load_hyphenated_module("dcm-cocoindex-flows.py", "dcm_cocoindex_flows")

@@ -26,6 +26,14 @@
         <string>http://localhost:8888</string>
         <key>COCOINDEX_PG_URL</key>
         <string>postgresql://hindsight:hindsight@localhost:5432/hindsight</string>
+        <!-- code_app's pgvector pool -- right-sized down from asyncpg's own
+             min_size=10/max_size=10 default, since every onboarded project's
+             cocoindex-flows.py opens its own pool against this same shared
+             Postgres instance. See docs/FINDINGS.md 2026-08-03. -->
+        <key>COCOINDEX_PG_POOL_MIN_SIZE</key>
+        <string>2</string>
+        <key>COCOINDEX_PG_POOL_MAX_SIZE</key>
+        <string>5</string>
         <key>PATH</key>
         <string>__HOME__/.hindsight/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>

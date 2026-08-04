@@ -27,6 +27,8 @@ import cocoindex as coco
 from cocoindex.connectors import localfs
 from cocoindex.resources.file import PatternFilePathMatcher
 
+import chunking
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
@@ -59,6 +61,13 @@ PG_DSN = os.environ.get(
     "COCOINDEX_PG_URL",
     "postgresql://hindsight:hindsight@localhost:5432/hindsight",
 )
+# See cocoindex-flows.py's PG_POOL_MIN_SIZE/MAX_SIZE comment (docs/FINDINGS.md
+# 2026-08-03) -- asyncpg's own min_size=10/max_size=10 default is oversized
+# for this pool's light, bursty pgvector-upsert-only workload, and each
+# onboarded project's own cocoindex-flows.py multiplies it against the same
+# shared Postgres instance.
+PG_POOL_MIN_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MIN_SIZE", "2"))
+PG_POOL_MAX_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MAX_SIZE", "5"))
 COCOINDEX_DB = pathlib.Path(os.environ.get(
     "COCOINDEX_DB",
     os.path.expanduser("~/.hindsight/koku-cocoindex.db"),
@@ -105,11 +114,13 @@ def hindsight_retain(
     metadata: dict | None = None,
     tags: list[str] | None = None,
 ) -> dict[str, Any]:
+    # See cocoindex-flows.py's hindsight_retain() docstring: strategy="exact"
+    # was never registered in any bank's retain_strategies config, so
+    # hindsight-api silently ignored it -- pure log noise, no behavior.
     url = f"{HINDSIGHT_URL}/v1/default/banks/{bank_id}/memories"
     item: dict[str, Any] = {
         "content": content,
         "document_id": document_id,
-        "strategy": "exact",
     }
     if timestamp:
         item["timestamp"] = timestamp
@@ -135,19 +146,11 @@ def hindsight_retain(
 
 
 def _split_text(text: str, chunk_size: int = 800, chunk_overlap: int = 200) -> list[str]:
-    if len(text) <= chunk_size:
-        return [text]
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        if end < len(text):
-            break_point = text.rfind("\n", start, end)
-            if break_point > start + chunk_size // 2:
-                end = break_point + 1
-        chunks.append(text[start:end])
-        start = end - chunk_overlap
-    return chunks
+    """Thin alias to chunking.split_fixed_window() -- still used directly by
+    code_app below. process_doc_file/process_pr/process_jira_issue now use
+    chunking.split_markdown_sections()/split_issue_sections() instead. See
+    docs/FINDINGS.md 2026-08-03."""
+    return chunking.split_fixed_window(text, chunk_size, chunk_overlap)
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +162,7 @@ async def coco_lifespan(builder: coco.EnvironmentBuilder) -> AsyncIterator[None]
     from cocoindex.connectors import postgres
 
     builder.settings.db_path = COCOINDEX_DB
-    pool = await postgres.create_pool(PG_DSN)
+    pool = await postgres.create_pool(PG_DSN, min_size=PG_POOL_MIN_SIZE, max_size=PG_POOL_MAX_SIZE)
     builder.provide(PG_POOL, pool)
     yield
     pool.close()
@@ -192,11 +195,10 @@ async def process_doc_file(
     parts = pathlib.Path(rel_path).parts
     section = parts[0] if len(parts) > 1 else "root"
 
-    chunks = _split_text(content, chunk_size=800, chunk_overlap=200)
-    for i, chunk in enumerate(chunks):
-        doc_id = f"{source_tag}--{rel_path.replace('/', '--').replace('.md', '')}"
-        if i > 0:
-            doc_id = f"{doc_id}--chunk{i}"
+    base_doc_id = f"{source_tag}--{rel_path.replace('/', '--').replace('.md', '')}"
+    sections = chunking.split_markdown_sections(content, chunk_size=800, chunk_overlap=200)
+    for key, chunk in sections:
+        doc_id = base_doc_id if not key else f"{base_doc_id}--{key}"
         hindsight_retain(
             bank_id="koku-docs",
             content=chunk,
@@ -283,54 +285,60 @@ def _repo_short_name(repo: str) -> str:
     return repo.split("/")[-1] if "/" in repo else repo
 
 
-def _format_issue_content(issue: dict, repo: str) -> str:
-    parts = []
+def _format_issue_header(issue: dict, repo: str) -> str:
+    """Static (non-volatile) header for a PR: title/repo/author/created plus
+    the description body. Deliberately excludes state/labels -- those
+    change routinely (PRs get merged, labels get triaged) and are already
+    carried in `metadata`/`tags`. See docs/FINDINGS.md 2026-08-03.
+    """
     number = issue.get("number", "?")
     title = issue.get("title", "")
-    state = issue.get("state", "OPEN")
     kind = issue.get("_kind", "issue")
     kind_label = "PR" if kind == "pr" else "Issue"
-    labels = [label.get("name", "") for label in issue.get("labels", [])]
     author = issue.get("author", {}).get("login", "unknown")
     created = issue.get("createdAt", "")[:10]
     short_repo = _repo_short_name(repo)
 
-    parts.append(f"# {kind_label} #{number} ({short_repo}): {title}")
-    parts.append(f"Repo: {repo} | State: {state} | Labels: {', '.join(labels) or 'none'} | Author: {author} | Created: {created}")
-    parts.append("")
-
+    parts = [
+        f"# {kind_label} #{number} ({short_repo}): {title}",
+        f"Repo: {repo} | Author: {author} | Created: {created}",
+        "",
+    ]
     body = issue.get("body", "") or ""
     if body.strip():
         parts.append(body.strip())
-        parts.append("")
+    return "\n".join(parts)
 
+
+def _filter_human_comments(issue: dict) -> list[dict]:
     comments = issue.get("comments", []) or []
-    human_comments = [
+    return [
         c for c in comments
         if c.get("authorAssociation", "NONE") in TRUSTED_ASSOCIATIONS
         and not c.get("author", {}).get("login", "").endswith("[bot]")
         and len(c.get("body", "")) > 20
-    ]
-    if human_comments:
-        parts.append("---")
-        parts.append(f"## Discussion ({len(human_comments)} comments)")
-        parts.append("")
-        for c in human_comments[:10]:
-            c_author = c.get("author", {}).get("login", "?")
-            c_body = c.get("body", "").strip()
-            if len(c_body) > 2000:
-                c_body = c_body[:2000] + "\n[...truncated]"
-            parts.append(f"**@{c_author}:**")
-            parts.append(c_body)
-            parts.append("")
+    ][:10]
 
-    return "\n".join(parts)
+
+def _format_comment(comment: dict) -> str:
+    c_author = comment.get("author", {}).get("login", "?")
+    c_body = comment.get("body", "").strip()
+    if len(c_body) > 2000:
+        c_body = c_body[:2000] + "\n[...truncated]"
+    return f"**@{c_author}:**\n{c_body}"
 
 
 @coco.fn(memo=True)
 def process_pr(pr: dict, repo: str) -> None:
-    content = _format_issue_content(pr, repo)
-    if not content.strip() or len(content) < 50:
+    """Format, chunk, and push a single PR to Hindsight.
+
+    Chunked as one section for the header+description plus one section per
+    comment (chunking.split_issue_sections()), keyed by ordinal comment
+    position rather than character offset -- see docs/FINDINGS.md
+    2026-08-03.
+    """
+    header = _format_issue_header(pr, repo)
+    if not header.strip() or len(header) < 50:
         return
 
     number = pr.get("number", 0)
@@ -340,6 +348,9 @@ def process_pr(pr: dict, repo: str) -> None:
     labels = [label.get("name", "") for label in pr.get("labels", [])]
     short_repo = _repo_short_name(repo)
 
+    comment_texts = [_format_comment(c) for c in _filter_human_comments(pr)]
+    base_doc_id = f"{short_repo}-{kind}-{number}"
+
     # Deliberately much larger than docs/code chunking: this feeds
     # hindsight_retain()'s LLM extraction, not an embedding index, and each
     # call pays a large fixed system-prompt overhead (~3,550 tokens,
@@ -348,11 +359,9 @@ def process_pr(pr: dict, repo: str) -> None:
     # measured ~55-60% cheaper at this size vs. the docs-app-inherited 1200
     # default across koku's ~13k-item issue/PR backlog, with no downside
     # since Haiku 4.5's 200K context makes this trivially safe.
-    chunks = _split_text(content, chunk_size=12000, chunk_overlap=500)
-    for i, chunk in enumerate(chunks):
-        doc_id = f"{short_repo}-{kind}-{number}"
-        if i > 0:
-            doc_id = f"{doc_id}-chunk{i}"
+    sections = chunking.split_issue_sections(header, comment_texts, chunk_size=12000, chunk_overlap=500)
+    for key, chunk in sections:
+        doc_id = base_doc_id if not key else f"{base_doc_id}-{key}"
         hindsight_retain(
             bank_id="koku-issues",
             content=chunk,
@@ -480,50 +489,54 @@ def _fetch_all_jira_issues(project: str, page_size: int = 100) -> list[dict]:
     return all_items
 
 
-def _format_jira_issue_content(issue: dict) -> str:
+def _format_jira_issue_header(issue: dict) -> str:
+    """Static (non-volatile) header for a Jira issue: key/summary/reporter/
+    created plus the description. Deliberately excludes status/priority/
+    labels -- those get triaged routinely, and are already carried in the
+    retain call's `metadata`/`tags`. See docs/FINDINGS.md 2026-08-03.
+    """
     fields = issue.get("fields", {}) or {}
     key = issue.get("key", "?")
     summary = fields.get("summary", "")
-    status = (fields.get("status") or {}).get("name", "Unknown")
     issue_type = (fields.get("issueType") or {}).get("name", "Issue")
-    priority = (fields.get("priority") or {}).get("name", "")
-    labels = fields.get("labels", []) or []
     reporter = (fields.get("reporter") or {}).get("displayName", "unknown")
     created = (fields.get("created") or "")[:10]
 
     parts = [
         f"# {issue_type} {key}: {summary}",
-        f"Project: COST | Status: {status} | Priority: {priority} | Labels: {', '.join(labels) or 'none'} | Reporter: {reporter} | Created: {created}",
+        f"Project: COST | Reporter: {reporter} | Created: {created}",
         "",
     ]
-
     description = _adf_to_text(fields.get("description")).strip()
     if description:
         parts.append(description)
-        parts.append("")
-
-    comments = ((fields.get("comment") or {}).get("comments", [])) or []
-    real_comments = [c for c in comments if len(_adf_to_text(c.get("body")).strip()) > 20]
-    if real_comments:
-        parts.append("---")
-        parts.append(f"## Discussion ({len(real_comments)} comments)")
-        parts.append("")
-        for c in real_comments[:10]:
-            author = (c.get("author") or {}).get("displayName", "?")
-            body = _adf_to_text(c.get("body")).strip()
-            if len(body) > 2000:
-                body = body[:2000] + "\n[...truncated]"
-            parts.append(f"**{author}:**")
-            parts.append(body)
-            parts.append("")
-
     return "\n".join(parts)
+
+
+def _filter_jira_comments(issue: dict) -> list[dict]:
+    fields = issue.get("fields", {}) or {}
+    comments = ((fields.get("comment") or {}).get("comments", [])) or []
+    return [c for c in comments if len(_adf_to_text(c.get("body")).strip()) > 20][:10]
+
+
+def _format_jira_comment(comment: dict) -> str:
+    author = (comment.get("author") or {}).get("displayName", "?")
+    body = _adf_to_text(comment.get("body")).strip()
+    if len(body) > 2000:
+        body = body[:2000] + "\n[...truncated]"
+    return f"**{author}:**\n{body}"
 
 
 @coco.fn(memo=True)
 def process_jira_issue(issue: dict) -> None:
-    content = _format_jira_issue_content(issue)
-    if not content.strip() or len(content) < 50:
+    """Format, chunk, and push a single Jira issue to Hindsight.
+
+    Chunked as one section for the header+description plus one section per
+    comment, keyed by ordinal comment position -- see process_pr's
+    identical rationale and docs/FINDINGS.md 2026-08-03.
+    """
+    header = _format_jira_issue_header(issue)
+    if not header.strip() or len(header) < 50:
         return
 
     fields = issue.get("fields", {}) or {}
@@ -533,13 +546,14 @@ def process_jira_issue(issue: dict) -> None:
     labels = fields.get("labels", []) or []
     updated = fields.get("updated", "")
 
+    comment_texts = [_format_jira_comment(c) for c in _filter_jira_comments(issue)]
+    base_doc_id = f"koku-jira-{key}"
+
     # See process_pr's identical comment: retain()-only (no embedding), so a
     # large chunk size only reduces fixed per-call overhead cost, never hurts.
-    chunks = _split_text(content, chunk_size=12000, chunk_overlap=500)
-    for i, chunk in enumerate(chunks):
-        doc_id = f"koku-jira-{key}"
-        if i > 0:
-            doc_id = f"{doc_id}-chunk{i}"
+    sections = chunking.split_issue_sections(header, comment_texts, chunk_size=12000, chunk_overlap=500)
+    for key_suffix, chunk in sections:
+        doc_id = base_doc_id if not key_suffix else f"{base_doc_id}-{key_suffix}"
         hindsight_retain(
             bank_id="koku-issues",
             content=chunk,

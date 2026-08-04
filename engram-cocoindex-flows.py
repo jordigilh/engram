@@ -31,6 +31,8 @@ import cocoindex as coco
 from cocoindex.connectors import localfs
 from cocoindex.resources.file import PatternFilePathMatcher
 
+import chunking
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
@@ -53,6 +55,13 @@ PG_DSN = os.environ.get(
     "COCOINDEX_PG_URL",
     "postgresql://hindsight:hindsight@localhost:5432/hindsight",
 )
+# See cocoindex-flows.py's PG_POOL_MIN_SIZE/MAX_SIZE comment (docs/FINDINGS.md
+# 2026-08-03) -- asyncpg's own min_size=10/max_size=10 default is oversized
+# for this pool's light, bursty pgvector-upsert-only workload, and each
+# onboarded project's own cocoindex-flows.py multiplies it against the same
+# shared Postgres instance.
+PG_POOL_MIN_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MIN_SIZE", "2"))
+PG_POOL_MAX_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MAX_SIZE", "5"))
 COCOINDEX_DB = pathlib.Path(os.environ.get(
     "COCOINDEX_DB",
     os.path.expanduser("~/.hindsight/engram-cocoindex.db"),
@@ -99,11 +108,13 @@ def hindsight_retain(
 ) -> dict[str, Any]:
     import json
 
+    # See cocoindex-flows.py's hindsight_retain() docstring: strategy="exact"
+    # was never registered in any bank's retain_strategies config, so
+    # hindsight-api silently ignored it -- pure log noise, no behavior.
     url = f"{HINDSIGHT_URL}/v1/default/banks/{bank_id}/memories"
     item: dict[str, Any] = {
         "content": content,
         "document_id": document_id,
-        "strategy": "exact",
     }
     if timestamp:
         item["timestamp"] = timestamp
@@ -130,19 +141,10 @@ def hindsight_retain(
 
 
 def _split_text(text: str, chunk_size: int = 800, chunk_overlap: int = 200) -> list[str]:
-    if len(text) <= chunk_size:
-        return [text]
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        if end < len(text):
-            break_point = text.rfind("\n", start, end)
-            if break_point > start + chunk_size // 2:
-                end = break_point + 1
-        chunks.append(text[start:end])
-        start = end - chunk_overlap
-    return chunks
+    """Thin alias to chunking.split_fixed_window() -- process_doc_file below
+    now uses chunking.split_markdown_sections() instead. See
+    docs/FINDINGS.md 2026-08-03."""
+    return chunking.split_fixed_window(text, chunk_size, chunk_overlap)
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +156,7 @@ async def coco_lifespan(builder: coco.EnvironmentBuilder) -> AsyncIterator[None]
     from cocoindex.connectors import postgres
 
     builder.settings.db_path = COCOINDEX_DB
-    pool = await postgres.create_pool(PG_DSN)
+    pool = await postgres.create_pool(PG_DSN, min_size=PG_POOL_MIN_SIZE, max_size=PG_POOL_MAX_SIZE)
     builder.provide(PG_POOL, pool)
     yield
     pool.close()
@@ -187,11 +189,10 @@ async def process_doc_file(
     parts = pathlib.Path(rel_path).parts
     section = parts[0] if len(parts) > 1 else "root"
 
-    chunks = _split_text(content, chunk_size=800, chunk_overlap=200)
-    for i, chunk in enumerate(chunks):
-        doc_id = f"{source_tag}--{rel_path.replace('/', '--').replace('.md', '')}"
-        if i > 0:
-            doc_id = f"{doc_id}--chunk{i}"
+    base_doc_id = f"{source_tag}--{rel_path.replace('/', '--').replace('.md', '')}"
+    sections = chunking.split_markdown_sections(content, chunk_size=800, chunk_overlap=200)
+    for key, chunk in sections:
+        doc_id = base_doc_id if not key else f"{base_doc_id}--{key}"
         hindsight_retain(
             bank_id="engram-docs",
             content=chunk,

@@ -442,6 +442,161 @@ class TestProcessTranscriptWatermarking:
         assert retain_calls[0]["document_id"] != retain_calls[1]["document_id"]
 
 
+class TestFormatIssueHeader:
+    """Regression coverage for the 2026-08-03 fix: state/labels must not
+    appear in the chunked header text, since they change routinely (PR
+    merges, triage) and would otherwise cascade every comment chunk's
+    stored content-hash on every such change. See docs/FINDINGS.md."""
+
+    def _issue(self, **overrides):
+        issue = {
+            "number": 42,
+            "title": "Something broke",
+            "state": "OPEN",
+            "_kind": "issue",
+            "labels": [{"name": "bug"}],
+            "author": {"login": "alice"},
+            "createdAt": "2026-01-01T00:00:00Z",
+            "body": "Full description here.",
+        }
+        issue.update(overrides)
+        return issue
+
+    def test_header_excludes_state_and_labels(self, cocoindex_flows):
+        header = cocoindex_flows._format_issue_header(self._issue(), "jordigilh/kubernaut")
+        assert "OPEN" not in header
+        assert "bug" not in header
+        assert "State" not in header
+        assert "Labels" not in header
+
+    def test_header_includes_stable_fields(self, cocoindex_flows):
+        header = cocoindex_flows._format_issue_header(self._issue(), "jordigilh/kubernaut")
+        assert "Something broke" in header
+        assert "alice" in header
+        assert "2026-01-01" in header
+        assert "Full description here." in header
+
+    def test_regression_state_change_does_not_change_header_text(self, cocoindex_flows):
+        """The exact cascade trigger: an issue/PR's state flips (e.g. merged)
+        with nothing else changing. Header text must be byte-identical."""
+        open_header = cocoindex_flows._format_issue_header(self._issue(state="OPEN"), "jordigilh/kubernaut")
+        closed_header = cocoindex_flows._format_issue_header(self._issue(state="CLOSED"), "jordigilh/kubernaut")
+        assert open_header == closed_header
+
+    def test_regression_label_change_does_not_change_header_text(self, cocoindex_flows):
+        no_labels = cocoindex_flows._format_issue_header(self._issue(labels=[]), "jordigilh/kubernaut")
+        with_labels = cocoindex_flows._format_issue_header(
+            self._issue(labels=[{"name": "bug"}, {"name": "p1"}]), "jordigilh/kubernaut",
+        )
+        assert no_labels == with_labels
+
+
+class TestProcessIssue:
+    def _issue(self, **overrides):
+        issue = {
+            "number": 42,
+            "title": "Something broke",
+            "state": "OPEN",
+            "_kind": "issue",
+            "labels": [{"name": "bug"}],
+            "author": {"login": "alice"},
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-02T00:00:00Z",
+            "body": "Full description here.",
+            "comments": [],
+        }
+        issue.update(overrides)
+        return issue
+
+    def _comment(self, author="bob", body=None, association="MEMBER"):
+        return {
+            "author": {"login": author},
+            "body": body or ("word " * 10),
+            "authorAssociation": association,
+        }
+
+    def test_header_only_issue_produces_single_bare_document_id(self, cocoindex_flows, monkeypatch):
+        retain_calls = []
+        monkeypatch.setattr(cocoindex_flows, "hindsight_retain", lambda **kwargs: retain_calls.append(kwargs))
+
+        cocoindex_flows.process_issue(self._issue(), "jordigilh/kubernaut")
+
+        assert len(retain_calls) == 1
+        assert retain_calls[0]["document_id"] == "kubernaut-issue-42"
+        assert retain_calls[0]["bank_id"] == "kubernaut-issues"
+
+    def test_comments_get_ordinal_suffixed_document_ids(self, cocoindex_flows, monkeypatch):
+        retain_calls = []
+        monkeypatch.setattr(cocoindex_flows, "hindsight_retain", lambda **kwargs: retain_calls.append(kwargs))
+
+        cocoindex_flows.process_issue(
+            self._issue(comments=[self._comment(), self._comment()]), "jordigilh/kubernaut",
+        )
+
+        doc_ids = [c["document_id"] for c in retain_calls]
+        assert doc_ids == ["kubernaut-issue-42", "kubernaut-issue-42-comment0", "kubernaut-issue-42-comment1"]
+
+    def test_regression_new_comment_does_not_change_earlier_comment_document_ids_or_content(
+        self, cocoindex_flows, monkeypatch,
+    ):
+        """The exact kubernaut-issues cascade this fix targets: polling picks
+        up a brand-new comment on an existing issue. The header and every
+        earlier comment's document_id + content must be unaffected."""
+        first_calls = []
+        monkeypatch.setattr(cocoindex_flows, "hindsight_retain", lambda **kwargs: first_calls.append(kwargs))
+        cocoindex_flows.process_issue(
+            self._issue(comments=[self._comment(body="the first comment body text")]), "jordigilh/kubernaut",
+        )
+
+        second_calls = []
+        monkeypatch.setattr(cocoindex_flows, "hindsight_retain", lambda **kwargs: second_calls.append(kwargs))
+        cocoindex_flows.process_issue(
+            self._issue(comments=[
+                self._comment(body="the first comment body text"),
+                self._comment(body="the second comment body text"),
+            ]),
+            "jordigilh/kubernaut",
+        )
+
+        first_by_id = {c["document_id"]: c["content"] for c in first_calls}
+        second_by_id = {c["document_id"]: c["content"] for c in second_calls}
+        for doc_id, content in first_by_id.items():
+            assert second_by_id[doc_id] == content
+        assert "kubernaut-issue-42-comment1" in second_by_id
+        assert "kubernaut-issue-42-comment1" not in first_by_id
+
+    def test_regression_state_change_does_not_change_header_document_content(self, cocoindex_flows, monkeypatch):
+        open_calls = []
+        monkeypatch.setattr(cocoindex_flows, "hindsight_retain", lambda **kwargs: open_calls.append(kwargs))
+        cocoindex_flows.process_issue(self._issue(state="OPEN"), "jordigilh/kubernaut")
+
+        closed_calls = []
+        monkeypatch.setattr(cocoindex_flows, "hindsight_retain", lambda **kwargs: closed_calls.append(kwargs))
+        cocoindex_flows.process_issue(self._issue(state="CLOSED"), "jordigilh/kubernaut")
+
+        assert open_calls[0]["document_id"] == closed_calls[0]["document_id"]
+        assert open_calls[0]["content"] == closed_calls[0]["content"]
+        assert open_calls[0]["metadata"]["state"] == "open"
+        assert closed_calls[0]["metadata"]["state"] == "closed"
+
+    def test_bot_and_short_comments_are_filtered_before_chunking(self, cocoindex_flows, monkeypatch):
+        retain_calls = []
+        monkeypatch.setattr(cocoindex_flows, "hindsight_retain", lambda **kwargs: retain_calls.append(kwargs))
+
+        cocoindex_flows.process_issue(
+            self._issue(comments=[
+                self._comment(author="renovate[bot]"),
+                self._comment(body="hi"),  # too short (<20 chars)
+                self._comment(association="NONE"),
+                self._comment(body="a real substantive comment"),
+            ]),
+            "jordigilh/kubernaut",
+        )
+
+        doc_ids = [c["document_id"] for c in retain_calls]
+        assert doc_ids == ["kubernaut-issue-42", "kubernaut-issue-42-comment0"]
+
+
 class TestHindsightRetain:
     def test_success_returns_parsed_json(self, cocoindex_flows, monkeypatch):
         class FakeResponse:
@@ -457,6 +612,33 @@ class TestHindsightRetain:
         monkeypatch.setattr(cocoindex_flows, "urlopen", lambda req, timeout=60: FakeResponse())
         result = cocoindex_flows.hindsight_retain(bank_id="cursor-memory", content="x", document_id="doc-1")
         assert result == {"success": True}
+
+    def test_regression_payload_does_not_include_dead_strategy_field(self, cocoindex_flows, monkeypatch):
+        """strategy='exact' was never registered in any bank's
+        retain_strategies config, so hindsight-api silently ignored it --
+        pure log noise, no behavior. Removed rather than fixed since the
+        bank's default delta-retain already skips reprocessing unchanged
+        content with no strategy needed. See docs/FINDINGS.md 2026-08-03."""
+        captured_requests = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps({"success": True}).encode()
+
+        def fake_urlopen(req, timeout=60):
+            captured_requests.append(json.loads(req.data))
+            return FakeResponse()
+
+        monkeypatch.setattr(cocoindex_flows, "urlopen", fake_urlopen)
+        cocoindex_flows.hindsight_retain(bank_id="cursor-memory", content="x", document_id="doc-1")
+
+        assert "strategy" not in captured_requests[0]["items"][0]
 
     def test_retries_then_gives_up_returning_empty_dict(self, cocoindex_flows, monkeypatch):
         from urllib.error import URLError

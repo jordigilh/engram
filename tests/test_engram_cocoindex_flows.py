@@ -127,6 +127,75 @@ class TestProcessDocFile:
         assert retain_calls[0]["document_id"] == "engram--long"
         assert retain_calls[1]["document_id"] == "engram--long--chunk1"
 
+    def test_regression_prepending_a_findings_style_section_does_not_change_older_sections_document_id(
+        self, engram_cocoindex_flows, monkeypatch,
+    ):
+        """The exact 2026-08-03 cascade bug: FINDINGS.md grows by prepending
+        a new dated ## entry above existing ones. An older entry's
+        document_id (and retained content) must be unaffected by the
+        prepend. See docs/FINDINGS.md."""
+        before_content = (
+            "# Research Findings\n\n"
+            "## 2026-08-01: First entry\n\nOriginal body text for the first entry.\n"
+        )
+        after_content = (
+            "# Research Findings\n\n"
+            "## 2026-08-03: New entry\n\nBrand new body text.\n\n"
+            "## 2026-08-01: First entry\n\nOriginal body text for the first entry.\n"
+        )
+
+        before_calls = []
+        monkeypatch.setattr(engram_cocoindex_flows, "hindsight_retain", lambda **kwargs: before_calls.append(kwargs))
+        _run(engram_cocoindex_flows.process_doc_file(
+            FakeDocFile(before_content, "/fake/repo/docs/FINDINGS.md"),
+            base_dir=Path("/fake/repo/docs"),
+            source_tag="engram",
+        ))
+
+        after_calls = []
+        monkeypatch.setattr(engram_cocoindex_flows, "hindsight_retain", lambda **kwargs: after_calls.append(kwargs))
+        _run(engram_cocoindex_flows.process_doc_file(
+            FakeDocFile(after_content, "/fake/repo/docs/FINDINGS.md"),
+            base_dir=Path("/fake/repo/docs"),
+            source_tag="engram",
+        ))
+
+        before_by_id = {c["document_id"]: c["content"] for c in before_calls}
+        after_by_id = {c["document_id"]: c["content"] for c in after_calls}
+        first_entry_doc_id = [d for d in before_by_id if d != "engram--FINDINGS"][0]
+
+        assert first_entry_doc_id in after_by_id
+        assert after_by_id[first_entry_doc_id] == before_by_id[first_entry_doc_id]
+
+
+class TestHindsightRetainStrategyField:
+    def test_regression_payload_does_not_include_dead_strategy_field(self, engram_cocoindex_flows, monkeypatch):
+        """Same fix as cocoindex-flows.py's hindsight_retain(): strategy=
+        "exact" was never registered in any bank's retain_strategies
+        config, so it was pure log noise. See docs/FINDINGS.md 2026-08-03."""
+        import json
+
+        captured_requests = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps({"success": True}).encode()
+
+        def fake_urlopen(req, timeout=60):
+            captured_requests.append(json.loads(req.data))
+            return FakeResponse()
+
+        monkeypatch.setattr(engram_cocoindex_flows, "urlopen", fake_urlopen)
+        engram_cocoindex_flows.hindsight_retain(bank_id="engram-docs", content="x", document_id="doc-1")
+
+        assert "strategy" not in captured_requests[0]["items"][0]
+
 
 class TestHindsightRetain:
     """Same retry-then-give-up contract as cocoindex-flows.py's own

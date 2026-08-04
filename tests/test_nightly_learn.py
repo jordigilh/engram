@@ -1186,3 +1186,97 @@ class TestRunNightlyProjectClobbering:
         nightly_learn.run_nightly({}, set(), project="dcm")
 
         assert captured["project"] == "dcm"
+
+
+class TestReflectWindowed:
+    """reflect_windowed() -- see nightly-learn.py's docstring and
+    docs/findings/2026-08.md for why this exists: /reflect has no date-range
+    parameter, so a plain reflect() call always reasons over the bank's
+    entire all-time correction history. This client-side-filters correction
+    facts to a recent window before handing them to reflect() as context."""
+
+    def test_no_corrections_in_window_skips_reflect_call(self, nightly_learn, monkeypatch):
+        """Zero recent corrections is itself a meaningful signal -- must not
+        fall back to an unscoped/all-time reflect() call."""
+        reflect_called = []
+        monkeypatch.setattr(
+            nightly_learn, "api_post",
+            lambda path, payload: (
+                {"results": []} if path.endswith("/memories/recall")
+                else reflect_called.append(payload) or {"answer": "should not be called"}
+            ),
+        )
+
+        result = nightly_learn.reflect_windowed(days=7)
+
+        assert result == {"window_days": 7, "corrections_in_window": 0, "result": None}
+        assert reflect_called == []
+
+    def test_old_corrections_outside_window_are_excluded(self, nightly_learn, monkeypatch):
+        old_fact = {
+            "text": "User corrected: use X instead of Y",
+            "mentioned_at": "2020-01-01T00:00:00+00:00",
+        }
+        monkeypatch.setattr(
+            nightly_learn, "api_post",
+            lambda path, payload: {"results": [old_fact]} if path.endswith("/memories/recall") else {},
+        )
+
+        result = nightly_learn.reflect_windowed(days=7)
+
+        assert result["corrections_in_window"] == 0
+        assert result["result"] is None
+
+    def test_recent_correction_is_included_and_passed_as_context(self, nightly_learn, monkeypatch):
+        from datetime import datetime, timezone
+
+        recent_fact = {
+            "text": "User corrected: use X instead of Y",
+            "mentioned_at": datetime.now(timezone.utc).isoformat(),
+        }
+        reflect_payloads = []
+
+        def fake_api_post(path, payload):
+            if path.endswith("/memories/recall"):
+                return {"results": [recent_fact]}
+            reflect_payloads.append(payload)
+            return {"answer": "pattern found"}
+
+        monkeypatch.setattr(nightly_learn, "api_post", fake_api_post)
+
+        result = nightly_learn.reflect_windowed(days=7)
+
+        assert result["corrections_in_window"] == 1
+        assert result["result"] == {"answer": "pattern found"}
+        assert len(reflect_payloads) == 1
+        assert "use X instead of Y" in reflect_payloads[0]["context"]
+        assert "last 7 days" in reflect_payloads[0]["query"]
+
+    def test_naive_timestamp_without_offset_is_treated_as_utc(self, nightly_learn, monkeypatch):
+        """Regression: this REST endpoint has been observed returning
+        mentioned_at without a UTC offset suffix (unlike the MCP recall
+        tool against the same data) -- must not crash or silently drop
+        the fact."""
+        from datetime import datetime, timezone
+
+        naive_recent = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+        fact = {"text": "User corrected: naive timestamp case", "mentioned_at": naive_recent}
+        monkeypatch.setattr(
+            nightly_learn, "api_post",
+            lambda path, payload: {"results": [fact]} if path.endswith("/memories/recall") else {"answer": "ok"},
+        )
+
+        result = nightly_learn.reflect_windowed(days=7)
+
+        assert result["corrections_in_window"] == 1
+
+    def test_recall_failure_returns_error_without_raising(self, nightly_learn, monkeypatch):
+        def raise_error(path, payload):
+            raise URLError("connection refused")
+
+        monkeypatch.setattr(nightly_learn, "api_post", raise_error)
+
+        result = nightly_learn.reflect_windowed(days=7)
+
+        assert result["result"] is None
+        assert "error" in result

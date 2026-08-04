@@ -275,6 +275,32 @@ def generate_dashboard(reports: list[dict]) -> str:
 
     lines.append("")
 
+    # --- Recent Correction Patterns (time-windowed reflect) ---
+    # reflect_windowed_7d (nightly-learn.py, added 2026-08-04) client-side
+    # filters correction facts to a recent window before reflecting, unlike
+    # the plain "reflect_result" above/elsewhere which reasons over the
+    # bank's entire all-time correction history every night (the /reflect
+    # endpoint has no date-range parameter) and so barely changes even after
+    # a pattern has genuinely stopped recurring. See docs/findings/2026-08.md.
+    windowed = latest.get("reflect_windowed_7d")
+    if windowed is not None:
+        window_days = windowed.get("window_days", 7)
+        in_window = windowed.get("corrections_in_window", 0)
+        lines.append(f"## Recent Correction Patterns (last {window_days} days)")
+        lines.append("")
+        lines.append(f"**{in_window}** correction(s) retained in this window.")
+        lines.append("")
+        result = windowed.get("result")
+        if windowed.get("error"):
+            lines.append(f"_Windowed reflect failed: {windowed['error']}_")
+        elif in_window == 0:
+            lines.append("No corrections in this window — a genuinely positive signal, not just a quiet night.")
+        elif result and result.get("text"):
+            lines.append(result["text"].strip())
+        else:
+            lines.append("_Reflect call returned no text._")
+        lines.append("")
+
     # --- Session Distribution ---
     dist = eff.get("session_distribution", {})
     if dist:

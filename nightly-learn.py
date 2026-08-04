@@ -24,7 +24,7 @@ import re
 import subprocess
 import sys
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from glob import glob
 from pathlib import Path
 from typing import Any
@@ -890,6 +890,112 @@ def reflect() -> dict[str, Any]:
         return {"error": str(e)}
 
 
+def _parse_fact_timestamp(raw: str | None) -> datetime | None:
+    """Parse a recall result's mentioned_at/occurred_start into a tz-aware UTC
+    datetime, tolerating both the naive-looking timestamps this REST endpoint
+    has been observed to return and offset-suffixed ones (seen from the MCP
+    recall tool against the same data) -- see reflect_windowed()."""
+    if not raw:
+        return None
+    try:
+        ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts
+
+
+def reflect_windowed(days: int = 7) -> dict[str, Any]:
+    """Time-windowed variant of reflect().
+
+    reflect()'s /reflect endpoint has no date-range parameter at all (confirmed
+    by inspecting its schema), and /recall's query_timestamp only anchors
+    relative-date parsing and recency *scoring* -- it does not filter out
+    older memories (confirmed empirically, see docs/findings/2026-08.md). That
+    combination means a plain reflect() call reasons over the bank's entire
+    all-time correction history every single night, so the "top 3 recurring
+    patterns" answer barely changes night to night even after a pattern has
+    genuinely stopped recurring -- there is no way to tell "still happening"
+    from "happened once, months ago" from the output alone.
+
+    This works around the missing server-side filter by doing the filtering
+    client-side: recall() correction-tagged facts (tag "CORRECTION", applied
+    at retain time -- see retain_windows_deduped()), keep only those whose
+    mentioned_at/occurred_start falls within the last `days` days, and then
+    hand that already-correct subset to reflect() as explicit `context` with
+    a query that tells it to reason ONLY over the enumerated facts. This
+    still relies on reflect() actually honoring "only use what's in context"
+    rather than pulling in its own unscoped recall -- not independently
+    verified beyond the spot-check in docs/findings/2026-08.md -- so treat
+    the output as a best-effort recency signal, not a guarantee.
+
+    Returns {"window_days", "corrections_in_window", "result"}; `result` is
+    None (not an empty reflect() call) when zero corrections fall in the
+    window -- itself a meaningful, distinct signal from reflect()'s output.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    try:
+        recall_result = api_post(
+            f"/v1/default/banks/{BANK_ID}/memories/recall",
+            {
+                "query": "corrections and mistakes made by the assistant",
+                "tags": ["CORRECTION"],
+                "tags_match": "any",
+                "max_tokens": 4096,
+                "budget": "high",
+            },
+        )
+    except Exception as e:
+        log.warning("Windowed reflect: recall failed: %s", e)
+        return {"window_days": days, "corrections_in_window": 0, "result": None, "error": str(e)}
+
+    recent_facts = []
+    for fact in recall_result.get("results", []):
+        ts = _parse_fact_timestamp(fact.get("mentioned_at") or fact.get("occurred_start"))
+        if ts is not None and ts >= cutoff:
+            text = fact.get("text", "")
+            if text:
+                recent_facts.append(text)
+
+    if not recent_facts:
+        log.info("Windowed reflect: no corrections in last %d days", days)
+        return {"window_days": days, "corrections_in_window": 0, "result": None}
+
+    # Capped rather than exhaustive -- this is a context block for one LLM
+    # call, not a full export; 40 facts is generous headroom over what a
+    # healthy `days`-sized window should realistically contain.
+    context_block = "\n".join(f"- {t}" for t in recent_facts[:40])
+    payload = {
+        "query": (
+            f"Based ONLY on the {len(recent_facts)} correction(s) listed in the context below "
+            f"(all from the last {days} days -- do not use any other memories you may know "
+            "about), what are the top 3 recurring patterns where the assistant made errors? "
+            "For each, state what went wrong and what should be done instead. If fewer than "
+            "3 distinct patterns are present, report only as many as genuinely exist."
+        ),
+        "context": context_block,
+        "budget": "low",
+        "max_tokens": 1024,
+    }
+    try:
+        result = api_post(f"/v1/default/banks/{BANK_ID}/reflect", payload)
+    except Exception as e:
+        log.warning("Windowed reflect failed: %s", e)
+        return {
+            "window_days": days,
+            "corrections_in_window": len(recent_facts),
+            "result": None,
+            "error": str(e),
+        }
+
+    return {
+        "window_days": days,
+        "corrections_in_window": len(recent_facts),
+        "result": result,
+    }
+
+
 RECALL_SIGNALS_PATH = LOG_DIR / "recall-signals.jsonl"
 
 PROJECT_CONFIGS = {
@@ -1627,6 +1733,7 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
         "contradictions_queued": 0,
         "total_retain_usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
         "reflect_result": None,
+        "reflect_windowed_7d": None,
         "bank_stats": bank_stats,
         "observability_probes": [],
         "errors": [],
@@ -1709,6 +1816,7 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
     ):
         log.info("Running reflect...")
         results["reflect_result"] = reflect()
+        results["reflect_windowed_7d"] = reflect_windowed(days=7)
 
     # Phase: Observability probes
     log.info("Running recall observability probes...")

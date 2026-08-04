@@ -362,6 +362,64 @@ curl -X POST http://localhost:8888/v1/default/banks/<project>-docs/memories/reca
   -d '{"query": "architecture overview", "max_tokens": 1024}'
 ```
 
+### 12. Install the Deterministic Correction Enforcement Hooks (optional)
+
+Recall and cursor rules are *advisory* — a model can always choose not to
+call `recall`, and a summarized/compacted context can silently drop a rule's
+instructions. The hook pair in `hooks/` is the harness-enforced alternative:
+Cursor hooks cannot be skipped by the model the way a rule file can (see
+docs/findings/2026-08.md for the full design rationale and spike history).
+
+The pair:
+
+- `hooks/detect-plan-kickoff.sh` (`beforeSubmitPrompt`) — detects Cursor's
+  auto-continue "implement the plan" message, extracts the newly-confirmed
+  plan's `overview` field, and caches it to a per-session marker file.
+- `hooks/post-plan-hindsight-check.py` (`preToolUse`, matcher
+  `Write|StrReplace|Shell|EditNotebook`) — on the first matched tool call
+  after a plan is confirmed, consumes that marker and runs a real
+  `contradiction_resolution.resolve()` check (in a subprocess under a hard
+  45s wall-clock watchdog) against the target project's `cursor-memory`
+  bank. A genuine contradiction hard-blocks the call with
+  `permission: deny` and a `user_message` explaining the conflict; the
+  model can then retry (same or revised) and pass through cleanly — this is
+  a one-time speed bump per plan, not a permanent lock, because the check
+  detects semantic conflict, not intent (see docs/findings/2026-08.md for a
+  real false-positive example: a plan that *deliberately* superseded a
+  stale convention looks identical to one that violates a still-valid one).
+
+Install into a target repo:
+
+```bash
+cd /path/to/engram
+bash hooks/install.sh /path/to/target-repo
+```
+
+This is idempotent (safe to re-run) and merges into any existing
+`.cursor/hooks.json` rather than overwriting it. It also symlinks the four
+hook scripts into `~/.hindsight/hooks/` — the single stable location every
+onboarded repo's `hooks.json` points at, so the hooks keep working even if
+engram's own checkout path ever changes (same rationale as `chunking.py`'s
+symlink into `~/.hindsight/`, see step 4 above and docs/INSTALL.md).
+
+> **Gotcha**: the enforcer's `command` in `hooks.json` must invoke
+> `~/.hindsight/venv/bin/python3`, never a bare `python3`/`python` — the
+> real `resolve()` call needs `litellm`/`vertexai`, which only exist in
+> Hindsight's venv. `hooks/install.sh` gets this right automatically; if
+> you ever hand-edit `hooks.json`, don't "simplify" the interpreter path.
+
+> **Gotcha**: like `.cursor/mcp.json` (step 7), `hooks.json` embeds this
+> machine's absolute paths and is gitignored via the same blanket
+> `.cursor/*` pattern — it will not exist in a fresh clone/worktree until
+> `hooks/install.sh` is re-run there.
+
+Known scope limits (both accepted, not bugs): a `Task` subagent's tool
+calls carry a different `session_id` than its parent conversation, so
+subagent-delegated plan implementation gets zero coverage from the
+`preToolUse` enforcer; and the check only fires on the *first* matched tool
+call per plan (by design — the marker is consumed immediately), not on
+every subsequent one.
+
 ## File Checklist
 
 | File | Purpose |
@@ -373,6 +431,8 @@ curl -X POST http://localhost:8888/v1/default/banks/<project>-docs/memories/reca
 | `cursor/hindsight-memory.mdc.tmpl` | Shared template (do not edit per-project) |
 | `cursor/generate-mdc.sh` | Generates .mdc from template + vars |
 | Each repo's `.cursor/mcp.json` | Workspace-level MCP routing |
+| `hooks/install.sh` | Installs the Deterministic Correction Enforcement hook pair (optional, step 12) |
+| Each opted-in repo's `.cursor/hooks.json` | Harness-enforced plan-kickoff detector + contradiction-check enforcer |
 
 ## Isolation Guarantees
 

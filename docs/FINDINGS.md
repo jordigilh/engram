@@ -27,8 +27,9 @@ recall-quality benchmark is built against.
 
 ## Index
 
-### August 2026 (7 entries)
+### August 2026 (8 entries)
 
+- [2026-08-04 (same day, follow-up): Deterministic Correction Enforcement — Advisory Rules Can't Be the Whole Answer, So We Built a Harness Hook That Can't Be Skipped](findings/2026-08.md#2026-08-04-same-day-follow-up-deterministic-correction-enforcement-advisory-rules-cant-be-the-whole-answer-so-we-built-a-harness-hook-that-cant-be-skipped)
 - [2026-08-04: Purged 177 Legacy Pre-`memory_id` Pending Contradictions — Unactionable Backlog, Not Data Loss](findings/2026-08.md#2026-08-04-purged-177-legacy-pre-memory_id-pending-contradictions-unactionable-backlog-not-data-loss)
 - [2026-08-03 (same day, third follow-up): `kubernaut-operator` Had No `.cursor/mcp.json` — Restored It, Then Verified It Survives Branch Switches](findings/2026-08.md#2026-08-03-same-day-third-follow-up-kubernaut-operator-had-no-cursormcpjson-restored-it-then-verified-it-survives-branch-switches)
 - [2026-08-03 (same day, second follow-up): Split `docs/FINDINGS.md` Into Monthly Files — Considered and Rejected a GitHub-Issues Migration](findings/2026-08.md#2026-08-03-same-day-second-follow-up-split-docsfindingsmd-into-monthly-files-considered-and-rejected-a-github-issues-migration)

@@ -18,7 +18,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent
 SPIKE_DIR = REPO_ROOT / "spike"
-for path in (REPO_ROOT, SPIKE_DIR):
+HOOKS_DIR = REPO_ROOT / "hooks"
+for path in (REPO_ROOT, SPIKE_DIR, HOOKS_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
@@ -91,6 +92,19 @@ def koku_cocoindex_flows() -> ModuleType:
     "koku_repo_pg_pool" for the same process-global-collision reason as
     engram_cocoindex_flows's PG_POOL above."""
     return load_hyphenated_module("koku-cocoindex-flows.py", "koku_cocoindex_flows")
+
+
+@pytest.fixture(scope="session")
+def post_plan_hindsight_check() -> ModuleType:
+    """hooks/post-plan-hindsight-check.py -- the preToolUse enforcer half of
+    the Deterministic Correction Enforcement hook pair (see
+    docs/findings/2026-08.md)."""
+    return load_hyphenated_module("hooks/post-plan-hindsight-check.py", "post_plan_hindsight_check")
+
+
+@pytest.fixture(scope="session")
+def generate_dashboard() -> ModuleType:
+    return load_hyphenated_module("generate-dashboard.py", "generate_dashboard")
 
 
 @pytest.fixture(scope="session")

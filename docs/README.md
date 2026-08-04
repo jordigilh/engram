@@ -404,4 +404,4 @@ relevant. See [Metrics — Memory Triage](METRICS.md#memory-triage) for details.
 - **[CocoIndex Operations](COCOINDEX.md)** — flow catalog, running modes, monitoring, troubleshooting
 - **[Metrics and Monitoring](METRICS.md)** — observability, effectiveness tracking, report interpretation
 - **[Effectiveness Dashboard](DASHBOARD.md)** — daily metrics trend, auto-updated by nightly pipeline
-- **[Research Findings](FINDINGS.md)** — empirical results, incidents, and lessons learned
+- **[Research Findings](FINDINGS.md)** — index of empirical results, incidents, and lessons learned; entries live in per-month files under `findings/` as of 2026-08-03

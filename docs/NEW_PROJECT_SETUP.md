@@ -27,9 +27,13 @@ code table + own launchd service). Two lighter variants exist, both shipped
 for real during the 2026-07-15 Engram-onboarding + kubernaut-operator/console
 work (see [FINDINGS.md](FINDINGS.md)):
 
-**No-issues-bank variant** — for a project with zero GitHub issues (e.g. this
-repo, `engram`, which tracks bugs/decisions in `docs/FINDINGS.md` instead):
-skip the `<project>-issues` bank entirely, skip the `issues_app` in the
+**No-issues-bank variant** — for a project with no incident/decision issue
+tracking to ingest (e.g. this repo, `engram`, which tracks bugs/decisions in
+`docs/FINDINGS.md` instead; as of 2026-07-29 it does use a small number of
+GitHub issues, but only for forward-looking enhancement proposals, a
+separate and non-overlapping use case that still doesn't need an
+`<project>-issues` bank): skip the `<project>-issues` bank entirely, skip
+the `issues_app` in the
 CocoIndex flow file, and omit `issues_repos` from the project's
 `PROJECT_CONFIGS` entry in both `nightly-learn.py` and `report.py` (both
 files' `collect_ingestion_coverage()`/probe logic treat a missing
@@ -188,6 +192,26 @@ Create `.cursor/mcp.json` in each project repository:
 ```
 
 The workspace-level config uses the same server **names** as kubernaut (`hindsight-docs`, `hindsight-issues`, `cocoindex-code`) but points to different backends. Cursor rules reference these server names, so the same `recall` calls work across projects.
+
+> **Gotcha**: whether to commit this file depends on whether the repo is
+> personal/single-machine or shared/multi-contributor. `engram` and
+> `kubernaut-console` commit `.cursor/mcp.json` directly (only this machine
+> ever clones them). Repos with real outside contributors (`kubernaut`,
+> `kubernaut-v1.5`, `kubernaut-v1.6`, `kubernaut-operator`) instead gitignore
+> it via a blanket `.cursor/*` in `.gitignore` (with `!.cursor/rules/` /
+> `!.cursor/skills/` carved back out, but no exception for `mcp.json`) —
+> because the file embeds this machine's absolute paths
+> (`/Users/jgil/.hindsight/venv/bin/python3`, `/Users/jgil/go/bin/gopls`),
+> which would be wrong on every other contributor's machine if committed.
+> An untracked, gitignored `.cursor/mcp.json` still survives ordinary
+> `git checkout`/`git switch` between branches in the same working directory
+> (checkout only adds/removes *tracked* files) — verified empirically
+> 2026-08-03 in `kubernaut-operator`. It does **not** survive
+> `git clean -fdx` (the `-x` pulls in ignored files) or a brand-new
+> `git clone`/`git worktree add` of the repo elsewhere, since those only
+> materialize tracked content — if a repo is ever missing this file, that's
+> the likely cause; just redo this step rather than trying to make git
+> remember a file it's deliberately excluding (see FINDINGS.md).
 
 ### 8. Slim the Global MCP Config
 

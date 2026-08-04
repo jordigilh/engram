@@ -19,10 +19,14 @@ Use the appropriate bank(s):
 Call one or more banks depending on what the task touches. A single recall to
 **hindsight** with a query summarizing the task intent is sufficient for most work.
 
-Note: engram has no dedicated issues bank (this repo has zero GitHub issues —
-decisions and known bugs are tracked in `docs/FINDINGS.md` instead). For
-requirements/bug history, read `docs/FINDINGS.md` directly rather than recalling
-a bank.
+Note: engram has no dedicated issues bank for incident/decision tracking —
+decisions and known bugs are tracked in `docs/FINDINGS.md` instead. (Engram
+does use a small number of GitHub issues, but only for forward-looking
+enhancement proposals, a separate and non-overlapping use case — see
+`docs/NEW_PROJECT_SETUP.md`'s "no-issues-bank variant".) For
+requirements/bug history, start at `docs/FINDINGS.md` — as of 2026-08-03 it's
+a linked index into per-month entry files under `docs/findings/`, not the
+entries themselves (it outgrew a single flat file at 4,320 lines).
 
 ## Before planning or implementing (MANDATORY GATE)
 

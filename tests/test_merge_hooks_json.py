@@ -10,6 +10,7 @@ import _merge_hooks_json as m
 
 DETECTOR = "/Users/jgil/.hindsight/hooks/detect-plan-kickoff.sh"
 ENFORCER = "/Users/jgil/.hindsight/venv/bin/python3 /Users/jgil/.hindsight/hooks/post-plan-hindsight-check.py"
+REMINDER = "/Users/jgil/.hindsight/venv/bin/python3 /Users/jgil/.hindsight/hooks/post-plan-checklist-reminder.py"
 
 
 class TestMerge:
@@ -68,6 +69,39 @@ class TestMerge:
 
         assert len(result["hooks"]["preToolUse"]) == 2
 
+    def test_reminder_cmd_adds_posttooluse_hook(self):
+        result = m.merge({}, DETECTOR, ENFORCER, REMINDER)
+
+        assert result["hooks"]["postToolUse"] == [
+            {"matcher": m.MATCHER, "command": REMINDER, "timeout": m.REMINDER_TIMEOUT_S}
+        ]
+
+    def test_no_reminder_cmd_omits_posttooluse_entirely(self):
+        """The kubernaut case: install.sh passes no reminder command at
+        all, and hooks.json must not gain a postToolUse key just for this
+        feature -- not even an empty list."""
+        result = m.merge({}, DETECTOR, ENFORCER, None)
+
+        assert "postToolUse" not in result["hooks"]
+
+    def test_reminder_merge_is_idempotent(self):
+        result = m.merge({}, DETECTOR, ENFORCER, REMINDER)
+        result = m.merge(result, DETECTOR, ENFORCER, REMINDER)
+
+        assert len(result["hooks"]["postToolUse"]) == 1
+
+    def test_reminder_preserves_existing_posttooluse_entries(self):
+        existing = {
+            "version": 1,
+            "hooks": {"postToolUse": [{"matcher": "TodoWrite", "command": "/some/other.sh", "timeout": 5}]},
+        }
+
+        result = m.merge(existing, DETECTOR, ENFORCER, REMINDER)
+
+        post = result["hooks"]["postToolUse"]
+        assert len(post) == 2
+        assert {"matcher": "TodoWrite", "command": "/some/other.sh", "timeout": 5} in post
+
 
 class TestMainCli:
     def test_writes_merged_config_to_file(self, tmp_path):
@@ -102,3 +136,25 @@ class TestMainCli:
 
         sys.argv = ["prog", "only-one-arg"]
         assert m.main() == 1
+
+    def test_four_args_with_reminder_writes_all_three_hooks(self, tmp_path):
+        import sys
+
+        hooks_path = tmp_path / "hooks.json"
+        sys.argv = ["prog", str(hooks_path), DETECTOR, ENFORCER, REMINDER]
+        assert m.main() == 0
+
+        data = json.loads(hooks_path.read_text())
+        assert data["hooks"]["postToolUse"][0]["command"] == REMINDER
+
+    def test_four_args_with_empty_reminder_omits_posttooluse(self, tmp_path):
+        """Mirrors how install.sh invokes this for kubernaut repos: it still
+        passes 4 positional args, but the 4th is an empty string."""
+        import sys
+
+        hooks_path = tmp_path / "hooks.json"
+        sys.argv = ["prog", str(hooks_path), DETECTOR, ENFORCER, ""]
+        assert m.main() == 0
+
+        data = json.loads(hooks_path.read_text())
+        assert "postToolUse" not in data["hooks"]

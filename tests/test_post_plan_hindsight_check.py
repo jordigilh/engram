@@ -18,6 +18,9 @@ import pytest
 def isolate_paths(post_plan_hindsight_check, tmp_path, monkeypatch):
     monkeypatch.setattr(post_plan_hindsight_check, "MARKER_DIR", tmp_path / "markers")
     monkeypatch.setattr(post_plan_hindsight_check, "LOG_PATH", tmp_path / "logs" / "check.jsonl")
+    # No repo has a checklist file by default -- individual tests that need
+    # the has_checklist=True path create a file under this dir explicitly.
+    monkeypatch.setattr(post_plan_hindsight_check, "REVIEW_CHECKLISTS_DIR", tmp_path / "review-checklists")
 
 
 def _stdin(payload: dict) -> StringIO:
@@ -101,6 +104,97 @@ class TestMarkerConsumption:
         ))
         assert post_plan_hindsight_check.main() == 0
         assert json.loads(capsys.readouterr().out) == {"permission": "allow"}
+
+
+class TestChecklistMarkerDeferral:
+    """The blast-radius-critical behavior for the "Hook-delivered PR review
+    checklist" feature: deletion timing must only change for repos that
+    actually have a checklist file. Everything else (kubernaut, and any
+    dcm-project repo without one) must be byte-identical to the pre-existing
+    unconditional-immediate-unlink behavior."""
+
+    def _write_marker(self, post_plan_hindsight_check, session_id="sess-1", repo=None, **extra):
+        marker_dir = post_plan_hindsight_check.MARKER_DIR
+        marker_dir.mkdir(parents=True, exist_ok=True)
+        path = marker_dir / f"plan-kickoff-{session_id}.json"
+        data = {"overview": "Do the thing.", "project": "dcm", **extra}
+        if repo is not None:
+            data["repo"] = repo
+        path.write_text(json.dumps(data))
+        return path
+
+    def _fake_run(self, stdout_obj, returncode=0):
+        return lambda *a, **k: subprocess.CompletedProcess(
+            args=[], returncode=returncode, stdout=json.dumps(stdout_obj), stderr="",
+        )
+
+    def test_no_checklist_file_for_repo_deletes_marker_immediately(self, post_plan_hindsight_check, monkeypatch):
+        """Covers kubernaut and any dcm-project repo without a checklist
+        file -- must match today's unconditional-unlink behavior exactly."""
+        marker_path = self._write_marker(post_plan_hindsight_check, repo="kubernaut")
+        monkeypatch.setattr("sys.stdin", _stdin({"session_id": "sess-1"}))
+        monkeypatch.setattr(subprocess, "run", self._fake_run({"action": "retain", "confidence": 0.0, "explanation": ""}))
+
+        post_plan_hindsight_check.main()
+
+        assert not marker_path.exists()
+
+    def test_marker_without_repo_field_deletes_immediately(self, post_plan_hindsight_check, monkeypatch):
+        """Markers written before this feature existed have no "repo" key
+        at all -- must degrade to the old behavior, not crash."""
+        marker_path = self._write_marker(post_plan_hindsight_check, repo=None)
+        monkeypatch.setattr("sys.stdin", _stdin({"session_id": "sess-1"}))
+        monkeypatch.setattr(subprocess, "run", self._fake_run({"action": "retain", "confidence": 0.0, "explanation": ""}))
+
+        post_plan_hindsight_check.main()
+
+        assert not marker_path.exists()
+
+    def test_checklist_file_exists_and_allow_outcome_defers_deletion(self, post_plan_hindsight_check, monkeypatch):
+        checklists_dir = post_plan_hindsight_check.REVIEW_CHECKLISTS_DIR
+        checklists_dir.mkdir(parents=True)
+        (checklists_dir / "osac-service-provider.md").write_text("- some checklist item")
+        marker_path = self._write_marker(post_plan_hindsight_check, repo="osac-service-provider")
+        monkeypatch.setattr("sys.stdin", _stdin({"session_id": "sess-1"}))
+        monkeypatch.setattr(subprocess, "run", self._fake_run({"action": "retain", "confidence": 0.0, "explanation": ""}))
+
+        out = post_plan_hindsight_check.main()
+
+        assert marker_path.exists(), "marker must survive an allow outcome so the reminder hook can consume it"
+        assert out == 0
+
+    def test_checklist_file_exists_but_timeout_still_defers_deletion(self, post_plan_hindsight_check, monkeypatch):
+        checklists_dir = post_plan_hindsight_check.REVIEW_CHECKLISTS_DIR
+        checklists_dir.mkdir(parents=True)
+        (checklists_dir / "osac-service-provider.md").write_text("- some checklist item")
+        marker_path = self._write_marker(post_plan_hindsight_check, repo="osac-service-provider")
+        monkeypatch.setattr("sys.stdin", _stdin({"session_id": "sess-1"}))
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(cmd="worker", timeout=45)
+        ))
+
+        post_plan_hindsight_check.main()
+
+        assert marker_path.exists(), "checklist reminder should still be able to fire even if the contradiction check timed out"
+
+    def test_checklist_file_exists_but_deny_outcome_deletes_marker(self, post_plan_hindsight_check, monkeypatch, capsys):
+        """postToolUse never fires after a preToolUse deny, so nothing would
+        ever consume a marker left behind here -- must clean up immediately,
+        same as the no-checklist-file path."""
+        checklists_dir = post_plan_hindsight_check.REVIEW_CHECKLISTS_DIR
+        checklists_dir.mkdir(parents=True)
+        (checklists_dir / "osac-service-provider.md").write_text("- some checklist item")
+        marker_path = self._write_marker(post_plan_hindsight_check, repo="osac-service-provider")
+        monkeypatch.setattr("sys.stdin", _stdin({"session_id": "sess-1"}))
+        monkeypatch.setattr(subprocess, "run", self._fake_run(
+            {"action": "auto_resolved", "confidence": 0.9, "explanation": "conflict"}
+        ))
+
+        post_plan_hindsight_check.main()
+        out = json.loads(capsys.readouterr().out)
+
+        assert out["permission"] == "deny"
+        assert not marker_path.exists()
 
 
 class TestCheckOutcomes:

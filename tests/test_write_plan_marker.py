@@ -34,6 +34,31 @@ class TestDetectProject:
         ]) == "dcm"
 
 
+class TestDetectRepoName:
+    def test_extracts_basename_of_first_root(self):
+        assert wpm.detect_repo_name(
+            ["/Users/jgil/go/src/github.com/dcm-project/osac-service-provider"]
+        ) == "osac-service-provider"
+
+    def test_strips_trailing_slash(self):
+        assert wpm.detect_repo_name(
+            ["/Users/jgil/go/src/github.com/jordigilh/kubernaut/"]
+        ) == "kubernaut"
+
+    def test_empty_list_returns_none(self):
+        assert wpm.detect_repo_name([]) is None
+
+    def test_skips_empty_strings_to_find_a_real_root(self):
+        assert wpm.detect_repo_name(["", "/Users/jgil/go/src/github.com/dcm-project/cli"]) == "cli"
+
+    def test_generic_not_tied_to_dcm_or_kubernaut_families(self):
+        """Unlike detect_project(), this has no project-family allowlist --
+        any repo basename is returned, since the checklist-reminder feature
+        scopes itself by whether a matching file exists, not by this
+        function pre-filtering to known projects."""
+        assert wpm.detect_repo_name(["/Users/jgil/go/src/github.com/someone-else/random-repo"]) == "random-repo"
+
+
 def _write_plan(plans_dir, filename, overview, extra_after_overview="todos:\n  - id: x\n"):
     plans_dir.mkdir(parents=True, exist_ok=True)
     content = f'---\nname: Test Plan\noverview: "{overview}"\n{extra_after_overview}---\n\n# Body\n'
@@ -94,6 +119,7 @@ class TestMain:
         data = json.loads(marker_path.read_text())
         assert data["overview"] == "Do the thing carefully."
         assert data["project"] == "kubernaut"
+        assert data["repo"] == "kubernaut"
         assert data["plan_file"].endswith("a.plan.md")
 
     def test_picks_newest_plan_by_mtime(self, monkeypatch, tmp_path):

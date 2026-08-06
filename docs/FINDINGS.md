@@ -27,8 +27,9 @@ recall-quality benchmark is built against.
 
 ## Index
 
-### August 2026 (9 entries)
+### August 2026 (10 entries)
 
+- [2026-08-06: Hook-Delivered PR Review Checklist — Extending the Correction-Enforcement Hooks to Inject Reviewer Expectations, Not Just Block Contradictions](findings/2026-08.md#2026-08-06-hook-delivered-pr-review-checklist-extending-the-correction-enforcement-hooks-to-inject-reviewer-expectations-not-just-block-contradictions)
 - [2026-08-05: Two Postgres Outages in Two Days — pg0-Embedded's Self-Managed Lifecycle Was the Actual Root Cause, Fixed by Decoupling It](findings/2026-08.md#2026-08-05-two-postgres-outages-in-two-days-pg0-embeddeds-self-managed-lifecycle-was-the-actual-root-cause-fixed-by-decoupling-it)
 - [2026-08-04 (same day, follow-up): Deterministic Correction Enforcement — Advisory Rules Can't Be the Whole Answer, So We Built a Harness Hook That Can't Be Skipped](findings/2026-08.md#2026-08-04-same-day-follow-up-deterministic-correction-enforcement-advisory-rules-cant-be-the-whole-answer-so-we-built-a-harness-hook-that-cant-be-skipped)
 - [2026-08-04: Purged 177 Legacy Pre-`memory_id` Pending Contradictions — Unactionable Backlog, Not Data Loss](findings/2026-08.md#2026-08-04-purged-177-legacy-pre-memory_id-pending-contradictions-unactionable-backlog-not-data-loss)

@@ -366,15 +366,17 @@ curl -X POST http://localhost:8888/v1/default/banks/<project>-docs/memories/reca
 
 Recall and cursor rules are *advisory* — a model can always choose not to
 call `recall`, and a summarized/compacted context can silently drop a rule's
-instructions. The hook pair in `hooks/` is the harness-enforced alternative:
-Cursor hooks cannot be skipped by the model the way a rule file can (see
-docs/findings/2026-08.md for the full design rationale and spike history).
+instructions. The hook family in `hooks/` is the harness-enforced
+alternative: Cursor hooks cannot be skipped by the model the way a rule file
+can (see docs/findings/2026-08.md for the full design rationale and spike
+history).
 
-The pair:
+Three hooks, sharing one per-session marker:
 
 - `hooks/detect-plan-kickoff.sh` (`beforeSubmitPrompt`) — detects Cursor's
   auto-continue "implement the plan" message, extracts the newly-confirmed
-  plan's `overview` field, and caches it to a per-session marker file.
+  plan's `overview` field plus the repo name (basename of the first
+  workspace root), and caches both to a per-session marker file.
 - `hooks/post-plan-hindsight-check.py` (`preToolUse`, matcher
   `Write|StrReplace|Shell|EditNotebook`) — on the first matched tool call
   after a plan is confirmed, consumes that marker and runs a real
@@ -387,6 +389,14 @@ The pair:
   detects semantic conflict, not intent (see docs/findings/2026-08.md for a
   real false-positive example: a plan that *deliberately* superseded a
   stale convention looks identical to one that violates a still-valid one).
+- `hooks/post-plan-checklist-reminder.py` (`postToolUse`, same matcher) —
+  fires right after the enforcer, on the same tool call. If
+  `~/.hindsight/review-checklists/<repo>.md` exists for the marker's repo,
+  injects it via `additional_context` as a one-time reminder (e.g. a
+  project's Pre-PR review checklist that reviewers keep having to repeat).
+  No-ops (and is not even registered in `hooks.json`, see below) for repos
+  without a checklist file — currently that's every kubernaut repo, and all
+  dcm-project repos except `osac-service-provider`.
 
 Install into a target repo:
 
@@ -396,15 +406,25 @@ bash hooks/install.sh /path/to/target-repo
 ```
 
 This is idempotent (safe to re-run) and merges into any existing
-`.cursor/hooks.json` rather than overwriting it. It also symlinks the four
-hook scripts into `~/.hindsight/hooks/` — the single stable location every
-onboarded repo's `hooks.json` points at, so the hooks keep working even if
-engram's own checkout path ever changes (same rationale as `chunking.py`'s
-symlink into `~/.hindsight/`, see step 4 above and docs/INSTALL.md).
+`.cursor/hooks.json` rather than overwriting it. It also symlinks the hook
+scripts into `~/.hindsight/hooks/` and the whole `hooks/review-checklists/`
+directory into `~/.hindsight/review-checklists/` — the single stable
+locations every onboarded repo's `hooks.json` points at, so the hooks keep
+working even if engram's own checkout path ever changes (same rationale as
+`chunking.py`'s symlink into `~/.hindsight/`, see step 4 above and
+docs/INSTALL.md).
 
-> **Gotcha**: the enforcer's `command` in `hooks.json` must invoke
-> `~/.hindsight/venv/bin/python3`, never a bare `python3`/`python` — the
-> real `resolve()` call needs `litellm`/`vertexai`, which only exist in
+`install.sh` auto-detects kubernaut paths (any path containing
+`/kubernaut`) and, for those, registers only the detector+enforcer pair —
+the checklist reminder hook is not added to their `hooks.json` at all, since
+the checklist feature is DCM-specific. To add a checklist for a future
+(non-kubernaut) repo, just add `hooks/review-checklists/<repo>.md` and
+commit it — no script changes needed, the enforcer and reminder both key off
+file existence, not a hardcoded project list.
+
+> **Gotcha**: the enforcer's/reminder's `command` in `hooks.json` must
+> invoke `~/.hindsight/venv/bin/python3`, never a bare `python3`/`python` —
+> the real `resolve()` call needs `litellm`/`vertexai`, which only exist in
 > Hindsight's venv. `hooks/install.sh` gets this right automatically; if
 > you ever hand-edit `hooks.json`, don't "simplify" the interpreter path.
 
@@ -413,12 +433,26 @@ symlink into `~/.hindsight/`, see step 4 above and docs/INSTALL.md).
 > `.cursor/*` pattern — it will not exist in a fresh clone/worktree until
 > `hooks/install.sh` is re-run there.
 
-Known scope limits (both accepted, not bugs): a `Task` subagent's tool
-calls carry a different `session_id` than its parent conversation, so
-subagent-delegated plan implementation gets zero coverage from the
-`preToolUse` enforcer; and the check only fires on the *first* matched tool
-call per plan (by design — the marker is consumed immediately), not on
-every subsequent one.
+> **Gotcha (checklist content security)**: checklist files are git-tracked
+> inside engram's own repo, not committed to the target repo (e.g.
+> `osac-service-provider`'s own contributors, most of whom don't use
+> Engram, never see this file) and not stored as a bare untracked file
+> under `~/.hindsight/` either — `git diff`/`git log` on
+> `hooks/review-checklists/*.md` is the real integrity control against
+> tampering. `post-plan-checklist-reminder.py`'s
+> `is_safe_checklist_content()` is a cheap secondary sanity check (max
+> length, no URLs, no obvious prompt-injection phrasing), not a
+> replacement for reviewing checklist-file diffs.
+
+Known scope limits (accepted, not bugs): a `Task` subagent's tool calls
+carry a different `session_id` than its parent conversation, so
+subagent-delegated plan implementation gets zero coverage from either the
+enforcer or the reminder; the enforcer check only fires on the *first*
+matched tool call per plan (by design — the marker is consumed immediately
+unless a checklist file is deferring it, see above), not on every
+subsequent one; and a `preToolUse` deny always deletes the marker
+immediately, so a denied-then-retried plan never gets a checklist reminder
+either (`postToolUse` never fires after a `preToolUse` deny).
 
 ## File Checklist
 
@@ -431,8 +465,9 @@ every subsequent one.
 | `cursor/hindsight-memory.mdc.tmpl` | Shared template (do not edit per-project) |
 | `cursor/generate-mdc.sh` | Generates .mdc from template + vars |
 | Each repo's `.cursor/mcp.json` | Workspace-level MCP routing |
-| `hooks/install.sh` | Installs the Deterministic Correction Enforcement hook pair (optional, step 12) |
-| Each opted-in repo's `.cursor/hooks.json` | Harness-enforced plan-kickoff detector + contradiction-check enforcer |
+| `hooks/install.sh` | Installs the Deterministic Correction Enforcement hook family (optional, step 12) |
+| Each opted-in repo's `.cursor/hooks.json` | Harness-enforced plan-kickoff detector + contradiction-check enforcer (+ checklist reminder for non-kubernaut repos) |
+| `hooks/review-checklists/<repo>.md` | Per-repo PR review checklist content, injected by the checklist-reminder hook when present |
 
 ## Isolation Guarantees
 

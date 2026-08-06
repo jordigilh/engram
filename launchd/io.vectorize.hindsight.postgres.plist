@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.vectorize.hindsight.postgres</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.pg0/installation/18.1.0/bin/postgres</string>
+        <string>-D</string>
+        <string>__HOME__/.pg0/instances/hindsight/data</string>
+        <string>-p</string>
+        <string>5432</string>
+        <string>-c</string>
+        <string>shared_buffers=256MB</string>
+        <string>-c</string>
+        <string>maintenance_work_mem=512MB</string>
+        <string>-c</string>
+        <string>effective_cache_size=1GB</string>
+        <string>-c</string>
+        <string>logging_collector=on</string>
+        <string>-c</string>
+        <string>timezone=UTC</string>
+        <string>-c</string>
+        <string>log_filename=postgresql-%Y-%m-%d.log</string>
+        <string>-c</string>
+        <string>log_directory=log</string>
+        <string>-c</string>
+        <string>max_parallel_maintenance_workers=4</string>
+        <string>-c</string>
+        <string>work_mem=64MB</string>
+        <string>-c</string>
+        <string>log_rotation_size=100MB</string>
+        <string>-c</string>
+        <string>log_timezone=UTC</string>
+        <string>-c</string>
+        <string>log_rotation_age=1d</string>
+    </array>
+    <!-- fsync is intentionally left at Postgres's own default (on) here --
+         this instance is permanent, always-on infrastructure shared by
+         Hindsight and CocoIndex, not a throwaway embedded dev instance, so
+         durability on crash/power-loss matters. This is the one deliberate
+         behavior change vs. the pg0-managed instance it replaces (which ran
+         with fsync=off) -- see docs/findings/2026-08.md for the incident
+         history and rationale.
+
+         No LimitLoadToSessionType key: this plist is loaded once via
+         `launchctl bootstrap` and left to RunAtLoad/KeepAlive from then on,
+         same as every other job in this directory. The Aug 5 outage came
+         from hindsight-blue-green-restart.sh's own runtime `launchctl
+         bootstrap gui/<uid>` call failing without an active Aqua session,
+         which then took Postgres down with it because Postgres used to be
+         owned by hindsight-api's process lifecycle. This job is never
+         re-bootstrapped by any script, so that failure mode cannot recur
+         for Postgres specifically -- macOS's own launchd starts it at login
+         and keeps it alive on crash without any external command ever
+         being involved. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOME__/.pg0/installation/18.1.0/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>__HOME__/.pg0/instances/hindsight/data</string>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.hindsight/logs/postgres-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.hindsight/logs/postgres-stderr.log</string>
+</dict>
+</plist>

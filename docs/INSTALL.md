@@ -64,6 +64,47 @@ This installs Hindsight with embedded PostgreSQL (pg0), local ONNX embeddings,
 and local reranker — all running natively on macOS with no container or VM
 dependency. Data persists at `~/.pg0/instances/hindsight/data/`.
 
+### Recommended for always-on/multi-project setups: decouple Postgres
+
+By default `hindsight-api` starts, stops, and health-checks its own embedded
+Postgres (`pg0`) as part of its own process lifecycle. This is fine for a
+quick single-user trial, but on a machine running CocoIndex too (which shares
+this same Postgres instance/database for its pgvector tables — see
+`COCOINDEX_PG_URL` in step 16) and running `hindsight-api` as an unattended
+launchd service (step 5), it couples Postgres's uptime to two independent
+failure modes that have nothing to do with Postgres itself: a `pg0` liveness
+check that can false-positive on a stale/reused PID, and any future script
+that restarts `hindsight-api` (e.g. the nightly heap-reclaim swap in step 5)
+being unable to `launchctl bootstrap` without an active GUI session. Both of
+these took Postgres down within the same week on the reference deployment —
+see [docs/findings/2026-08.md](findings/2026-08.md).
+
+To run Postgres as its own independently-supervised launchd job instead
+(same binary, same data directory — no data migration):
+
+```bash
+# Stop the pg0-managed instance first (only if hindsight-api/pg0 already
+# started it once, e.g. after step 4 or an earlier run of ./start.sh):
+~/.pg0/installation/*/bin/pg_ctl -D ~/.pg0/instances/hindsight/data stop -m fast
+
+sed "s|__HOME__|$HOME|g" launchd/io.vectorize.hindsight.postgres.plist \
+    > ~/Library/LaunchAgents/io.vectorize.hindsight.postgres.plist
+
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.vectorize.hindsight.postgres.plist
+```
+
+Then add this to `~/.hindsight/config.env` so `hindsight-api` connects to it
+directly instead of trying to manage `pg0` itself (see the comment above this
+var in `config.env.example` for the full rationale):
+
+```bash
+HINDSIGHT_API_DATABASE_URL=postgresql://hindsight:hindsight@localhost:5432/hindsight
+```
+
+Restart `hindsight-api` (step 5) after adding this so it picks up the new
+value. Omit this var entirely to keep using pg0-embedded's default
+self-managed behavior.
+
 ## 5. Start the service
 
 ```bash

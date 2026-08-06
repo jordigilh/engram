@@ -103,6 +103,14 @@ def post_plan_hindsight_check() -> ModuleType:
 
 
 @pytest.fixture(scope="session")
+def post_plan_checklist_reminder() -> ModuleType:
+    """hooks/post-plan-checklist-reminder.py -- the postToolUse reminder,
+    third member of the Deterministic Correction Enforcement hook family
+    (see the "Hook-delivered PR review checklist" plan)."""
+    return load_hyphenated_module("hooks/post-plan-checklist-reminder.py", "post_plan_checklist_reminder")
+
+
+@pytest.fixture(scope="session")
 def generate_dashboard() -> ModuleType:
     return load_hyphenated_module("generate-dashboard.py", "generate_dashboard")
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge the Deterministic Correction Enforcement hook pair into a target
+"""Merge the Deterministic Correction Enforcement hook family into a target
 repo's .cursor/hooks.json, preserving any existing hook registrations.
 Idempotent -- re-running with the same args does not duplicate entries.
 
@@ -18,9 +18,12 @@ MATCHER = "Write|StrReplace|Shell|EditNotebook"
 # Cursor could kill the hook before its own fail-open path gets to run.
 ENFORCER_TIMEOUT_S = 60
 DETECTOR_TIMEOUT_S = 5
+# The reminder hook only does local file I/O (no network/subprocess calls),
+# so it needs nowhere near the enforcer's budget.
+REMINDER_TIMEOUT_S = 5
 
 
-def merge(config: dict, detector_cmd: str, enforcer_cmd: str) -> dict:
+def merge(config: dict, detector_cmd: str, enforcer_cmd: str, reminder_cmd: str | None = None) -> dict:
     config.setdefault("version", 1)
     config.setdefault("hooks", {})
 
@@ -32,19 +35,28 @@ def merge(config: dict, detector_cmd: str, enforcer_cmd: str) -> dict:
     if not any(h.get("command") == enforcer_cmd and h.get("matcher") == MATCHER for h in pre_tool):
         pre_tool.append({"matcher": MATCHER, "command": enforcer_cmd, "timeout": ENFORCER_TIMEOUT_S})
 
+    # Omitted for kubernaut repos (see install.sh's path-based auto-detection)
+    # -- this keeps the checklist-reminder hook entirely out of their
+    # hooks.json rather than registering a hook that would just no-op there.
+    if reminder_cmd:
+        post_tool = config["hooks"].setdefault("postToolUse", [])
+        if not any(h.get("command") == reminder_cmd and h.get("matcher") == MATCHER for h in post_tool):
+            post_tool.append({"matcher": MATCHER, "command": reminder_cmd, "timeout": REMINDER_TIMEOUT_S})
+
     return config
 
 
 def main() -> int:
-    if len(sys.argv) != 4:
+    if len(sys.argv) not in (4, 5):
         print(
-            "usage: _merge_hooks_json.py <hooks.json path> <detector command> <enforcer command>",
+            "usage: _merge_hooks_json.py <hooks.json path> <detector command> <enforcer command> [<reminder command>]",
             file=sys.stderr,
         )
         return 1
 
     hooks_json_path = Path(sys.argv[1])
     detector_cmd, enforcer_cmd = sys.argv[2], sys.argv[3]
+    reminder_cmd = sys.argv[4] if len(sys.argv) == 5 and sys.argv[4] else None
 
     config: dict = {"version": 1, "hooks": {}}
     if hooks_json_path.exists():
@@ -57,7 +69,7 @@ def main() -> int:
             )
             return 1
 
-    config = merge(config, detector_cmd, enforcer_cmd)
+    config = merge(config, detector_cmd, enforcer_cmd, reminder_cmd)
     hooks_json_path.write_text(json.dumps(config, indent=2) + "\n")
     return 0
 

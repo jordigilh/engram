@@ -13,7 +13,20 @@ recall()/check_contradiction()'s own retry loops are uncapped in aggregate),
 and hard-blocks (permission: deny + user_message -- NOT agent_message,
 confirmed broken on Cursor 3.14.7) only on a genuine contradiction.
 
-The marker is deleted immediately, before the check runs, deliberately:
+The marker is deleted immediately, before the check runs, UNLESS a companion
+`hooks/post-plan-checklist-reminder.py` (postToolUse) needs it -- i.e. unless
+`~/.hindsight/review-checklists/<repo>.md` exists for this marker's `repo`.
+This keeps the marker-lifecycle change inert for every repo without a
+checklist file (all of kubernaut, and any dcm-project repo that hasn't been
+given one): their behavior is byte-identical to before this hook pair grew a
+third member. Only when a checklist file exists is deletion deferred so the
+reminder hook (which fires after this one, on the same tool call, per
+Cursor's preToolUse-then-postToolUse ordering) can still read it -- and even
+then, a `deny` here deletes it immediately anyway, since postToolUse never
+fires after a preToolUse deny (see below), so nothing would consume it.
+
+Historically (before the checklist reminder existed) the marker was always
+deleted immediately, deliberately:
   - a crash mid-check never leaves a stale marker to be silently
     re-consumed or stuck
   - a deny is a one-time speed bump, not a permanent lock -- the model sees
@@ -23,6 +36,10 @@ The marker is deleted immediately, before the check runs, deliberately:
     correctly supersedes a stale convention looks identical to it as one
     that violates a still-valid one (a real example was found preflighting
     against historical plans, see docs/findings/2026-08.md).
+Both properties still hold: a crash before the has_checklist branch below
+still unlinks on the deny path or the invalid-marker path, and the only new
+case where a marker can outlive this hook (has_checklist AND allow) hands off
+to a hook that itself unconditionally deletes it on its very next read.
 
 Known gap: a Task subagent's tool calls carry a different session_id than
 its parent conversation (confirmed empirically), so a plan whose
@@ -45,6 +62,7 @@ from pathlib import Path
 
 MARKER_DIR = Path.home() / ".cache" / "engram-hooks"
 LOG_PATH = Path.home() / ".hindsight" / "logs" / "post-plan-hindsight-check.jsonl"
+REVIEW_CHECKLISTS_DIR = Path.home() / ".hindsight" / "review-checklists"
 # Measured empirically at 13-17s wall-clock for a *successful* real recall()
 # + check_contradiction() round trip (venv Python startup + one network hop
 # to hindsight-api + one Vertex AI call) -- see docs/findings/2026-08.md.
@@ -99,14 +117,24 @@ def main() -> int:
     except (OSError, json.JSONDecodeError):
         marker = None
 
-    try:
-        marker_path.unlink()
-    except OSError:
-        pass
-
     if not marker or not marker.get("overview"):
+        try:
+            marker_path.unlink()
+        except OSError:
+            pass
         allow()
         return 0
+
+    # See module docstring: only defer deletion when a companion checklist
+    # reminder actually exists for this repo -- otherwise this is exactly
+    # today's unconditional-immediate-unlink behavior.
+    repo = marker.get("repo")
+    has_checklist = bool(repo) and (REVIEW_CHECKLISTS_DIR / f"{repo}.md").exists()
+    if not has_checklist:
+        try:
+            marker_path.unlink()
+        except OSError:
+            pass
 
     overview = marker["overview"]
     project = marker.get("project")
@@ -146,6 +174,14 @@ def main() -> int:
             "project": project, "outcome": "denied", "action": action, "confidence": confidence,
             "explanation": explanation[:500], "elapsed_s": round(elapsed, 1),
         })
+        if has_checklist:
+            # postToolUse never fires after a preToolUse deny (confirmed,
+            # see docs/findings/2026-08.md), so nothing will ever consume a
+            # marker we leave here -- clean it up now instead of leaking it.
+            try:
+                marker_path.unlink()
+            except OSError:
+                pass
         deny(
             f"This plan's stated approach conflicts with an existing convention "
             f"(confidence {confidence:.2f}): {explanation} "

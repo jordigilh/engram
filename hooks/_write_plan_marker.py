@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Helper for hooks/detect-plan-kickoff.sh: find the newest confirmed plan
-file, extract its `overview` frontmatter field, detect the project from
-workspace_roots, and write a per-session marker for
-hooks/post-plan-hindsight-check.py to consume on the first matched mutating
-tool call of the implementation.
+file, extract its `overview` frontmatter field, detect the project and repo
+name from workspace_roots, and write a per-session marker consumed by
+hooks/post-plan-hindsight-check.py (preToolUse enforcer) and, if a checklist
+file exists for this repo, hooks/post-plan-checklist-reminder.py (postToolUse
+reminder) on the first matched mutating tool call of the implementation.
 
 Deliberately extracts only the `overview` field, not the full plan body --
 hindsight-api's /recall endpoint hard-caps queries at 500 tokens, and a
@@ -45,6 +46,19 @@ def detect_project(workspace_roots: list[str]) -> str | None:
     return None
 
 
+def detect_repo_name(workspace_roots: list[str]) -> str | None:
+    """Basename of the first non-empty workspace root, used by
+    hooks/post-plan-checklist-reminder.py to look up a per-repo checklist
+    file (review-checklists/<repo>.md). Deliberately generic (not tied to
+    the dcm/kubernaut project-family labels above) -- the checklist
+    mechanism scopes itself by file existence, not by this function."""
+    for root in workspace_roots:
+        name = Path(root.rstrip("/")).name
+        if name:
+            return name
+    return None
+
+
 def main() -> int:
     if len(sys.argv) < 3:
         return 0
@@ -73,6 +87,7 @@ def main() -> int:
         return 0
 
     project = detect_project(workspace_roots)
+    repo = detect_repo_name(workspace_roots)
 
     try:
         MARKER_DIR.mkdir(parents=True, exist_ok=True)
@@ -80,6 +95,7 @@ def main() -> int:
         marker_path.write_text(json.dumps({
             "overview": overview,
             "project": project,
+            "repo": repo,
             "plan_file": str(plan_files[0]),
         }))
     except OSError:

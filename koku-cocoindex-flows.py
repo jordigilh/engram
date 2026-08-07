@@ -145,14 +145,6 @@ def hindsight_retain(
             return {}
 
 
-def _split_text(text: str, chunk_size: int = 800, chunk_overlap: int = 200) -> list[str]:
-    """Thin alias to chunking.split_fixed_window() -- still used directly by
-    code_app below. process_doc_file/process_pr/process_jira_issue now use
-    chunking.split_markdown_sections()/split_issue_sections() instead. See
-    docs/FINDINGS.md 2026-08-03."""
-    return chunking.split_fixed_window(text, chunk_size, chunk_overlap)
-
-
 # ---------------------------------------------------------------------------
 # Lifespan: configure CocoIndex database path + Postgres pool for code index
 # ---------------------------------------------------------------------------
@@ -601,22 +593,6 @@ class CodeEmbedding:
     embedding: list[float]
     search_text: str
 
-_embedder = None
-
-def _get_embedder():
-    global _embedder
-    if _embedder is None:
-        from sentence_transformers import SentenceTransformer
-        _embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-        log.info("Loaded embedding model: all-MiniLM-L6-v2")
-    return _embedder
-
-
-def _embed_text(text: str) -> list[float]:
-    model = _get_embedder()
-    return model.encode(text, normalize_embeddings=True).tolist()
-
-
 @coco.fn(memo=True)
 async def process_code_file(
     file: localfs.File,
@@ -633,10 +609,14 @@ async def process_code_file(
     rel_path = abs_path.replace(base_prefix, "") if abs_path.startswith(base_prefix) else str(file.file_path.path)
     filepath = f"{repo_tag}/{rel_path}"
 
-    chunks = _split_text(content, chunk_size=1000, chunk_overlap=300)
+    chunks = chunking.split_code(content, filename=filepath, chunk_size=1000, chunk_overlap=300)
 
-    for i, chunk in enumerate(chunks):
-        embedding = _embed_text(chunk)
+    # Concurrent embed() calls via chunking.embed_code_chunks() let
+    # cocoindex's SentenceTransformerEmbedder batch this file's chunks into
+    # one model.encode() call instead of one sequential call per chunk --
+    # see docs/FINDINGS.md 2026-08-07.
+    embeddings = await chunking.embed_code_chunks(chunks)
+    for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
         row = CodeEmbedding(
             id=f"{filepath}:{i}",
             filepath=filepath,
@@ -654,11 +634,12 @@ async def code_main(
 ) -> None:
     from cocoindex.connectors import postgres
 
+    embedding_dim = await chunking.code_embedding_dim()
     schema = await postgres.TableSchema.from_class(
         CodeEmbedding, primary_key=["id"],
         column_overrides={
             "embedding": postgres.PgType(
-                "vector(384)",
+                f"vector({embedding_dim})",
                 encoder=lambda v: "[" + ",".join(str(x) for x in v) + "]",
             ),
         },

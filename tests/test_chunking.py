@@ -10,6 +10,8 @@ byte-identical, just repositioned.
 """
 from __future__ import annotations
 
+import asyncio
+
 import chunking
 
 
@@ -23,6 +25,110 @@ class TestSplitFixedWindow:
         chunks = chunking.split_fixed_window(text, chunk_size=800, chunk_overlap=200)
         assert len(chunks) > 1
         assert all(len(c) > 0 for c in chunks)
+
+
+_SAMPLE_GO = '''package main
+
+import "fmt"
+
+func Add(a, b int) int {
+\treturn a + b
+}
+
+func Multiply(a, b int) int {
+\tresult := 0
+\tfor i := 0; i < b; i++ {
+\t\tresult += a
+\t}
+\treturn result
+}
+'''
+
+
+class TestSplitCode:
+    """AST-aware code chunking via cocoindex's own tree-sitter-backed
+    RecursiveSplitter (see docs/FINDINGS.md 2026-08-07 -- code_app claimed
+    tree-sitter parsing in docs since inception, but process_code_file()
+    was actually calling split_fixed_window(), a plain character-offset
+    slice that can cut a function body in half)."""
+
+    def test_short_code_fits_in_a_single_chunk(self):
+        text = "package main\n"
+        chunks = chunking.split_code(text, filename="main.go", chunk_size=1000, chunk_overlap=300)
+        assert len(chunks) == 1
+        assert chunks[0].strip() == text.strip()
+
+    def test_returns_plain_list_of_strings(self):
+        """Must match split_fixed_window()'s return contract exactly so
+        process_code_file() can swap one call for the other without any
+        other change to the row-building loop."""
+        chunks = chunking.split_code(_SAMPLE_GO, filename="main.go", chunk_size=1000, chunk_overlap=300)
+        assert isinstance(chunks, list)
+        assert all(isinstance(c, str) for c in chunks)
+
+    def test_forced_split_breaks_at_function_boundaries_not_mid_function(self):
+        """The exact regression this fixes: split_fixed_window() would cut
+        wherever chunk_size landed, even mid function-body. A chunk_size
+        that fits each function individually but not the whole file must
+        produce one chunk per function, never a chunk containing a
+        function's signature without its closing brace."""
+        chunks = chunking.split_code(_SAMPLE_GO, filename="main.go", chunk_size=120, chunk_overlap=0)
+        assert len(chunks) == 2
+        assert "func Add" in chunks[0] and "return a + b" in chunks[0] and chunks[0].rstrip().endswith("}")
+        assert "func Multiply" in chunks[1] and "return result" in chunks[1] and chunks[1].rstrip().endswith("}")
+
+    def test_language_is_detected_from_filename_extension(self):
+        """python and go have different comment/block syntax; both must
+        split without error purely based on the filename's extension."""
+        py_source = "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n" * 10
+        chunks = chunking.split_code(py_source, filename="lib/math.py", chunk_size=150, chunk_overlap=30)
+        assert len(chunks) > 1
+        assert all(chunk.strip() for chunk in chunks)
+
+    def test_unrecognized_extension_still_chunks_without_error(self):
+        """No language grammar for the extension (detect_code_language()
+        returns None) must degrade gracefully to generic splitting, not
+        raise -- e.g. a Dockerfile or other extension-less/unknown file
+        that a repo's include patterns didn't mean to exclude."""
+        text = ("some unstructured content\n" * 100)
+        chunks = chunking.split_code(text, filename="Dockerfile.unknown", chunk_size=200, chunk_overlap=50)
+        assert len(chunks) > 1
+        assert all(isinstance(c, str) and c.strip() for c in chunks)
+
+    def test_empty_content_returns_no_chunks(self):
+        assert chunking.split_code("", filename="empty.go", chunk_size=1000, chunk_overlap=300) == []
+
+
+class TestEmbedCodeChunks:
+    """Batched embedding via cocoindex's own SentenceTransformerEmbedder,
+    replacing each *-cocoindex-flows.py script's separate
+    _embedder/_get_embedder()/_embed_text() globals (see docs/FINDINGS.md
+    2026-08-07). Concurrent embed() calls issued through asyncio.gather()
+    let cocoindex's @coco.fn.as_async(batching=True) wrapper coalesce them
+    into one batched model.encode() call instead of one per chunk."""
+
+    def test_empty_chunks_returns_empty_list(self):
+        assert asyncio.run(chunking.embed_code_chunks([])) == []
+
+    def test_returns_one_vector_per_chunk_in_the_same_order(self):
+        chunks = ["def add(a, b):\n    return a + b", "def sub(a, b):\n    return a - b"]
+        vectors = asyncio.run(chunking.embed_code_chunks(chunks))
+        assert len(vectors) == 2
+        assert all(isinstance(v, list) for v in vectors)
+        assert all(isinstance(x, float) for x in vectors[0])
+        assert vectors[0] != vectors[1]
+
+    def test_vector_dimension_matches_code_embedding_dim(self):
+        dim = asyncio.run(chunking.code_embedding_dim())
+        vectors = asyncio.run(chunking.embed_code_chunks(["def f(): pass"]))
+        assert len(vectors[0]) == dim
+
+
+class TestCodeEmbeddingDim:
+    def test_returns_positive_integer(self):
+        dim = asyncio.run(chunking.code_embedding_dim())
+        assert isinstance(dim, int)
+        assert dim > 0
 
 
 class TestSplitMarkdownSectionsNoHeadings:

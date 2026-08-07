@@ -36,6 +36,30 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+class FakeCodeFile:
+    """Minimal stand-in for CocoIndex's localfs.File as used by
+    process_code_file(), which reads file.file_path.resolve() (not the
+    nested file_path.path FakeDocFile above deliberately omits)."""
+
+    def __init__(self, content: str, path: str):
+        self._content = content
+        self.file_path = Path(path)
+
+    async def read_text(self) -> str:
+        return self._content
+
+
+class FakeTable:
+    """Captures declare_row() calls in insertion order, standing in for
+    CocoIndex's postgres table target."""
+
+    def __init__(self):
+        self.rows = []
+
+    def declare_row(self, row):
+        self.rows.append(row)
+
+
 class TestModuleLoadsWithoutContextKeyCollision:
     """Regression guard: engram-cocoindex-flows.py originally reused
     ContextKey("pg_pool"), the exact same name cocoindex-flows.py registers
@@ -53,18 +77,6 @@ class TestModuleLoadsWithoutContextKeyCollision:
     def test_apps_are_defined(self, engram_cocoindex_flows):
         assert engram_cocoindex_flows.docs_app is not None
         assert engram_cocoindex_flows.code_app is not None
-
-
-class TestSplitText:
-    def test_short_text_is_not_split(self, engram_cocoindex_flows):
-        text = "short content"
-        assert engram_cocoindex_flows._split_text(text, chunk_size=800, chunk_overlap=200) == [text]
-
-    def test_long_text_is_split_into_multiple_chunks(self, engram_cocoindex_flows):
-        text = "line\n" * 500  # well over the 800-char chunk_size
-        chunks = engram_cocoindex_flows._split_text(text, chunk_size=800, chunk_overlap=200)
-        assert len(chunks) > 1
-        assert all(len(c) > 0 for c in chunks)
 
 
 class TestProcessDocFile:
@@ -166,6 +178,89 @@ class TestProcessDocFile:
 
         assert first_entry_doc_id in after_by_id
         assert after_by_id[first_entry_doc_id] == before_by_id[first_entry_doc_id]
+
+
+class TestProcessCodeFile:
+    """process_code_file() batches embedding through chunking.embed_code_chunks()
+    instead of calling a bare per-chunk _embed_text() in a loop (see
+    docs/FINDINGS.md 2026-08-07). embed_code_chunks() itself is mocked here
+    so these tests stay fast/deterministic and don't depend on loading a
+    real sentence-transformers model -- that integration is covered
+    directly by tests/test_chunking.py::TestEmbedCodeChunks."""
+
+    def test_chunks_are_embedded_and_declared_as_rows_in_order(self, engram_cocoindex_flows, monkeypatch):
+        import chunking as chunking_module
+
+        async def fake_embed_code_chunks(chunks):
+            return [[float(i)] * 3 for i in range(len(chunks))]
+
+        monkeypatch.setattr(chunking_module, "embed_code_chunks", fake_embed_code_chunks)
+
+        table = FakeTable()
+        _run(engram_cocoindex_flows.process_code_file(
+            FakeCodeFile("def add(a, b):\n    return a + b\n", "/fake/repo/foo.py"),
+            table=table,
+            base_dir=Path("/fake/repo"),
+            repo_tag="engram",
+        ))
+
+        assert len(table.rows) == 1
+        row = table.rows[0]
+        assert row.id == "engram/foo.py:0"
+        assert row.filepath == "engram/foo.py"
+        assert row.chunk_index == 0
+        assert row.embedding == [0.0, 0.0, 0.0]
+        assert "def add" in row.code
+        assert row.search_text == f"engram/foo.py {row.code}"
+
+    def test_multiple_chunks_get_matching_embeddings_by_position(self, engram_cocoindex_flows, monkeypatch):
+        import chunking as chunking_module
+
+        captured_chunks = []
+
+        async def fake_embed_code_chunks(chunks):
+            captured_chunks.extend(chunks)
+            return [[float(i)] for i in range(len(chunks))]
+
+        monkeypatch.setattr(chunking_module, "embed_code_chunks", fake_embed_code_chunks)
+
+        table = FakeTable()
+        content = "".join(f"def add_{i}(a, b):\n    return a + b\n\n\n" for i in range(50))
+        _run(engram_cocoindex_flows.process_code_file(
+            FakeCodeFile(content, "/fake/repo/math.py"),
+            table=table,
+            base_dir=Path("/fake/repo"),
+            repo_tag="engram",
+        ))
+
+        assert len(table.rows) > 1
+        assert len(table.rows) == len(captured_chunks)
+        for i, row in enumerate(table.rows):
+            assert row.chunk_index == i
+            assert row.embedding == [float(i)]
+            assert row.code == captured_chunks[i]
+
+    def test_empty_content_declares_no_rows(self, engram_cocoindex_flows, monkeypatch):
+        import chunking as chunking_module
+
+        embed_calls = []
+
+        async def fake_embed_code_chunks(chunks):
+            embed_calls.append(chunks)
+            return []
+
+        monkeypatch.setattr(chunking_module, "embed_code_chunks", fake_embed_code_chunks)
+
+        table = FakeTable()
+        _run(engram_cocoindex_flows.process_code_file(
+            FakeCodeFile("", "/fake/repo/empty.py"),
+            table=table,
+            base_dir=Path("/fake/repo"),
+            repo_tag="engram",
+        ))
+
+        assert table.rows == []
+        assert embed_calls == []
 
 
 class TestHindsightRetainStrategyField:

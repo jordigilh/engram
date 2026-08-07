@@ -40,10 +40,16 @@ already-ingested chunk-0 rows) is undisturbed.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
 
+from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
+from cocoindex.ops.text import RecursiveSplitter, detect_code_language
+
 _HEADING_RE = re.compile(r"^(#{1,6})[ \t]+.*$", re.MULTILINE)
+_code_splitter = RecursiveSplitter()
+_code_embedder = SentenceTransformerEmbedder("sentence-transformers/all-MiniLM-L6-v2")
 
 
 def split_fixed_window(text: str, chunk_size: int = 800, chunk_overlap: int = 200) -> list[str]:
@@ -69,6 +75,72 @@ def split_fixed_window(text: str, chunk_size: int = 800, chunk_overlap: int = 20
         chunks.append(text[start:end])
         start = end - chunk_overlap
     return chunks
+
+
+def split_code(text: str, filename: str, chunk_size: int = 1000, chunk_overlap: int = 300) -> list[str]:
+    """AST-aware code split, via cocoindex's own tree-sitter-backed
+    RecursiveSplitter, using the language cocoindex detects from
+    `filename`'s extension.
+
+    Why this exists (see docs/FINDINGS.md 2026-08-07): code_app's
+    process_code_file() used to call split_fixed_window() directly on
+    source code -- a plain character-offset slice that can (and did) cut a
+    function body in half mid-declaration. docs/COCOINDEX.md and this
+    project's README have described code chunking as tree-sitter/AST-aware
+    since inception; the cocoindex *framework* has in fact supported this
+    the whole time (detect_code_language/RecursiveSplitter), engram's own
+    flow scripts just never called into it -- a docs-vs-implementation
+    drift, not a missing upstream capability. RecursiveSplitter descends
+    the language's AST (function/class/block nodes) before ever falling
+    back to a raw character cut, and only takes that fallback for a single
+    node that still exceeds chunk_size on its own.
+
+    An unrecognized extension (detect_code_language() returns None) is not
+    an error: RecursiveSplitter still does generic paragraph/line-aware
+    splitting without a language grammar, which is strictly no worse than
+    the old fixed-window cut, so no special-casing is needed here.
+
+    Return contract matches split_fixed_window() exactly (a plain
+    list[str], no keys) -- code_app has no stable-heading/ordinal concept
+    and isn't routed through hindsight-api's delta-retain/consolidation
+    pipeline, so a positional list is fine here unlike the markdown/issue
+    splitters above.
+    """
+    language = detect_code_language(filename=filename)
+    chunks = _code_splitter.split(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap, language=language)
+    return [chunk.text for chunk in chunks]
+
+
+async def embed_code_chunks(chunks: list[str]) -> list[list[float]]:
+    """Embed a file's code chunks via cocoindex's own batching embedder,
+    replacing each *-cocoindex-flows.py script's separate
+    _embedder/_get_embedder()/_embed_text() globals that called a bare
+    SentenceTransformer.encode() once per chunk, sequentially.
+
+    Why this exists (see docs/FINDINGS.md 2026-08-07): today's tree-sitter
+    chunking backfill logged every one of ~25,000 code chunks going through
+    model.encode() one at a time. SentenceTransformerEmbedder.embed() is
+    decorated `@coco.fn.as_async(batching=True, max_batch_size=64)`, which
+    coalesces *concurrent* calls into one batched model.encode(list) call
+    and halves-and-retries the batch on accelerator OOM
+    (coco.RetryWithSmallerBatch) -- neither of which a for-loop of awaited
+    single-text calls can ever trigger. asyncio.gather() below is what
+    actually produces the concurrency the batcher coalesces; awaiting each
+    embed() one at a time in a loop would still work but would silently
+    never batch.
+    """
+    if not chunks:
+        return []
+    vectors = await asyncio.gather(*(_code_embedder.embed(c) for c in chunks))
+    return [v.tolist() for v in vectors]
+
+
+async def code_embedding_dim() -> int:
+    """The active code embedder's output dimension, for the pgvector
+    column's vector(N) type -- derived from the model itself instead of
+    each *-cocoindex-flows.py script hardcoding vector(384) independently
+    of whichever model _code_embedder actually loads."""
+    return await _code_embedder.dimension()
 
 
 def _stable_key(text: str) -> str:

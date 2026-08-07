@@ -131,6 +131,57 @@ class TestCodeEmbeddingDim:
         assert dim > 0
 
 
+class TestFindCodeFiles:
+    """File-walk helper backing the *_code_pattern_search MCP tools (see
+    *-cocoindex-search.py, docs/FINDINGS.md 2026-08-07 CodePattern spike).
+
+    Kept here rather than reimplemented per search script so the pattern
+    search's file set stays in sync with each *-cocoindex-flows.py's own
+    localfs.walk_dir(path_matcher=PatternFilePathMatcher(...)) ingestion
+    scope -- both read the exact same included_patterns/excluded_patterns
+    lists in practice."""
+
+    def _make_tree(self, tmp_path):
+        (tmp_path / "pkg").mkdir()
+        (tmp_path / "pkg" / "a.go").write_text("package pkg\n")
+        (tmp_path / "pkg" / "b.go").write_text("package pkg\n")
+        (tmp_path / "pkg" / "a_test.go").write_text("package pkg\n")
+        (tmp_path / "vendor").mkdir()
+        (tmp_path / "vendor" / "dep.go").write_text("package dep\n")
+        (tmp_path / "README.md").write_text("# readme\n")
+        return tmp_path
+
+    def test_finds_files_matching_included_pattern_only(self, tmp_path):
+        root = self._make_tree(tmp_path)
+        found = chunking.find_code_files(root, included_patterns=["**/*.go"])
+        names = {p.name for p in found}
+        assert names == {"a.go", "b.go", "a_test.go", "dep.go"}
+
+    def test_excluded_patterns_filter_out_matches(self, tmp_path):
+        root = self._make_tree(tmp_path)
+        found = chunking.find_code_files(
+            root,
+            included_patterns=["**/*.go"],
+            excluded_patterns=["**/vendor/**", "**/*_test.go"],
+        )
+        names = {p.name for p in found}
+        assert names == {"a.go", "b.go"}
+
+    def test_no_matches_returns_empty_list(self, tmp_path):
+        root = self._make_tree(tmp_path)
+        assert chunking.find_code_files(root, included_patterns=["**/*.rs"]) == []
+
+    def test_nonexistent_root_returns_empty_list_not_error(self, tmp_path):
+        missing = tmp_path / "does-not-exist"
+        assert chunking.find_code_files(missing, included_patterns=["**/*.go"]) == []
+
+    def test_result_has_no_duplicates_when_patterns_overlap(self, tmp_path):
+        root = self._make_tree(tmp_path)
+        found = chunking.find_code_files(root, included_patterns=["**/*.go", "pkg/*.go"])
+        names = [p.name for p in found]
+        assert len(names) == len(set(names))
+
+
 class TestSplitMarkdownSectionsNoHeadings:
     """Content with no markdown headings falls back to the original
     fixed-window behavior and naming exactly -- no regression for plain-text

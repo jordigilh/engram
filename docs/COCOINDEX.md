@@ -63,11 +63,21 @@ with `_kind` (`issue` or `pr`) and gets a distinct `document_id` (`issue-N` or
 `pr-N`). Title + body + human comments are serialized, chunked, and pushed to
 Hindsight with `kind` and `state` tags. Re-ingestion is idempotent.
 
-**Code flow:** Uses tree-sitter to parse Go source files into an AST, then
-extracts function declarations, type definitions, and method blocks as individual
-chunks. Each chunk includes the file path, line range, and package name as
-metadata. Each row stores both a dense embedding (`vector(384)` via
-`all-MiniLM-L6-v2`) and a `search_text` column used for BM25 full-text search.
+**Code flow:** Detects each file's language from its extension
+(`cocoindex.ops.text.detect_code_language`) and splits it with cocoindex's
+own tree-sitter-backed `RecursiveSplitter`, which descends the language's AST
+(function/type/block nodes) so chunk boundaries land on those nodes instead of
+an arbitrary character offset, and only falls back to a raw character cut for
+a single node that still exceeds `chunk_size` on its own. A file's chunks are
+embedded together via cocoindex's own `SentenceTransformerEmbedder`
+(`chunking.embed_code_chunks()`), whose `@coco.fn.as_async(batching=True)`
+wrapper coalesces the concurrent `embed()` calls into one batched
+`model.encode()` call per file instead of one call per chunk, and the
+pgvector column's dimension is read from the model itself
+(`chunking.code_embedding_dim()`) rather than hardcoded. Each row stores the
+file path, a positional `chunk_index`, the chunk text, the dense embedding,
+and a `search_text` column used for BM25 full-text search — there is no
+separate line-range or package-name metadata column.
 A `declare_sql_command_attachment` on the table creates a PostgreSQL trigger
 that auto-populates a `tsvector` column and GIN index from `search_text` — this
 is managed entirely by CocoIndex's lifecycle (setup on create, teardown on
@@ -89,7 +99,7 @@ two retrieval methods simultaneously:
 
 | Method | Column | Index | Best for |
 |--------|--------|-------|----------|
-| **Dense** (semantic) | `embedding vector(384)` | HNSW/IVFFlat | Conceptual queries: "how does rate limiting work?" |
+| **Dense** (semantic) | `embedding vector(N)` (N from the active model, e.g. 384 for `all-MiniLM-L6-v2`) | HNSW/IVFFlat | Conceptual queries: "how does rate limiting work?" |
 | **BM25** (lexical) | `search_vector tsvector` | GIN | Exact identifiers: "ParseConfig", "RemediationRequest" |
 
 ### How it works
@@ -126,6 +136,63 @@ python3 cocoindex-search.py --query "error handling in reconciler" --mode dense
 # BM25 only — great for exact identifiers
 python3 cocoindex-search.py --query "ParseConfig" --mode bm25
 ```
+
+## Structural Pattern Search
+
+Hybrid search above answers "find code *about* X" (semantic/lexical). Every
+`*-cocoindex-search.py` script also exposes a second MCP tool for the
+opposite question — "find code *shaped like* X" — via CocoIndex's
+`CodePattern` (tree-sitter-backed by-example structural matching).
+
+| Project | Tool | Languages |
+|---------|------|-----------|
+| kubernaut | `cocoindex_pattern_search` | go (kubernaut, kubernaut-operator), typescript/tsx (kubernaut-console) |
+| koku | `koku_code_pattern_search` | python |
+| engram | `engram_code_pattern_search` | python |
+| dcm | `dcm_code_pattern_search` | go (8 repos — see `repo` param) |
+
+### How it works
+
+Unlike hybrid search, there is no structural-pattern *index* — `CodePattern`
+parses source directly, so each call walks the project's live checkout
+(`chunking.find_code_files()`, scoped to the exact same
+`included_patterns`/`excluded_patterns` each `*-cocoindex-flows.py` already
+uses for ingestion, so pattern search never drifts from what's indexed).
+For each candidate file: a cheap parse-free prefilter rejects files that
+can't possibly match, then a match renders with enclosing-scope context via
+`render_match()`. See docs/FINDINGS.md 2026-08-07 for the spike that
+validated this.
+
+### Pattern syntax
+
+Write an example of the shape you want. `\NAME` is a metavariable matching
+one AST node; `\(NAME*\)` matches zero or more (e.g. a parameter list).
+Omitting a body/block entirely means "don't care what's inside":
+
+```bash
+# Any Go function returning exactly (bool, error), regardless of name,
+# params, or body:
+python3 cocoindex-search.py --pattern 'func \NAME(\(A*\)) (bool, error)' --language go
+
+# Any Python function/method, regardless of body:
+python3 koku-cocoindex-search.py --pattern 'def \NAME(\(A*\)):' --language python
+
+# Scope to one of DCM's 8 repos:
+python3 dcm-cocoindex-search.py --pattern 'func \NAME(\(A*\)) error' --language go --repo dcm-cli
+```
+
+### What this is NOT: complementary to gopls/Serena, not a replacement
+
+`CodePattern` is purely syntactic. It has no type resolution (won't match
+`(ok bool, err error)` against a search for `(bool, error)`), can't find
+references/callers, has no call graph, and produces no diagnostics.
+kubernaut/dcm/engram already use `gopls` and koku already uses Serena
+(Pyright-backed) for exactly those type-aware, cross-file needs — adding
+`CodePattern` does not replace either. Its distinct value is answering "find
+every X shaped like this" queries neither LSP tool can do (LSP navigation
+starts from a known symbol/cursor position, not a structural shape), while
+reusing CocoIndex — infrastructure Engram already runs — instead of standing
+up a separate MCP server per language.
 
 ### Why SQL command attachment (not a manual trigger)
 

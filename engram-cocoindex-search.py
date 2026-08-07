@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Engram code search MCP server.
+r"""Engram code search MCP server.
 
 Provides hybrid code search (dense vectors + BM25) over the
 cocoindex.engram_code_embeddings table (this repo's own Python source).
@@ -11,12 +11,16 @@ Usage:
     python3 engram-cocoindex-search.py --query "how does contradiction resolution work"
     python3 engram-cocoindex-search.py --query "resolve_contradiction" --mode dense
     python3 engram-cocoindex-search.py --query "resolve_contradiction" --mode bm25
+    python3 engram-cocoindex-search.py --pattern 'def \NAME(\(A*\)):' --language python
 """
 
 import argparse
 import logging
 import os
+import pathlib
 from typing import Any
+
+import chunking
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,6 +34,22 @@ PG_URL = os.environ.get(
 )
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 RRF_K = 60  # RRF constant — standard value from the original paper
+
+# Same env var (and default) as engram-cocoindex-flows.py, so pattern search
+# walks the exact same checkout the ingestion flow indexes.
+ENGRAM_REPO_DIR = pathlib.Path(os.environ.get(
+    "ENGRAM_REPO_DIR", os.path.expanduser("~/.hindsight/watch/engram"),
+))
+
+# (repo_tag, root, included_patterns, excluded_patterns) -- mirrors
+# engram-cocoindex-flows.py's localfs.walk_dir(path_matcher=
+# PatternFilePathMatcher(...)) call exactly.
+_PATTERN_SEARCH_ROOTS = [
+    ("engram", ENGRAM_REPO_DIR, ["**/*.py"], [
+        "**/__pycache__/**", "**/.pytest_cache/**", "**/.git/**",
+        "**/venv/**", "**/node_modules/**",
+    ]),
+]
 
 _model = None
 
@@ -163,6 +183,62 @@ def _format_results(query: str, results: list[dict], mode: str = "hybrid") -> st
     return "\n".join(lines)
 
 
+def pattern_search_code(pattern: str, language: str, limit: int = 10) -> list[dict[str, Any]]:
+    """Structural ("by-example") code search via CocoIndex's CodePattern --
+    tree-sitter AST matching against this repo's own live checkout.
+
+    Unlike search_code() above, there is no structural-pattern index to
+    query: CodePattern.match_file() parses source directly, so this walks
+    the same file set engram-cocoindex-flows.py already ingests (see
+    _PATTERN_SEARCH_ROOTS / chunking.find_code_files()) for every call.
+    Complements, not replaces, search_code() (semantic/BM25 "what does X
+    do"): this is purely syntactic "find code shaped like X", with no type
+    resolution and no cross-file symbol graph (see docs/FINDINGS.md
+    2026-08-07).
+    """
+    from cocoindex.ops.code import CodePattern, render_match
+    from cocoindex.ops.text import detect_code_language
+
+    cp = CodePattern(pattern, language)
+    results: list[dict[str, Any]] = []
+    for repo_tag, root, included, excluded in _PATTERN_SEARCH_ROOTS:
+        if len(results) >= limit:
+            break
+        for path in chunking.find_code_files(root, included, excluded):
+            if len(results) >= limit:
+                break
+            if detect_code_language(filename=path.name) != language:
+                continue
+            file_match = cp.match_file(str(path))
+            if file_match is None:
+                continue
+            rel_path = path.relative_to(root)
+            for match in file_match.matches:
+                if len(results) >= limit:
+                    break
+                view = render_match(file_match.source, match)
+                results.append({
+                    "repo": repo_tag,
+                    "filepath": f"{repo_tag}/{rel_path}",
+                    "line": match.chunks[0].start.line,
+                    "text": view.text,
+                })
+    return results
+
+
+def _format_pattern_results(pattern: str, language: str, results: list[dict]) -> str:
+    """Format structural pattern matches as readable text for the agent."""
+    if not results:
+        return f'No structural matches for language={language} pattern: {pattern}'
+
+    lines = [f"Structural pattern search [{language}]: {len(results)} matches for: {pattern}\n"]
+    for i, r in enumerate(results, 1):
+        lines.append(f"[{i}] {r['filepath']}:{r['line']}")
+        lines.append(r["text"])
+        lines.append("")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # MCP server
 # ---------------------------------------------------------------------------
@@ -191,6 +267,26 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8890, transport: str = 
         results = search_code(query, limit=min(limit, 20))
         return _format_results(query, results)
 
+    @mcp.tool()
+    def engram_code_pattern_search(pattern: str, language: str = "python", limit: int = 10) -> str:
+        r"""Structural ("by-example") code search over the Engram tooling codebase.
+
+        For "find code shaped like X" -- e.g. every function matching a
+        signature -- not "find code about X" (use engram_code_search for
+        that). Matches by tree-sitter AST shape, not text/regex.
+
+        Pattern syntax: write an example of the shape you want, using `\`
+        + a name for a metavariable (matches one node) or `\(NAME*\)`
+        (matches zero or more, e.g. an argument list). Omit a body entirely
+        to mean "don't care what's inside" -- e.g. `def \NAME(\(A*\)):`
+        matches any Python function/method regardless of body or args.
+
+        This is purely syntactic: it does NOT resolve types and can't find
+        references/callers or diagnostics.
+        """
+        results = pattern_search_code(pattern, language, limit=min(limit, 20))
+        return _format_pattern_results(pattern, language, results)
+
     if transport == "stdio":
         log.info("Starting engram-code MCP server (stdio)")
         mcp.run(transport="stdio")
@@ -208,11 +304,18 @@ def _run_cli_query(query: str, limit: int = 10, mode: str = "hybrid") -> None:
     print(_format_results(query, results, mode=mode))
 
 
+def _run_cli_pattern_query(pattern: str, language: str, limit: int = 10) -> None:
+    results = pattern_search_code(pattern, language, limit=limit)
+    print(_format_pattern_results(pattern, language, results))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Engram code search — MCP server + CLI"
     )
     parser.add_argument("--query", "-q", help="Run a single query and exit")
+    parser.add_argument("--pattern", help="Run a single structural pattern query and exit")
+    parser.add_argument("--language", default="python", help="Language for --pattern (default: python)")
     parser.add_argument("--limit", "-n", type=int, default=10, help="Max results (default: 10)")
     parser.add_argument("--mode", "-m", default="hybrid", choices=["hybrid", "dense", "bm25"],
                         help="Search mode (default: hybrid)")
@@ -220,7 +323,9 @@ def main():
     parser.add_argument("--host", default="127.0.0.1", help="MCP server bind address")
     args = parser.parse_args()
 
-    if args.query:
+    if args.pattern:
+        _run_cli_pattern_query(args.pattern, args.language, limit=args.limit)
+    elif args.query:
         _run_cli_query(args.query, limit=args.limit, mode=args.mode)
     else:
         _run_mcp_server(host=args.host, port=args.port)

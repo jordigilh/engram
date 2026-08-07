@@ -55,7 +55,8 @@ LLM calls only happen overnight for pattern extraction.
 - **Mental models** — pre-synthesized documents (not scattered facts)
 - **Multi-bank architecture** — behavioral memory + project docs + GitHub issues/PRs + code index
 - **CocoIndex live sync** — docs, code, and transcripts watch for filesystem changes in real time; issues and PRs poll GitHub every 5 minutes. All four flows run concurrently as threads in a single launchd service
-- **Hybrid code search** — tree-sitter AST parsing extracts functions, types, and methods; dense embeddings (pgvector) handle semantic queries while BM25 (tsvector + GIN) handles exact identifiers — results fused via Reciprocal Rank Fusion
+- **Hybrid code search** — tree-sitter AST-aware chunking (via cocoindex's `RecursiveSplitter`) keeps chunk boundaries on function/type/block nodes instead of arbitrary character offsets; dense embeddings (pgvector) handle semantic queries while BM25 (tsvector + GIN) handles exact identifiers — results fused via Reciprocal Rank Fusion
+- **Structural pattern search** — tree-sitter by-example matching (cocoindex's `CodePattern`) answers "find code shaped like X" (e.g. every function matching a signature) as a distinct MCP tool per project, complementing (not replacing) hybrid search's "find code about X" and LSP tools' (gopls/Serena) type-aware navigation — see docs/COCOINDEX.md
 - **Self-cleaning** — nightly triage removes ephemeral, stale, and duplicate memories
 - **Self-evaluating** — weekly trend metrics (corrections/session, rework %, productivity density), exploration efficiency, ingestion coverage, data freshness
 - **Recoverable** — transcripts are source of truth; `recover-memories.py` rebuilds the bank

@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import pathlib
 import re
 
 from cocoindex.ops.sentence_transformers import SentenceTransformerEmbedder
@@ -141,6 +142,42 @@ async def code_embedding_dim() -> int:
     each *-cocoindex-flows.py script hardcoding vector(384) independently
     of whichever model _code_embedder actually loads."""
     return await _code_embedder.dimension()
+
+
+def find_code_files(
+    root: pathlib.Path,
+    included_patterns: list[str],
+    excluded_patterns: list[str] | None = None,
+) -> list[pathlib.Path]:
+    """Enumerate files under `root` matching `included_patterns` (gitignore-
+    style globs, `**` supported) and none of `excluded_patterns`.
+
+    Backs the `*_code_pattern_search` MCP tools (see *-cocoindex-search.py,
+    docs/FINDINGS.md 2026-08-07 CodePattern spike): CodePattern.match_file()
+    needs a concrete file list to scan, and this reuses the exact same
+    included/excluded glob lists each *-cocoindex-flows.py already passes to
+    localfs.walk_dir(path_matcher=PatternFilePathMatcher(...)) for ingestion,
+    so pattern search never drifts out of sync with what's actually indexed
+    (vendor/, generated code, node_modules, etc. stay excluded from both).
+
+    A missing root returns an empty list rather than raising -- a
+    project whose live checkout isn't present locally (e.g. running from a
+    machine that only has some of kubernaut/koku/dcm/engram cloned) should
+    degrade to "no matches" for that one root, not crash the whole query.
+    """
+    if not root.is_dir():
+        return []
+    excluded_patterns = excluded_patterns or []
+    found: set[pathlib.Path] = set()
+    for pattern in included_patterns:
+        for path in root.glob(pattern):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root)
+            if any(rel.full_match(pat) for pat in excluded_patterns):
+                continue
+            found.add(path)
+    return sorted(found)
 
 
 def _stable_key(text: str) -> str:

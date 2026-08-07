@@ -134,13 +134,20 @@ Use the right tool for the right question:
   `user-cocoindex-code` MCP server. Call it with `{"query": "...", "limit": 10}`.
   Use for "where do we handle rate limiting?", "how does the remediation pipeline work?",
   "what functions touch this data?"
+- **`cocoindex_pattern_search`** — structural (by-example) code search, on the
+  same `user-cocoindex-code` MCP server. Call it with
+  `{"pattern": "func \\NAME(\\(A*\\)) error", "language": "go"}`. Use for
+  "find every function shaped like X" (a signature, not a name/concept) --
+  purely syntactic, no type resolution or find-references; not a substitute
+  for gopls.
 
 - **hindsight** — past mistakes, conventions, behavioral patterns about code.
   Use for "how should I structure this test?", "what was corrected before?"
 
 Prefer gopls for precise lookups, `cocoindex_search` for semantic exploration,
-and hindsight for behavioral context. Do not redundantly call all three for the
-same question.
+`cocoindex_pattern_search` for structural shape queries, and hindsight for
+behavioral context. Do not redundantly call all of these for the same
+question.
 
 ## Do NOT retain
 

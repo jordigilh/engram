@@ -27,8 +27,9 @@ recall-quality benchmark is built against.
 
 ## Index
 
-### August 2026 (18 entries)
+### August 2026 (19 entries)
 
+- [2026-08-08 (same day, second follow-up): Narrowed the 8 Leftover Entries Into Specific Questions — 4 Confirmed by the User, 3 Resolved by Codebase/Cluster Investigation, 1 Reversed the Expected Direction](findings/2026-08.md#2026-08-08-same-day-second-follow-up-narrowed-the-8-leftover-entries-into-specific-questions-4-confirmed-by-the-user-3-resolved-by-codebasecluster-investigation-1-reversed-the-expected-direction)
 - [2026-08-08 (same day, follow-up): Resolved the 13 Judgment-Call Clusters With User-Provided Ground Truth — 72 → 48, and Found the Resolution Wasn't 1:1 Per Cluster](findings/2026-08.md#2026-08-08-same-day-follow-up-resolved-the-13-judgment-call-clusters-with-user-provided-ground-truth-72-48-and-found-the-resolution-wasnt-11-per-cluster)
 - [2026-08-08: Bulk-Triaged and Cleared the Pending Contradictions Backlog — 219 → 72 via LLM-Assisted Classification, Semantic Clustering, and a Scripted Execution Pass](findings/2026-08.md#2026-08-08-bulk-triaged-and-cleared-the-pending-contradictions-backlog-219-72-via-llm-assisted-classification-semantic-clustering-and-a-scripted-execution-pass)
 - [2026-08-07 (same day, fifth follow-up): `CodePattern` Verdict Reversed From "Skip" to "Add" — Implemented `*_code_pattern_search` MCP Tools Across All Four Projects, Confirmed It Replaces Neither `gopls` Nor Serena](findings/2026-08.md#2026-08-07-same-day-fifth-follow-up-codepattern-verdict-reversed-from-skip-to-add-implemented-_code_pattern_search-mcp-tools-across-all-four-projects-confirmed-it-replaces-neither-gopls-nor-serena)

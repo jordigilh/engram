@@ -27,8 +27,9 @@ recall-quality benchmark is built against.
 
 ## Index
 
-### August 2026 (21 entries)
+### August 2026 (22 entries)
 
+- [2026-08-08 (same day, fifth follow-up): `gopls` Serves Stale Reference Results Because It's a Long-Lived Process on a Live, Branch-Switched Clone — Fixed via `post-checkout`/`post-merge` Auto-Restart](findings/2026-08.md#2026-08-08-same-day-fifth-follow-up-gopls-serves-stale-reference-results-because-its-a-long-lived-process-on-a-live-branch-switched-clone-fixed-via-post-checkoutpost-merge-auto-restart)
 - [2026-08-08 (same day, fourth follow-up): Closed the Final 6 With User Ground Truth + Two Targeted Investigations — 6 → 0, Pending Contradictions Backlog Fully Cleared](findings/2026-08.md#2026-08-08-same-day-fourth-follow-up-closed-the-final-6-with-user-ground-truth--two-targeted-investigations-6-0-pending-contradictions-backlog-fully-cleared)
 - [2026-08-08 (same day, third follow-up): Investigated the Remaining 29 Entries via Three Parallel Subagents + Direct Checks — 40 → 6, Only Two Genuinely Undecided in Code Plus Four Low-Confidence Preflights](findings/2026-08.md#2026-08-08-same-day-third-follow-up-investigated-the-remaining-29-entries-via-three-parallel-subagents--direct-checks-40-6-only-two-genuinely-undecided-in-code-plus-four-low-confidence-preflights)
 - [2026-08-08 (same day, second follow-up): Narrowed the 8 Leftover Entries Into Specific Questions — 4 Confirmed by the User, 3 Resolved by Codebase/Cluster Investigation, 1 Reversed the Expected Direction](findings/2026-08.md#2026-08-08-same-day-second-follow-up-narrowed-the-8-leftover-entries-into-specific-questions-4-confirmed-by-the-user-3-resolved-by-codebasecluster-investigation-1-reversed-the-expected-direction)

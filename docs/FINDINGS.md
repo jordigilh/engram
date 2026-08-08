@@ -27,8 +27,10 @@ recall-quality benchmark is built against.
 
 ## Index
 
-### August 2026 (16 entries)
+### August 2026 (18 entries)
 
+- [2026-08-08 (same day, follow-up): Resolved the 13 Judgment-Call Clusters With User-Provided Ground Truth — 72 → 48, and Found the Resolution Wasn't 1:1 Per Cluster](findings/2026-08.md#2026-08-08-same-day-follow-up-resolved-the-13-judgment-call-clusters-with-user-provided-ground-truth-72-48-and-found-the-resolution-wasnt-11-per-cluster)
+- [2026-08-08: Bulk-Triaged and Cleared the Pending Contradictions Backlog — 219 → 72 via LLM-Assisted Classification, Semantic Clustering, and a Scripted Execution Pass](findings/2026-08.md#2026-08-08-bulk-triaged-and-cleared-the-pending-contradictions-backlog-219-72-via-llm-assisted-classification-semantic-clustering-and-a-scripted-execution-pass)
 - [2026-08-07 (same day, fifth follow-up): `CodePattern` Verdict Reversed From "Skip" to "Add" — Implemented `*_code_pattern_search` MCP Tools Across All Four Projects, Confirmed It Replaces Neither `gopls` Nor Serena](findings/2026-08.md#2026-08-07-same-day-fifth-follow-up-codepattern-verdict-reversed-from-skip-to-add-implemented-_code_pattern_search-mcp-tools-across-all-four-projects-confirmed-it-replaces-neither-gopls-nor-serena)
 - [2026-08-07 (same day, fourth follow-up): Capability Survey Triaged and Spiked — Batched Embeddings Shipped, `disposition_skepticism` Raised, `entity_labels`/`CodePattern` Spiked and Deliberately Not Implemented](findings/2026-08.md#2026-08-07-same-day-fourth-follow-up-capability-survey-triaged-and-spiked-batched-embeddings-shipped-disposition_skepticism-raised-entity_labelscodepattern-spiked-and-deliberately-not-implemented)
 - [2026-08-07 (same day, third follow-up): Backfilled the Tree-Sitter Chunking Fix on kubernaut/koku/engram — Found a Never-Deployed `koku` Code Index and a 24h+ Downed `kubernaut` Service Along the Way, Plus a CocoIndex/Hindsight Capability Survey](findings/2026-08.md#2026-08-07-same-day-third-follow-up-backfilled-the-tree-sitter-chunking-fix-on-kubernautkokuengram-found-a-never-deployed-koku-code-index-and-a-24h-downed-kubernaut-service-along-the-way-plus-a-cocoindexhindsight-capability-survey)

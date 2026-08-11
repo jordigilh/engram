@@ -128,3 +128,15 @@ def praxis_cocoindex_flows() -> ModuleType:
     """praxis-cocoindex-flows.py (praxis-proxy org onboarding). PG_POOL is
     "praxis_repo_pg_pool" for the same process-global-collision reason as
     the other *_cocoindex_flows fixtures' PG_POOL above."""
+    return load_hyphenated_module("praxis-cocoindex-flows.py", "praxis_cocoindex_flows")
+
+
+@pytest.fixture(scope="session")
+def cocoindex_search() -> ModuleType:
+    """cocoindex-search.py (the kubernaut-family code search MCP server).
+    Unlike the *_cocoindex_flows fixtures, this module registers no
+    CocoIndex flow/ContextKey at import time (its `import cocoindex.ops.*`
+    calls are all deferred into function bodies), so it's safe to load
+    into the same session as any/all of those fixtures with no collision
+    handling needed."""
+    return load_hyphenated_module("cocoindex-search.py", "cocoindex_search")

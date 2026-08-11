@@ -18,6 +18,8 @@ import argparse
 import logging
 import os
 import pathlib
+import re
+import subprocess
 import sys
 from typing import Any
 
@@ -64,6 +66,145 @@ _PATTERN_SEARCH_ROOTS = [
      ["**/*.ts", "**/*.tsx"],
      ["**/node_modules/**", "**/dist/**", "**/storybook-static/**", "**/*.d.ts"]),
 ]
+
+# --- Multi-branch (2026-08-10) ------------------------------------------
+#
+# code_main (cocoindex-flows.py) additionally indexes release/v1.5 and
+# release/v1.6 mirrors of the kubernaut family, tagging rows with
+# repo_tag="{repo}@release-{line}" (docs/issues stay main-only, unaffected
+# -- see docs/FINDINGS.md 2026-08-03 and its 2026-08-10 refinement). This
+# section makes search_code()/pattern_search_code() branch-aware: by
+# default they auto-detect which release line (if any) the *caller's* live
+# checkout is on via KUBERNAUT_LIVE_CLONE_DIR and scope results to match,
+# so `cocoindex_search` from a release/v1.5 workspace doesn't silently
+# return main's code. Kept in sync by hand with cocoindex-flows.py's
+# KUBERNAUT_RELEASE_LINES (same env var name/default).
+KUBERNAUT_RELEASE_LINES = [
+    line.strip()
+    for line in os.environ.get("KUBERNAUT_RELEASE_LINES", "v1.5,v1.6").split(",")
+    if line.strip()
+]
+# Set by mcp.json (per-workspace ${workspaceFolder} substitution in the
+# kubernaut-family templates) to whichever live dev clone this MCP server
+# instance was spawned alongside -- NOT one of the read-only mirrors, since
+# it's the *caller's actual checkout* we need to detect, not what's mirrored.
+KUBERNAUT_LIVE_CLONE_DIR = os.environ.get("KUBERNAUT_LIVE_CLONE_DIR")
+
+
+def _release_line_dir(repo_name: str, line: str) -> pathlib.Path:
+    """Mirror path for one (repo, release line) pair -- must match
+    cocoindex-flows.py's `_release_line_dir` (and, transitively,
+    watch-mirrors-config.sh's RELEASE_WATCH_MIRRORS mirror_path convention)
+    exactly, or pattern search will silently walk nothing."""
+    return pathlib.Path(os.path.expanduser(f"~/.hindsight/watch/{repo_name}-release-{line}"))
+
+
+for _repo_name, _root, _included, _excluded in [
+    ("kubernaut", KUBERNAUT_CODE_DIR,
+     ["**/*.go"], ["**/vendor/**", "**/*_test.go", "**/zz_generated*"]),
+    ("kubernaut-operator", KUBERNAUT_OPERATOR_DIR,
+     ["**/*.go"], ["**/vendor/**", "**/*_test.go", "**/zz_generated*"]),
+    ("kubernaut-console", KUBERNAUT_CONSOLE_DIR,
+     ["**/*.ts", "**/*.tsx"],
+     ["**/node_modules/**", "**/dist/**", "**/storybook-static/**", "**/*.d.ts"]),
+]:
+    for _line in KUBERNAUT_RELEASE_LINES:
+        _PATTERN_SEARCH_ROOTS.append((
+            f"{_repo_name}@release-{_line}", _release_line_dir(_repo_name, _line),
+            _included, _excluded,
+        ))
+del _repo_name, _root, _included, _excluded, _line
+
+
+def _detect_current_release_line() -> str | None:
+    """Detect which release line (if any) the KUBERNAUT_LIVE_CLONE_DIR
+    checkout belongs to, trying two signals in order:
+
+    1. The checked-out branch is literally `release/vX.Y`.
+    2. Directory-name convention fallback: this team's actual day-to-day
+       workflow is a dedicated clone *per release line* (e.g. `kubernaut`,
+       `kubernaut-v1.5`, `kubernaut-v1.6`), with feature/fix branches for
+       that line branched off *inside* the matching directory rather than
+       worked on directly on the release branch -- so signal 1 almost never
+       fires in practice. Confirmed live 2026-08-10: kubernaut-v1.5's
+       checked-out `fix/2086-...` branch has merge-base == origin/release/v1.5
+       HEAD (0 commits ahead) vs 269 commits ahead of origin/main, i.e. it
+       really is v1.5-line work, just not literally *on* that branch.
+
+    Returns None for `main`, a plain (non-suffixed) clone directory, any
+    line not in KUBERNAUT_RELEASE_LINES, or when the env var isn't set --
+    callers then fall back to the pre-2026-08-10 default (main-only,
+    excluding @-tagged rows)."""
+    if not KUBERNAUT_LIVE_CLONE_DIR:
+        return None
+
+    branch = ""
+    try:
+        result = subprocess.run(
+            ["git", "-C", KUBERNAUT_LIVE_CLONE_DIR, "branch", "--show-current"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+        if result.returncode == 0:
+            branch = result.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    match = re.match(r"^release/v(.+)$", branch)
+    if match:
+        line = f"v{match.group(1)}"
+        if line in KUBERNAUT_RELEASE_LINES:
+            return line
+
+    dirname = pathlib.Path(KUBERNAUT_LIVE_CLONE_DIR).name
+    dir_match = re.search(r"-v(\d+\.\d+)$", dirname)
+    if dir_match:
+        line = f"v{dir_match.group(1)}"
+        if line in KUBERNAUT_RELEASE_LINES:
+            return line
+
+    return None
+
+
+def _resolve_release_line(branch: str | None) -> str | None:
+    """Resolve the effective release line to scope results to: an explicit
+    `branch` param wins over auto-detection. Returns the release line
+    string (e.g. "v1.5") to filter results TO, or None to filter release
+    content OUT entirely (covers both "main" and "no line detected" --
+    they mean the same thing to callers: today's pre-2026-08-10 behavior).
+    `branch="main"` forces the None/exclude behavior explicitly, useful when
+    the caller's checkout is on a release branch but they want cross-branch
+    (main) results anyway."""
+    if branch is None:
+        return _detect_current_release_line()
+    if branch == "main":
+        return None
+    return branch if branch in KUBERNAUT_RELEASE_LINES else None
+
+
+def _branch_where(repo: str | None, release_line: str | None) -> tuple[str, list[str]]:
+    """SQL WHERE-clause fragment (leading " AND ...", or "" if nothing to
+    filter) + its params, for repo + release-line scoping together. Shared
+    by both the dense and BM25 branches of search_code() so they can never
+    drift into filtering release-line rows differently from each other."""
+    clauses: list[str] = []
+    params: list[str] = []
+    if release_line is not None:
+        clauses.append("filepath LIKE %s")
+        params.append(f"{repo}@release-{release_line}/%" if repo else f"%@release-{release_line}/%")
+    else:
+        if repo:
+            clauses.append("filepath LIKE %s")
+            params.append(f"{repo}/%")
+        # Exclude every release-tagged row from the default/main-branch
+        # view -- without this, `cocoindex_search` from a `main` checkout
+        # would silently mix release/v1.5-only code into results just
+        # because it happens to rank well, which is exactly the
+        # cross-branch-mismatch bug this whole feature exists to fix.
+        clauses.append("filepath NOT LIKE %s")
+        params.append("%@%")
+    where = (" AND " + " AND ".join(clauses)) if clauses else ""
+    return where, params
+
 
 _model = None
 
@@ -116,19 +257,26 @@ def search_code(
     limit: int = 10,
     mode: str = "hybrid",
     repo: str | None = None,
+    branch: str | None = None,
 ) -> list[dict[str, Any]]:
     """Search the code_embeddings table using hybrid dense + BM25 retrieval.
 
     filepath is stored as "{repo_tag}/{rel_path}" (see cocoindex-flows.py's
     process_code_file), so passing repo narrows results to one repo (e.g.
-    "kubernaut-operator") via a LIKE prefix match. Omit repo to search the
-    whole platform (kubernaut core + operator + console + demo scenarios)
-    unfiltered -- the default, unchanged behavior.
+    "kubernaut-operator") via a LIKE prefix match.
+
+    branch controls release-line scoping (2026-08-10): omit it to
+    auto-detect from KUBERNAUT_LIVE_CLONE_DIR (main/unrecognized -> today's
+    behavior, excluding release-tagged rows; a recognized release/vX.Y
+    checkout -> scoped to that line's rows only). Pass an explicit release
+    line (e.g. "v1.5") to override detection, or "main" to force
+    main-only regardless of the caller's actual checkout.
     """
     import psycopg2
 
     candidate_pool = limit * 3
-    repo_prefix = f"{repo}/%" if repo else None
+    release_line = _resolve_release_line(branch)
+    branch_where, branch_params = _branch_where(repo, release_line)
 
     conn = psycopg2.connect(PG_URL)
     try:
@@ -139,29 +287,17 @@ def search_code(
             if mode in ("hybrid", "dense"):
                 embedding = _embed_query(query)
                 embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
-                if repo_prefix:
-                    cur.execute(
-                        """
-                        SELECT id, filepath, chunk_index, code,
-                               1 - (embedding <=> %s::vector) AS score
-                        FROM cocoindex.code_embeddings
-                        WHERE filepath LIKE %s
-                        ORDER BY embedding <=> %s::vector
-                        LIMIT %s
-                        """,
-                        (embedding_str, repo_prefix, embedding_str, candidate_pool),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT id, filepath, chunk_index, code,
-                               1 - (embedding <=> %s::vector) AS score
-                        FROM cocoindex.code_embeddings
-                        ORDER BY embedding <=> %s::vector
-                        LIMIT %s
-                        """,
-                        (embedding_str, embedding_str, candidate_pool),
-                    )
+                cur.execute(
+                    f"""
+                    SELECT id, filepath, chunk_index, code,
+                           1 - (embedding <=> %s::vector) AS score
+                    FROM cocoindex.code_embeddings
+                    WHERE TRUE{branch_where}
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s
+                    """,
+                    (embedding_str, *branch_params, embedding_str, candidate_pool),
+                )
                 dense_results = [
                     {"id": r[0], "filepath": r[1], "chunk_index": r[2],
                      "code": r[3], "dense_score": round(float(r[4]), 4)}
@@ -173,31 +309,17 @@ def search_code(
                     t + ":*" for t in query.split() if t.strip()
                 )
                 if tsquery:
-                    if repo_prefix:
-                        cur.execute(
-                            """
-                            SELECT id, filepath, chunk_index, code,
-                                   ts_rank_cd(search_vector, to_tsquery('simple', %s)) AS score
-                            FROM cocoindex.code_embeddings
-                            WHERE search_vector @@ to_tsquery('simple', %s)
-                              AND filepath LIKE %s
-                            ORDER BY score DESC
-                            LIMIT %s
-                            """,
-                            (tsquery, tsquery, repo_prefix, candidate_pool),
-                        )
-                    else:
-                        cur.execute(
-                            """
-                            SELECT id, filepath, chunk_index, code,
-                                   ts_rank_cd(search_vector, to_tsquery('simple', %s)) AS score
-                            FROM cocoindex.code_embeddings
-                            WHERE search_vector @@ to_tsquery('simple', %s)
-                            ORDER BY score DESC
-                            LIMIT %s
-                            """,
-                            (tsquery, tsquery, candidate_pool),
-                        )
+                    cur.execute(
+                        f"""
+                        SELECT id, filepath, chunk_index, code,
+                               ts_rank_cd(search_vector, to_tsquery('simple', %s)) AS score
+                        FROM cocoindex.code_embeddings
+                        WHERE search_vector @@ to_tsquery('simple', %s){branch_where}
+                        ORDER BY score DESC
+                        LIMIT %s
+                        """,
+                        (tsquery, tsquery, *branch_params, candidate_pool),
+                    )
                     bm25_results = [
                         {"id": r[0], "filepath": r[1], "chunk_index": r[2],
                          "code": r[3], "bm25_score": round(float(r[4]), 4)}
@@ -244,11 +366,26 @@ def _format_results(query: str, results: list[dict], mode: str = "hybrid") -> st
     return "\n".join(lines)
 
 
+def _select_pattern_roots(repo: str | None, release_line: str | None) -> list[tuple]:
+    """Pick which _PATTERN_SEARCH_ROOTS entries apply, given a resolved repo
+    scope + release line. release_line=None means main -- the plain,
+    untagged repo_tags ("kubernaut", not "kubernaut@release-v1.5")."""
+    repo_names = ("kubernaut", "kubernaut-operator", "kubernaut-console")
+    if release_line is not None:
+        target_tags = {
+            f"{r}@release-{release_line}" for r in ((repo,) if repo else repo_names)
+        }
+    else:
+        target_tags = {repo} if repo else set(repo_names)
+    return [root for root in _PATTERN_SEARCH_ROOTS if root[0] in target_tags]
+
+
 def pattern_search_code(
     pattern: str,
     language: str,
     limit: int = 10,
     repo: str | None = None,
+    branch: str | None = None,
 ) -> list[dict[str, Any]]:
     """Structural ("by-example") code search via CocoIndex's CodePattern --
     tree-sitter AST matching against each repo's live checkout.
@@ -261,11 +398,16 @@ def pattern_search_code(
     do") and gopls/Serena (type-aware find-references/diagnostics): this is
     purely syntactic "find code shaped like X", with no type resolution and
     no cross-file symbol graph (see docs/FINDINGS.md 2026-08-07).
+
+    branch controls release-line scoping (2026-08-10) exactly like
+    search_code(): omit to auto-detect from KUBERNAUT_LIVE_CLONE_DIR, pass
+    an explicit release line to override, or "main" to force main-only.
     """
     from cocoindex.ops.code import CodePattern, render_match
     from cocoindex.ops.text import detect_code_language
 
-    roots = [r for r in _PATTERN_SEARCH_ROOTS if repo is None or r[0] == repo]
+    release_line = _resolve_release_line(branch)
+    roots = _select_pattern_roots(repo, release_line)
     if not roots:
         return []
 
@@ -323,7 +465,9 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
     )
 
     @mcp.tool()
-    def cocoindex_search(query: str, limit: int = 10, repo: str | None = None) -> str:
+    def cocoindex_search(
+        query: str, limit: int = 10, repo: str | None = None, branch: str | None = None,
+    ) -> str:
         """Hybrid code search over the kubernaut platform codebase.
 
         Combines dense vector similarity and BM25 keyword matching via
@@ -336,15 +480,27 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
         "kubernaut-console") to scope results to just that repo -- use this
         for own-repo work; omit it for upstream/cross-repo triage.
 
+        branch (2026-08-10): the code index additionally covers release/v1.5
+        and release/v1.6 mirrors. By default this auto-detects which
+        release line your current checkout is on and scopes results to
+        match, so results always reflect what you actually have checked
+        out -- a `main` (or any feature/fix branch) checkout gets today's
+        behavior, a `release/v1.5` checkout gets v1.5's code instead. Pass
+        an explicit line (e.g. "v1.5") to override detection (e.g. to check
+        a different release line than what you're on), or "main" to force
+        main regardless of your checkout. Branches outside {main, v1.5,
+        v1.6} aren't indexed here at all -- use Serena for those.
+
         Returns ranked code snippets with file paths and relevance scores.
         Prefer this over Grep when searching by concept rather than exact text.
         """
-        results = search_code(query, limit=min(limit, 20), repo=repo)
+        results = search_code(query, limit=min(limit, 20), repo=repo, branch=branch)
         return _format_results(query, results)
 
     @mcp.tool()
     def cocoindex_pattern_search(
         pattern: str, language: str, limit: int = 10, repo: str | None = None,
+        branch: str | None = None,
     ) -> str:
         r"""Structural ("by-example") code search over the kubernaut platform.
 
@@ -354,6 +510,10 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
 
         Supported languages: "go" (kubernaut, kubernaut-operator), "typescript"
         / "tsx" (kubernaut-console). Pass repo to scope to one of those three.
+
+        branch (2026-08-10): same release-line scoping as cocoindex_search
+        -- omit to auto-detect from your current checkout, pass an explicit
+        line (e.g. "v1.5") to override, or "main" to force main.
 
         Pattern syntax: write an example of the shape you want, using `\`
         + a name for a metavariable (matches one node) or `\(NAME*\)`
@@ -367,7 +527,9 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
         find references/callers, and has no diagnostics -- use gopls for
         that. Complementary to, not a replacement for, gopls.
         """
-        results = pattern_search_code(pattern, language, limit=min(limit, 20), repo=repo)
+        results = pattern_search_code(
+            pattern, language, limit=min(limit, 20), repo=repo, branch=branch,
+        )
         return _format_pattern_results(pattern, language, results)
 
     if transport == "stdio":
@@ -382,13 +544,19 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
 # CLI query mode
 # ---------------------------------------------------------------------------
 
-def _run_cli_query(query: str, limit: int = 10, mode: str = "hybrid", repo: str | None = None) -> None:
-    results = search_code(query, limit=limit, mode=mode, repo=repo)
+def _run_cli_query(
+    query: str, limit: int = 10, mode: str = "hybrid",
+    repo: str | None = None, branch: str | None = None,
+) -> None:
+    results = search_code(query, limit=limit, mode=mode, repo=repo, branch=branch)
     print(_format_results(query, results, mode=mode))
 
 
-def _run_cli_pattern_query(pattern: str, language: str, limit: int = 10, repo: str | None = None) -> None:
-    results = pattern_search_code(pattern, language, limit=limit, repo=repo)
+def _run_cli_pattern_query(
+    pattern: str, language: str, limit: int = 10,
+    repo: str | None = None, branch: str | None = None,
+) -> None:
+    results = pattern_search_code(pattern, language, limit=limit, repo=repo, branch=branch)
     print(_format_pattern_results(pattern, language, results))
 
 
@@ -404,6 +572,8 @@ def main():
                         help="Search mode for --query (default: hybrid)")
     parser.add_argument("--repo", default=None,
                         help="Scope results to one repo tag (e.g. kubernaut-operator); default: whole platform")
+    parser.add_argument("--branch", default=None,
+                        help="Release line to scope to (e.g. v1.5) or 'main'; default: auto-detect from KUBERNAUT_LIVE_CLONE_DIR")
     parser.add_argument("--port", "-p", type=int, default=8889, help="MCP server port (default: 8889)")
     parser.add_argument("--host", default="127.0.0.1", help="MCP server bind address")
     args = parser.parse_args()
@@ -411,9 +581,9 @@ def main():
     if args.pattern:
         if not args.language:
             parser.error("--pattern requires --language")
-        _run_cli_pattern_query(args.pattern, args.language, limit=args.limit, repo=args.repo)
+        _run_cli_pattern_query(args.pattern, args.language, limit=args.limit, repo=args.repo, branch=args.branch)
     elif args.query:
-        _run_cli_query(args.query, limit=args.limit, mode=args.mode, repo=args.repo)
+        _run_cli_query(args.query, limit=args.limit, mode=args.mode, repo=args.repo, branch=args.branch)
     else:
         _run_mcp_server(host=args.host, port=args.port)
 

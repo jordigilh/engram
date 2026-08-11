@@ -34,7 +34,7 @@ import sys
 import time
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
 SPIKE_DIR = REPO_ROOT / "spike"
 sys.path.insert(0, str(SPIKE_DIR))
 

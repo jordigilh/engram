@@ -39,7 +39,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "spike"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from classify import classify_correction  # noqa: E402
 from prefilters import loose_regex_prefilter, trivial_message_exclusion_filter  # noqa: E402
 

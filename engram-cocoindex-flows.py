@@ -131,7 +131,14 @@ def hindsight_retain(
         try:
             with urlopen(req, timeout=60) as resp:
                 return json.loads(resp.read())
-        except (HTTPError, URLError) as e:
+        # TimeoutError/ConnectionError added 2026-08-10 -- a slow hindsight-api
+        # under retain-consolidation load raises a raw socket TimeoutError
+        # (urllib only wraps connect-time failures as URLError; a read-time
+        # stall surfaces as bare TimeoutError), which this retry loop's
+        # original (HTTPError, URLError) clause didn't catch -- so instead of
+        # retrying, it propagated uncaught and crashed the whole backfill
+        # process (confirmed live: killed an `issues` app backfill outright).
+        except (HTTPError, URLError, TimeoutError, ConnectionError) as e:
             if attempt < 2:
                 time.sleep(2 ** attempt)
                 continue

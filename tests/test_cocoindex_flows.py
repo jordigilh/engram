@@ -651,3 +651,50 @@ class TestHindsightRetain:
 
         result = cocoindex_flows.hindsight_retain(bank_id="cursor-memory", content="x", document_id="doc-1")
         assert result == {}
+
+
+class TestReleaseLineWiring:
+    """code_main's multi-branch extension (2026-08-10): the kubernaut
+    family's *code* index additionally covers release/v1.5 and release/v1.6
+    mirrors (docs/issues stay main-only -- unchanged, LLM-consolidation-costed
+    via hindsight_retain(), unlike code embedding). See
+    watch-mirrors-config.sh's RELEASE_LINES/RELEASE_WATCH_MIRRORS and
+    docs/FINDINGS.md."""
+
+    def test_default_release_lines_are_v1_5_and_v1_6(self, cocoindex_flows):
+        assert cocoindex_flows.KUBERNAUT_RELEASE_LINES == ["v1.5", "v1.6"]
+
+    def test_release_line_dir_matches_watch_mirrors_config_convention(self, cocoindex_flows):
+        """Must match watch-mirrors-config.sh's RELEASE_WATCH_MIRRORS
+        mirror_path convention exactly (`~/.hindsight/watch/<repo>-release-<line>`)
+        -- this script never creates the mirrors itself, it only reads
+        wherever watch-mirrors-lib.sh already put them."""
+        path = cocoindex_flows._release_line_dir("kubernaut", "v1.5")
+        assert str(path).endswith("/.hindsight/watch/kubernaut-release-v1.5")
+
+        path = cocoindex_flows._release_line_dir("kubernaut-operator", "v1.6")
+        assert str(path).endswith("/.hindsight/watch/kubernaut-operator-release-v1.6")
+
+    def test_release_line_dir_expands_user_home(self, cocoindex_flows):
+        import os
+
+        path = cocoindex_flows._release_line_dir("kubernaut-console", "v1.5")
+        assert "~" not in str(path)
+        assert str(path).startswith(os.path.expanduser("~"))
+
+    def test_code_main_source_covers_all_three_repos_x_release_lines(self, cocoindex_flows):
+        """Structural regression (mirrors test_koku_cocoindex_flows.py's
+        PR_REPOS-membership style): asserting on code_main's *source*
+        rather than executing it, since a real run needs a live postgres
+        pool + coco flow-graph runtime that isn't worth faking out here.
+        Confirms the release-line loop is wired for all 3 repos with the
+        exact repo_tag format code relies on downstream (cocoindex-search.py's
+        branch filtering matches on the literal "@release-" substring)."""
+        import inspect
+
+        source = inspect.getsource(cocoindex_flows.code_main)
+        assert "KUBERNAUT_RELEASE_LINES" in source
+        assert "_release_line_dir" in source
+        assert '@release-{line}"' in source
+        for repo_name in ("kubernaut", "kubernaut-operator", "kubernaut-console"):
+            assert f'"{repo_name}"' in source, f"code_main's release-line loop is missing {repo_name}"

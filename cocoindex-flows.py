@@ -84,6 +84,28 @@ ISSUES_REPOS = os.environ.get(
 ).split(",")
 ISSUES_POLL_INTERVAL = int(os.environ.get("ENGRAM_ISSUES_POLL_SECONDS", "300"))
 
+# Manually-curated release lines for the kubernaut family's *code* index only
+# -- kept in sync by hand with watch-mirrors-config.sh's RELEASE_LINES (docs
+# code_main's release-line loop reads mirror dirs that
+# watch-mirrors-config.sh/watch-mirrors-lib.sh are responsible for creating;
+# this script never creates or fetches them itself). code_main tags rows
+# from these mirrors with repo_tag="{repo}@release-{line}"; docs_main and
+# issues_main are unaffected (main-only, unchanged -- see docs/FINDINGS.md
+# 2026-08-03 and its 2026-08-10 refinement for why code is cheap to
+# multi-branch and docs/issues are not).
+KUBERNAUT_RELEASE_LINES = [
+    line.strip()
+    for line in os.environ.get("KUBERNAUT_RELEASE_LINES", "v1.5,v1.6").split(",")
+    if line.strip()
+]
+
+
+def _release_line_dir(repo_name: str, line: str) -> pathlib.Path:
+    """Mirror path for one (repo, release line) pair, matching the
+    `~/.hindsight/watch/<repo>-release-<line>` convention created by
+    watch-mirrors-config.sh's RELEASE_WATCH_MIRRORS."""
+    return pathlib.Path(os.path.expanduser(f"~/.hindsight/watch/{repo_name}-release-{line}"))
+
 PG_DSN = os.environ.get(
     "COCOINDEX_PG_URL",
     "postgresql://hindsight:hindsight@localhost:5432/hindsight",
@@ -243,7 +265,14 @@ def hindsight_retain(
         try:
             with urlopen(req, timeout=60) as resp:
                 return json.loads(resp.read())
-        except (HTTPError, URLError) as e:
+        # TimeoutError/ConnectionError added 2026-08-10 -- a slow hindsight-api
+        # under retain-consolidation load raises a raw socket TimeoutError
+        # (urllib only wraps connect-time failures as URLError; a read-time
+        # stall surfaces as bare TimeoutError), which this retry loop's
+        # original (HTTPError, URLError) clause didn't catch -- so instead of
+        # retrying, it propagated uncaught and crashed the whole backfill
+        # process (confirmed live: killed an `issues` app backfill outright).
+        except (HTTPError, URLError, TimeoutError, ConnectionError) as e:
             if attempt < 2:
                 time.sleep(2 ** attempt)
                 continue
@@ -732,6 +761,42 @@ async def code_main(
         process_code_file, console_files.items(),
         table, console_dir, "kubernaut-console",
     )
+
+    # Release-line mirrors (main is the 3 blocks above) -- see
+    # watch-mirrors-config.sh's RELEASE_WATCH_MIRRORS and KUBERNAUT_RELEASE_LINES
+    # above. A line with no mirror dir yet (e.g. release/v1.6 before it's cut
+    # upstream) is skipped gracefully; watch-mirrors-lib.sh logs its own INFO
+    # when that happens, so no duplicate warning is needed here.
+    release_repos = [
+        ("kubernaut", code_dir, ["**/*.go"], ["**/vendor/**", "**/*_test.go", "**/zz_generated*"]),
+        ("kubernaut-operator", operator_dir, ["**/*.go"], ["**/vendor/**", "**/*_test.go", "**/zz_generated*"]),
+        ("kubernaut-console", console_dir, ["**/*.ts", "**/*.tsx"],
+         ["**/node_modules/**", "**/dist/**", "**/storybook-static/**", "**/*.d.ts"]),
+    ]
+    for repo_name, _main_dir, included, excluded in release_repos:
+        for line in KUBERNAUT_RELEASE_LINES:
+            line_dir = _release_line_dir(repo_name, line)
+            if not line_dir.is_dir():
+                log.info(
+                    "code_main: skipping %s@release-%s -- mirror not present at %s yet",
+                    repo_name, line, line_dir,
+                )
+                continue
+            repo_tag = f"{repo_name}@release-{line}"
+            release_files = localfs.walk_dir(
+                line_dir,
+                recursive=True,
+                path_matcher=PatternFilePathMatcher(
+                    included_patterns=included,
+                    excluded_patterns=excluded,
+                ),
+                live=True,
+            )
+            await coco.mount_each(
+                coco.component_subpath(repo_tag),
+                process_code_file, release_files.items(),
+                table, line_dir, repo_tag,
+            )
 
 
 code_app = coco.App(

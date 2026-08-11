@@ -18,9 +18,15 @@ import argparse
 import logging
 import os
 import pathlib
+import sys
 from typing import Any
 
-import chunking
+# This file lives in search/; shared modules (chunking.py etc.) stay at the
+# repo root. sys.path[0] for a script invoked via a symlink (as launchd
+# does) resolves to the symlink's realpath target directory (search/), not
+# the symlink's own directory, so the repo root must be added explicitly.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+import chunking  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,

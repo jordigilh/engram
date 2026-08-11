@@ -1,53 +1,59 @@
 #!/usr/bin/env python3
-r"""Engram code search MCP server.
+r"""Koku code search MCP server.
 
 Provides hybrid code search (dense vectors + BM25) over the
-cocoindex.engram_code_embeddings table (this repo's own Python source).
-Results are fused using Reciprocal Rank Fusion (RRF) so both semantic
-similarity and exact keyword matches contribute to ranking.
+cocoindex.koku_code_embeddings table. Results are fused using Reciprocal Rank
+Fusion (RRF) so both semantic similarity and exact keyword matches
+contribute to ranking.
 
 Usage:
-    python3 engram-cocoindex-search.py                    # Start MCP server (stdio)
-    python3 engram-cocoindex-search.py --query "how does contradiction resolution work"
-    python3 engram-cocoindex-search.py --query "resolve_contradiction" --mode dense
-    python3 engram-cocoindex-search.py --query "resolve_contradiction" --mode bm25
-    python3 engram-cocoindex-search.py --pattern 'def \NAME(\(A*\)):' --language python
+    python3 koku-cocoindex-search.py                    # Start MCP server (stdio)
+    python3 koku-cocoindex-search.py --query "how does the report processing pipeline work"
+    python3 koku-cocoindex-search.py --query "ReportChargeUpdater" --mode dense
+    python3 koku-cocoindex-search.py --query "ReportChargeUpdater" --mode bm25
+    python3 koku-cocoindex-search.py --pattern 'def \NAME(\(A*\)):' --language python
 """
 
 import argparse
 import logging
 import os
 import pathlib
+import sys
 from typing import Any
 
-import chunking
+# This file lives in search/; shared modules (chunking.py etc.) stay at the
+# repo root. sys.path[0] for a script invoked via a symlink (as launchd
+# does) resolves to the symlink's realpath target directory (search/), not
+# the symlink's own directory, so the repo root must be added explicitly.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+import chunking  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
-log = logging.getLogger("engram-cocoindex-search")
+log = logging.getLogger("koku-cocoindex-search")
 
 PG_URL = os.environ.get(
     "COCOINDEX_PG_URL",
     "postgresql://hindsight:hindsight@localhost:5432/hindsight",
 )
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-RRF_K = 60  # RRF constant — standard value from the original paper
+RRF_K = 60
 
-# Same env var (and default) as engram-cocoindex-flows.py, so pattern search
+# Same env var (and default) as koku-cocoindex-flows.py, so pattern search
 # walks the exact same checkout the ingestion flow indexes.
-ENGRAM_REPO_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_REPO_DIR", os.path.expanduser("~/.hindsight/watch/engram"),
+KOKU_REPO_DIR = pathlib.Path(os.environ.get(
+    "KOKU_REPO_DIR", os.path.expanduser("~/go/src/github.com/project-koku/koku"),
 ))
 
 # (repo_tag, root, included_patterns, excluded_patterns) -- mirrors
-# engram-cocoindex-flows.py's localfs.walk_dir(path_matcher=
+# koku-cocoindex-flows.py's localfs.walk_dir(path_matcher=
 # PatternFilePathMatcher(...)) call exactly.
 _PATTERN_SEARCH_ROOTS = [
-    ("engram", ENGRAM_REPO_DIR, ["**/*.py"], [
-        "**/__pycache__/**", "**/.pytest_cache/**", "**/.git/**",
-        "**/venv/**", "**/node_modules/**",
+    ("koku", KOKU_REPO_DIR, ["**/*.py"], [
+        "**/migrations/**", "**/tests/**", "**/test_*.py",
+        "**/node_modules/**", "**/.venv/**", "**/venv/**", "**/vendor/**",
     ]),
 ]
 
@@ -110,7 +116,7 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                     """
                     SELECT id, filepath, chunk_index, code,
                            1 - (embedding <=> %s::vector) AS score
-                    FROM cocoindex.engram_code_embeddings
+                    FROM cocoindex.koku_code_embeddings
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
                     """,
@@ -131,7 +137,7 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                         """
                         SELECT id, filepath, chunk_index, code,
                                ts_rank_cd(search_vector, to_tsquery('simple', %s)) AS score
-                        FROM cocoindex.engram_code_embeddings
+                        FROM cocoindex.koku_code_embeddings
                         WHERE search_vector @@ to_tsquery('simple', %s)
                         ORDER BY score DESC
                         LIMIT %s
@@ -185,16 +191,16 @@ def _format_results(query: str, results: list[dict], mode: str = "hybrid") -> st
 
 def pattern_search_code(pattern: str, language: str, limit: int = 10) -> list[dict[str, Any]]:
     """Structural ("by-example") code search via CocoIndex's CodePattern --
-    tree-sitter AST matching against this repo's own live checkout.
+    tree-sitter AST matching against the live koku checkout.
 
     Unlike search_code() above, there is no structural-pattern index to
     query: CodePattern.match_file() parses source directly, so this walks
-    the same file set engram-cocoindex-flows.py already ingests (see
+    the same file set koku-cocoindex-flows.py already ingests (see
     _PATTERN_SEARCH_ROOTS / chunking.find_code_files()) for every call.
     Complements, not replaces, search_code() (semantic/BM25 "what does X
-    do"): this is purely syntactic "find code shaped like X", with no type
-    resolution and no cross-file symbol graph (see docs/FINDINGS.md
-    2026-08-07).
+    do") and Serena (type-aware find-references/diagnostics): this is
+    purely syntactic "find code shaped like X", with no type resolution and
+    no cross-file symbol graph (see docs/FINDINGS.md 2026-08-07).
     """
     from cocoindex.ops.code import CodePattern, render_match
     from cocoindex.ops.text import detect_code_language
@@ -243,23 +249,23 @@ def _format_pattern_results(pattern: str, language: str, results: list[dict]) ->
 # MCP server
 # ---------------------------------------------------------------------------
 
-def _run_mcp_server(host: str = "127.0.0.1", port: int = 8890, transport: str = "stdio") -> None:
+def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = "stdio") -> None:
     from mcp.server import FastMCP
 
     mcp = FastMCP(
-        "engram-code",
+        "koku-code",
         host=host,
         port=port,
     )
 
     @mcp.tool()
-    def engram_code_search(query: str, limit: int = 10) -> str:
-        """Hybrid code search over the Engram tooling codebase.
+    def koku_code_search(query: str, limit: int = 10) -> str:
+        """Hybrid code search over the Koku codebase.
 
         Combines dense vector similarity and BM25 keyword matching via
         Reciprocal Rank Fusion for best results.  Works equally well for:
-        - conceptual queries: "how does contradiction resolution work?"
-        - exact identifiers: "resolve_contradiction"
+        - conceptual queries: "how does the report processing pipeline work?"
+        - exact identifiers: "ParseConfig"
 
         Returns ranked code snippets with file paths and relevance scores.
         Prefer this over Grep when searching by concept rather than exact text.
@@ -268,11 +274,11 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8890, transport: str = 
         return _format_results(query, results)
 
     @mcp.tool()
-    def engram_code_pattern_search(pattern: str, language: str = "python", limit: int = 10) -> str:
-        r"""Structural ("by-example") code search over the Engram tooling codebase.
+    def koku_code_pattern_search(pattern: str, language: str = "python", limit: int = 10) -> str:
+        r"""Structural ("by-example") code search over the Koku codebase.
 
         For "find code shaped like X" -- e.g. every function matching a
-        signature -- not "find code about X" (use engram_code_search for
+        signature -- not "find code about X" (use koku_code_search for
         that). Matches by tree-sitter AST shape, not text/regex.
 
         Pattern syntax: write an example of the shape you want, using `\`
@@ -281,17 +287,21 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8890, transport: str = 
         to mean "don't care what's inside" -- e.g. `def \NAME(\(A*\)):`
         matches any Python function/method regardless of body or args.
 
-        This is purely syntactic: it does NOT resolve types and can't find
-        references/callers or diagnostics.
+        This is purely syntactic: it does NOT resolve types, can't find
+        references/callers, and has no diagnostics -- use Serena for that.
+        Complementary to, not a replacement for, Serena. Note: koku's heavy
+        Celery/Django-signal use means dynamically-dispatched functions
+        (task handlers, signal receivers) match here by shape same as any
+        other function, which Serena's static analysis can miss.
         """
         results = pattern_search_code(pattern, language, limit=min(limit, 20))
         return _format_pattern_results(pattern, language, results)
 
     if transport == "stdio":
-        log.info("Starting engram-code MCP server (stdio)")
+        log.info("Starting koku-code MCP server (stdio)")
         mcp.run(transport="stdio")
     else:
-        log.info("Starting engram-code MCP server on %s:%d (sse)", host, port)
+        log.info("Starting koku-code MCP server on %s:%d (sse)", host, port)
         mcp.run(transport="sse")
 
 
@@ -311,7 +321,7 @@ def _run_cli_pattern_query(pattern: str, language: str, limit: int = 10) -> None
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Engram code search — MCP server + CLI"
+        description="Koku code search — MCP server + CLI"
     )
     parser.add_argument("--query", "-q", help="Run a single query and exit")
     parser.add_argument("--pattern", help="Run a single structural pattern query and exit")
@@ -319,7 +329,7 @@ def main():
     parser.add_argument("--limit", "-n", type=int, default=10, help="Max results (default: 10)")
     parser.add_argument("--mode", "-m", default="hybrid", choices=["hybrid", "dense", "bm25"],
                         help="Search mode (default: hybrid)")
-    parser.add_argument("--port", "-p", type=int, default=8890, help="MCP server port (default: 8890)")
+    parser.add_argument("--port", "-p", type=int, default=8889, help="MCP server port (default: 8889)")
     parser.add_argument("--host", default="127.0.0.1", help="MCP server bind address")
     args = parser.parse_args()
 

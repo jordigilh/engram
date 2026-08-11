@@ -142,8 +142,8 @@ graph TB
 | Effectiveness report | `report.py` | Metrics aggregation, token analysis, mental model stats |
 | Dashboard generator | `generate-dashboard.py` | Auto-updates `docs/DASHBOARD.md` from daily reports |
 | MCP hook | `cursor/hooks.json` + `hooks/log-mcp-calls.sh` | Real-time MCP call logging with hit/miss |
-| CocoIndex flows | `cocoindex-flows.py` (symlinked to `~/.hindsight/`) | Incremental ingestion for docs, issues, code, transcripts |
-| Code search | `cocoindex-search.py` | MCP hybrid code search (dense + BM25 via RRF fusion) |
+| CocoIndex flows | `flows/cocoindex-flows.py` (symlinked to `~/.hindsight/`) | Incremental ingestion for docs, issues, code, transcripts |
+| Code search | `search/cocoindex-search.py` | MCP hybrid code search (dense + BM25 via RRF fusion) |
 | Proxy | `hindsight-proxy.py` (symlinked to `~/.hindsight/`) | Sole owner of port 8888; never restarts, so Cursor's MCP connection never drops |
 | Service plists | `~/Library/LaunchAgents/io.vectorize.hindsight.service-{blue,green}.plist` | KeepAlive + RunAtLoad; exactly one active at a time, bound to an internal port (18888/18889) |
 | Restart plist | `~/Library/LaunchAgents/io.vectorize.hindsight.restart.plist` | 1 AM: runs `hindsight-blue-green-restart.sh` — health-checked blue/green swap, not a raw `pkill` |

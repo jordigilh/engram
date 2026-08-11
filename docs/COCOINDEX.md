@@ -128,13 +128,13 @@ The MCP tool `cocoindex_search` accepts a `mode` parameter:
 
 ```bash
 # Hybrid (default)
-python3 cocoindex-search.py --query "how does the reconciler handle errors"
+python3 search/cocoindex-search.py --query "how does the reconciler handle errors"
 
 # Dense only
-python3 cocoindex-search.py --query "error handling in reconciler" --mode dense
+python3 search/cocoindex-search.py --query "error handling in reconciler" --mode dense
 
 # BM25 only — great for exact identifiers
-python3 cocoindex-search.py --query "ParseConfig" --mode bm25
+python3 search/cocoindex-search.py --query "ParseConfig" --mode bm25
 ```
 
 ## Structural Pattern Search
@@ -172,13 +172,13 @@ Omitting a body/block entirely means "don't care what's inside":
 ```bash
 # Any Go function returning exactly (bool, error), regardless of name,
 # params, or body:
-python3 cocoindex-search.py --pattern 'func \NAME(\(A*\)) (bool, error)' --language go
+python3 search/cocoindex-search.py --pattern 'func \NAME(\(A*\)) (bool, error)' --language go
 
 # Any Python function/method, regardless of body:
-python3 koku-cocoindex-search.py --pattern 'def \NAME(\(A*\)):' --language python
+python3 search/koku-cocoindex-search.py --pattern 'def \NAME(\(A*\)):' --language python
 
 # Scope to one of DCM's 8 repos:
-python3 dcm-cocoindex-search.py --pattern 'func \NAME(\(A*\)) error' --language go --repo dcm-cli
+python3 search/dcm-cocoindex-search.py --pattern 'func \NAME(\(A*\)) error' --language go --repo dcm-cli
 ```
 
 ### What this is NOT: complementary to gopls/Serena, not a replacement
@@ -215,7 +215,7 @@ the full schema under CocoIndex's control.
 ### Live mode (default)
 
 ```bash
-python3 cocoindex-flows.py --mode live
+python3 flows/cocoindex-flows.py --mode live
 ```
 
 Runs all four flows concurrently using threads:
@@ -231,7 +231,7 @@ so all output goes to `cocoindex-stderr.log`.
 ### Backfill mode
 
 ```bash
-python3 cocoindex-flows.py --mode backfill
+python3 flows/cocoindex-flows.py --mode backfill
 ```
 
 Processes all existing sources from scratch, then exits. Use for:
@@ -311,7 +311,7 @@ embeddings (stored separately in pgvector) will use a different vector space.
 **Fix:** Run a full backfill to re-embed all code chunks:
 
 ```bash
-python3 cocoindex-flows.py --mode backfill
+python3 flows/cocoindex-flows.py --mode backfill
 ```
 
 ### `gh` CLI not authenticated
@@ -357,7 +357,7 @@ file changes (e.g., files modified outside the watched directory).
 
 ```bash
 # Force reprocessing
-python3 cocoindex-flows.py --mode backfill
+python3 flows/cocoindex-flows.py --mode backfill
 ```
 
 ---
@@ -371,7 +371,7 @@ To declare a new CocoIndex flow:
 2. Add transform steps (chunking, embedding, metadata extraction)
 3. Configure the sink (Hindsight retain API for memory banks, or pgvector for
    direct search)
-4. Test with backfill mode: `python3 cocoindex-flows.py --mode backfill`
+4. Test with backfill mode: `python3 flows/cocoindex-flows.py --mode backfill`
 5. Verify the data appears in recall or search results
 
 CocoIndex handles lineage tracking automatically — when a source document is

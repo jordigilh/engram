@@ -138,8 +138,8 @@ uv pip install --python ~/.hindsight/venv/bin/python -r requirements-dev.txt
 uv pip install --python ~/.hindsight/venv/bin/python cocoindex
 
 ln -sf "$(pwd)/nightly-learn.py" ~/.hindsight/nightly-learn.py
-ln -sf "$(pwd)/cocoindex-flows.py" ~/.hindsight/cocoindex-flows.py
-ln -sf "$(pwd)/cocoindex-search.py" ~/.hindsight/cocoindex-search.py
+ln -sf "$(pwd)/flows/cocoindex-flows.py" ~/.hindsight/cocoindex-flows.py
+ln -sf "$(pwd)/search/cocoindex-search.py" ~/.hindsight/cocoindex-search.py
 ln -sf "$(pwd)/correction_gate.py" ~/.hindsight/correction_gate.py
 ln -sf "$(pwd)/contradiction_resolution.py" ~/.hindsight/contradiction_resolution.py
 ln -sf "$(pwd)/project_scope.py" ~/.hindsight/project_scope.py

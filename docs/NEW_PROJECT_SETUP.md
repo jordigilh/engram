@@ -110,7 +110,7 @@ Use the Hindsight API or MCP to create mental models for each bank:
 
 ### 4. Create CocoIndex Flows
 
-Create `<project>-cocoindex-flows.py` adapted from `cocoindex-flows.py`:
+Create `flows/<project>-cocoindex-flows.py` adapted from `flows/cocoindex-flows.py`:
 
 - Three apps: docs, issues, code
 - Banks: `<project>-docs`, `<project>-issues`
@@ -121,18 +121,18 @@ Create `<project>-cocoindex-flows.py` adapted from `cocoindex-flows.py`:
 > **Gotcha**: give the Postgres pool `coco.ContextKey(...)` a name unique
 > across *every* flow file in this repo, not just this project's own file
 > (e.g. `"<project>_repo_pg_pool"`, not the generic `"pg_pool"` that
-> `cocoindex-flows.py` already uses). CocoIndex registers `ContextKey`s
+> `flows/cocoindex-flows.py` already uses). CocoIndex registers `ContextKey`s
 > process-globally and raises `ValueError` on a same-name second
 > registration — harmless in production (each flow file runs as its own
 > `launchd` process), but it means the pytest suite will crash at collection
 > time if it ever loads two flow files with colliding key names into one
-> process. `engram-cocoindex-flows.py`'s `PG_POOL` (`"engram_repo_pg_pool"`)
+> process. `flows/engram-cocoindex-flows.py`'s `PG_POOL` (`"engram_repo_pg_pool"`)
 > is the reference example; see `tests/test_engram_cocoindex_flows.py::TestModuleLoadsWithoutContextKeyCollision`
 > for the regression guard.
 
 ### 5. Create Code Search Server
 
-Create `<project>-cocoindex-search.py` adapted from `cocoindex-search.py`:
+Create `search/<project>-cocoindex-search.py` adapted from `search/cocoindex-search.py`:
 
 - Queries `cocoindex.<project>_code_embeddings` table
 - MCP server name: `<project>-code`
@@ -143,7 +143,7 @@ Create `<project>-cocoindex-search.py` adapted from `cocoindex-search.py`:
 
 Create `launchd/io.vectorize.cocoindex.<project>.plist`:
 
-- Runs `<project>-cocoindex-flows.py` in live mode
+- Runs `flows/<project>-cocoindex-flows.py` in live mode
 - Environment variables for all repo paths
 - Separate log files: `~/.hindsight/logs/<project>-cocoindex-{stdout,stderr}.log`
 - KeepAlive: true
@@ -553,8 +553,8 @@ either (`postToolUse` never fires after a `preToolUse` deny).
 
 | File | Purpose |
 |------|---------|
-| `<project>-cocoindex-flows.py` | Ingestion (docs, issues, code) |
-| `<project>-cocoindex-search.py` | Code search MCP server |
+| `flows/<project>-cocoindex-flows.py` | Ingestion (docs, issues, code) |
+| `search/<project>-cocoindex-search.py` | Code search MCP server |
 | `launchd/io.vectorize.cocoindex.<project>.plist` | macOS service |
 | `cursor/projects/<project>.vars` | Template variables for cursor rule generation |
 | `cursor/hindsight-memory.mdc.tmpl` | Shared template (do not edit per-project) |

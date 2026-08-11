@@ -407,8 +407,8 @@ uv pip install --python ~/.hindsight/venv/bin/python pdfplumber
 ### Symlink flow and search scripts
 
 ```bash
-ln -sf "$(pwd)/cocoindex-flows.py" ~/.hindsight/cocoindex-flows.py
-ln -sf "$(pwd)/cocoindex-search.py" ~/.hindsight/cocoindex-search.py
+ln -sf "$(pwd)/flows/cocoindex-flows.py" ~/.hindsight/cocoindex-flows.py
+ln -sf "$(pwd)/search/cocoindex-search.py" ~/.hindsight/cocoindex-search.py
 ln -sf "$(pwd)/chunking.py" ~/.hindsight/chunking.py
 ```
 
@@ -438,7 +438,7 @@ ENGRAM_CODE_DIR=~/go/src/github.com/jordigilh/kubernaut
 ### Run initial backfill
 
 ```bash
-python3 cocoindex-flows.py --mode backfill
+python3 flows/cocoindex-flows.py --mode backfill
 ```
 
 This processes all existing docs, issues, code, and transcripts. Subsequent runs
@@ -468,10 +468,10 @@ issue poll cycles completing with the full count of issues + PRs. See
 [CocoIndex Operations](COCOINDEX.md) for monitoring and troubleshooting details.
 
 > **Onboarding additional projects**: the steps above cover the original
-> kubernaut project's single `cocoindex-flows.py`. Each additional onboarded
-> project gets its own `<project>-cocoindex-flows.py` / `<project>-cocoindex-search.py`
-> pair, symlinked into `~/.hindsight/` the same way (see `engram-cocoindex-flows.py`/
-> `engram-cocoindex-search.py` for a real example), plus its own `launchd` plist.
+> kubernaut project's single `flows/cocoindex-flows.py`. Each additional onboarded
+> project gets its own `flows/<project>-cocoindex-flows.py` / `search/<project>-cocoindex-search.py`
+> pair, symlinked into `~/.hindsight/` the same way (see `flows/engram-cocoindex-flows.py`/
+> `search/engram-cocoindex-search.py` for a real example), plus its own `launchd` plist.
 > See [NEW_PROJECT_SETUP.md](NEW_PROJECT_SETUP.md) for the full walkthrough,
 > including a lighter tag-scoped-recall variant for sub-repos of an
 > already-onboarded project that don't need a fully separate pipeline.

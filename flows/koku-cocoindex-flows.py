@@ -26,6 +26,7 @@ import logging
 import os
 import pathlib
 import subprocess
+import sys
 import time
 from datetime import datetime
 from typing import Any, AsyncIterator
@@ -36,7 +37,12 @@ import cocoindex as coco
 from cocoindex.connectors import localfs
 from cocoindex.resources.file import PatternFilePathMatcher
 
-import chunking
+# This file lives in flows/; shared modules (chunking.py etc.) stay at the
+# repo root. sys.path[0] for a script invoked via a symlink (as launchd
+# does) resolves to the symlink's realpath target directory (flows/), not
+# the symlink's own directory, so the repo root must be added explicitly.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+import chunking  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,

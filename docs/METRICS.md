@@ -376,9 +376,9 @@ mode effectiveness to understand which retrieval method contributes most:
 To compare modes manually:
 
 ```bash
-python3 cocoindex-search.py --query "reconciler error handling" --mode hybrid
-python3 cocoindex-search.py --query "reconciler error handling" --mode dense
-python3 cocoindex-search.py --query "ParseConfig" --mode bm25
+python3 search/cocoindex-search.py --query "reconciler error handling" --mode hybrid
+python3 search/cocoindex-search.py --query "reconciler error handling" --mode dense
+python3 search/cocoindex-search.py --query "ParseConfig" --mode bm25
 ```
 
 **Healthy indicators:**
@@ -390,7 +390,7 @@ python3 cocoindex-search.py --query "ParseConfig" --mode bm25
 - BM25 returns 0 results for known identifiers: the `search_vector` trigger
   may not be firing — check `SELECT count(*) FROM cocoindex.code_embeddings WHERE search_vector IS NULL`
 - Hybrid results identical to dense-only: BM25 index may be empty — re-run
-  `python3 cocoindex-flows.py --mode backfill`
+  `python3 flows/cocoindex-flows.py --mode backfill`
 
 ### Freshness-at-Recall
 
@@ -428,7 +428,7 @@ locate unfamiliar code.
 
 **Warning signs:**
 - Exploration calls/task increasing: code index may not be covering the queried area — check if the source directory is configured
-- Code index hit rate < 50%: embeddings may need reprocessing — run `python3 cocoindex-flows.py --mode backfill`
+- Code index hit rate < 50%: embeddings may need reprocessing — run `python3 flows/cocoindex-flows.py --mode backfill`
 
 ## Exploration Efficiency
 

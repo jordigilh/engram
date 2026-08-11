@@ -34,7 +34,7 @@ from contradiction_resolution import delete_document, invalidate_memory  # noqa:
 
 # cocoindex-flows.py has a hyphen, so it can't be `import`ed normally.
 _spec = importlib.util.spec_from_file_location(
-    "cocoindex_flows", Path(__file__).resolve().parent / "cocoindex-flows.py"
+    "cocoindex_flows", Path(__file__).resolve().parent / "flows" / "cocoindex-flows.py"
 )
 _cf = importlib.util.module_from_spec(_spec)
 try:

@@ -276,6 +276,15 @@ def api_post(path: str, payload: dict) -> dict:
     except URLError as e:
         log.error("Connection error %s: %s", url, e.reason)
         raise
+    # TimeoutError/ConnectionError added 2026-08-10 -- a slow hindsight-api
+    # under retain-consolidation load raises a raw socket TimeoutError/
+    # ConnectionError (urllib only wraps connect-time failures as URLError; a
+    # read-time stall or reset surfaces bare), which callers relying on
+    # (HTTPError, URLError) alone don't catch. Log and re-raise like the
+    # other branches so callers get a consistent, catchable exception type.
+    except (TimeoutError, ConnectionError) as e:
+        log.error("Connection error %s: %s", url, e)
+        raise
 
 
 PROJECTS_ROOT = Path(os.path.expanduser("~/.cursor/projects"))
@@ -605,7 +614,7 @@ def retain_windows(windows: list[str], transcript_id: str, project: str | None =
                 usage = result.get("usage", {})
                 for k in total_usage:
                     total_usage[k] += usage.get(k, 0)
-        except (HTTPError, URLError, TimeoutError) as e:
+        except (HTTPError, URLError, TimeoutError, ConnectionError) as e:
             extracted = fallback_extract.extract(window)
             fallback_extract.record_fallback(window, transcript_id, project, extracted, reason=str(e))
             fallback_used += 1
@@ -662,7 +671,7 @@ def reprocess_fallback_backlog() -> dict[str, int]:
             result = api_post(f"/v1/default/banks/{BANK_ID}/memories", payload)
             if result.get("success"):
                 recovered_this_entry = True
-        except (HTTPError, URLError, TimeoutError) as e:
+        except (HTTPError, URLError, TimeoutError, ConnectionError) as e:
             log.warning("Reprocess-fallback still failing for %s: %s", transcript_id, e)
 
         if recovered_this_entry:
@@ -1110,7 +1119,53 @@ PROJECT_CONFIGS = {
             "Users-jgil-go-src-github-com-project-koku",
             "Users-jgil-go-src-github-com-insights-onprem-koku",
         ],
-        "issues_repos": ["project-koku/koku"],
+        # koku-service-operator (2026-08-10) is folded into this same project
+        # scope rather than getting its own PROJECT_CONFIGS entry -- see
+        # koku-cocoindex-flows.py's module docstring. "workspace_prefixes"
+        # above already covers it via the shared "...project-koku" prefix
+        # (startswith match), no separate entry needed there.
+        "issues_repos": ["project-koku/koku", "project-koku/koku-service-operator"],
+    },
+    "praxis": {
+        "banks": ["cursor-memory", "praxis-docs", "praxis-issues"],
+        "mental_models": {
+            "praxis-docs": ("praxis-architecture", "praxis-enhancements", "praxis-api-contracts"),
+            # praxis-roadmap-priorities synthesizes org Project (v2) board
+            # Status + issue milestones -- the actual prioritization signal
+            # for this org, which plain issue labels/state don't carry. See
+            # the 2026-08-10 "roadmap-signal scope" entry in the onboarding
+            # plan / docs/findings/2026-08.md.
+            "praxis-issues": ("active-priorities", "known-bugs", "praxis-roadmap-priorities"),
+            # Tag-isolated (tags=["praxis"], strict match) sibling of
+            # kubernaut's/dcm's/engram's/koku's cursor-memory models -- same
+            # 2026-07-27 pollution fix applied from day one, see docs/FINDINGS.md.
+            "cursor-memory": ("praxis-workflow-preferences", "praxis-architecture-decisions", "praxis-testing-methodology", "praxis-coding-conventions"),
+        },
+        "probes": [
+            ("praxis-docs", "Praxis Grid routing overlay rendering and candidate scoring"),
+            ("praxis-docs", "filter chain model and CRDT/SWIM state propagation"),
+            ("praxis-issues", "open issues and active priorities"),
+            ("praxis-issues", "AI Grid project board status and mixture-of-models routing epic"),
+        ],
+        "recall_banks": {"hindsight", "praxis-docs", "praxis-issues", "praxis-code"},
+        "code_bank": "praxis-code",
+        "log_suffix": "-praxis",
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-praxis-proxy"],
+        # pingora deliberately excluded (vendored cloudflare/pingora fork,
+        # not team-authored architecture) -- see the onboarding plan's
+        # "Confirmed scope" section.
+        "issues_repos": [
+            "praxis-proxy/praxis",
+            "praxis-proxy/conventions",
+            "praxis-proxy/praxis-proxy.github.io",
+            "praxis-proxy/ai",
+            "praxis-proxy/forge",
+            "praxis-proxy/policy",
+            "praxis-proxy/operator",
+            "praxis-proxy/experiments",
+            "praxis-proxy/grid",
+            "praxis-proxy/demos",
+        ],
     },
 }
 
@@ -1124,7 +1179,7 @@ def api_get(path: str) -> dict:
     try:
         with urlopen(req, timeout=30) as resp:
             return json.loads(resp.read())
-    except (HTTPError, URLError) as e:
+    except (HTTPError, URLError, TimeoutError, ConnectionError) as e:
         log.warning("GET %s failed: %s", url, e)
         return {}
 
@@ -1701,6 +1756,23 @@ def run_hourly(watermarks: dict, seen_hashes: set) -> dict:
     return results
 
 
+def run_memory_triage(bank_id: str) -> dict:
+    """Dynamically load triage-memories.py (kept as a standalone, separately
+    runnable script rather than an importable package) and apply its triage
+    pass against `bank_id`. Extracted to a module-level function -- rather
+    than inlined in run_nightly() -- specifically so tests can monkeypatch
+    `nightly_learn.run_memory_triage` instead of exercising the real,
+    mutating (apply=True) triage against the live hindsight-api."""
+    import importlib.util
+    _spec = importlib.util.spec_from_file_location(
+        "triage_memories",
+        Path(__file__).resolve().parent / "triage-memories.py",
+    )
+    _mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    return _mod.triage(bank_id=bank_id, stale_days=14, apply=True)
+
+
 def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") -> dict:
     """Nightly mode: catch-all retain + reflect + probes + metrics + mental models."""
     pconfig = PROJECT_CONFIGS[project]
@@ -1811,11 +1883,24 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
         log.info("All transcripts already processed by hourly runs")
 
     # Phase: Reflect on accumulated patterns
+    #
+    # Only the windowed variant is called here. The unscoped, all-time
+    # reflect() (still defined above for any ad-hoc/manual use) reasons over
+    # the bank's entire correction history with no way to bound it, and as
+    # of 2026-08-10 that made it deterministically fail with HTTP 500
+    # ("LiteLLM response was truncated due to token limit") once
+    # cursor-memory grew large enough -- confirmed not to be a transient
+    # outage by manually re-running it against a healthy hindsight-api and
+    # reproducing the identical error. It would only keep failing as the
+    # bank keeps growing, and reflect_result was never read downstream
+    # anyway (generate-dashboard.py only renders reflect_windowed_7d), so it
+    # was retired rather than fixed in place. results["reflect_result"]
+    # stays None (its initialized value above) for schema compatibility with
+    # historical JSON logs. See docs/FINDINGS.md.
     if results["windows_retained"] > 0 or any(
         watermarks.get(t.stem, {}).get("message_count", 0) > 0 for t in transcripts
     ):
         log.info("Running reflect...")
-        results["reflect_result"] = reflect()
         results["reflect_windowed_7d"] = reflect_windowed(days=7)
 
     # Phase: Observability probes
@@ -1927,7 +2012,7 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
                     f"/v1/default/banks/{bank}/mental-models/{model_id}/refresh",
                     {},
                 )
-            except (HTTPError, URLError) as e:
+            except (HTTPError, URLError, TimeoutError, ConnectionError) as e:
                 log.warning("  %s/%s: refresh failed: %s", bank, model_id, e)
                 continue
             if resp and "error" not in resp:
@@ -1954,14 +2039,7 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
     # Phase: Triage memories (remove ephemeral, stale, duplicate content)
     log.info("Running memory triage...")
     try:
-        import importlib.util
-        _spec = importlib.util.spec_from_file_location(
-            "triage_memories",
-            Path(__file__).resolve().parent / "triage-memories.py",
-        )
-        _mod = importlib.util.module_from_spec(_spec)
-        _spec.loader.exec_module(_mod)
-        triage_result = _mod.triage(bank_id=BANK_ID, stale_days=14, apply=True)
+        triage_result = run_memory_triage(BANK_ID)
         results["triage"] = triage_result
         log.info(
             "  Triage: %d/%d flagged (%.1f%%), %d documents deleted",

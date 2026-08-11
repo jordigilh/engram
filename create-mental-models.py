@@ -209,6 +209,100 @@ MENTAL_MODELS = [
         "trigger": {"mode": "full", "refresh_after_consolidation": False},
         "tags": ["koku"],
     },
+    # praxis-docs: Rust AI gateway/grid architecture, RFC-style design discussions
+    {
+        "bank": "praxis-docs",
+        "id": "praxis-architecture",
+        "name": "Praxis Architecture",
+        "source_query": "How is Praxis (the AI gateway proxy) and Praxis Grid (multi-cluster/multi-site control plane) structured? Describe the filter chain model, the Grid Operator overlay-rendering pipeline, routing-overlay contract, scoring/admission, and CRDT/SWIM state propagation between sites.",
+        "max_tokens": 4096,
+        "trigger": {"mode": "full", "refresh_after_consolidation": False},
+    },
+    {
+        "bank": "praxis-docs",
+        "id": "praxis-enhancements",
+        "name": "Praxis Enhancement Proposals and Design Debates",
+        "source_query": "What enhancement proposals, RFC-style design debates, and architectural trade-offs have been discussed for Praxis routing, filters, or Grid?",
+        "max_tokens": 4096,
+        "trigger": {"mode": "full", "refresh_after_consolidation": False},
+    },
+    {
+        "bank": "praxis-docs",
+        "id": "praxis-api-contracts",
+        "name": "Praxis API and CRD Contracts",
+        "source_query": "What are the API contracts, CRD schemas (GridNetwork, InferenceProvider, GridSite), and routing-overlay envelope formats used by Praxis and Grid?",
+        "max_tokens": 4096,
+        "trigger": {"mode": "full", "refresh_after_consolidation": False},
+    },
+    # praxis-issues: requirements/direction (delta, nightly refresh)
+    {
+        "bank": "praxis-issues",
+        "id": "active-priorities",
+        "name": "Active Priorities",
+        "source_query": "What are the current open issues, their priorities, and what direction the praxis-proxy org is heading?",
+        "max_tokens": 4096,
+        "trigger": {"mode": "delta", "refresh_after_consolidation": False},
+    },
+    {
+        "bank": "praxis-issues",
+        "id": "known-bugs",
+        "name": "Known Bugs and Workarounds",
+        "source_query": "What are the known bugs, their root causes, and any workarounds documented in praxis-proxy issues?",
+        "max_tokens": 4096,
+        "trigger": {"mode": "delta", "refresh_after_consolidation": False},
+    },
+    {
+        # Answers "what ships first" questions directly from ingested GitHub
+        # Projects (v2) board Status fields + issue milestones, rather than
+        # requiring a manual `gh api graphql` investigation each time -- see
+        # docs/findings/2026-08.md's 2026-08-10 praxis-proxy roadmap-signal
+        # entry for the investigation that motivated this model.
+        "bank": "praxis-issues",
+        "id": "praxis-roadmap-priorities",
+        "name": "Praxis Roadmap Priorities",
+        "source_query": "Which praxis-proxy initiatives are actively staffed and prioritized right now (GitHub Project board Status: Next/In Progress vs Backlog/Epics with no board placement), and what are their milestone due dates? Cover multi-cluster/model routing, the AI Grid board, mixture-of-models/intelligent routing, and semantic routing specifically.",
+        "max_tokens": 4096,
+        "trigger": {"mode": "delta", "refresh_after_consolidation": False},
+    },
+    # cursor-memory, tag-isolated (tags=["praxis"], strict match) sibling of
+    # kubernaut's/dcm's/engram's/koku's own scoped models -- same 2026-07-27
+    # fix pattern applied from day one, see docs/FINDINGS.md.
+    {
+        "bank": "cursor-memory",
+        "id": "praxis-coding-conventions",
+        "name": "Praxis Coding Conventions",
+        "source_query": "What are the user's coding conventions, naming patterns, and style preferences when working on praxis-proxy (Rust)?",
+        "max_tokens": 2048,
+        "trigger": {"mode": "delta", "refresh_after_consolidation": True},
+        "tags": ["praxis"],
+    },
+    {
+        "bank": "cursor-memory",
+        "id": "praxis-testing-methodology",
+        "name": "Praxis Testing Methodology",
+        "source_query": "What testing approach, frameworks, and patterns does the user follow when working on praxis-proxy?",
+        "max_tokens": 2048,
+        "trigger": {"mode": "delta", "refresh_after_consolidation": True},
+        "tags": ["praxis"],
+    },
+    {
+        "bank": "cursor-memory",
+        "id": "praxis-workflow-preferences",
+        "name": "Praxis Development Workflow",
+        "source_query": "What is the user's preferred development workflow, review process, and tooling when working on praxis-proxy?",
+        "max_tokens": 2048,
+        "trigger": {"mode": "delta", "refresh_after_consolidation": True},
+        "tags": ["praxis"],
+    },
+    {
+        "bank": "cursor-memory",
+        "id": "praxis-architecture-decisions",
+        "name": "Praxis Architecture Decisions",
+        "source_query": "What architectural decisions and design patterns has the user established while working on praxis-proxy?",
+        "max_tokens": 4096,
+        "trigger": {"mode": "full", "refresh_after_consolidation": False},
+        "tags": ["praxis"],
+    },
 ]
 
 
@@ -256,7 +350,7 @@ def refresh_model(bank: str, model_id: str) -> bool:
 
 
 def list_models():
-    banks = ["cursor-memory", "kubernaut-docs", "kubernaut-issues", "dcm-docs", "dcm-issues", "engram-docs", "koku-docs", "koku-issues"]
+    banks = ["cursor-memory", "kubernaut-docs", "kubernaut-issues", "dcm-docs", "dcm-issues", "engram-docs", "koku-docs", "koku-issues", "praxis-docs", "praxis-issues"]
     for bank in banks:
         result = api_request("GET", f"/v1/default/banks/{bank}/mental-models")
         items = result.get("items", [])

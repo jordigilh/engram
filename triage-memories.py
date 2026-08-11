@@ -109,7 +109,7 @@ def api_get(path: str) -> dict:
     try:
         with urlopen(req, timeout=60) as resp:
             return json.loads(resp.read())
-    except (HTTPError, URLError) as e:
+    except (HTTPError, URLError, TimeoutError, ConnectionError) as e:
         log.warning("GET %s failed: %s", url, e)
         return {}
 
@@ -127,6 +127,15 @@ def api_post(path: str, payload: dict) -> dict:
         raise
     except URLError as e:
         log.error("Connection error %s: %s", url, e.reason)
+        raise
+    # TimeoutError/ConnectionError added 2026-08-10 -- a slow hindsight-api
+    # under retain-consolidation load raises a raw socket TimeoutError/
+    # ConnectionError (urllib only wraps connect-time failures as URLError; a
+    # read-time stall or reset surfaces bare), which callers relying on
+    # (HTTPError, URLError) alone don't catch. Log and re-raise like the
+    # other branches so callers get a consistent, catchable exception type.
+    except (TimeoutError, ConnectionError) as e:
+        log.error("Connection error %s: %s", url, e)
         raise
 
 

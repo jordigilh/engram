@@ -91,7 +91,27 @@ PROJECT_CONFIGS = {
             "Users-jgil-go-src-github-com-insights-onprem-koku",
         ],
         "log_suffix": "-koku",
-        "issues_repos": ["project-koku/koku"],
+        # koku-service-operator (2026-08-10) folded into this scope -- see
+        # koku-cocoindex-flows.py's module docstring.
+        "issues_repos": ["project-koku/koku", "project-koku/koku-service-operator"],
+    },
+    "praxis": {
+        "banks": ["cursor-memory", "praxis-docs", "praxis-issues"],
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-praxis-proxy"],
+        "log_suffix": "-praxis",
+        # pingora deliberately excluded -- see nightly-learn.py's matching entry.
+        "issues_repos": [
+            "praxis-proxy/praxis",
+            "praxis-proxy/conventions",
+            "praxis-proxy/praxis-proxy.github.io",
+            "praxis-proxy/ai",
+            "praxis-proxy/forge",
+            "praxis-proxy/policy",
+            "praxis-proxy/operator",
+            "praxis-proxy/experiments",
+            "praxis-proxy/grid",
+            "praxis-proxy/demos",
+        ],
     },
 }
 
@@ -491,7 +511,8 @@ def collect_ingestion_coverage(project: str | None = None) -> dict:
     # Bank document counts from Hindsight API
     for bank_id, cov_key in [("kubernaut-issues", "issues_indexed"), ("kubernaut-docs", "docs_indexed"),
                               ("dcm-issues", "dcm_issues_indexed"), ("dcm-docs", "dcm_docs_indexed"),
-                              ("engram-docs", "engram_docs_indexed")]:
+                              ("engram-docs", "engram_docs_indexed"),
+                              ("praxis-issues", "praxis_issues_indexed"), ("praxis-docs", "praxis_docs_indexed")]:
         try:
             url = f"http://localhost:8888/v1/default/banks/{bank_id}"
             with urllib.request.urlopen(url, timeout=10) as resp:
@@ -516,7 +537,8 @@ def collect_ingestion_coverage(project: str | None = None) -> dict:
 
     # Code index: row count from pgvector tables
     for table, key in [("code_embeddings", "code_chunks"), ("dcm_code_embeddings", "dcm_code_chunks"),
-                        ("engram_code_embeddings", "engram_code_chunks"), ("koku_code_embeddings", "koku_code_chunks")]:
+                        ("engram_code_embeddings", "engram_code_chunks"), ("koku_code_embeddings", "koku_code_chunks"),
+                        ("praxis_code_embeddings", "praxis_code_chunks")]:
         try:
             result = subprocess.run(
                 ["psql", "-h", "localhost", "-p", "5432", "-U", "hindsight", "-d", "hindsight",
@@ -1253,6 +1275,15 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
             lines.append(f"  {'Engram docs (indexed)':<25}{engram_docs_idx:>10}{'':>10}{'':>10}")
         if engram_code is not None:
             lines.append(f"  {'Engram code chunks':<25}{engram_code:>10}{'—':>10}{'—':>10}")
+        praxis_docs_idx = coverage.get("praxis_docs_indexed", 0)
+        praxis_issues_idx = coverage.get("praxis_issues_indexed", 0)
+        praxis_code = coverage.get("praxis_code_chunks")
+        if praxis_docs_idx:
+            lines.append(f"  {'Praxis docs (indexed)':<25}{praxis_docs_idx:>10}{'':>10}{'':>10}")
+        if praxis_issues_idx:
+            lines.append(f"  {'Praxis issues (indexed)':<25}{praxis_issues_idx:>10}{'':>10}{'':>10}")
+        if praxis_code is not None:
+            lines.append(f"  {'Praxis code chunks':<25}{praxis_code:>10}{'—':>10}{'—':>10}")
         lines.append("  " + "-" * 66)
     else:
         lines.append("  Coverage data not available (run with live Hindsight + gh CLI).")
@@ -1617,7 +1648,7 @@ def main():
                         help="Save current metrics as a baseline snapshot")
     parser.add_argument("--compare", type=str, metavar="BASELINE",
                         help="Compare current metrics against a baseline snapshot file")
-    parser.add_argument("--project", choices=["kubernaut", "dcm", "engram", "koku", "all"], default="all",
+    parser.add_argument("--project", choices=["kubernaut", "dcm", "engram", "koku", "praxis", "all"], default="all",
                         help="Scope the report to one project, or 'all' for every "
                              "configured project shown separately (default: all)")
     args = parser.parse_args()

@@ -1136,6 +1136,11 @@ class TestRunNightlyProjectClobbering:
         monkeypatch.setattr(nightly_learn, "reflect", lambda: {})
         monkeypatch.setattr(nightly_learn, "run_observability_probes", lambda *a, **k: [])
         monkeypatch.setattr(nightly_learn, "api_post", lambda *a, **k: {"success": True})
+        monkeypatch.setattr(nightly_learn, "dedup_graph", lambda bank_id: 0)
+        monkeypatch.setattr(
+            nightly_learn, "run_memory_triage",
+            lambda bank_id: {"total_flagged": 0, "total_memories": 0, "flagged_pct": 0.0, "docs_deleted": 0},
+        )
 
         captured = {}
 
@@ -1280,3 +1285,103 @@ class TestReflectWindowed:
 
         assert result["result"] is None
         assert "error" in result
+
+
+class TestRunNightlyReflectRetired:
+    """Regression for the 2026-08-10 incident: run_nightly()'s "Phase: Reflect
+    on accumulated patterns" called the unscoped, all-time reflect() every
+    night in addition to reflect_windowed(days=7). As cursor-memory grew
+    (12,134 nodes / 838,877 links as of 2026-08-09), that unscoped call
+    started deterministically failing with HTTP 500 ("LiteLLM response was
+    truncated due to token limit") -- confirmed by manually re-running it
+    against a healthy hindsight-api and reproducing the identical error, so
+    this is not a transient outage like 2026-07-26/07-28/08-03/08-04 and
+    would keep failing every night going forward as the bank keeps growing.
+    reflect_result was never read by anything downstream (only
+    reflect_windowed_7d is rendered, in generate-dashboard.py), so the fix is
+    to stop calling the doomed unscoped reflect() from run_nightly() -- the
+    reflect() function itself is left intact for any ad-hoc/manual use. See
+    docs/FINDINGS.md."""
+
+    def _stub_common(self, nightly_learn, monkeypatch, tmp_path):
+        p = tmp_path / "t0.jsonl"
+        p.write_text("{}")
+
+        monkeypatch.setattr(nightly_learn, "collect_bank_stats", lambda project: {})
+        monkeypatch.setattr(nightly_learn, "find_recent_transcripts", lambda **k: [p])
+        monkeypatch.setattr(
+            nightly_learn, "filter_and_scan",
+            lambda missed, watermarks: [(p, [], 0) for p in missed],
+        )
+        monkeypatch.setattr(
+            nightly_learn, "extract_learning_windows",
+            lambda messages, start_index=0: (["[CORRECTION] User: placeholder"], []),
+        )
+        monkeypatch.setattr(nightly_learn, "project_for_transcript_path", lambda path: "kubernaut")
+        monkeypatch.setattr(
+            nightly_learn, "retain_windows_deduped",
+            lambda *a, **k: {"items_retained": 1, "usage": {}},
+        )
+        monkeypatch.setattr(nightly_learn, "run_observability_probes", lambda *a, **k: [])
+        monkeypatch.setattr(
+            nightly_learn, "analyze_mcp_effectiveness",
+            lambda project_transcripts, workspace_prefixes=None, project=None: {
+                "mcp_usage": {},
+                "effectiveness": {
+                    "sessions_with_recall": 0, "sessions_without_recall": 0,
+                    "corrections_per_session_with_recall": 0.0,
+                    "corrections_per_session_without_recall": 0.0,
+                },
+                "proactive_recall": {},
+                "session_distribution": {},
+                "recall_session_stats": {},
+                "weekly_trend": [],
+                "exploration_efficiency": {},
+            },
+        )
+        monkeypatch.setattr(nightly_learn, "api_post", lambda *a, **k: {"success": True})
+        monkeypatch.setattr(nightly_learn, "dedup_graph", lambda bank_id: 0)
+        monkeypatch.setattr(
+            nightly_learn, "run_memory_triage",
+            lambda bank_id: {"total_flagged": 0, "total_memories": 0, "flagged_pct": 0.0, "docs_deleted": 0},
+        )
+
+    def test_regression_unscoped_reflect_is_never_called(self, nightly_learn, tmp_path, monkeypatch):
+        """The nightly run must not invoke the unscoped, all-time reflect()
+        -- it's the call that started deterministically failing once the
+        bank grew past what a single reflect() call can reason over without
+        the underlying LLM response getting truncated."""
+        self._stub_common(nightly_learn, monkeypatch, tmp_path)
+
+        def fail_if_called():
+            raise AssertionError("unscoped reflect() must not be called from run_nightly()")
+        monkeypatch.setattr(nightly_learn, "reflect", fail_if_called)
+
+        nightly_learn.run_nightly({}, set(), project="kubernaut")
+
+    def test_reflect_result_field_stays_none(self, nightly_learn, tmp_path, monkeypatch):
+        """reflect_result is kept in the schema (for backward compat with
+        historical JSON logs) but must always be None now -- it is
+        permanently retired, not populated by a different call."""
+        self._stub_common(nightly_learn, monkeypatch, tmp_path)
+        monkeypatch.setattr(nightly_learn, "reflect", lambda: {"answer": "should never run"})
+
+        results = nightly_learn.run_nightly({}, set(), project="kubernaut")
+
+        assert results["reflect_result"] is None
+
+    def test_windowed_reflect_still_runs(self, nightly_learn, tmp_path, monkeypatch):
+        """reflect_windowed_7d is the surviving, bounded replacement and
+        must still populate on nights with retained corrections."""
+        self._stub_common(nightly_learn, monkeypatch, tmp_path)
+        monkeypatch.setattr(nightly_learn, "reflect", lambda: {"answer": "should never run"})
+        monkeypatch.setattr(
+            nightly_learn, "reflect_windowed",
+            lambda days=7: {"window_days": days, "corrections_in_window": 1, "result": {"answer": "ok"}},
+        )
+
+        results = nightly_learn.run_nightly({}, set(), project="kubernaut")
+
+        assert results["reflect_windowed_7d"] == {
+            "window_days": 7, "corrections_in_window": 1, "result": {"answer": "ok"},
+        }

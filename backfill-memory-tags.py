@@ -111,7 +111,7 @@ def apply_retag(bank_id: str, document_id: str, project: str) -> tuple[bool, str
         with urlopen(req, timeout=30) as resp:
             result = json.load(resp)
         return bool(result.get("success")), None
-    except (HTTPError, URLError) as e:
+    except (HTTPError, URLError, TimeoutError, ConnectionError) as e:
         return False, str(e)
 
 

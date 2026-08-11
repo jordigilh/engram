@@ -77,12 +77,12 @@ class TestCheckRuleSync:
 class TestRulePairsRealShape:
     """Pins the real (non-monkeypatched) RULE_PAIRS dict so a future edit
     can't silently drop the engram/operator/console pairs added during the
-    2026-07-15 generalization, or the koku pair added 2026-08-03 -- TestMain
-    below only ever exercises fake pairs, so it wouldn't catch that
-    regression on its own."""
+    2026-07-15 generalization, the koku pair added 2026-08-03, or the praxis
+    pair added 2026-08-10 -- TestMain below only ever exercises fake pairs,
+    so it wouldn't catch that regression on its own."""
 
-    def test_all_five_pairs_are_registered(self, check_rule_sync):
-        assert set(check_rule_sync.RULE_PAIRS.keys()) == {"global", "engram", "operator", "console", "koku"}
+    def test_all_six_pairs_are_registered(self, check_rule_sync):
+        assert set(check_rule_sync.RULE_PAIRS.keys()) == {"global", "engram", "operator", "console", "koku", "praxis"}
 
     def test_each_pair_is_a_two_tuple_of_paths(self, check_rule_sync):
         for name, pair in check_rule_sync.RULE_PAIRS.items():

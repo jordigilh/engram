@@ -121,3 +121,10 @@ def dcm_cocoindex_flows() -> ModuleType:
     generic "pg_pool" to "dcm_repo_pg_pool" (2026-08-03) specifically to
     unblock this fixture -- see the comment next to that ContextKey() call."""
     return load_hyphenated_module("dcm-cocoindex-flows.py", "dcm_cocoindex_flows")
+
+
+@pytest.fixture(scope="session")
+def praxis_cocoindex_flows() -> ModuleType:
+    """praxis-cocoindex-flows.py (praxis-proxy org onboarding). PG_POOL is
+    "praxis_repo_pg_pool" for the same process-global-collision reason as
+    the other *_cocoindex_flows fixtures' PG_POOL above."""

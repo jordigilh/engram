@@ -393,6 +393,17 @@ with continuous, incremental sync for docs, issues, code, and transcripts.
 uv pip install --python ~/.hindsight/venv/bin/python cocoindex
 ```
 
+`pdfplumber` (PDF text extraction) rides along as a transitive dependency of
+`cocoindex` at this point, but any flow that ingests manually-curated PDFs
+(e.g. `praxis-cocoindex-flows.py`'s `process_pdf_file`, for supplementary
+project-overview PDFs dropped in `~/.hindsight/manual-docs/<project>/`) does
+`import pdfplumber` directly, so pin it explicitly rather than relying on an
+undeclared transitive dependency:
+
+```bash
+uv pip install --python ~/.hindsight/venv/bin/python pdfplumber
+```
+
 ### Symlink flow and search scripts
 
 ```bash

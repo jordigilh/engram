@@ -21,6 +21,19 @@ ensure_mirror() {
         return 1
     fi
 
+    # Cheap existence check before fetching -- for a manually-curated,
+    # proactively-added line like release/v1.6 that doesn't exist upstream
+    # yet, `git fetch origin <branch>` would otherwise fail every single
+    # 10-minute refresh cycle and log at ERROR, which is just alarm fatigue
+    # for an expected, self-resolving state (it activates automatically the
+    # moment the branch is created). Not-yet-created is INFO; anything else
+    # that makes ls-remote itself fail (network/auth) still surfaces as
+    # ERROR via the fetch failure path below.
+    if ! git -C "$live_clone" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+        log "INFO ${name}: origin/${branch} not yet created, will activate automatically"
+        return 1
+    fi
+
     if ! git -C "$live_clone" fetch origin "$branch" --quiet; then
         log "ERROR ${name}: git fetch origin ${branch} failed"
         return 1
@@ -41,11 +54,16 @@ ensure_mirror() {
     fi
 }
 
-# sync_all_mirrors: loops WATCH_MIRRORS (from watch-mirrors-config.sh), best
-# effort -- one repo's failure (e.g. clone moved/deleted) doesn't stop the
-# others from being synced.
+# sync_all_mirrors: loops WATCH_MIRRORS + RELEASE_WATCH_MIRRORS (from
+# watch-mirrors-config.sh), best effort -- one repo's failure (e.g. clone
+# moved/deleted, or a release line not created upstream yet) doesn't stop
+# the others from being synced.
 sync_all_mirrors() {
     for entry in "${WATCH_MIRRORS[@]}"; do
+        IFS='|' read -r name live_clone branch mirror_path <<<"$entry"
+        ensure_mirror "$name" "$live_clone" "$branch" "$mirror_path" || true
+    done
+    for entry in "${RELEASE_WATCH_MIRRORS[@]}"; do
         IFS='|' read -r name live_clone branch mirror_path <<<"$entry"
         ensure_mirror "$name" "$live_clone" "$branch" "$mirror_path" || true
     done

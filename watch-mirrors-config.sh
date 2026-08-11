@@ -31,3 +31,28 @@ WATCH_MIRRORS=(
     "kubernaut-docs|${HOME}/go/src/github.com/jordigilh/kubernaut-docs|main|${HOME}/.hindsight/watch/kubernaut-docs"
     "engram|${HOME}/go/src/github.com/jordigilh/engram|main|${HOME}/.hindsight/watch/engram"
 )
+
+# Manually-curated release lines for the kubernaut family's *code* index only
+# (docs/issues stay main-only -- those are Hindsight-retain-costed, code
+# indexing is not; see docs/FINDINGS.md 2026-08-03 and its 2026-08-10
+# refinement). Not auto-discovered from `git ls-remote` on purpose: update
+# this list by hand as release lines are cut/retired (currently main +
+# release/v1.5 + release/v1.6, v1.6 added proactively before the branch
+# exists upstream -- ensure_mirror()/refresh-watch-mirrors.sh skip it
+# cleanly, logging at INFO not ERROR, until it's created).
+RELEASE_LINES=("v1.5" "v1.6")
+
+# One WATCH_MIRRORS-shaped entry per (repo, release line) -- same live_clone
+# as that repo's `main` entry above (a single local clone can hold worktrees
+# for multiple detached-HEAD mirror branches simultaneously), different
+# mirror_path/branch. code_main (cocoindex-flows.py) tags rows ingested from
+# these with repo_tag="{repo}@release-{line}"; docs_main/issues_app never
+# read from them.
+RELEASE_WATCH_MIRRORS=(
+    "kubernaut-release-v1.5|${HOME}/go/src/github.com/jordigilh/kubernaut|release/v1.5|${HOME}/.hindsight/watch/kubernaut-release-v1.5"
+    "kubernaut-release-v1.6|${HOME}/go/src/github.com/jordigilh/kubernaut|release/v1.6|${HOME}/.hindsight/watch/kubernaut-release-v1.6"
+    "kubernaut-operator-release-v1.5|${HOME}/go/src/github.com/jordigilh/kubernaut-operator|release/v1.5|${HOME}/.hindsight/watch/kubernaut-operator-release-v1.5"
+    "kubernaut-operator-release-v1.6|${HOME}/go/src/github.com/jordigilh/kubernaut-operator|release/v1.6|${HOME}/.hindsight/watch/kubernaut-operator-release-v1.6"
+    "kubernaut-console-release-v1.5|${HOME}/go/src/github.com/jordigilh/kubernaut-console|release/v1.5|${HOME}/.hindsight/watch/kubernaut-console-release-v1.5"
+    "kubernaut-console-release-v1.6|${HOME}/go/src/github.com/jordigilh/kubernaut-console|release/v1.6|${HOME}/.hindsight/watch/kubernaut-console-release-v1.6"
+)

@@ -2,9 +2,18 @@
 """CocoIndex flows for Koku — incremental ingestion into Hindsight and pgvector.
 
 Declares three apps:
-  1. koku-docs:   Markdown docs from the koku repo    → Hindsight koku-docs bank
-  2. koku-issues: GitHub issues from project-koku/koku → Hindsight koku-issues bank
-  3. koku-code:   Python source                        → pgvector koku_code_embeddings table
+  1. koku-docs:   Markdown docs from koku + koku-service-operator → Hindsight koku-docs bank
+  2. koku-issues: GitHub PRs from project-koku/koku (+ koku-service-operator) → Hindsight koku-issues bank
+  3. koku-code:   Python (koku) + Go (koku-service-operator) source → pgvector koku_code_embeddings table
+
+koku-service-operator (2026-08-10) is folded into this same "koku" scope
+rather than getting its own bank/table/launchd service -- one product, one
+Jira project (COST), reviewers overlap heavily with koku itself. This is
+the "fold into an existing project" pattern from NEW_PROJECT_SETUP.md's
+tag-scoped variant, applied at the CocoIndex-flow level: same banks/table,
+each item tagged/tracked with its own `repo`/`source_tag` so it stays
+distinguishable in `metadata`/`tags` and filterable via `cocoindex_search`'s
+`repo` parameter.
 
 Runs as a single long-lived process via launchd. Supports backfill and live modes.
 """
@@ -46,14 +55,33 @@ KOKU_DOCS_DIR = pathlib.Path(os.environ.get(
     str(KOKU_REPO_DIR / "docs"),
 ))
 
+# koku-service-operator (Go): folded into koku's scope, see module docstring.
+# No separate *_DOCS_DIR override env var -- unlike koku itself (whose docs
+# dir historically needed to move), this repo's docs/ has always been at the
+# conventional path, so one env var is enough.
+KOKU_SERVICE_OPERATOR_REPO_DIR = pathlib.Path(os.environ.get(
+    "KOKU_SERVICE_OPERATOR_REPO_DIR",
+    os.path.expanduser("~/go/src/github.com/project-koku/koku-service-operator"),
+))
+
 # Koku's real issue tracker is Jira (project COST, see
 # https://issues.redhat.com/projects/COST/ -- linked from the repo's own
 # README), not GitHub Issues. PR_REPOS is GitHub-PR-only (code review still
-# happens on GitHub even though ticket tracking doesn't).
+# happens on GitHub even though ticket tracking doesn't). koku-service-operator
+# has zero GitHub Issues of its own either (verified 2026-08-10) -- same Jira
+# COST project covers the whole product, no per-repo Jira split needed.
 PR_REPOS = os.environ.get(
     "KOKU_PR_REPOS",
-    "project-koku/koku",
+    "project-koku/koku,project-koku/koku-service-operator",
 ).split(",")
+# koku is 5+ years old with ~6,300 PRs; the codebase has changed substantially
+# over that time and we're temporal (not core) contributors, so PRs from
+# years ago carry little task-relevant signal while still paying full
+# consolidation cost. `gh pr list` defaults to newest-created-first (verified
+# 2026-08-11), so this --limit keeps only the most recent PRs, not an
+# arbitrary sample. koku-service-operator is much younger and has nowhere
+# near this many PRs, so the cap is a no-op there in practice.
+KOKU_PR_LIMIT = int(os.environ.get("KOKU_PR_LIMIT", "2000"))
 JIRA_PROJECT = os.environ.get("KOKU_JIRA_PROJECT", "COST")
 ISSUES_POLL_INTERVAL = int(os.environ.get("KOKU_ISSUES_POLL_SECONDS", "300"))
 
@@ -137,7 +165,14 @@ def hindsight_retain(
         try:
             with urlopen(req, timeout=60) as resp:
                 return json.loads(resp.read())
-        except (HTTPError, URLError) as e:
+        # TimeoutError/ConnectionError added 2026-08-10 -- a slow hindsight-api
+        # under retain-consolidation load raises a raw socket TimeoutError
+        # (urllib only wraps connect-time failures as URLError; a read-time
+        # stall surfaces as bare TimeoutError), which this retry loop's
+        # original (HTTPError, URLError) clause didn't catch -- so instead of
+        # retrying, it propagated uncaught and crashed the whole backfill
+        # process (confirmed live: killed an `issues` app backfill outright).
+        except (HTTPError, URLError, TimeoutError, ConnectionError) as e:
             if attempt < 2:
                 time.sleep(2 ** attempt)
                 continue
@@ -205,6 +240,7 @@ async def process_doc_file(
 async def docs_main(
     repo_dir: pathlib.Path,
     docs_dir: pathlib.Path,
+    service_operator_repo_dir: pathlib.Path,
 ) -> None:
     docs_tree = localfs.walk_dir(
         docs_dir,
@@ -234,11 +270,42 @@ async def docs_main(
         repo_dir, "koku-readme",
     )
 
+    # koku-service-operator, folded into the same bank -- see module docstring.
+    so_docs_dir = service_operator_repo_dir / "docs"
+    so_docs_tree = localfs.walk_dir(
+        so_docs_dir,
+        recursive=True,
+        path_matcher=PatternFilePathMatcher(
+            included_patterns=["**/*.md"],
+        ),
+        live=True,
+    )
+    await coco.mount_each(
+        coco.component_subpath("docs-koku-service-operator"),
+        process_doc_file, so_docs_tree.items(),
+        so_docs_dir, "koku-service-operator-docs-tree",
+    )
+
+    so_readme_files = localfs.walk_dir(
+        service_operator_repo_dir,
+        recursive=False,
+        path_matcher=PatternFilePathMatcher(
+            included_patterns=["README.md", "CONTRIBUTING.md", "AGENTS.md"],
+        ),
+        live=True,
+    )
+    await coco.mount_each(
+        coco.component_subpath("readme-koku-service-operator"),
+        process_doc_file, so_readme_files.items(),
+        service_operator_repo_dir, "koku-service-operator-readme",
+    )
+
 
 docs_app = coco.App(
     "koku-docs", docs_main,
     repo_dir=KOKU_REPO_DIR,
     docs_dir=KOKU_DOCS_DIR,
+    service_operator_repo_dir=KOKU_SERVICE_OPERATOR_REPO_DIR,
 )
 
 
@@ -249,13 +316,17 @@ docs_app = coco.App(
 def _fetch_all_prs(repo: str) -> list[dict]:
     """GitHub PRs only -- koku's actual issue/ticket tracking lives in Jira
     (project COST), not GitHub Issues, but code review discussion still
-    happens on GitHub PRs, so those remain worth ingesting here."""
+    happens on GitHub PRs, so those remain worth ingesting here.
+
+    Capped to the KOKU_PR_LIMIT most recent PRs (see its definition above) --
+    `gh pr list` returns newest-created-first by default, so this is a
+    recency window, not an arbitrary truncation."""
     fields = "number,title,body,state,labels,createdAt,updatedAt,comments,author"
     cmd = [
         "gh", "pr", "list",
         "--repo", repo,
         "--state", "all",
-        "--limit", "10000",
+        "--limit", str(KOKU_PR_LIMIT),
         "--json", fields,
     ]
     try:
@@ -404,6 +475,12 @@ def _adf_to_text(node: Any) -> str:
 
 JIRA_SERVER = os.environ.get("KOKU_JIRA_SERVER", "https://redhat.atlassian.net")
 JIRA_LOGIN_EMAIL = os.environ.get("KOKU_JIRA_EMAIL", "jgil@redhat.com")
+# Same recency rationale as KOKU_PR_LIMIT above, applied to Jira (COST) --
+# ~7,800 issues over 5+ years is dominated by stale, no-longer-relevant
+# history for temporal contributors. Sorted `created desc` in the JQL below
+# so this is a recency cutoff, not an arbitrary sample -- see docs/FINDINGS.md
+# 2026-08-11.
+KOKU_JIRA_LIMIT = int(os.environ.get("KOKU_JIRA_LIMIT", "2000"))
 JIRA_FIELDS = [
     "summary", "description", "status", "issuetype", "priority",
     "labels", "reporter", "created", "updated", "comment",
@@ -437,10 +514,14 @@ def _jira_token() -> str | None:
         return None
 
 
-def _fetch_all_jira_issues(project: str, page_size: int = 100) -> list[dict]:
+def _fetch_all_jira_issues(project: str, page_size: int = 100, limit: int = KOKU_JIRA_LIMIT) -> list[dict]:
     """Paginate `POST /rest/api/3/search/jql` directly via nextPageToken.
     Each page already includes description + comments (as ADF) -- no N+1
-    per-issue fetch needed, unlike jira-cli's `view` command."""
+    per-issue fetch needed, unlike jira-cli's `view` command.
+
+    Sorted `created desc` and capped at `limit` (KOKU_JIRA_LIMIT) -- stops
+    paginating as soon as enough of the most recent issues are collected, so
+    this never fetches more pages than needed for the cap."""
     token = _jira_token()
     if token is None:
         return []
@@ -448,10 +529,10 @@ def _fetch_all_jira_issues(project: str, page_size: int = 100) -> list[dict]:
 
     all_items: list[dict] = []
     next_page_token: str | None = None
-    while True:
+    while len(all_items) < limit:
         body: dict[str, Any] = {
-            "jql": f"project = {project} order by key asc",
-            "maxResults": page_size,
+            "jql": f"project = {project} order by created desc",
+            "maxResults": min(page_size, limit - len(all_items)),
             "fields": JIRA_FIELDS,
         }
         if next_page_token:
@@ -478,7 +559,7 @@ def _fetch_all_jira_issues(project: str, page_size: int = 100) -> list[dict]:
         next_page_token = data.get("nextPageToken")
         if not next_page_token:
             break
-    return all_items
+    return all_items[:limit]
 
 
 def _format_jira_issue_header(issue: dict) -> str:
@@ -631,6 +712,7 @@ async def process_code_file(
 @coco.fn
 async def code_main(
     repo_dir: pathlib.Path,
+    service_operator_repo_dir: pathlib.Path,
 ) -> None:
     from cocoindex.connectors import postgres
 
@@ -713,10 +795,33 @@ async def code_main(
         table, repo_dir, "koku",
     )
 
+    # koku-service-operator (Go), folded into the same table -- see module
+    # docstring. Excludes mirror dcm-cocoindex-flows.py's Go pattern
+    # (generated code, vendored deps, test files).
+    so_files = localfs.walk_dir(
+        service_operator_repo_dir,
+        recursive=True,
+        path_matcher=PatternFilePathMatcher(
+            included_patterns=["**/*.go"],
+            excluded_patterns=[
+                "**/vendor/**",
+                "**/*_test.go",
+                "**/zz_generated*",
+            ],
+        ),
+        live=True,
+    )
+    await coco.mount_each(
+        coco.component_subpath("koku-service-operator"),
+        process_code_file, so_files.items(),
+        table, service_operator_repo_dir, "koku-service-operator",
+    )
+
 
 code_app = coco.App(
     "koku-code", code_main,
     repo_dir=KOKU_REPO_DIR,
+    service_operator_repo_dir=KOKU_SERVICE_OPERATOR_REPO_DIR,
 )
 
 
@@ -789,8 +894,11 @@ def main():
     log.info("Starting Koku CocoIndex in %s mode — apps: %s", args.mode, ", ".join(sorted(selected)))
     log.info("  Repo dir:            %s", KOKU_REPO_DIR)
     log.info("  Docs dir:            %s", KOKU_DOCS_DIR)
+    log.info("  Service operator dir: %s", KOKU_SERVICE_OPERATOR_REPO_DIR)
     log.info("  PR repos:            %s", ", ".join(PR_REPOS))
+    log.info("  PR limit:            %d most recent", KOKU_PR_LIMIT)
     log.info("  Jira project:        %s", JIRA_PROJECT)
+    log.info("  Jira limit:          %d most recent", KOKU_JIRA_LIMIT)
     log.info("  Hindsight URL:       %s", HINDSIGHT_URL)
     log.info("  CocoIndex DB:        %s", COCOINDEX_DB)
 

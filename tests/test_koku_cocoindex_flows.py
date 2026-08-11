@@ -35,6 +35,40 @@ class TestModuleLoads:
         assert koku_cocoindex_flows.issues_app is not None
         assert koku_cocoindex_flows.code_app is not None
 
+    def test_koku_service_operator_folded_into_koku_scope(self, koku_cocoindex_flows):
+        """koku-service-operator (2026-08-10) is folded into koku's existing
+        banks/table rather than getting its own PROJECT_CONFIGS entry -- see
+        the module docstring. PR_REPOS must include it (it has zero GitHub
+        Issues of its own, verified against `gh issue list`, so it only ever
+        shows up via PR_REPOS, never a separate issues-only list)."""
+        assert "project-koku/koku-service-operator" in koku_cocoindex_flows.PR_REPOS
+        assert "project-koku/koku" in koku_cocoindex_flows.PR_REPOS
+        assert koku_cocoindex_flows.KOKU_SERVICE_OPERATOR_REPO_DIR.name == "koku-service-operator"
+
+    def test_pr_limit_defaults_to_2000(self, koku_cocoindex_flows):
+        """koku is 5+ years old with a large PR history; only the most recent
+        PRs carry task-relevant signal for temporal (non-core) contributors
+        -- see docs/FINDINGS.md 2026-08-11."""
+        assert koku_cocoindex_flows.KOKU_PR_LIMIT == 2000
+
+
+class TestFetchAllPrs:
+    def test_gh_pr_list_invoked_with_configured_limit(self, koku_cocoindex_flows, monkeypatch):
+        """gh pr list defaults to newest-created-first, so --limit is a
+        recency window, not an arbitrary truncation -- verified live 2026-08-11."""
+        captured_cmd = []
+
+        def fake_run(cmd, **kwargs):
+            captured_cmd.extend(cmd)
+            return type("R", (), {"returncode": 0, "stdout": "[]", "stderr": ""})()
+
+        monkeypatch.setattr(koku_cocoindex_flows.subprocess, "run", fake_run)
+        koku_cocoindex_flows._fetch_all_prs("project-koku/koku")
+
+        assert "--limit" in captured_cmd
+        limit_value = captured_cmd[captured_cmd.index("--limit") + 1]
+        assert limit_value == str(koku_cocoindex_flows.KOKU_PR_LIMIT)
+
 
 class TestProcessDocFile:
     def test_root_level_doc_gets_root_section_tag(self, koku_cocoindex_flows, monkeypatch):
@@ -219,6 +253,81 @@ class TestProcessJiraIssue:
             assert second_by_id[doc_id] == content
         assert "koku-jira-COST-123-comment1" in second_by_id
         assert "koku-jira-COST-123-comment1" not in first_by_id
+
+
+class TestFetchAllJiraIssues:
+    """KOKU_JIRA_LIMIT (2026-08-11): same recency-cap rationale as
+    KOKU_PR_LIMIT, applied to Jira -- see docs/FINDINGS.md."""
+
+    def _fake_page(self, n: int, is_last: bool, next_token: str | None = None) -> dict:
+        return {
+            "issues": [{"key": f"COST-{i}"} for i in range(n)],
+            "isLast": is_last,
+            "nextPageToken": next_token,
+        }
+
+    def test_default_limit_is_2000(self, koku_cocoindex_flows):
+        assert koku_cocoindex_flows.KOKU_JIRA_LIMIT == 2000
+
+    def test_jql_sorts_by_created_desc_for_recency(self, koku_cocoindex_flows, monkeypatch):
+        captured_bodies = []
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps(self._payload).encode()
+
+        def fake_urlopen(req, timeout=60):
+            captured_bodies.append(json.loads(req.data))
+            return FakeResponse(self._fake_page(5, is_last=True))
+
+        monkeypatch.setattr(koku_cocoindex_flows, "_jira_token", lambda: "fake-token")
+        monkeypatch.setattr(koku_cocoindex_flows, "urlopen", fake_urlopen)
+
+        koku_cocoindex_flows._fetch_all_jira_issues("COST", limit=10)
+
+        assert "order by created desc" in captured_bodies[0]["jql"]
+
+    def test_stops_paginating_once_limit_reached(self, koku_cocoindex_flows, monkeypatch):
+        pages = [
+            self._fake_page(100, is_last=False, next_token="tok-1"),
+            self._fake_page(100, is_last=False, next_token="tok-2"),
+        ]
+        call_count = {"n": 0}
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps(self._payload).encode()
+
+        def fake_urlopen(req, timeout=60):
+            page = pages[call_count["n"]]
+            call_count["n"] += 1
+            return FakeResponse(page)
+
+        monkeypatch.setattr(koku_cocoindex_flows, "_jira_token", lambda: "fake-token")
+        monkeypatch.setattr(koku_cocoindex_flows, "urlopen", fake_urlopen)
+
+        result = koku_cocoindex_flows._fetch_all_jira_issues("COST", page_size=100, limit=150)
+
+        assert len(result) == 150
+        assert call_count["n"] == 2
 
 
 class TestHindsightRetain:

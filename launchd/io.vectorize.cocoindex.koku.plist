@@ -16,6 +16,8 @@
     <dict>
         <key>KOKU_REPO_DIR</key>
         <string>__HOME__/go/src/github.com/project-koku/koku</string>
+        <key>KOKU_SERVICE_OPERATOR_REPO_DIR</key>
+        <string>__HOME__/go/src/github.com/project-koku/koku-service-operator</string>
         <key>HINDSIGHT_URL</key>
         <string>http://localhost:8888</string>
         <key>COCOINDEX_PG_URL</key>

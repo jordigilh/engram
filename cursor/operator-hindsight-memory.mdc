@@ -80,6 +80,25 @@ Use `cocoindex_search` when:
 Prefer `cocoindex_search` over Grep/SemanticSearch when searching by meaning.
 Use Grep only when you need exact regex matching.
 
+## Multi-branch code search (2026-08-10)
+
+The code index additionally covers `release/v1.5` and `release/v1.6` mirrors
+of kubernaut, kubernaut-operator, and kubernaut-console (docs/issues stay
+main-only, unaffected). `cocoindex_search`/`cocoindex_pattern_search`
+auto-detect which release line your current workspace belongs to -- either a
+checked-out `release/vX.Y` branch, or (the common case) a feature/fix branch
+inside a dedicated per-release-line clone directory like `kubernaut-operator-v1.5`
+-- and scope results to match, so a v1.5 workspace's searches return v1.5's
+code, not main's. Pass `branch: "v1.5"` explicitly to override detection, or
+`branch: "main"` to force main regardless of your checkout.
+
+Branches outside `{main, v1.5, v1.6}` (regular feature/fix work) aren't
+indexed here at all -- use gopls for those; it operates on your live checkout
+directly so it's always accurate regardless of index staleness. (This repo's
+tier-1 tool is still raw `gopls`, not Serena -- see the still-open
+Serena-migration question for this repo, tracked separately from this
+multi-branch change.)
+
 ## When to recall again (mid-session)
 
 Call `recall` again if:

@@ -164,7 +164,84 @@ run first), it's fine to create the plist in `launchd/` and commit it without
 this `load` step — `engram`'s own plist shipped this way initially. Nothing
 else in this guide depends on the service actually being loaded.
 
-### 7. Configure Workspace-Level MCP
+### 7. Choose Your Code-Intelligence Backend
+
+Every onboarded project needs a code-intelligence MCP server so agents get
+real symbol lookup/find-references/diagnostics instead of grepping for
+identifiers. **[Serena](https://github.com/oraios/serena)** (an LSP-wrapping
+MCP server) is the default backend for every language this project has
+onboarded so far — it wraps the language's real LSP (`gopls` for Go,
+`pyright` for Python, `rust-analyzer` for Rust,
+`typescript-language-server` for TypeScript) behind one consistent MCP tool
+surface, so the same `find_symbol`/`find_referencing_symbols`/
+`get_diagnostics_for_file` tools work regardless of language.
+
+Add a `serena` entry to the project's `.cursor/mcp.json` (step 8 below):
+
+```json
+"serena": {
+  "command": "/Users/jgil/.local/bin/uvx",
+  "args": [
+    "--from", "git+https://github.com/oraios/serena",
+    "serena", "start-mcp-server",
+    "--project", "${workspaceFolder}",
+    "--context", "ide",
+    "--add-mode", "no-memories",
+    "--open-web-dashboard", "false"
+  ],
+  "type": "stdio"
+}
+```
+
+Plus a per-repo `.serena/project.yml` — Serena's project registration is
+keyed by absolute path, so unlike `.cursor/mcp.json` (which some repo
+families share via a symlinked template, see step 8's kubernaut-family
+gotcha) this file can never be shared across repos, even siblings in the
+same family:
+
+```yaml
+language_servers: [<go|python|rust|typescript>]
+```
+
+And a `.gitignore` entry (same wording used for every onboarded repo so far
+— this reflects that Serena is a personal trial, not yet a team decision):
+
+```
+# Serena MCP trial (project config/cache/logs; not yet a team decision)
+.serena/
+```
+
+> **Prerequisite per language, verified during real onboardings**:
+> - **Go**: no extra install — Serena's `solidlsp` layer auto-manages/caches
+>   a `gopls` binary itself.
+> - **Python**: no extra install — same auto-management, via `pyright`.
+> - **Rust**: Serena does **not** auto-install `rust-analyzer` — it fails
+>   fast with an explicit "Stop, do not attempt workarounds" message if it's
+>   missing. Install via `brew install rust-analyzer` (or
+>   `rustup component add rust-analyzer`). Also install `rustup` itself
+>   (not just Homebrew's `rustc`/`cargo`) if the target repo pins a
+>   `rust-toolchain.toml` channel newer than Homebrew's current formula —
+>   rust-analyzer's background `cargo check`/flycheck fails diagnostics-only
+>   in that case (symbol lookup/find-references are unaffected) until the
+>   pinned toolchain is installed and `~/.cargo/bin` takes `PATH` priority
+>   over Homebrew's own `rustc`/`cargo`.
+> - **TypeScript**: not yet spiked in this project as of 2026-08-10 — treat
+>   as its own mini-spike (health-check plus a couple of real
+>   `find_symbol`/`find_referencing_symbols` calls against real code) before
+>   relying on it for real work, consistent with how Go and Rust were each
+>   spiked first (see docs/findings/2026-08.md's 2026-08-10 entries).
+
+**Known limitation (all languages)**: for symbols located inside certain
+non-declaration contexts (e.g. Go's Ginkgo `var _ = Describe(...)` test
+blocks, some Rust module-level statements), `find_referencing_symbols` can't
+attribute a named containing symbol and falls back to file-level attribution
+(`"kind": "File"`, `"name": None`) — the reference *location* itself is
+still found correctly, just less precisely labeled. On large codebases or
+very common identifiers, `find_referencing_symbols` can also time out
+(~235s observed on a broad identifier in a large Rust repo) — every other
+tool still works normally when this happens.
+
+### 8. Configure Workspace-Level MCP
 
 Create `.cursor/mcp.json` in each project repository:
 
@@ -201,7 +278,7 @@ The workspace-level config uses the same server **names** as kubernaut (`hindsig
 > it via a blanket `.cursor/*` in `.gitignore` (with `!.cursor/rules/` /
 > `!.cursor/skills/` carved back out, but no exception for `mcp.json`) —
 > because the file embeds this machine's absolute paths
-> (`/Users/jgil/.hindsight/venv/bin/python3`, `/Users/jgil/go/bin/gopls`),
+> (`/Users/jgil/.hindsight/venv/bin/python3`, `/Users/jgil/.local/bin/uvx`),
 > which would be wrong on every other contributor's machine if committed.
 > An untracked, gitignored `.cursor/mcp.json` still survives ordinary
 > `git checkout`/`git switch` between branches in the same working directory
@@ -213,9 +290,21 @@ The workspace-level config uses the same server **names** as kubernaut (`hindsig
 > the likely cause; just redo this step rather than trying to make git
 > remember a file it's deliberately excluding (see FINDINGS.md).
 
-### 8. Slim the Global MCP Config
+> **Gotcha (repo families sharing one physical file)**: a family of closely
+> related repos (e.g. `kubernaut`/`kubernaut-v1.5`/`kubernaut-v1.6`/
+> `kubernaut-operator`) can have every repo's `.cursor/mcp.json` be a
+> filesystem symlink to one shared file under
+> `~/.hindsight/cursor-mcp-templates/<family>.json`, so a config change (like
+> adding step 7's `serena` entry) is one edit that cascades to every repo in
+> the family instead of N separate edits. This is easy to miss when
+> retrofitting an existing family — check with `readlink` before assuming a
+> repo's `.cursor/mcp.json` is a plain, independent file.
 
-The global `~/.cursor/mcp.json` should only contain shared servers:
+### 9. Slim the Global MCP Config
+
+The global `~/.cursor/mcp.json` should only contain servers that are truly
+shared across every project on the machine — in practice, today, just
+`hindsight` (the `cursor-memory` bank):
 
 ```json
 {
@@ -223,19 +312,19 @@ The global `~/.cursor/mcp.json` should only contain shared servers:
     "hindsight": {
       "type": "http",
       "url": "http://localhost:8888/mcp/cursor-memory/"
-    },
-    "gopls": {
-      "command": "gopls",
-      "args": ["mcp"],
-      "type": "stdio"
     }
   }
 }
 ```
 
-Project-specific servers are defined at workspace level and override global ones when names collide.
+The code-intelligence backend (step 7) is **workspace-scoped, not global** —
+each repo's own `.cursor/mcp.json` carries its own `serena` entry with
+`--project ${workspaceFolder}`, since Serena's language server and index are
+per-project state that a single global entry couldn't represent correctly
+across repos in different languages anyway. Project-specific servers are
+defined at workspace level and override global ones when names collide.
 
-### 9. Create Cursor Rule
+### 10. Create Cursor Rule
 
 Generate `.cursor/rules/hindsight-memory.mdc` from the template:
 
@@ -289,21 +378,21 @@ RULE_PAIRS: dict[str, tuple[Path, Path]] = {
 `python3 check-rule-sync.py` (no `--pair`) checks every registered pair;
 `--pair <project>` checks just one.
 
-### 10. Update Nightly Pipeline
+### 11. Update Nightly Pipeline
 
 In `nightly-learn.py`:
 - Add `<project>-docs` and `<project>-issues` to `BANKS` list
 - Add a new entry to `PROJECT_CONFIGS[<project>]` with `banks`, `mental_models`, `probes`, `recall_banks`, `log_suffix`
 - Add mental model refresh entries to `models_to_refresh`
 - Add observability probes for new banks
-- **Add `workspace_prefixes`** to the new `PROJECT_CONFIGS` entry (see 10a — easy to miss, since nothing errors if you skip it)
+- **Add `workspace_prefixes`** to the new `PROJECT_CONFIGS` entry (see 11a — easy to miss, since nothing errors if you skip it)
 
 In `report.py`:
 - Add new banks to `collect_mental_model_stats()` bank list
 - Add new bank coverage to `collect_ingestion_coverage()`
 - Add new pgvector table to code chunk count queries
 
-### 10a. Scope Transcript-Derived Analytics Per Project (do not skip)
+### 11a. Scope Transcript-Derived Analytics Per Project (do not skip)
 
 **Why this matters:** Bank/table/CocoIndex isolation (above) only covers *ingested content*
 (docs, issues, code). It does **not** automatically isolate the nightly report's
@@ -340,7 +429,7 @@ To scope correctly:
    reports (`~/.hindsight/logs/<date>.json` vs `<date>-dcm.json`) — they should differ,
    not match byte-for-byte.
 
-### 11. Verify End-to-End
+### 12. Verify End-to-End
 
 ```bash
 # Check banks exist
@@ -360,9 +449,15 @@ psql -h localhost -U hindsight -d hindsight \
 curl -X POST http://localhost:8888/v1/default/banks/<project>-docs/memories/recall \
   -H 'Content-Type: application/json' \
   -d '{"query": "architecture overview", "max_tokens": 1024}'
+
+# Health-check the code-intelligence backend (step 7) against real code —
+# do a couple of real find_symbol/find_referencing_symbols calls, not just
+# the health-check CLI, which can land on a file with no top-level symbols
+# (e.g. a Ginkgo test file) and report a false negative
+uvx --from git+https://github.com/oraios/serena serena project health-check --project /path/to/target-repo
 ```
 
-### 12. Install the Deterministic Correction Enforcement Hooks (optional)
+### 13. Install the Deterministic Correction Enforcement Hooks (optional)
 
 Recall and cursor rules are *advisory* — a model can always choose not to
 call `recall`, and a summarized/compacted context can silently drop a rule's
@@ -428,7 +523,7 @@ file existence, not a hardcoded project list.
 > Hindsight's venv. `hooks/install.sh` gets this right automatically; if
 > you ever hand-edit `hooks.json`, don't "simplify" the interpreter path.
 
-> **Gotcha**: like `.cursor/mcp.json` (step 7), `hooks.json` embeds this
+> **Gotcha**: like `.cursor/mcp.json` (step 8), `hooks.json` embeds this
 > machine's absolute paths and is gitignored via the same blanket
 > `.cursor/*` pattern — it will not exist in a fresh clone/worktree until
 > `hooks/install.sh` is re-run there.
@@ -465,7 +560,8 @@ either (`postToolUse` never fires after a `preToolUse` deny).
 | `cursor/hindsight-memory.mdc.tmpl` | Shared template (do not edit per-project) |
 | `cursor/generate-mdc.sh` | Generates .mdc from template + vars |
 | Each repo's `.cursor/mcp.json` | Workspace-level MCP routing |
-| `hooks/install.sh` | Installs the Deterministic Correction Enforcement hook family (optional, step 12) |
+| Each repo's `.serena/project.yml` | Per-repo Serena language-server registration (step 7); cannot be shared/symlinked, keyed by absolute path |
+| `hooks/install.sh` | Installs the Deterministic Correction Enforcement hook family (optional, step 13) |
 | Each opted-in repo's `.cursor/hooks.json` | Harness-enforced plan-kickoff detector + contradiction-check enforcer (+ checklist reminder for non-kubernaut repos) |
 | `hooks/review-checklists/<repo>.md` | Per-repo PR review checklist content, injected by the checklist-reminder hook when present |
 
@@ -481,7 +577,7 @@ either (`postToolUse` never fires after a `preToolUse` deny).
   (full variant only — the tag-scoped variant adds no new CocoIndex app at all)
 - **MCP routing**: Workspace-level config ensures agents only see their project's data
 - **Nightly analytics**: `effectiveness` and `mcp_usage` are isolated per project **only if**
-  `workspace_prefixes` is set on the `PROJECT_CONFIGS` entry (step 10a) — this is not
+  `workspace_prefixes` is set on the `PROJECT_CONFIGS` entry (step 11a) — this is not
   automatic and does not fail loudly if skipped
 - **GitHub issues/PRs totals**: scoped per project via `PROJECT_CONFIGS[project]["issues_repos"]`
   in both `nightly-learn.py` and `report.py` — a project with no `issues_repos` key

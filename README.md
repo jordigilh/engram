@@ -56,7 +56,8 @@ LLM calls only happen overnight for pattern extraction.
 - **Multi-bank architecture** — behavioral memory + project docs + GitHub issues/PRs + code index
 - **CocoIndex live sync** — docs, code, and transcripts watch for filesystem changes in real time; issues and PRs poll GitHub every 5 minutes. All four flows run concurrently as threads in a single launchd service
 - **Hybrid code search** — tree-sitter AST-aware chunking (via cocoindex's `RecursiveSplitter`) keeps chunk boundaries on function/type/block nodes instead of arbitrary character offsets; dense embeddings (pgvector) handle semantic queries while BM25 (tsvector + GIN) handles exact identifiers — results fused via Reciprocal Rank Fusion
-- **Structural pattern search** — tree-sitter by-example matching (cocoindex's `CodePattern`) answers "find code shaped like X" (e.g. every function matching a signature) as a distinct MCP tool per project, complementing (not replacing) hybrid search's "find code about X" and LSP tools' (gopls/Serena) type-aware navigation — see docs/COCOINDEX.md
+- **Structural pattern search** — tree-sitter by-example matching (cocoindex's `CodePattern`) answers "find code shaped like X" (e.g. every function matching a signature) as a distinct MCP tool per project, complementing (not replacing) hybrid search's "find code about X" and Serena's type-aware navigation (find_symbol/find_referencing_symbols/diagnostics) — see docs/COCOINDEX.md
+- **LSP-backed code intelligence** — [Serena](https://github.com/oraios/serena) is the default code-intelligence MCP backend across every onboarded project, wrapping each language's real LSP (`gopls`, `pyright`, `rust-analyzer`, `typescript-language-server`) behind one consistent tool surface, so agents get real symbol lookup/find-references/diagnostics instead of grepping for identifiers — see docs/NEW_PROJECT_SETUP.md#7-choose-your-code-intelligence-backend
 - **Self-cleaning** — nightly triage removes ephemeral, stale, and duplicate memories
 - **Self-evaluating** — weekly trend metrics (corrections/session, rework %, productivity density), exploration efficiency, ingestion coverage, data freshness
 - **Recoverable** — transcripts are source of truth; `recover-memories.py` rebuilds the bank
@@ -82,7 +83,7 @@ graph TB
     subgraph cursor["Cursor IDE"]
         rule["Rule (.mdc)"]
         hook["MCP Hook"]
-        gopls["gopls MCP"]
+        serena["Serena MCP<br/>(LSP: gopls/pyright/<br/>rust-analyzer/tsserver)"]
         code_mcp["code-index MCP"]
     end
 

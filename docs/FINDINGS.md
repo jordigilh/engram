@@ -27,8 +27,9 @@ recall-quality benchmark is built against.
 
 ## Index
 
-### August 2026 (36 entries)
+### August 2026 (37 entries)
 
+- [2026-08-12 (same day, fifth follow-up): Restructured Engram Into a `src/engram/` Package With `pyproject.toml` Console Scripts, Then Cut Over Every Live `launchd` Service and All 35 External Repos' `.cursor/mcp.json` to Use Them](findings/2026-08.md#2026-08-12-same-day-fifth-follow-up-restructured-engram-into-a-srcengram-package-with-pyprojecttoml-console-scripts-then-cut-over-every-live-launchd-service-and-all-35-external-repos-cursormcpjson-to-use-them)
 - [2026-08-12 (same day, fourth follow-up): Host at 100% CPU — `hindsight-api` Grinding a Sonnet-Tier Consolidation Backlog, Compounded by 23 of 45 Mental Models Silently Running Full Re-Synthesis Instead of Delta](findings/2026-08.md#2026-08-12-same-day-fourth-follow-up-host-at-100-cpu-hindsight-api-grinding-a-sonnet-tier-consolidation-backlog-compounded-by-23-of-45-mental-models-silently-running-full-re-synthesis-instead-of-delta)
 - [2026-08-12 (same day, third follow-up): Added a `launchd` Watchdog for the Silent-Live-Service-Outage Failure Class](findings/2026-08.md#2026-08-12-same-day-follow-up-added-a-launchd-watchdog-for-the-silent-live-service-outage-failure-class)
 - [2026-08-12 (same day, follow-up): Enabled Full Scheduled Automation for Koku and Praxis (Live Ingestion + Nightly-Learn) — Templates Already Existed, Just Never Deployed; Found a Pre-Existing File-Watch Bug in Praxis's Live Mode Along the Way](findings/2026-08.md#2026-08-12-same-day-follow-up-enabled-full-scheduled-automation-for-koku-and-praxis-live-ingestion--nightly-learn-templates-already-existed-just-never-deployed-found-a-pre-existing-file-watch-bug-in-praxiss-live-mode-along-the-way)

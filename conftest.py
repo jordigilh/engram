@@ -41,7 +41,7 @@ def nightly_learn() -> ModuleType:
 
 @pytest.fixture(scope="session")
 def cocoindex_flows() -> ModuleType:
-    return load_hyphenated_module("flows/cocoindex-flows.py", "cocoindex_flows")
+    return load_hyphenated_module("src/engram/flows/kubernaut.py", "cocoindex_flows")
 
 
 @pytest.fixture(scope="session")
@@ -84,7 +84,7 @@ def engram_cocoindex_flows() -> ModuleType:
     CocoIndex's "Context key already used" ValueError -- see the comment
     next to that ContextKey() call for the full rationale.
     """
-    return load_hyphenated_module("flows/engram-cocoindex-flows.py", "engram_cocoindex_flows")
+    return load_hyphenated_module("src/engram/flows/engram.py", "engram_cocoindex_flows")
 
 
 @pytest.fixture(scope="session")
@@ -92,7 +92,7 @@ def koku_cocoindex_flows() -> ModuleType:
     """koku-cocoindex-flows.py (Koku onboarding). Its PG_POOL ContextKey is
     "koku_repo_pg_pool" for the same process-global-collision reason as
     engram_cocoindex_flows's PG_POOL above."""
-    return load_hyphenated_module("flows/koku-cocoindex-flows.py", "koku_cocoindex_flows")
+    return load_hyphenated_module("src/engram/flows/koku.py", "koku_cocoindex_flows")
 
 
 @pytest.fixture(scope="session")
@@ -121,7 +121,7 @@ def dcm_cocoindex_flows() -> ModuleType:
     """dcm-cocoindex-flows.py (DCM onboarding). PG_POOL was renamed from the
     generic "pg_pool" to "dcm_repo_pg_pool" (2026-08-03) specifically to
     unblock this fixture -- see the comment next to that ContextKey() call."""
-    return load_hyphenated_module("flows/dcm-cocoindex-flows.py", "dcm_cocoindex_flows")
+    return load_hyphenated_module("src/engram/flows/dcm.py", "dcm_cocoindex_flows")
 
 
 @pytest.fixture(scope="session")
@@ -129,7 +129,7 @@ def praxis_cocoindex_flows() -> ModuleType:
     """praxis-cocoindex-flows.py (praxis-proxy org onboarding). PG_POOL is
     "praxis_repo_pg_pool" for the same process-global-collision reason as
     the other *_cocoindex_flows fixtures' PG_POOL above."""
-    return load_hyphenated_module("flows/praxis-cocoindex-flows.py", "praxis_cocoindex_flows")
+    return load_hyphenated_module("src/engram/flows/praxis.py", "praxis_cocoindex_flows")
 
 
 @pytest.fixture(scope="session")
@@ -140,4 +140,4 @@ def cocoindex_search() -> ModuleType:
     calls are all deferred into function bodies), so it's safe to load
     into the same session as any/all of those fixtures with no collision
     handling needed."""
-    return load_hyphenated_module("search/cocoindex-search.py", "cocoindex_search")
+    return load_hyphenated_module("src/engram/search/kubernaut.py", "cocoindex_search")

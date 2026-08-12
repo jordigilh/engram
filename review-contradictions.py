@@ -32,16 +32,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 from engram.pending_queue import load_pending, remove_pending  # noqa: E402
 from engram.contradiction_resolution import delete_document, invalidate_memory  # noqa: E402
 
-# cocoindex-flows.py has a hyphen, so it can't be `import`ed normally.
+# kubernaut.py registers CocoIndex flow/ContextKey state at import time (see
+# its own module docstring), so it still needs an isolated exec here rather
+# than a plain `from engram.flows import kubernaut` -- same reasoning as
+# conftest.py's load_hyphenated_module fixtures.
 _spec = importlib.util.spec_from_file_location(
-    "cocoindex_flows", Path(__file__).resolve().parent / "flows" / "cocoindex-flows.py"
+    "cocoindex_flows", Path(__file__).resolve().parent / "src" / "engram" / "flows" / "kubernaut.py"
 )
 _cf = importlib.util.module_from_spec(_spec)
 try:
     _spec.loader.exec_module(_cf)
     _HAS_RETAIN = True
 except Exception as e:  # pragma: no cover - only if cocoindex deps missing
-    print(f"Note: could not import cocoindex-flows.py ({e}); approve will be disabled.")
+    print(f"Note: could not import engram.flows.kubernaut ({e}); approve will be disabled.")
     _HAS_RETAIN = False
 
 

@@ -34,12 +34,13 @@ import cocoindex as coco
 from cocoindex.connectors import localfs
 from cocoindex.resources.file import PatternFilePathMatcher
 
-# This file lives in flows/; shared modules (chunking.py etc.) live in the
-# src/engram/ package. sys.path[0] for a script invoked via a symlink (as
-# launchd does) resolves to the symlink's realpath target directory
-# (flows/), not the symlink's own directory, so src/ must be added
-# explicitly for `engram` to resolve.
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
+# This file is part of the engram.flows package (src/engram/flows/).
+# sys.path[0] for a script invoked via a symlink (as launchd does) resolves
+# to the symlink's realpath target directory (src/engram/flows/), not the
+# symlink's own directory -- src/ itself must still be added explicitly so
+# `engram` resolves as a top-level package rather than needing this file to
+# be run via `-m`/an installed console script (not yet true in this repo).
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 from engram import chunking  # noqa: E402
 from engram import correction_gate  # noqa: E402
 from engram import contradiction_resolution  # noqa: E402

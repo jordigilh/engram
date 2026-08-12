@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-r"""Praxis code search MCP server.
+r"""Koku code search MCP server.
 
 Provides hybrid code search (dense vectors + BM25) over the
-cocoindex.praxis_code_embeddings table. Results are fused using Reciprocal
-Rank Fusion (RRF) so both semantic similarity and exact keyword matches
+cocoindex.koku_code_embeddings table. Results are fused using Reciprocal Rank
+Fusion (RRF) so both semantic similarity and exact keyword matches
 contribute to ranking.
 
 Usage:
-    python3 praxis-cocoindex-search.py                    # Start MCP server (stdio)
-    python3 praxis-cocoindex-search.py --query "how does the routing overlay get rendered"
-    python3 praxis-cocoindex-search.py --query "score_backends" --mode dense
-    python3 praxis-cocoindex-search.py --query "score_backends" --mode bm25
-    python3 praxis-cocoindex-search.py --pattern 'fn \NAME(\(A*\))' --language rust
+    python3 koku-cocoindex-search.py                    # Start MCP server (stdio)
+    python3 koku-cocoindex-search.py --query "how does the report processing pipeline work"
+    python3 koku-cocoindex-search.py --query "ReportChargeUpdater" --mode dense
+    python3 koku-cocoindex-search.py --query "ReportChargeUpdater" --mode bm25
+    python3 koku-cocoindex-search.py --pattern 'def \NAME(\(A*\)):' --language python
 """
 
 import argparse
@@ -21,19 +21,20 @@ import pathlib
 import sys
 from typing import Any
 
-# This file lives in search/; shared modules (chunking.py etc.) live in the
-# src/engram/ package. sys.path[0] for a script invoked via a symlink (as
-# launchd does) resolves to the symlink's realpath target directory (search/),
-# not the symlink's own directory, so src/ must be added explicitly for
-# `engram` to resolve.
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
+# This file is part of the engram.search package (src/engram/search/).
+# sys.path[0] for a script invoked via a symlink (as launchd does) resolves
+# to the symlink's realpath target directory (src/engram/search/), not the
+# symlink's own directory -- src/ itself must still be added explicitly so
+# `engram` resolves as a top-level package rather than needing this file to
+# be run via `-m`/an installed console script (not yet true in this repo).
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 from engram import chunking  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
-log = logging.getLogger("praxis-cocoindex-search")
+log = logging.getLogger("koku-cocoindex-search")
 
 PG_URL = os.environ.get(
     "COCOINDEX_PG_URL",
@@ -42,20 +43,20 @@ PG_URL = os.environ.get(
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 RRF_K = 60
 
-# Same env var (and default) as praxis-cocoindex-flows.py, so pattern search
-# walks the exact same checkouts the ingestion flow indexes.
-PRAXIS_ORG_DIR = pathlib.Path(os.environ.get(
-    "PRAXIS_ORG_DIR", os.path.expanduser("~/go/src/github.com/praxis-proxy"),
+# Same env var (and default) as koku-cocoindex-flows.py, so pattern search
+# walks the exact same checkout the ingestion flow indexes.
+KOKU_REPO_DIR = pathlib.Path(os.environ.get(
+    "KOKU_REPO_DIR", os.path.expanduser("~/go/src/github.com/project-koku/koku"),
 ))
 
 # (repo_tag, root, included_patterns, excluded_patterns) -- mirrors
-# praxis-cocoindex-flows.py's localfs.walk_dir(path_matcher=
-# PatternFilePathMatcher(...)) call exactly. Only the Rust repos (those with
-# has_rust_code=True in PRAXIS_REPOS) are searchable here.
-_RUST_REPOS = ["praxis", "praxis-ai", "praxis-demos", "praxis-forge", "praxis-grid", "praxis-operator", "praxis-policy"]
+# koku-cocoindex-flows.py's localfs.walk_dir(path_matcher=
+# PatternFilePathMatcher(...)) call exactly.
 _PATTERN_SEARCH_ROOTS = [
-    (tag, PRAXIS_ORG_DIR / tag, ["**/*.rs"], ["**/target/**"])
-    for tag in _RUST_REPOS
+    ("koku", KOKU_REPO_DIR, ["**/*.py"], [
+        "**/migrations/**", "**/tests/**", "**/test_*.py",
+        "**/node_modules/**", "**/.venv/**", "**/venv/**", "**/vendor/**",
+    ]),
 ]
 
 _model = None
@@ -117,7 +118,7 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                     """
                     SELECT id, filepath, chunk_index, code,
                            1 - (embedding <=> %s::vector) AS score
-                    FROM cocoindex.praxis_code_embeddings
+                    FROM cocoindex.koku_code_embeddings
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
                     """,
@@ -138,7 +139,7 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                         """
                         SELECT id, filepath, chunk_index, code,
                                ts_rank_cd(search_vector, to_tsquery('simple', %s)) AS score
-                        FROM cocoindex.praxis_code_embeddings
+                        FROM cocoindex.koku_code_embeddings
                         WHERE search_vector @@ to_tsquery('simple', %s)
                         ORDER BY score DESC
                         LIMIT %s
@@ -192,12 +193,17 @@ def _format_results(query: str, results: list[dict], mode: str = "hybrid") -> st
 
 def pattern_search_code(pattern: str, language: str, limit: int = 10) -> list[dict[str, Any]]:
     """Structural ("by-example") code search via CocoIndex's CodePattern --
-    tree-sitter AST matching against the live praxis-proxy checkouts.
+    tree-sitter AST matching against the live koku checkout.
 
+    Unlike search_code() above, there is no structural-pattern index to
+    query: CodePattern.match_file() parses source directly, so this walks
+    the same file set koku-cocoindex-flows.py already ingests (see
+    _PATTERN_SEARCH_ROOTS / chunking.find_code_files()) for every call.
     Complements, not replaces, search_code() (semantic/BM25 "what does X
     do") and Serena (type-aware find-references/diagnostics): this is
     purely syntactic "find code shaped like X", with no type resolution and
-    no cross-crate symbol graph (see docs/FINDINGS.md 2026-08-07)."""
+    no cross-file symbol graph (see docs/FINDINGS.md 2026-08-07).
+    """
     from cocoindex.ops.code import CodePattern, render_match
     from cocoindex.ops.text import detect_code_language
 
@@ -229,6 +235,7 @@ def pattern_search_code(pattern: str, language: str, limit: int = 10) -> list[di
 
 
 def _format_pattern_results(pattern: str, language: str, results: list[dict]) -> str:
+    """Format structural pattern matches as readable text for the agent."""
     if not results:
         return f'No structural matches for language={language} pattern: {pattern}'
 
@@ -248,19 +255,19 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
     from mcp.server import FastMCP
 
     mcp = FastMCP(
-        "praxis-code",
+        "koku-code",
         host=host,
         port=port,
     )
 
     @mcp.tool()
-    def praxis_code_search(query: str, limit: int = 10) -> str:
-        """Hybrid code search over the Praxis/Grid Rust codebases.
+    def koku_code_search(query: str, limit: int = 10) -> str:
+        """Hybrid code search over the Koku codebase.
 
         Combines dense vector similarity and BM25 keyword matching via
-        Reciprocal Rank Fusion for best results. Works equally well for:
-        - conceptual queries: "how does the routing overlay get rendered?"
-        - exact identifiers: "score_backends"
+        Reciprocal Rank Fusion for best results.  Works equally well for:
+        - conceptual queries: "how does the report processing pipeline work?"
+        - exact identifiers: "ParseConfig"
 
         Returns ranked code snippets with file paths and relevance scores.
         Prefer this over Grep when searching by concept rather than exact text.
@@ -269,31 +276,34 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
         return _format_results(query, results)
 
     @mcp.tool()
-    def praxis_code_pattern_search(pattern: str, language: str = "rust", limit: int = 10) -> str:
-        r"""Structural ("by-example") code search over the Praxis/Grid Rust codebases.
+    def koku_code_pattern_search(pattern: str, language: str = "python", limit: int = 10) -> str:
+        r"""Structural ("by-example") code search over the Koku codebase.
 
         For "find code shaped like X" -- e.g. every function matching a
-        signature -- not "find code about X" (use praxis_code_search for
+        signature -- not "find code about X" (use koku_code_search for
         that). Matches by tree-sitter AST shape, not text/regex.
 
         Pattern syntax: write an example of the shape you want, using `\`
         + a name for a metavariable (matches one node) or `\(NAME*\)`
         (matches zero or more, e.g. an argument list). Omit a body entirely
-        to mean "don't care what's inside" -- e.g. `fn \NAME(\(A*\))`
-        matches any Rust function regardless of body or args.
+        to mean "don't care what's inside" -- e.g. `def \NAME(\(A*\)):`
+        matches any Python function/method regardless of body or args.
 
         This is purely syntactic: it does NOT resolve types, can't find
-        references/callers across crates, and has no diagnostics -- use
-        Serena for that. Complementary to, not a replacement for, Serena.
+        references/callers, and has no diagnostics -- use Serena for that.
+        Complementary to, not a replacement for, Serena. Note: koku's heavy
+        Celery/Django-signal use means dynamically-dispatched functions
+        (task handlers, signal receivers) match here by shape same as any
+        other function, which Serena's static analysis can miss.
         """
         results = pattern_search_code(pattern, language, limit=min(limit, 20))
         return _format_pattern_results(pattern, language, results)
 
     if transport == "stdio":
-        log.info("Starting praxis-code MCP server (stdio)")
+        log.info("Starting koku-code MCP server (stdio)")
         mcp.run(transport="stdio")
     else:
-        log.info("Starting praxis-code MCP server on %s:%d (sse)", host, port)
+        log.info("Starting koku-code MCP server on %s:%d (sse)", host, port)
         mcp.run(transport="sse")
 
 
@@ -313,11 +323,11 @@ def _run_cli_pattern_query(pattern: str, language: str, limit: int = 10) -> None
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Praxis code search — MCP server + CLI"
+        description="Koku code search — MCP server + CLI"
     )
     parser.add_argument("--query", "-q", help="Run a single query and exit")
     parser.add_argument("--pattern", help="Run a single structural pattern query and exit")
-    parser.add_argument("--language", default="rust", help="Language for --pattern (default: rust)")
+    parser.add_argument("--language", default="python", help="Language for --pattern (default: python)")
     parser.add_argument("--limit", "-n", type=int, default=10, help="Max results (default: 10)")
     parser.add_argument("--mode", "-m", default="hybrid", choices=["hybrid", "dense", "bm25"],
                         help="Search mode (default: hybrid)")

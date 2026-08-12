@@ -15,11 +15,36 @@ from datetime import date, datetime, timedelta, timezone
 from glob import glob
 from pathlib import Path
 
+
+def _find_repo_root() -> Path:
+    """Resolve the engram repo root so docs/DASHBOARD.md etc. can be found
+    regardless of where this module physically lives.
+
+    Prefers the ENGRAM_REPO_ROOT env var (the one plist that calls this via
+    nightly-learn.py sets it explicitly) since once this module moves inside
+    a real installed package, `Path(__file__).resolve().parent` no longer
+    points at the repo -- it resolves inside src/engram/pipeline/ (or
+    site-packages/engram/pipeline/ for a non-editable install), which has no
+    docs/ directory at all. Falls back to walking up from this file looking
+    for .git, which works for interactive/dev use against an editable
+    install (the only kind this repo ever installs)."""
+    env_root = os.environ.get("ENGRAM_REPO_ROOT")
+    if env_root:
+        return Path(env_root)
+    for candidate in (Path(__file__).resolve(), *Path(__file__).resolve().parents):
+        if (candidate / ".git").exists():
+            return candidate
+    raise RuntimeError(
+        "Could not determine engram repo root: set ENGRAM_REPO_ROOT or run from a git checkout"
+    )
+
+
+REPO_ROOT = _find_repo_root()
 LOG_DIR = Path(os.path.expanduser("~/.hindsight/logs"))
-DASHBOARD_PATH = Path(__file__).resolve().parent / "docs" / "DASHBOARD.md"
+DASHBOARD_PATH = REPO_ROOT / "docs" / "DASHBOARD.md"
 PENDING_CONTRADICTIONS_LOG = LOG_DIR / "contradictions-pending.jsonl"
 AUTO_RESOLVED_LOG = LOG_DIR / "contradictions-auto-resolved.jsonl"
-PENDING_CONTRADICTIONS_DOC = Path(__file__).resolve().parent / "docs" / "PENDING_CONTRADICTIONS.md"
+PENDING_CONTRADICTIONS_DOC = REPO_ROOT / "docs" / "PENDING_CONTRADICTIONS.md"
 EPOCH_START_DATE = "2026-06-26"
 
 

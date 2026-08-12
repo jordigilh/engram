@@ -36,7 +36,7 @@ def load_hyphenated_module(filename: str, module_name: str) -> ModuleType:
 
 @pytest.fixture(scope="session")
 def nightly_learn() -> ModuleType:
-    return load_hyphenated_module("nightly-learn.py", "nightly_learn")
+    return load_hyphenated_module("src/engram/pipeline/nightly_learn.py", "nightly_learn")
 
 
 @pytest.fixture(scope="session")
@@ -113,7 +113,7 @@ def post_plan_checklist_reminder() -> ModuleType:
 
 @pytest.fixture(scope="session")
 def generate_dashboard() -> ModuleType:
-    return load_hyphenated_module("generate-dashboard.py", "generate_dashboard")
+    return load_hyphenated_module("src/engram/pipeline/generate_dashboard.py", "generate_dashboard")
 
 
 @pytest.fixture(scope="session")

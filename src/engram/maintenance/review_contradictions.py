@@ -26,9 +26,10 @@ import importlib.util
 import sys
 from pathlib import Path
 
-# Shared modules (pending_queue.py, contradiction_resolution.py etc.) live in
-# the src/engram/ package.
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+# This file is part of the engram.maintenance package
+# (src/engram/maintenance/), three directories below the repo root.
+_REPO_SRC = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(_REPO_SRC))
 from engram.pending_queue import load_pending, remove_pending  # noqa: E402
 from engram.contradiction_resolution import delete_document, invalidate_memory  # noqa: E402
 
@@ -37,7 +38,7 @@ from engram.contradiction_resolution import delete_document, invalidate_memory  
 # than a plain `from engram.flows import kubernaut` -- same reasoning as
 # conftest.py's load_hyphenated_module fixtures.
 _spec = importlib.util.spec_from_file_location(
-    "cocoindex_flows", Path(__file__).resolve().parent / "src" / "engram" / "flows" / "kubernaut.py"
+    "cocoindex_flows", _REPO_SRC / "engram" / "flows" / "kubernaut.py"
 )
 _cf = importlib.util.module_from_spec(_spec)
 try:

@@ -33,8 +33,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-# Shared modules (project_scope.py etc.) live in the src/engram/ package.
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+# This file is part of the engram.maintenance package
+# (src/engram/maintenance/), three directories below the repo root.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from engram import project_scope  # noqa: E402
 from engram.contradiction_resolution import delete_document  # noqa: E402
 

@@ -18,7 +18,7 @@ import json
 import subprocess
 import urllib.request
 
-import report
+from engram.maintenance import report
 
 
 class TestNormalizeServerName:

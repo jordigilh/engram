@@ -37,17 +37,18 @@ untouched.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
+import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-# nightly-learn.py has a hyphen, so it can't be `import`ed normally.
-_spec = importlib.util.spec_from_file_location(
-    "nightly_learn", Path(__file__).resolve().parent / "nightly-learn.py"
-)
-nl = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(nl)
+# This file is part of the engram.maintenance package
+# (src/engram/maintenance/), three directories below the repo root.
+# nightly_learn.py has no CocoIndex/process-global state to worry about
+# colliding on (unlike the flows/*.py modules), so a plain import is safe
+# here -- no importlib.util isolated-exec needed.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from engram.pipeline import nightly_learn as nl  # noqa: E402
 
 # (hour, minute) each project's nightly launchd job is scheduled to start,
 # per ~/Library/LaunchAgents/io.vectorize.hindsight.nightly{,-dcm}.plist.

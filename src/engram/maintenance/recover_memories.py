@@ -25,14 +25,13 @@ from datetime import datetime
 from glob import glob
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-import importlib.util
-
-_spec = importlib.util.spec_from_file_location(
-    "nightly_learn", Path(__file__).parent / "nightly-learn.py"
-)
-nightly = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(nightly)
+# This file is part of the engram.maintenance package
+# (src/engram/maintenance/), three directories below the repo root.
+# nightly_learn.py has no CocoIndex/process-global state to worry about
+# colliding on (unlike the flows/*.py modules), so a plain import is safe
+# here -- no importlib.util isolated-exec needed.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from engram.pipeline import nightly_learn as nightly  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,

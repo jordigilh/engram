@@ -38,7 +38,6 @@ other LLM-calling script in this repo:
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import os
 import sys
@@ -46,17 +45,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# Shared modules (classify.py etc.) live in the src/engram/ package.
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
-from engram import classify
-
-# backfill-memory-tags.py has a hyphen, so it can't be `import`ed normally.
-_spec = importlib.util.spec_from_file_location(
-    "backfill_memory_tags", Path(__file__).resolve().parent / "backfill-memory-tags.py"
-)
-bmt = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(bmt)
+# This file is part of the engram.maintenance package
+# (src/engram/maintenance/), three directories below the repo root.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from engram import classify  # noqa: E402
+from engram.maintenance import backfill_memory_tags as bmt  # noqa: E402
 
 HINDSIGHT_URL = "http://localhost:8888"
 AUDIT_LOG = Path(os.path.expanduser("~/.hindsight/logs/content-classification-audit.jsonl"))

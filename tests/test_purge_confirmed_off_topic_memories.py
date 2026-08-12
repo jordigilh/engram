@@ -5,20 +5,8 @@ and should_purge() (the high-confidence deletion gate). See docs/FINDINGS.md
 """
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "src"))
-from engram import classify  # noqa: E402
-
-_spec = importlib.util.spec_from_file_location(
-    "purge_confirmed_off_topic_memories", REPO_ROOT / "purge-confirmed-off-topic-memories.py"
-)
-pcotm = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(pcotm)
+from engram import classify
+from engram.maintenance import purge_confirmed_off_topic_memories as pcotm
 
 
 class TestPlanPurgeCandidates:

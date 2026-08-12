@@ -59,7 +59,7 @@ def review_contradictions(cocoindex_flows: ModuleType) -> ModuleType:
     broken `_cf`/`_HAS_RETAIN` with the one canonical, already-working
     module instance instead.
     """
-    module = load_hyphenated_module("review-contradictions.py", "review_contradictions")
+    module = load_hyphenated_module("src/engram/maintenance/review_contradictions.py", "review_contradictions")
     module._cf = cocoindex_flows
     module._HAS_RETAIN = True
     return module
@@ -67,7 +67,9 @@ def review_contradictions(cocoindex_flows: ModuleType) -> ModuleType:
 
 @pytest.fixture(scope="session")
 def purge_script() -> ModuleType:
-    return load_hyphenated_module("purge-out-of-scope-memories.py", "purge_out_of_scope_memories")
+    return load_hyphenated_module(
+        "src/engram/maintenance/purge_out_of_scope_memories.py", "purge_out_of_scope_memories"
+    )
 
 
 @pytest.fixture(scope="session")

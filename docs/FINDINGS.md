@@ -27,8 +27,11 @@ recall-quality benchmark is built against.
 
 ## Index
 
-### August 2026 (32 entries)
+### August 2026 (35 entries)
 
+- [2026-08-12 (same day, third follow-up): Added a `launchd` Watchdog for the Silent-Live-Service-Outage Failure Class](findings/2026-08.md#2026-08-12-same-day-follow-up-added-a-launchd-watchdog-for-the-silent-live-service-outage-failure-class)
+- [2026-08-12 (same day, follow-up): Enabled Full Scheduled Automation for Koku and Praxis (Live Ingestion + Nightly-Learn) — Templates Already Existed, Just Never Deployed; Found a Pre-Existing File-Watch Bug in Praxis's Live Mode Along the Way](findings/2026-08.md#2026-08-12-same-day-follow-up-enabled-full-scheduled-automation-for-koku-and-praxis-live-ingestion--nightly-learn-templates-already-existed-just-never-deployed-found-a-pre-existing-file-watch-bug-in-praxiss-live-mode-along-the-way)
+- [2026-08-12: RCA — Kubernaut's Live CocoIndex Ingestion Was Being Knocked Offline Every Night for 9 Nights Straight by a "One-Time" 2026-08-03 Cleanup Job That Never Successfully Self-Removed](findings/2026-08.md#2026-08-12-rca--kubernauts-live-cocoindex-ingestion-was-being-knocked-offline-every-night-for-9-nights-straight-by-a-one-time-2026-08-03-cleanup-job-that-never-successfully-self-removed)
 - [2026-08-11 (same day, fifth follow-up): `osac-service-provider` Was Missing Serena — Turned Out None of the 14 `dcm-project` Repos Had It; Rolled Out the Full Shared-Template + Self-Healing-Hook Pattern to All of Them](findings/2026-08.md#2026-08-11-same-day-fifth-follow-up-osac-service-provider-was-missing-serena-turned-out-none-of-the-14-dcm-project-repos-had-it-rolled-out-the-full-shared-template--self-healing-hook-pattern-to-all-of-them)
 - [2026-08-11 (same day, fourth follow-up): "MCPs Disabled Across the Board" Traced to Two Separate Things — a Confirmed Cursor UI Bug (Not a Real Disable) and a Real, Now-Closed `git reset`/`git rebase` Gap in the Serena/`gopls` Self-Healing Hooks](findings/2026-08.md#2026-08-11-same-day-fourth-follow-up-mcps-disabled-across-the-board-traced-to-two-separate-things-a-confirmed-cursor-ui-bug-not-a-real-disable-and-a-real-now-closed-git-resetgit-rebase-gap-in-the-serenagopls-self-healing-hooks)
 - [2026-08-11 (same day, third follow-up): Swept dcm/koku/praxis/engram Deployed Plists for the Same Drift — Found and Fixed a Second Instance, in Engram's Own Live Ingestion](findings/2026-08.md#2026-08-11-same-day-third-follow-up-swept-dcmkokupraxisengram-deployed-plists-for-the-same-drift-found-and-fixed-a-second-instance-in-engrams-own-live-ingestion)

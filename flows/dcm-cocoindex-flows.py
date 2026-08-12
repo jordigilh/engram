@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import pathlib
-import re
 import subprocess
 import sys
 import time
@@ -564,7 +563,6 @@ async def process_code_file(
     base_dir: pathlib.Path,
     repo_tag: str,
 ) -> None:
-    from cocoindex.connectors import postgres
 
     content = await file.read_text()
     if not content or not content.strip():

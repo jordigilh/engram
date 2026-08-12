@@ -33,6 +33,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -95,8 +96,6 @@ def parse_transcript(path: str) -> list[dict]:
         pass
     return messages
 
-
-import re
 
 # System-injected templates that appear with role="user" in the transcript
 # JSONL but were never typed by a human -- discovered during the shadow
@@ -306,7 +305,7 @@ def report() -> None:
               f"(Haiku-call reduction: {reduction_str})")
         print(f"  Recall vs. Haiku's own confirmed corrections: {s['caught']}/{n_corrections} = {recall_str}")
         if s["missed"]:
-            print(f"  MISSED corrections (Haiku said yes, prefilter would have skipped):")
+            print("  MISSED corrections (Haiku said yes, prefilter would have skipped):")
             for r in s["missed"][:10]:
                 print(f"    [{r.get('haiku_category')}] {r['text'][:80]}")
         print()

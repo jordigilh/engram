@@ -1,0 +1,15 @@
+# Lint config for the Engram pipeline scripts. Run with:
+#   ruff check .
+#
+# Not yet wired into CI (see docs/FINDINGS.md GA-gaps discussion) -- there is
+# no CI at all today. This file exists so the current clean baseline
+# (established 2026-08-12) is a checked-in contract, not tribal knowledge.
+target-version = "py312"
+line-length = 120
+
+[lint]
+# Defaults (E4, E7, E9, F) plus E402 (import order) -- deliberately strict
+# about import placement except where a script must set an env var (e.g.
+# COCOINDEX_DB) before importing cocoindex; those spots use an explicit
+# `# noqa: E402` rather than a blanket exception.
+select = ["E4", "E7", "E9", "F", "E402"]

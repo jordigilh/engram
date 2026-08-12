@@ -4,7 +4,6 @@ purge-out-of-scope-memories.py's classification logic that relies on it.
 """
 from __future__ import annotations
 
-import json
 
 import project_scope as ps
 

@@ -25,7 +25,7 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, AsyncIterator
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -628,7 +628,6 @@ async def process_code_file(
     repo_tag: str,
 ) -> None:
     """Read a source file, chunk it, embed, and declare rows in pgvector table."""
-    from cocoindex.connectors import postgres
 
     content = await file.read_text()
     if not content or not content.strip():

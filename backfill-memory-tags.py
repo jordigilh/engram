@@ -33,7 +33,6 @@ import glob
 import json
 import os
 import sys
-import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 

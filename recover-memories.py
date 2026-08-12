@@ -21,8 +21,7 @@ import json
 import logging
 import shutil
 import sys
-import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from glob import glob
 from pathlib import Path
 

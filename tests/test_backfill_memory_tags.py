@@ -7,7 +7,6 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-import pytest
 
 _spec = importlib.util.spec_from_file_location(
     "backfill_memory_tags", Path(__file__).resolve().parent.parent / "backfill-memory-tags.py"

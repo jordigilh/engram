@@ -14,7 +14,6 @@ change, then discard/archive the result into docs/FINDINGS.md.
 """
 from __future__ import annotations
 
-import json
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path

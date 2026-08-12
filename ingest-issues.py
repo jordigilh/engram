@@ -24,7 +24,6 @@ import os
 import subprocess
 import sys
 from datetime import datetime, timedelta
-from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -91,7 +90,7 @@ def format_issue_content(issue: dict) -> str:
     number = issue.get("number", "?")
     title = issue.get("title", "")
     state = issue.get("state", "OPEN")
-    labels = [l.get("name", "") for l in issue.get("labels", [])]
+    labels = [label.get("name", "") for label in issue.get("labels", [])]
     author = issue.get("author", {}).get("login", "unknown")
     created = issue.get("createdAt", "")[:10]
 
@@ -141,7 +140,7 @@ def ingest_issues(issues: list[dict]) -> tuple[int, int]:
         if not content.strip() or len(content) < 50:
             continue
 
-        labels = [l.get("name", "") for l in issue.get("labels", [])]
+        labels = [label.get("name", "") for label in issue.get("labels", [])]
         state = issue.get("state", "OPEN").lower()
         tags = [state] + labels[:5]
 

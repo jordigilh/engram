@@ -59,7 +59,9 @@ def whitespace_normalized_match(evidence_span: str, haystack: str) -> bool:
     """Collapse runs of whitespace before comparing -- the minimal
     normalization real transcript text plausibly needs (line-wrapping,
     trailing spaces) without opening the door to loose/fuzzy matching."""
-    norm = lambda s: re.sub(r"\s+", " ", s).strip()
+    def norm(s: str) -> str:
+        return re.sub(r"\s+", " ", s).strip()
+
     return norm(evidence_span) in norm(haystack)
 
 
@@ -107,7 +109,7 @@ def build_synthetic_edge_cases(real_texts: list[str]) -> list[MatchCase]:
     multiline = next((t for t in real_texts if t.count("\n") >= 2), None)
     if multiline:
         lines = multiline.split("\n")
-        collapsed = " ".join(l.strip() for l in lines[:3] if l.strip())
+        collapsed = " ".join(line.strip() for line in lines[:3] if line.strip())
         cases.append(MatchCase(
             label="multiline-collapsed",
             evidence_span=collapsed,

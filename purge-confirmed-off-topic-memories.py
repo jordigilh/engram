@@ -129,7 +129,7 @@ def main():
         return
 
     if not args.execute:
-        print(f"\nDry run only -- no documents were deleted. Re-run with --execute to delete.")
+        print("\nDry run only -- no documents were deleted. Re-run with --execute to delete.")
         print(f"Full audit trail: {AUDIT_LOG}")
         return
 

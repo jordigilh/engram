@@ -49,9 +49,9 @@ from dataclasses import dataclass, field
 _STATE_DIR = pathlib.Path(tempfile.mkdtemp(prefix="cocoindex-watch-spike-state-"))
 os.environ.setdefault("COCOINDEX_DB", str(_STATE_DIR / "spike.db"))
 
-import cocoindex as coco
-from cocoindex.connectors import localfs
-from cocoindex.resources.file import PatternFilePathMatcher
+import cocoindex as coco  # noqa: E402
+from cocoindex.connectors import localfs  # noqa: E402
+from cocoindex.resources.file import PatternFilePathMatcher  # noqa: E402
 
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("watch-latency-spike")

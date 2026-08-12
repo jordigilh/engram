@@ -134,17 +134,25 @@ directory detected" startup log line and by querying the bank after restart.
 uv venv ~/.hindsight/venv --python 3.14
 uv pip install --python ~/.hindsight/venv/bin/python \
   'hindsight-api[all]' 'google-cloud-aiplatform>=1.38'
-uv pip install --python ~/.hindsight/venv/bin/python -r requirements-dev.txt
+uv pip install --python ~/.hindsight/venv/bin/python -e ".[dev]"
 uv pip install --python ~/.hindsight/venv/bin/python cocoindex
 
-ln -sf "$(pwd)/nightly-learn.py" ~/.hindsight/nightly-learn.py
-ln -sf "$(pwd)/flows/cocoindex-flows.py" ~/.hindsight/cocoindex-flows.py
-ln -sf "$(pwd)/search/cocoindex-search.py" ~/.hindsight/cocoindex-search.py
-ln -sf "$(pwd)/correction_gate.py" ~/.hindsight/correction_gate.py
-ln -sf "$(pwd)/contradiction_resolution.py" ~/.hindsight/contradiction_resolution.py
-ln -sf "$(pwd)/project_scope.py" ~/.hindsight/project_scope.py
-ln -sf "$(pwd)/spike" ~/.hindsight/spike
+ln -sf "$(pwd)/src/engram/pipeline/nightly_learn.py" ~/.hindsight/nightly-learn.py
+ln -sf "$(pwd)/src/engram/pipeline/ingest_issues.py" ~/.hindsight/ingest-issues.py
+ln -sf "$(pwd)/src/engram/flows/kubernaut.py" ~/.hindsight/cocoindex-flows.py
+ln -sf "$(pwd)/src/engram/search/kubernaut.py" ~/.hindsight/cocoindex-search.py
 ```
+
+`uv pip install -e ".[dev]"` is the one-shot editable install of the whole
+`engram` package (see [`INSTALL.md`](INSTALL.md) step 9) — it makes
+`correction_gate.py`, `contradiction_resolution.py`, `project_scope.py` etc.
+importable as `engram.*` and generates the `engram-flows-kubernaut` /
+`engram-search-kubernaut` / `engram-nightly-learn` / `engram-ingest-issues`
+console scripts in `~/.hindsight/venv/bin/`, so no per-shared-module symlinks
+or `spike/` path hack are needed here either. The two remaining symlinks
+above are only for the systemd-invoked entry points below (a planned
+follow-up will point those units at the console scripts directly instead
+and retire the symlinks — not yet done).
 
 These run **natively**, not containerized — the host-Python-version concern
 that would justify containerizing them doesn't apply once `uv venv --python

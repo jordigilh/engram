@@ -82,20 +82,20 @@ The nightly script (`nightly-learn.py`) produces two outputs:
 ### Quick summary (last 7 days)
 
 ```bash
-python3 report.py
+python3 -m engram.maintenance.report
 ```
 
 ### Extended period
 
 ```bash
-python3 report.py --days 30
+python3 -m engram.maintenance.report --days 30
 ```
 
 ### Machine-readable (for dashboards or scripts)
 
 ```bash
-python3 report.py --json
-python3 report.py --csv
+python3 -m engram.maintenance.report --json
+python3 -m engram.maintenance.report --csv
 ```
 
 ### Example output
@@ -208,10 +208,10 @@ python3 report.py --csv
 
 ### Actions
 
-- **Low hit rate on hindsight-docs**: Check CocoIndex flow status; for manual recovery, run `ingest-docs.py`
-- **Low hit rate on hindsight-issues**: Check CocoIndex flow status; for manual recovery, run `ingest-issues.py` or check `gh auth status`
+- **Low hit rate on hindsight-docs**: Check CocoIndex flow status; for manual recovery, run `python3 -m engram.pipeline.ingest_docs`
+- **Low hit rate on hindsight-issues**: Check CocoIndex flow status; for manual recovery, run `~/.hindsight/venv/bin/engram-ingest-issues` or check `gh auth status`
 - **High corrections with recall active**: Retained patterns may be outdated — run reflect manually
-- **Mental models stale**: Run `python3 create-mental-models.py --refresh` to force refresh
+- **Mental models stale**: Run `python3 -m engram.maintenance.create_mental_models --refresh` to force refresh
 - **Low proactive recall**: Strengthen the `alwaysApply` rule wording, ensure it says "ALWAYS recall before starting work"
 - **gopls not being used**: Verify `~/.cursor/mcp.json` has the gopls entry and restart Cursor
 
@@ -251,16 +251,16 @@ both fully-flagged and mixed documents:
 
 ```bash
 # Dry-run (report only)
-python3 triage-memories.py
+python3 -m engram.pipeline.triage_memories
 
 # Apply deletions
-python3 triage-memories.py --apply
+python3 -m engram.pipeline.triage_memories --apply
 
 # JSON output for scripting
-python3 triage-memories.py --json
+python3 -m engram.pipeline.triage_memories --json
 
 # Adjust stale threshold
-python3 triage-memories.py --stale-days 7
+python3 -m engram.pipeline.triage_memories --stale-days 7
 ```
 
 ### Recovery after data loss
@@ -270,13 +270,13 @@ script to rebuild the bank from transcripts:
 
 ```bash
 # Dry-run: show how many windows would be re-extracted
-python3 recover-memories.py
+python3 -m engram.maintenance.recover_memories
 
 # Apply: reset watermarks, reprocess all transcripts
-python3 recover-memories.py --apply
+python3 -m engram.maintenance.recover_memories --apply
 
 # Limit to last N days of transcripts
-python3 recover-memories.py --apply --max-age 30
+python3 -m engram.maintenance.recover_memories --apply --max-age 30
 ```
 
 The recovery script backs up `watermarks.json` and `retained-hashes.json`
@@ -294,7 +294,7 @@ nightly pipeline doesn't double-process.
 ### Warning signs
 
 - **Re-retained < kept**: Some re-retain batches failed — check for API errors in logs
-- **Memory count drops sharply after triage**: Rearrange may have failed — run `recover-memories.py`
+- **Memory count drops sharply after triage**: Rearrange may have failed — run `python3 -m engram.maintenance.recover_memories`
 
 ### Triage log
 
@@ -316,7 +316,7 @@ salience regexes, no LLM call) instead of being lost outright.
 ### Checking the backlog
 
 ```bash
-python3 report.py
+python3 -m engram.maintenance.report
 ```
 
 surfaces a `FALLBACK-EXTRACTED (Vertex AI unavailable on hindsight-api)`
@@ -328,7 +328,7 @@ Once hindsight-api's Vertex AI dependency has recovered, retry every
 buffered entry against the real extraction pipeline:
 
 ```bash
-python3 nightly-learn.py --mode reprocess-fallback
+~/.hindsight/venv/bin/engram-nightly-learn --mode reprocess-fallback
 ```
 
 Entries that succeed are removed from the backlog; entries that still fail
@@ -376,9 +376,9 @@ mode effectiveness to understand which retrieval method contributes most:
 To compare modes manually:
 
 ```bash
-python3 search/cocoindex-search.py --query "reconciler error handling" --mode hybrid
-python3 search/cocoindex-search.py --query "reconciler error handling" --mode dense
-python3 search/cocoindex-search.py --query "ParseConfig" --mode bm25
+~/.hindsight/venv/bin/engram-search-kubernaut --query "reconciler error handling" --mode hybrid
+~/.hindsight/venv/bin/engram-search-kubernaut --query "reconciler error handling" --mode dense
+~/.hindsight/venv/bin/engram-search-kubernaut --query "ParseConfig" --mode bm25
 ```
 
 **Healthy indicators:**
@@ -390,7 +390,7 @@ python3 search/cocoindex-search.py --query "ParseConfig" --mode bm25
 - BM25 returns 0 results for known identifiers: the `search_vector` trigger
   may not be firing — check `SELECT count(*) FROM cocoindex.code_embeddings WHERE search_vector IS NULL`
 - Hybrid results identical to dense-only: BM25 index may be empty — re-run
-  `python3 flows/cocoindex-flows.py --mode backfill`
+  `~/.hindsight/venv/bin/engram-flows-kubernaut --mode backfill`
 
 ### Freshness-at-Recall
 
@@ -428,12 +428,13 @@ locate unfamiliar code.
 
 **Warning signs:**
 - Exploration calls/task increasing: code index may not be covering the queried area — check if the source directory is configured
-- Code index hit rate < 50%: embeddings may need reprocessing — run `python3 flows/cocoindex-flows.py --mode backfill`
+- Code index hit rate < 50%: embeddings may need reprocessing — run `~/.hindsight/venv/bin/engram-flows-kubernaut --mode backfill`
 
 ## Exploration Efficiency
 
 Measures whether recall replaces grep/glob/SemanticSearch exploration calls.
-Computed per session in the nightly pipeline and surfaced in `report.py`.
+Computed per session in the nightly pipeline and surfaced by
+`python3 -m engram.maintenance.report`.
 
 | Metric | Formula | What it measures |
 |--------|---------|-----------------|
@@ -453,7 +454,8 @@ Computed per session in the nightly pipeline and surfaced in `report.py`.
 ## Ingestion Coverage
 
 Tracks what percentage of each source is actually indexed. Computed live by
-`report.py` by comparing GitHub CLI counts with Hindsight bank document counts.
+`engram.maintenance.report` by comparing GitHub CLI counts with Hindsight
+bank document counts.
 
 **Healthy indicators:**
 - Issues + PRs coverage at 100% (all items indexed)
@@ -465,8 +467,9 @@ Tracks what percentage of each source is actually indexed. Computed live by
 
 ## Baseline Comparison
 
-Use `report.py --snapshot` to capture a baseline, and `report.py --compare <file>`
-to see deltas over time. Key metrics to watch:
+Use `python3 -m engram.maintenance.report --snapshot` to capture a baseline,
+and `python3 -m engram.maintenance.report --compare <file>` to see deltas
+over time. Key metrics to watch:
 
 - Exploration calls delta (are we needing fewer searches?)
 - Correction rate delta (are corrections declining?)
@@ -475,10 +478,10 @@ to see deltas over time. Key metrics to watch:
 
 ```bash
 # Take a baseline before making changes
-python3 report.py --snapshot
+python3 -m engram.maintenance.report --snapshot
 
 # Compare after a week
-python3 report.py --compare ~/.hindsight/logs/baseline-2026-06-22.json
+python3 -m engram.maintenance.report --compare ~/.hindsight/logs/baseline-2026-06-22.json
 ```
 
 ## Setup

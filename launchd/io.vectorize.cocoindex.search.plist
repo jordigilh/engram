@@ -6,8 +6,7 @@
     <string>io.vectorize.cocoindex.search</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.hindsight/venv/bin/python3</string>
-        <string>__HOME__/.hindsight/cocoindex-search.py</string>
+        <string>__HOME__/.hindsight/venv/bin/engram-search-kubernaut</string>
         <string>--port</string>
         <string>8889</string>
     </array>

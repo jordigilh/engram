@@ -7,8 +7,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>__HOME__/.hindsight/with-config-env.sh</string>
-        <string>__HOME__/.hindsight/venv/bin/python3</string>
-        <string>__HOME__/.hindsight/engram-cocoindex-flows.py</string>
+        <string>__HOME__/.hindsight/venv/bin/engram-flows-engram</string>
         <string>--mode</string>
         <string>live</string>
     </array>

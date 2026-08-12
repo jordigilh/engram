@@ -6,8 +6,7 @@
     <string>io.vectorize.hindsight.proxy</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.hindsight/venv/bin/python3</string>
-        <string>__HOME__/.hindsight/hindsight-proxy.py</string>
+        <string>__HOME__/.hindsight/venv/bin/engram-hindsight-proxy</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>

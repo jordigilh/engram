@@ -7,11 +7,10 @@ set -euo pipefail
 
 CLONE_ROOT="/tmp/dcm-repos"
 ORG="dcm-project"
-VENV_PYTHON="${HOME}/.hindsight/venv/bin/python3"
-FLOWS_SCRIPT="${HOME}/.hindsight/dcm-cocoindex-flows.py"
+FLOWS_CMD="${HOME}/.hindsight/venv/bin/engram-flows-dcm"
 LOG_PREFIX="[dcm-nightly-ingest]"
 
-# Every active DCM repo and its corresponding env var for dcm-cocoindex-flows.py.
+# Every active DCM repo and its corresponding env var for engram.flows.dcm.
 # Format: ENV_VAR_NAME=github-repo-name
 declare -a REPO_MAP=(
   "DCM_ARCHITECTURE_DIR=dcm"
@@ -64,6 +63,6 @@ export COCOINDEX_PG_URL="${COCOINDEX_PG_URL:-postgresql://hindsight:hindsight@lo
 export COCOINDEX_DB="${COCOINDEX_DB:-${HOME}/.hindsight/dcm-cocoindex.db}"
 
 echo "${LOG_PREFIX} Running backfill: docs + code + issues"
-"${VENV_PYTHON}" "${FLOWS_SCRIPT}" --mode backfill --apps docs code issues
+"${FLOWS_CMD}" --mode backfill --apps docs code issues
 
 echo "${LOG_PREFIX} Backfill complete at $(date)"

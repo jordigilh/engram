@@ -4,15 +4,7 @@ untagged cursor-memory backlog (2026-07-27 fix, see docs/FINDINGS.md).
 """
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-
-
-_spec = importlib.util.spec_from_file_location(
-    "backfill_memory_tags", Path(__file__).resolve().parent.parent / "backfill-memory-tags.py"
-)
-bmt = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(bmt)
+from engram.maintenance import backfill_memory_tags as bmt
 
 
 def _doc(doc_id, tags=None, transcript_id=None):

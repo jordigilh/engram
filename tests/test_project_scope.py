@@ -5,7 +5,7 @@ purge-out-of-scope-memories.py's classification logic that relies on it.
 from __future__ import annotations
 
 
-import project_scope as ps
+from engram import project_scope as ps
 
 
 class TestIsAllowedWorkspace:

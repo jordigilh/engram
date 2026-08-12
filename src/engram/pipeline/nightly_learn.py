@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import time
 from datetime import date, datetime, timedelta, timezone
 from glob import glob
@@ -30,10 +31,17 @@ from typing import Any
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
-import correction_gate
-import contradiction_resolution
-import fallback_extract
-import project_scope
+# This file is part of the engram.pipeline package (src/engram/pipeline/).
+# sys.path[0] for a script invoked via a symlink (as launchd does) resolves
+# to the symlink's realpath target directory (src/engram/pipeline/), not the
+# symlink's own directory -- src/ itself must still be added explicitly so
+# `engram` resolves as a top-level package rather than needing this file to
+# be run via `-m`/an installed console script (not yet true in this repo).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from engram import correction_gate  # noqa: E402
+from engram import contradiction_resolution  # noqa: E402
+from engram import fallback_extract  # noqa: E402
+from engram import project_scope  # noqa: E402
 
 HINDSIGHT_URL = "http://localhost:8888"
 BANK_ID = "cursor-memory"
@@ -1756,20 +1764,13 @@ def run_hourly(watermarks: dict, seen_hashes: set) -> dict:
 
 
 def run_memory_triage(bank_id: str) -> dict:
-    """Dynamically load triage-memories.py (kept as a standalone, separately
-    runnable script rather than an importable package) and apply its triage
-    pass against `bank_id`. Extracted to a module-level function -- rather
-    than inlined in run_nightly() -- specifically so tests can monkeypatch
-    `nightly_learn.run_memory_triage` instead of exercising the real,
-    mutating (apply=True) triage against the live hindsight-api."""
-    import importlib.util
-    _spec = importlib.util.spec_from_file_location(
-        "triage_memories",
-        Path(__file__).resolve().parent / "triage-memories.py",
-    )
-    _mod = importlib.util.module_from_spec(_spec)
-    _spec.loader.exec_module(_mod)
-    return _mod.triage(bank_id=bank_id, stale_days=14, apply=True)
+    """Apply triage_memories.py's triage pass against `bank_id`. Extracted to
+    a module-level function -- rather than inlined in run_nightly() --
+    specifically so tests can monkeypatch `nightly_learn.run_memory_triage`
+    instead of exercising the real, mutating (apply=True) triage against the
+    live hindsight-api."""
+    from engram.pipeline import triage_memories
+    return triage_memories.triage(bank_id=bank_id, stale_days=14, apply=True)
 
 
 def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") -> dict:
@@ -2061,14 +2062,8 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
 
     # Regenerate dashboard from all daily reports
     try:
-        import importlib.util
-        _dash_spec = importlib.util.spec_from_file_location(
-            "generate_dashboard",
-            Path(__file__).resolve().parent / "generate-dashboard.py",
-        )
-        _dash_mod = importlib.util.module_from_spec(_dash_spec)
-        _dash_spec.loader.exec_module(_dash_mod)
-        _dash_mod.main()
+        from engram.pipeline import generate_dashboard
+        generate_dashboard.main()
         log.info("Dashboard updated")
     except Exception as e:
         log.warning("Dashboard generation failed: %s", e)

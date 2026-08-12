@@ -1,10 +1,9 @@
 # Lint config for the Engram pipeline scripts. Run with:
 #   ruff check .
 #
-# Not yet wired into CI (see docs/FINDINGS.md GA-gaps discussion) -- there is
-# no CI at all today. This file exists so the current clean baseline
-# (established 2026-08-12) is a checked-in contract, not tribal knowledge.
-target-version = "py312"
+# Enforced in CI as of 2026-08-12 (see .github/workflows/ci.yml) -- this file
+# is the checked-in baseline that job lints against.
+target-version = "py313"
 line-length = 120
 
 [lint]

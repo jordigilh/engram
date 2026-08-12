@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "engram"
+version = "0.1.0"
+description = "Hindsight/CocoIndex ingestion and memory-management pipeline for engram and its client projects"
+requires-python = ">=3.13"
+dependencies = [
+    "cocoindex==1.0.18",
+    "anthropic==0.120.0",
+    "litellm==1.93.0",
+    "mcp==1.28.1",
+    "openai==2.48.0",
+    "psycopg2-binary==2.9.12",
+    "pdfplumber==0.11.10",
+    "sentence-transformers==5.6.1",
+    "requests==2.34.2",
+    "watchdog==6.0.0",
+    "numpy==2.5.1",
+    "torch==2.13.0",
+    "asyncpg==0.31.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff==0.16.2"]
+
+# The 13 launchd-invoked entry points only (5 flows + 5 search + nightly-learn
+# + ingest-issues + hindsight-proxy). ingest-docs and the maintenance/backfill
+# tools are run by hand, not by launchd -- invoke those as
+# `python -m engram.pipeline.ingest_docs` / `python -m engram.maintenance.report`.
+[project.scripts]
+engram-flows-kubernaut = "engram.flows.kubernaut:main"
+engram-flows-dcm = "engram.flows.dcm:main"
+engram-flows-engram = "engram.flows.engram:main"
+engram-flows-koku = "engram.flows.koku:main"
+engram-flows-praxis = "engram.flows.praxis:main"
+engram-search-kubernaut = "engram.search.kubernaut:main"
+engram-search-dcm = "engram.search.dcm:main"
+engram-search-engram = "engram.search.engram:main"
+engram-search-koku = "engram.search.koku:main"
+engram-search-praxis = "engram.search.praxis:main"
+engram-nightly-learn = "engram.pipeline.nightly_learn:main"
+engram-ingest-issues = "engram.pipeline.ingest_issues:main"
+engram-hindsight-proxy = "engram.pipeline.hindsight_proxy:cli_main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

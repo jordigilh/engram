@@ -40,17 +40,19 @@ sys.path.insert(0, str(SPIKE_DIR))
 
 from ground_truth import DATASET, eval_examples, seed_examples  # noqa: E402
 from contradiction_suite import CASES as CONTRADICTION_CASES  # noqa: E402
-from classify import check_contradiction, HAIKU_MODEL, SONNET_MODEL  # noqa: E402
-from hindsight_client import recall  # noqa: E402
 import schema  # noqa: E402
+
+# classify.py/hindsight_client.py were promoted out of spike/ into the
+# src/engram/ package (load-bearing production code, not throwaway spikes --
+# see docs/FINDINGS.md).
+sys.path.insert(0, str(REPO_ROOT / "src"))
+from engram.classify import check_contradiction, HAIKU_MODEL, SONNET_MODEL  # noqa: E402
+from engram.hindsight_client import recall  # noqa: E402
 import variants  # noqa: E402
 
-# nightly-learn.py has a hyphen, so it can't be `import`ed normally.
-_spec = importlib.util.spec_from_file_location(
-    "nightly_learn", REPO_ROOT / "nightly-learn.py"
-)
-nl = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(nl)
+# nightly-learn.py was promoted into the src/engram/ package (as
+# nightly_learn.py) during the package restructure, so it's a plain import now.
+from engram.pipeline import nightly_learn as nl  # noqa: E402
 
 
 def hr(title: str = "") -> None:

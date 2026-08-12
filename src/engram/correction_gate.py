@@ -2,7 +2,7 @@
 """Shared correction-detection gate for production write paths
 (nightly-learn.py, cocoindex-flows.py).
 
-Replaces the regex-only CORRECTION_PATTERNS gate with spike/classify.py's
+Replaces the regex-only CORRECTION_PATTERNS gate with classify.py's
 Haiku-based classify_correction(), which the 2026-07-08 prefilter shadow
 trial measured at ~0.97 F1 against 630 Haiku-confirmed corrections across a
 14-day/3,873-message backfill, vs. ~24.4% recall for the best regex/keyword
@@ -30,7 +30,13 @@ import threading
 from pathlib import Path
 from typing import Pattern
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "spike"))
+# classify.py is a sibling in this same src/engram/ directory (promoted out
+# of spike/ during the package restructure). See contradiction_resolution.py
+# for why this stays a plain sys.path insert of our own directory rather
+# than a dotted `from engram.classify import ...` -- it keeps working
+# whether this file is reached as `engram.correction_gate` or via a flat
+# `~/.hindsight/` symlink with no `engram` package context.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from classify import classify_correction  # noqa: E402
 
 CACHE_PATH = Path(os.path.expanduser("~/.hindsight/logs/correction-cache.json"))

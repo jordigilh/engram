@@ -1,11 +1,22 @@
 """Shared pytest fixtures for the tests/ suite.
 
-Adds the repo root to sys.path so bare `import correction_gate`,
-`import contradiction_resolution`, `import project_scope` etc. work from
-tests/, and provides a fixture for loading the hyphenated production scripts
-(nightly-learn.py, cocoindex-flows.py) as modules -- they can't be `import`ed
-normally because Python identifiers can't contain hyphens. Mirrors the same
-importlib pattern already used in review-contradictions.py.
+Everything under src/engram/ is a real, `pip install -e .`-installed
+package now (see pyproject.toml) and gets imported the plain way --
+`import engram.flows.kubernaut`, etc. Python's sys.modules cache means each
+of these only ever executes once per test session no matter how many
+fixtures/modules import it, which is also what makes it safe for the
+*_cocoindex_flows fixtures below to coexist: CocoIndex registers global
+ContextKeys (e.g. "pg_pool") at module-exec time and raises if the same key
+is registered twice in one process, which import caching prevents (each
+project's flow module has its own uniquely-named PG_POOL key besides, as a
+second line of defense -- see the comment next to each ContextKey() call).
+
+`load_hyphenated_module()` below still exists for the three genuinely
+unpackaged, hyphenated-filename scripts this repo intentionally keeps
+outside the engram package (hooks/*.py, check-rule-sync.py -- see
+docs/findings/2026-08.md and the package-restructure plan's "explicitly out
+of scope" section) -- those can't be `import`ed normally since Python
+identifiers can't contain hyphens, and packaging them isn't in scope.
 """
 from __future__ import annotations
 
@@ -19,14 +30,16 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent
 SPIKE_DIR = REPO_ROOT / "spike"
 HOOKS_DIR = REPO_ROOT / "hooks"
-for path in (REPO_ROOT, SPIKE_DIR, HOOKS_DIR):
+SRC_DIR = REPO_ROOT / "src"
+for path in (REPO_ROOT, SPIKE_DIR, HOOKS_DIR, SRC_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
 
 def load_hyphenated_module(filename: str, module_name: str) -> ModuleType:
-    """Load a hyphenated-filename script (e.g. "nightly-learn.py") as an
-    importable module object."""
+    """Load a hyphenated-filename script (e.g. "check-rule-sync.py") that's
+    deliberately not part of the engram package as an importable module
+    object."""
     spec = importlib.util.spec_from_file_location(module_name, REPO_ROOT / filename)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -35,38 +48,31 @@ def load_hyphenated_module(filename: str, module_name: str) -> ModuleType:
 
 @pytest.fixture(scope="session")
 def nightly_learn() -> ModuleType:
-    return load_hyphenated_module("nightly-learn.py", "nightly_learn")
+    from engram.pipeline import nightly_learn
+    return nightly_learn
 
 
 @pytest.fixture(scope="session")
 def cocoindex_flows() -> ModuleType:
-    return load_hyphenated_module("flows/cocoindex-flows.py", "cocoindex_flows")
+    from engram.flows import kubernaut
+    return kubernaut
 
 
 @pytest.fixture(scope="session")
 def review_contradictions(cocoindex_flows: ModuleType) -> ModuleType:
-    """review-contradictions.py does its own independent importlib exec of
-    cocoindex-flows.py internally. CocoIndex registers global ContextKeys
-    (e.g. "pg_pool") at module-exec time and raises if the same key is
-    registered twice in one process, so exec'ing cocoindex-flows.py a second
-    time in the same session (once via the cocoindex_flows fixture above,
-    once inside review-contradictions.py's own module code) throws and
-    leaves review-contradictions.py's internal `_cf` half-initialized with
-    `_HAS_RETAIN=False`. Depending on the cocoindex_flows fixture first
-    doesn't avoid this (review-contradictions.py always execs its own copy
-    regardless of sys.modules state) -- so after loading, we replace its
-    broken `_cf`/`_HAS_RETAIN` with the one canonical, already-working
-    module instance instead.
-    """
-    module = load_hyphenated_module("review-contradictions.py", "review_contradictions")
-    module._cf = cocoindex_flows
-    module._HAS_RETAIN = True
-    return module
+    """review_contradictions.py imports engram.flows.kubernaut itself (as
+    `_cf`) the plain way now -- see its own module comment -- so this
+    fixture no longer needs to patch anything post-hoc; depending on the
+    cocoindex_flows fixture here just documents (and enforces via pytest's
+    fixture graph) that both share the one cached kubernaut module."""
+    from engram.maintenance import review_contradictions
+    return review_contradictions
 
 
 @pytest.fixture(scope="session")
 def purge_script() -> ModuleType:
-    return load_hyphenated_module("purge-out-of-scope-memories.py", "purge_out_of_scope_memories")
+    from engram.maintenance import purge_out_of_scope_memories
+    return purge_out_of_scope_memories
 
 
 @pytest.fixture(scope="session")
@@ -76,22 +82,24 @@ def check_rule_sync() -> ModuleType:
 
 @pytest.fixture(scope="session")
 def engram_cocoindex_flows() -> ModuleType:
-    """engram-cocoindex-flows.py (2026-07-15 Engram onboarding). Its
-    PG_POOL ContextKey is deliberately named "engram_repo_pg_pool" (not
-    "pg_pool" like cocoindex-flows.py's own) precisely so it can be loaded
-    into the same process as the cocoindex_flows fixture above without
-    CocoIndex's "Context key already used" ValueError -- see the comment
-    next to that ContextKey() call for the full rationale.
+    """engram.py (2026-07-15 Engram onboarding). Its PG_POOL ContextKey is
+    deliberately named "engram_repo_pg_pool" (not "pg_pool" like
+    kubernaut.py's own) precisely so it can be loaded into the same process
+    as the cocoindex_flows fixture above without CocoIndex's "Context key
+    already used" ValueError -- see the comment next to that ContextKey()
+    call for the full rationale.
     """
-    return load_hyphenated_module("flows/engram-cocoindex-flows.py", "engram_cocoindex_flows")
+    from engram.flows import engram as engram_cocoindex_flows
+    return engram_cocoindex_flows
 
 
 @pytest.fixture(scope="session")
 def koku_cocoindex_flows() -> ModuleType:
-    """koku-cocoindex-flows.py (Koku onboarding). Its PG_POOL ContextKey is
+    """koku.py (Koku onboarding). Its PG_POOL ContextKey is
     "koku_repo_pg_pool" for the same process-global-collision reason as
     engram_cocoindex_flows's PG_POOL above."""
-    return load_hyphenated_module("flows/koku-cocoindex-flows.py", "koku_cocoindex_flows")
+    from engram.flows import koku as koku_cocoindex_flows
+    return koku_cocoindex_flows
 
 
 @pytest.fixture(scope="session")
@@ -112,31 +120,35 @@ def post_plan_checklist_reminder() -> ModuleType:
 
 @pytest.fixture(scope="session")
 def generate_dashboard() -> ModuleType:
-    return load_hyphenated_module("generate-dashboard.py", "generate_dashboard")
+    from engram.pipeline import generate_dashboard
+    return generate_dashboard
 
 
 @pytest.fixture(scope="session")
 def dcm_cocoindex_flows() -> ModuleType:
-    """dcm-cocoindex-flows.py (DCM onboarding). PG_POOL was renamed from the
-    generic "pg_pool" to "dcm_repo_pg_pool" (2026-08-03) specifically to
-    unblock this fixture -- see the comment next to that ContextKey() call."""
-    return load_hyphenated_module("flows/dcm-cocoindex-flows.py", "dcm_cocoindex_flows")
+    """dcm.py (DCM onboarding). PG_POOL was renamed from the generic
+    "pg_pool" to "dcm_repo_pg_pool" (2026-08-03) specifically to unblock
+    this fixture -- see the comment next to that ContextKey() call."""
+    from engram.flows import dcm as dcm_cocoindex_flows
+    return dcm_cocoindex_flows
 
 
 @pytest.fixture(scope="session")
 def praxis_cocoindex_flows() -> ModuleType:
-    """praxis-cocoindex-flows.py (praxis-proxy org onboarding). PG_POOL is
+    """praxis.py (praxis-proxy org onboarding). PG_POOL is
     "praxis_repo_pg_pool" for the same process-global-collision reason as
     the other *_cocoindex_flows fixtures' PG_POOL above."""
-    return load_hyphenated_module("flows/praxis-cocoindex-flows.py", "praxis_cocoindex_flows")
+    from engram.flows import praxis as praxis_cocoindex_flows
+    return praxis_cocoindex_flows
 
 
 @pytest.fixture(scope="session")
 def cocoindex_search() -> ModuleType:
-    """cocoindex-search.py (the kubernaut-family code search MCP server).
-    Unlike the *_cocoindex_flows fixtures, this module registers no
-    CocoIndex flow/ContextKey at import time (its `import cocoindex.ops.*`
-    calls are all deferred into function bodies), so it's safe to load
-    into the same session as any/all of those fixtures with no collision
-    handling needed."""
-    return load_hyphenated_module("search/cocoindex-search.py", "cocoindex_search")
+    """kubernaut.py's code search module (engram.search.kubernaut) -- the
+    kubernaut-family code search MCP server. Unlike the *_cocoindex_flows
+    fixtures, this module registers no CocoIndex flow/ContextKey at import
+    time (its `import cocoindex.ops.*` calls are all deferred into function
+    bodies), so it's safe to load into the same session as any/all of those
+    fixtures with no collision handling needed."""
+    from engram.search import kubernaut as cocoindex_search
+    return cocoindex_search

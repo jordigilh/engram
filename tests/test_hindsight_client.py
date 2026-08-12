@@ -1,4 +1,4 @@
-"""Tests for spike/hindsight_client.py's recall(). Regression coverage for
+"""Tests for hindsight_client.py's recall(). Regression coverage for
 the 2026-07-12 bug: recall() parsed a "chunks" key the live hindsight-api
 response never populates -- the real shape is {"results": [...]}. Confirmed
 recall() had never actually seen real memory content before that fix (see
@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import time
 
-import hindsight_client as hc
+from engram import hindsight_client as hc
 
 
 class FakeResponse:

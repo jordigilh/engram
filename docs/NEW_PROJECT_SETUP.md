@@ -35,8 +35,8 @@ separate and non-overlapping use case that still doesn't need an
 `<project>-issues` bank): skip the `<project>-issues` bank entirely, skip
 the `issues_app` in the
 CocoIndex flow file, and omit `issues_repos` from the project's
-`PROJECT_CONFIGS` entry in both `nightly-learn.py` and `report.py` (both
-files' `collect_ingestion_coverage()`/probe logic treat a missing
+`PROJECT_CONFIGS` entry in both `engram.pipeline.nightly_learn` and
+`engram.maintenance.report` (both modules' `collect_ingestion_coverage()`/probe logic treat a missing
 `issues_repos` key as "contributes nothing to the total," not an error —
 verified by `tests/test_report.py::TestCollectIngestionCoverageProjectScoping::test_engram_project_contributes_nothing_to_issues_total`).
 
@@ -47,9 +47,9 @@ a fully separate bank/table/pipeline (e.g. `kubernaut-operator`/
 bank / `code_embeddings` table, already tagged by repo at ingestion time). No
 new bank, no new CocoIndex app, no new launchd service — just:
 1. `create_mental_model` with a `tags: ["<repo>"]` filter, scoped to the
-   existing shared bank (see `create-mental-models.py`'s `operator-architecture`/
-   `console-architecture` entries).
-2. An optional `repo` parameter on `cocoindex-search.py`'s `search_code()` /
+   existing shared bank (see `engram.maintenance.create_mental_models`'s
+   `operator-architecture`/`console-architecture` entries).
+2. An optional `repo` parameter on `engram.search.kubernaut`'s `search_code()` /
    `cocoindex_search` MCP tool, which adds a `filepath LIKE '<repo>/%'` filter
    to scope code search the same way.
 3. A hand-authored `.cursor/rules/hindsight-memory.mdc` that defaults to the
@@ -110,7 +110,7 @@ Use the Hindsight API or MCP to create mental models for each bank:
 
 ### 4. Create CocoIndex Flows
 
-Create `flows/<project>-cocoindex-flows.py` adapted from `flows/cocoindex-flows.py`:
+Create `src/engram/flows/<project>.py` adapted from `src/engram/flows/kubernaut.py`:
 
 - Three apps: docs, issues, code
 - Banks: `<project>-docs`, `<project>-issues`
@@ -118,39 +118,54 @@ Create `flows/<project>-cocoindex-flows.py` adapted from `flows/cocoindex-flows.
 - Separate CocoIndex state DB: `~/.hindsight/<project>-cocoindex.db`
 - Environment variables prefixed with `<PROJECT>_*`
 
+Add an `engram-flows-<project> = "engram.flows.<project>:main"` entry under
+`[project.scripts]` in `pyproject.toml`, then re-run
+`uv pip install --python ~/.hindsight/venv/bin/python -e .` to generate the
+console script.
+
 > **Gotcha**: give the Postgres pool `coco.ContextKey(...)` a name unique
-> across *every* flow file in this repo, not just this project's own file
-> (e.g. `"<project>_repo_pg_pool"`, not the generic `"pg_pool"` that
-> `flows/cocoindex-flows.py` already uses). CocoIndex registers `ContextKey`s
+> across *every* flow module in this package, not just this project's own
+> module (e.g. `"<project>_repo_pg_pool"`, not the generic `"pg_pool"` that
+> `engram.flows.kubernaut` already uses). CocoIndex registers `ContextKey`s
 > process-globally and raises `ValueError` on a same-name second
-> registration — harmless in production (each flow file runs as its own
+> registration — harmless in production (each flow module runs as its own
 > `launchd` process), but it means the pytest suite will crash at collection
-> time if it ever loads two flow files with colliding key names into one
-> process. `flows/engram-cocoindex-flows.py`'s `PG_POOL` (`"engram_repo_pg_pool"`)
+> time if it ever loads two flow modules with colliding key names into one
+> process. `engram.flows.engram`'s `PG_POOL` (`"engram_repo_pg_pool"`)
 > is the reference example; see `tests/test_engram_cocoindex_flows.py::TestModuleLoadsWithoutContextKeyCollision`
 > for the regression guard.
 
 ### 5. Create Code Search Server
 
-Create `search/<project>-cocoindex-search.py` adapted from `search/cocoindex-search.py`:
+Create `src/engram/search/<project>.py` adapted from `src/engram/search/kubernaut.py`:
 
 - Queries `cocoindex.<project>_code_embeddings` table
 - MCP server name: `<project>-code`
 - Tool name: `<project>_code_search`
 - Same hybrid search (dense + BM25 + RRF fusion)
 
+Add a matching `engram-search-<project> = "engram.search.<project>:main"`
+entry under `[project.scripts]` alongside the flows one from step 4, then
+re-run the same `pip install -e .` (it's idempotent to run twice).
+
 ### 6. Create launchd Service
 
 Create `launchd/io.vectorize.cocoindex.<project>.plist`:
 
-- Runs `flows/<project>-cocoindex-flows.py` in live mode
+- Runs `~/.hindsight/<project>-cocoindex-flows.py` in live mode (a symlink to
+  `src/engram/flows/<project>.py` -- see the note in
+  [INSTALL.md](INSTALL.md) step 16 about why launchd still goes through this
+  symlink rather than the `engram-flows-<project>` console script directly)
 - Environment variables for all repo paths
 - Separate log files: `~/.hindsight/logs/<project>-cocoindex-{stdout,stderr}.log`
 - KeepAlive: true
 
-Install and start:
+Symlink the new flow/search modules, then install and start:
 
 ```bash
+ln -sf "$(pwd)/src/engram/flows/<project>.py" ~/.hindsight/<project>-cocoindex-flows.py
+ln -sf "$(pwd)/src/engram/search/<project>.py" ~/.hindsight/<project>-cocoindex-search.py
+
 # Replace __HOME__ with actual home directory
 sed "s|__HOME__|$HOME|g" launchd/io.vectorize.cocoindex.<project>.plist \
   > ~/Library/LaunchAgents/io.vectorize.cocoindex.<project>.plist
@@ -257,8 +272,7 @@ Create `.cursor/mcp.json` in each project repository:
       "url": "http://localhost:8888/mcp/<project>-issues/"
     },
     "cocoindex-code": {
-      "command": "/Users/jgil/.hindsight/venv/bin/python3",
-      "args": ["/Users/jgil/.hindsight/<project>-cocoindex-search.py"],
+      "command": "/Users/jgil/.hindsight/venv/bin/engram-search-<project>",
       "type": "stdio",
       "env": {
         "COCOINDEX_PG_URL": "postgresql://hindsight:hindsight@localhost:5432/hindsight"
@@ -380,14 +394,14 @@ RULE_PAIRS: dict[str, tuple[Path, Path]] = {
 
 ### 11. Update Nightly Pipeline
 
-In `nightly-learn.py`:
+In `src/engram/pipeline/nightly_learn.py`:
 - Add `<project>-docs` and `<project>-issues` to `BANKS` list
 - Add a new entry to `PROJECT_CONFIGS[<project>]` with `banks`, `mental_models`, `probes`, `recall_banks`, `log_suffix`
 - Add mental model refresh entries to `models_to_refresh`
 - Add observability probes for new banks
 - **Add `workspace_prefixes`** to the new `PROJECT_CONFIGS` entry (see 11a — easy to miss, since nothing errors if you skip it)
 
-In `report.py`:
+In `src/engram/maintenance/report.py`:
 - Add new banks to `collect_mental_model_stats()` bank list
 - Add new bank coverage to `collect_ingestion_coverage()`
 - Add new pgvector table to code chunk count queries
@@ -411,7 +425,7 @@ per-project filter.
 To scope correctly:
 
 1. Add `"workspace_prefixes": ["Users-jgil-go-src-github-com-<org>-<repo-prefix>"]`
-   to the project's `PROJECT_CONFIGS` entry in `nightly-learn.py`. This should match
+   to the project's `PROJECT_CONFIGS` entry in `src/engram/pipeline/nightly_learn.py`. This should match
    the `~/.cursor/projects/<name>/` directory name(s) for the project's repos —
    run `ls ~/.cursor/projects/ | grep <org>` to find the actual prefix once at least
    one repo has been opened in Cursor.
@@ -553,8 +567,8 @@ either (`postToolUse` never fires after a `preToolUse` deny).
 
 | File | Purpose |
 |------|---------|
-| `flows/<project>-cocoindex-flows.py` | Ingestion (docs, issues, code) |
-| `search/<project>-cocoindex-search.py` | Code search MCP server |
+| `src/engram/flows/<project>.py` | Ingestion (docs, issues, code) |
+| `src/engram/search/<project>.py` | Code search MCP server |
 | `launchd/io.vectorize.cocoindex.<project>.plist` | macOS service |
 | `cursor/projects/<project>.vars` | Template variables for cursor rule generation |
 | `cursor/hindsight-memory.mdc.tmpl` | Shared template (do not edit per-project) |
@@ -580,7 +594,7 @@ either (`postToolUse` never fires after a `preToolUse` deny).
   `workspace_prefixes` is set on the `PROJECT_CONFIGS` entry (step 11a) — this is not
   automatic and does not fail loudly if skipped
 - **GitHub issues/PRs totals**: scoped per project via `PROJECT_CONFIGS[project]["issues_repos"]`
-  in both `nightly-learn.py` and `report.py` — a project with no `issues_repos` key
+  in both `engram.pipeline.nightly_learn` and `engram.maintenance.report` — a project with no `issues_repos` key
   (e.g. the no-issues-bank variant) simply contributes nothing to any total, rather
   than defaulting to one hardcoded repo (the pre-2026-07-15 behavior; see FINDINGS.md)
 - **Shared**: `cursor-memory` bank (behavioral corrections), Hindsight API instance, PostgreSQL

@@ -22,26 +22,27 @@ Usage:
 """
 from __future__ import annotations
 
-import importlib.util
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "spike"))
-from pending_queue import load_pending, remove_pending  # noqa: E402
+# This file is part of the engram.maintenance package
+# (src/engram/maintenance/), three directories below the repo root.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from engram.pending_queue import load_pending, remove_pending  # noqa: E402
+from engram.contradiction_resolution import delete_document, invalidate_memory  # noqa: E402
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from contradiction_resolution import delete_document, invalidate_memory  # noqa: E402
-
-# cocoindex-flows.py has a hyphen, so it can't be `import`ed normally.
-_spec = importlib.util.spec_from_file_location(
-    "cocoindex_flows", Path(__file__).resolve().parent / "flows" / "cocoindex-flows.py"
-)
-_cf = importlib.util.module_from_spec(_spec)
+# A plain import (rather than an isolated importlib exec) is safe here now
+# that kubernaut.py has a real, importable module identity
+# (engram.flows.kubernaut): Python's sys.modules cache means it only ever
+# executes once per process no matter how many places import it, so there's
+# no risk of CocoIndex's "Context key already used" ValueError from double
+# module-exec -- the risk that motivated an isolated exec back when this was
+# a hyphenated top-level script loaded via spec_from_file_location.
 try:
-    _spec.loader.exec_module(_cf)
+    from engram.flows import kubernaut as _cf  # noqa: E402
     _HAS_RETAIN = True
 except Exception as e:  # pragma: no cover - only if cocoindex deps missing
-    print(f"Note: could not import cocoindex-flows.py ({e}); approve will be disabled.")
+    print(f"Note: could not import engram.flows.kubernaut ({e}); approve will be disabled.")
     _HAS_RETAIN = False
 
 

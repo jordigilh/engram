@@ -27,8 +27,9 @@ recall-quality benchmark is built against.
 
 ## Index
 
-### August 2026 (35 entries)
+### August 2026 (36 entries)
 
+- [2026-08-12 (same day, fourth follow-up): Host at 100% CPU — `hindsight-api` Grinding a Sonnet-Tier Consolidation Backlog, Compounded by 23 of 45 Mental Models Silently Running Full Re-Synthesis Instead of Delta](findings/2026-08.md#2026-08-12-same-day-fourth-follow-up-host-at-100-cpu-hindsight-api-grinding-a-sonnet-tier-consolidation-backlog-compounded-by-23-of-45-mental-models-silently-running-full-re-synthesis-instead-of-delta)
 - [2026-08-12 (same day, third follow-up): Added a `launchd` Watchdog for the Silent-Live-Service-Outage Failure Class](findings/2026-08.md#2026-08-12-same-day-follow-up-added-a-launchd-watchdog-for-the-silent-live-service-outage-failure-class)
 - [2026-08-12 (same day, follow-up): Enabled Full Scheduled Automation for Koku and Praxis (Live Ingestion + Nightly-Learn) — Templates Already Existed, Just Never Deployed; Found a Pre-Existing File-Watch Bug in Praxis's Live Mode Along the Way](findings/2026-08.md#2026-08-12-same-day-follow-up-enabled-full-scheduled-automation-for-koku-and-praxis-live-ingestion--nightly-learn-templates-already-existed-just-never-deployed-found-a-pre-existing-file-watch-bug-in-praxiss-live-mode-along-the-way)
 - [2026-08-12: RCA — Kubernaut's Live CocoIndex Ingestion Was Being Knocked Offline Every Night for 9 Nights Straight by a "One-Time" 2026-08-03 Cleanup Job That Never Successfully Self-Removed](findings/2026-08.md#2026-08-12-rca--kubernauts-live-cocoindex-ingestion-was-being-knocked-offline-every-night-for-9-nights-straight-by-a-one-time-2026-08-03-cleanup-job-that-never-successfully-self-removed)

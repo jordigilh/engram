@@ -60,7 +60,7 @@ LLM calls only happen overnight for pattern extraction.
 - **LSP-backed code intelligence** — [Serena](https://github.com/oraios/serena) is the default code-intelligence MCP backend across every onboarded project, wrapping each language's real LSP (`gopls`, `pyright`, `rust-analyzer`, `typescript-language-server`) behind one consistent tool surface, so agents get real symbol lookup/find-references/diagnostics instead of grepping for identifiers — see docs/NEW_PROJECT_SETUP.md#7-choose-your-code-intelligence-backend
 - **Self-cleaning** — nightly triage removes ephemeral, stale, and duplicate memories
 - **Self-evaluating** — weekly trend metrics (corrections/session, rework %, productivity density), exploration efficiency, ingestion coverage, data freshness
-- **Recoverable** — transcripts are source of truth; `recover-memories.py` rebuilds the bank
+- **Recoverable** — transcripts are source of truth; `python3 -m engram.maintenance.recover_memories` rebuilds the bank
 - **Runs as macOS service** — launchd-managed, survives reboots, auto-restarts
 
 ## Quick start
@@ -95,8 +95,8 @@ graph TB
     end
 
     subgraph cocoindex_engine["CocoIndex"]
-        coco["cocoindex-flows.py"]
-        coco_search["cocoindex-search.py"]
+        coco["engram-flows-kubernaut"]
+        coco_search["engram-search-kubernaut"]
         coco --> pg
         coco_search --> pg
     end
@@ -165,7 +165,7 @@ At 5 sessions/day over a month, this translates to:
 - **~1.7M tokens/month saved** (20 working days × 5 sessions)
 - At Sonnet pricing (~$15/M tokens): **~$25/month saved** for **$3.60/month** cost
 
-> Run `python3 report.py` to see your weekly trends and session stats.
+> Run `python3 -m engram.maintenance.report` to see your weekly trends and session stats.
 > The [Effectiveness Dashboard](docs/DASHBOARD.md) auto-updates nightly.
 
 ## Expected benefits from CocoIndex integration
@@ -186,13 +186,13 @@ four source types. The expected improvements:
 
 ```bash
 # Full effectiveness report with all metrics
-python3 report.py
+python3 -m engram.maintenance.report
 
 # Take a baseline snapshot before changes
-python3 report.py --snapshot
+python3 -m engram.maintenance.report --snapshot
 
 # Compare against a previous baseline
-python3 report.py --compare ~/.hindsight/logs/baseline-2026-06-22.json
+python3 -m engram.maintenance.report --compare ~/.hindsight/logs/baseline-2026-06-22.json
 ```
 
 Key metrics to watch:

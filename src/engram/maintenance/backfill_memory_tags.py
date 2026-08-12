@@ -33,11 +33,14 @@ import glob
 import json
 import os
 import sys
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import project_scope
+# This file is part of the engram.maintenance package
+# (src/engram/maintenance/), three directories below the repo root.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from engram import project_scope  # noqa: E402
 
 HINDSIGHT_URL = "http://localhost:8888"
 TRANSCRIPTS_GLOB = os.path.expanduser(

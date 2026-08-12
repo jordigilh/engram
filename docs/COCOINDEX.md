@@ -22,7 +22,7 @@ flowchart LR
     end
 
     subgraph cocoindex["CocoIndex Engine"]
-        flows["cocoindex-flows.py"]
+        flows["engram-flows-kubernaut"]
     end
 
     subgraph sinks["Sinks"]
@@ -128,13 +128,13 @@ The MCP tool `cocoindex_search` accepts a `mode` parameter:
 
 ```bash
 # Hybrid (default)
-python3 search/cocoindex-search.py --query "how does the reconciler handle errors"
+~/.hindsight/venv/bin/engram-search-kubernaut --query "how does the reconciler handle errors"
 
 # Dense only
-python3 search/cocoindex-search.py --query "error handling in reconciler" --mode dense
+~/.hindsight/venv/bin/engram-search-kubernaut --query "error handling in reconciler" --mode dense
 
 # BM25 only — great for exact identifiers
-python3 search/cocoindex-search.py --query "ParseConfig" --mode bm25
+~/.hindsight/venv/bin/engram-search-kubernaut --query "ParseConfig" --mode bm25
 ```
 
 ## Structural Pattern Search
@@ -155,9 +155,10 @@ opposite question — "find code *shaped like* X" — via CocoIndex's
 
 Unlike hybrid search, there is no structural-pattern *index* — `CodePattern`
 parses source directly, so each call walks the project's live checkout
-(`chunking.find_code_files()`, scoped to the exact same
-`included_patterns`/`excluded_patterns` each `*-cocoindex-flows.py` already
-uses for ingestion, so pattern search never drifts from what's indexed).
+(`engram.chunking.find_code_files()`, scoped to the exact same
+`included_patterns`/`excluded_patterns` each project's `engram.flows.<project>`
+module already uses for ingestion, so pattern search never drifts from what's
+indexed).
 For each candidate file: a cheap parse-free prefilter rejects files that
 can't possibly match, then a match renders with enclosing-scope context via
 `render_match()`. See docs/FINDINGS.md 2026-08-07 for the spike that
@@ -172,13 +173,13 @@ Omitting a body/block entirely means "don't care what's inside":
 ```bash
 # Any Go function returning exactly (bool, error), regardless of name,
 # params, or body:
-python3 search/cocoindex-search.py --pattern 'func \NAME(\(A*\)) (bool, error)' --language go
+~/.hindsight/venv/bin/engram-search-kubernaut --pattern 'func \NAME(\(A*\)) (bool, error)' --language go
 
 # Any Python function/method, regardless of body:
-python3 search/koku-cocoindex-search.py --pattern 'def \NAME(\(A*\)):' --language python
+~/.hindsight/venv/bin/engram-search-koku --pattern 'def \NAME(\(A*\)):' --language python
 
 # Scope to one of DCM's 8 repos:
-python3 search/dcm-cocoindex-search.py --pattern 'func \NAME(\(A*\)) error' --language go --repo dcm-cli
+~/.hindsight/venv/bin/engram-search-dcm --pattern 'func \NAME(\(A*\)) error' --language go --repo dcm-cli
 ```
 
 ### What this is NOT: complementary to gopls/Serena, not a replacement
@@ -203,7 +204,7 @@ that CocoIndex manages as part of the table's lifecycle. This means:
   automatically when the flow initializes.
 - **Teardown**: if the attachment is removed or changed, CocoIndex runs the
   teardown SQL to clean up.
-- **No external migration scripts**: everything is declared in `cocoindex-flows.py`.
+- **No external migration scripts**: everything is declared in `engram.flows.kubernaut`.
 
 This is preferred over manually creating triggers via `psql` because it keeps
 the full schema under CocoIndex's control.
@@ -215,7 +216,7 @@ the full schema under CocoIndex's control.
 ### Live mode (default)
 
 ```bash
-python3 flows/cocoindex-flows.py --mode live
+~/.hindsight/venv/bin/engram-flows-kubernaut --mode live
 ```
 
 Runs all four flows concurrently using threads:
@@ -224,14 +225,16 @@ Runs all four flows concurrently using threads:
 - **issues**: Polling thread that fetches all issues + PRs from GitHub every
   `ENGRAM_ISSUES_POLL_SECONDS` (default: 300s / 5 min).
 
-This is the mode used by the launchd plist. The `report_to_stdout` flag is
-disabled in concurrent mode (CocoIndex only allows one progress reporter),
+This is the mode used by the launchd plist (currently via the
+`~/.hindsight/cocoindex-flows.py` symlink rather than this console script
+directly — see [INSTALL.md](INSTALL.md) step 16). The `report_to_stdout` flag
+is disabled in concurrent mode (CocoIndex only allows one progress reporter),
 so all output goes to `cocoindex-stderr.log`.
 
 ### Backfill mode
 
 ```bash
-python3 flows/cocoindex-flows.py --mode backfill
+~/.hindsight/venv/bin/engram-flows-kubernaut --mode backfill
 ```
 
 Processes all existing sources from scratch, then exits. Use for:
@@ -269,7 +272,7 @@ grep "Issues poll:" ~/.hindsight/logs/cocoindex-stderr.log | tail -5
 psql -h localhost -p 5432 -U hindsight -d hindsight -c "SELECT count(*) FROM code_embeddings;"
 
 # Full coverage and freshness report
-python3 report.py
+python3 -m engram.maintenance.report
 ```
 
 ### Healthy indicators
@@ -311,7 +314,7 @@ embeddings (stored separately in pgvector) will use a different vector space.
 **Fix:** Run a full backfill to re-embed all code chunks:
 
 ```bash
-python3 flows/cocoindex-flows.py --mode backfill
+~/.hindsight/venv/bin/engram-flows-kubernaut --mode backfill
 ```
 
 ### `gh` CLI not authenticated
@@ -340,7 +343,8 @@ launchctl load ~/Library/LaunchAgents/io.vectorize.cocoindex.service.plist
 
 ### Issues/PRs not fully indexed
 
-If `report.py` shows fewer indexed items than total issues + PRs:
+If `python3 -m engram.maintenance.report` shows fewer indexed items than
+total issues + PRs:
 
 ```bash
 # Check how many the flow is fetching
@@ -348,7 +352,7 @@ grep "Fetched.*from" ~/.hindsight/logs/cocoindex-stderr.log | tail -5
 ```
 
 The flow uses `--limit 10000` for both `gh issue list` and `gh pr list`. If you
-have more than 10,000 items, increase the limit in `cocoindex-flows.py`.
+have more than 10,000 items, increase the limit in `engram.flows.kubernaut`.
 
 ### Stale code index results
 
@@ -357,7 +361,7 @@ file changes (e.g., files modified outside the watched directory).
 
 ```bash
 # Force reprocessing
-python3 flows/cocoindex-flows.py --mode backfill
+~/.hindsight/venv/bin/engram-flows-kubernaut --mode backfill
 ```
 
 ---
@@ -366,12 +370,12 @@ python3 flows/cocoindex-flows.py --mode backfill
 
 To declare a new CocoIndex flow:
 
-1. Define a source connector in `cocoindex-flows.py` (file watcher, API poller,
-   or database reader)
+1. Define a source connector in `engram.flows.kubernaut` (file watcher, API
+   poller, or database reader)
 2. Add transform steps (chunking, embedding, metadata extraction)
 3. Configure the sink (Hindsight retain API for memory banks, or pgvector for
    direct search)
-4. Test with backfill mode: `python3 flows/cocoindex-flows.py --mode backfill`
+4. Test with backfill mode: `~/.hindsight/venv/bin/engram-flows-kubernaut --mode backfill`
 5. Verify the data appears in recall or search results
 
 CocoIndex handles lineage tracking automatically — when a source document is

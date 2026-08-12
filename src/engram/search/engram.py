@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-r"""DCM code search MCP server.
+r"""Engram code search MCP server.
 
 Provides hybrid code search (dense vectors + BM25) over the
-cocoindex.dcm_code_embeddings table. Results are fused using Reciprocal Rank
-Fusion (RRF) so both semantic similarity and exact keyword matches
-contribute to ranking.
+cocoindex.engram_code_embeddings table (this repo's own Python source).
+Results are fused using Reciprocal Rank Fusion (RRF) so both semantic
+similarity and exact keyword matches contribute to ranking.
 
 Usage:
-    python3 dcm-cocoindex-search.py                    # Start MCP server (stdio)
-    python3 dcm-cocoindex-search.py --query "how does the service provider reconciler work"
-    python3 dcm-cocoindex-search.py --query "ParseConfig" --mode dense
-    python3 dcm-cocoindex-search.py --query "ParseConfig" --mode bm25
-    python3 dcm-cocoindex-search.py --pattern 'func \NAME(\(A*\)) error' --language go
+    python3 engram-cocoindex-search.py                    # Start MCP server (stdio)
+    python3 engram-cocoindex-search.py --query "how does contradiction resolution work"
+    python3 engram-cocoindex-search.py --query "resolve_contradiction" --mode dense
+    python3 engram-cocoindex-search.py --query "resolve_contradiction" --mode bm25
+    python3 engram-cocoindex-search.py --pattern 'def \NAME(\(A*\)):' --language python
 """
 
 import argparse
@@ -21,69 +21,42 @@ import pathlib
 import sys
 from typing import Any
 
-# This file lives in search/; shared modules (chunking.py etc.) stay at the
-# repo root. sys.path[0] for a script invoked via a symlink (as launchd
-# does) resolves to the symlink's realpath target directory (search/), not
-# the symlink's own directory, so the repo root must be added explicitly.
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-import chunking  # noqa: E402
+# This file is part of the engram.search package (src/engram/search/).
+# sys.path[0] for a script invoked via a symlink (as launchd does) resolves
+# to the symlink's realpath target directory (src/engram/search/), not the
+# symlink's own directory -- src/ itself must still be added explicitly so
+# `engram` resolves as a top-level package rather than needing this file to
+# be run via `-m`/an installed console script (not yet true in this repo).
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
+from engram import chunking  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
-log = logging.getLogger("dcm-cocoindex-search")
+log = logging.getLogger("engram-cocoindex-search")
 
 PG_URL = os.environ.get(
     "COCOINDEX_PG_URL",
     "postgresql://hindsight:hindsight@localhost:5432/hindsight",
 )
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-RRF_K = 60
+RRF_K = 60  # RRF constant — standard value from the original paper
 
-# Same env vars (and defaults) as dcm-cocoindex-flows.py, so pattern search
-# walks the exact same checkouts the ingestion flow indexes. Excludes
-# DCM_SHARED_WORKFLOWS_DIR -- that repo is shell/YAML, not a tree-sitter
-# structural-pattern language.
-DCM_CONTROL_PLANE_DIR = pathlib.Path(os.environ.get(
-    "DCM_CONTROL_PLANE_DIR", os.path.expanduser("~/go/src/github.com/dcm-project/control-plane"),
+# Same env var (and default) as engram-cocoindex-flows.py, so pattern search
+# walks the exact same checkout the ingestion flow indexes.
+ENGRAM_REPO_DIR = pathlib.Path(os.environ.get(
+    "ENGRAM_REPO_DIR", os.path.expanduser("~/.hindsight/watch/engram"),
 ))
-DCM_CLI_DIR = pathlib.Path(os.environ.get(
-    "DCM_CLI_DIR", os.path.expanduser("~/go/src/github.com/dcm-project/cli"),
-))
-DCM_KUBEVIRT_SP_DIR = pathlib.Path(os.environ.get(
-    "DCM_KUBEVIRT_SP_DIR", os.path.expanduser("~/go/src/github.com/dcm-project/kubevirt-service-provider"),
-))
-DCM_K8S_CONTAINER_SP_DIR = pathlib.Path(os.environ.get(
-    "DCM_K8S_CONTAINER_SP_DIR", os.path.expanduser("~/go/src/github.com/dcm-project/k8s-container-service-provider"),
-))
-DCM_ACM_CLUSTER_SP_DIR = pathlib.Path(os.environ.get(
-    "DCM_ACM_CLUSTER_SP_DIR", os.path.expanduser("~/go/src/github.com/dcm-project/acm-cluster-service-provider"),
-))
-DCM_THREE_TIER_SP_DIR = pathlib.Path(os.environ.get(
-    "DCM_THREE_TIER_SP_DIR", os.path.expanduser("~/go/src/github.com/dcm-project/three-tier-app-demo-service-provider"),
-))
-DCM_OSAC_SP_DIR = pathlib.Path(os.environ.get(
-    "DCM_OSAC_SP_DIR", os.path.expanduser("~/go/src/github.com/dcm-project/osac-service-provider"),
-))
-DCM_UTILITIES_DIR = pathlib.Path(os.environ.get(
-    "DCM_UTILITIES_DIR", os.path.expanduser("~/go/src/github.com/dcm-project/utilities"),
-))
-
-_GO_EXCLUDED = ["**/vendor/**", "**/*_test.go", "**/zz_generated*"]
 
 # (repo_tag, root, included_patterns, excluded_patterns) -- mirrors
-# dcm-cocoindex-flows.py's go_repos list + localfs.walk_dir(path_matcher=
+# engram-cocoindex-flows.py's localfs.walk_dir(path_matcher=
 # PatternFilePathMatcher(...)) call exactly.
 _PATTERN_SEARCH_ROOTS = [
-    ("dcm-control-plane", DCM_CONTROL_PLANE_DIR, ["**/*.go"], _GO_EXCLUDED),
-    ("dcm-cli", DCM_CLI_DIR, ["**/*.go"], _GO_EXCLUDED),
-    ("dcm-kubevirt-sp", DCM_KUBEVIRT_SP_DIR, ["**/*.go"], _GO_EXCLUDED),
-    ("dcm-k8s-container-sp", DCM_K8S_CONTAINER_SP_DIR, ["**/*.go"], _GO_EXCLUDED),
-    ("dcm-acm-cluster-sp", DCM_ACM_CLUSTER_SP_DIR, ["**/*.go"], _GO_EXCLUDED),
-    ("dcm-three-tier-sp", DCM_THREE_TIER_SP_DIR, ["**/*.go"], _GO_EXCLUDED),
-    ("dcm-osac-sp", DCM_OSAC_SP_DIR, ["**/*.go"], _GO_EXCLUDED),
-    ("dcm-utilities", DCM_UTILITIES_DIR, ["**/*.go"], _GO_EXCLUDED),
+    ("engram", ENGRAM_REPO_DIR, ["**/*.py"], [
+        "**/__pycache__/**", "**/.pytest_cache/**", "**/.git/**",
+        "**/venv/**", "**/node_modules/**",
+    ]),
 ]
 
 _model = None
@@ -145,7 +118,7 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                     """
                     SELECT id, filepath, chunk_index, code,
                            1 - (embedding <=> %s::vector) AS score
-                    FROM cocoindex.dcm_code_embeddings
+                    FROM cocoindex.engram_code_embeddings
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
                     """,
@@ -166,7 +139,7 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                         """
                         SELECT id, filepath, chunk_index, code,
                                ts_rank_cd(search_vector, to_tsquery('simple', %s)) AS score
-                        FROM cocoindex.dcm_code_embeddings
+                        FROM cocoindex.engram_code_embeddings
                         WHERE search_vector @@ to_tsquery('simple', %s)
                         ORDER BY score DESC
                         LIMIT %s
@@ -218,36 +191,25 @@ def _format_results(query: str, results: list[dict], mode: str = "hybrid") -> st
     return "\n".join(lines)
 
 
-def pattern_search_code(
-    pattern: str,
-    language: str,
-    limit: int = 10,
-    repo: str | None = None,
-) -> list[dict[str, Any]]:
+def pattern_search_code(pattern: str, language: str, limit: int = 10) -> list[dict[str, Any]]:
     """Structural ("by-example") code search via CocoIndex's CodePattern --
-    tree-sitter AST matching against each repo's live checkout.
+    tree-sitter AST matching against this repo's own live checkout.
 
     Unlike search_code() above, there is no structural-pattern index to
     query: CodePattern.match_file() parses source directly, so this walks
-    the same file set dcm-cocoindex-flows.py already ingests (see
+    the same file set engram-cocoindex-flows.py already ingests (see
     _PATTERN_SEARCH_ROOTS / chunking.find_code_files()) for every call.
     Complements, not replaces, search_code() (semantic/BM25 "what does X
-    do") and gopls (type-aware find-references/diagnostics): this is purely
-    syntactic "find code shaped like X", with no type resolution and no
-    cross-file symbol graph (see docs/FINDINGS.md 2026-08-07). Pass repo
-    (e.g. "dcm-cli") to scope to one of DCM's 8 Go repos; omit it to search
-    all of them.
+    do"): this is purely syntactic "find code shaped like X", with no type
+    resolution and no cross-file symbol graph (see docs/FINDINGS.md
+    2026-08-07).
     """
     from cocoindex.ops.code import CodePattern, render_match
     from cocoindex.ops.text import detect_code_language
 
-    roots = [r for r in _PATTERN_SEARCH_ROOTS if repo is None or r[0] == repo]
-    if not roots:
-        return []
-
     cp = CodePattern(pattern, language)
     results: list[dict[str, Any]] = []
-    for repo_tag, root, included, excluded in roots:
+    for repo_tag, root, included, excluded in _PATTERN_SEARCH_ROOTS:
         if len(results) >= limit:
             break
         for path in chunking.find_code_files(root, included, excluded):
@@ -289,23 +251,23 @@ def _format_pattern_results(pattern: str, language: str, results: list[dict]) ->
 # MCP server
 # ---------------------------------------------------------------------------
 
-def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = "stdio") -> None:
+def _run_mcp_server(host: str = "127.0.0.1", port: int = 8890, transport: str = "stdio") -> None:
     from mcp.server import FastMCP
 
     mcp = FastMCP(
-        "dcm-code",
+        "engram-code",
         host=host,
         port=port,
     )
 
     @mcp.tool()
-    def dcm_code_search(query: str, limit: int = 10) -> str:
-        """Hybrid code search over the DCM codebase.
+    def engram_code_search(query: str, limit: int = 10) -> str:
+        """Hybrid code search over the Engram tooling codebase.
 
         Combines dense vector similarity and BM25 keyword matching via
         Reciprocal Rank Fusion for best results.  Works equally well for:
-        - conceptual queries: "how does the service provider reconciler work?"
-        - exact identifiers: "ParseConfig"
+        - conceptual queries: "how does contradiction resolution work?"
+        - exact identifiers: "resolve_contradiction"
 
         Returns ranked code snippets with file paths and relevance scores.
         Prefer this over Grep when searching by concept rather than exact text.
@@ -314,38 +276,30 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
         return _format_results(query, results)
 
     @mcp.tool()
-    def dcm_code_pattern_search(
-        pattern: str, language: str = "go", limit: int = 10, repo: str | None = None,
-    ) -> str:
-        r"""Structural ("by-example") code search over DCM's 8 Go repos.
+    def engram_code_pattern_search(pattern: str, language: str = "python", limit: int = 10) -> str:
+        r"""Structural ("by-example") code search over the Engram tooling codebase.
 
         For "find code shaped like X" -- e.g. every function matching a
-        signature -- not "find code about X" (use dcm_code_search for
+        signature -- not "find code about X" (use engram_code_search for
         that). Matches by tree-sitter AST shape, not text/regex.
-
-        Pass repo (e.g. "dcm-cli", "dcm-control-plane") to scope to one
-        repo; omit it to search all 8.
 
         Pattern syntax: write an example of the shape you want, using `\`
         + a name for a metavariable (matches one node) or `\(NAME*\)`
-        (matches zero or more, e.g. a parameter list). Omit a body entirely
-        to mean "don't care what's inside" -- e.g.
-        `func \NAME(\(A*\)) (bool, error)` matches any Go function with
-        that exact return signature regardless of body or parameter names.
+        (matches zero or more, e.g. an argument list). Omit a body entirely
+        to mean "don't care what's inside" -- e.g. `def \NAME(\(A*\)):`
+        matches any Python function/method regardless of body or args.
 
-        This is purely syntactic: it does NOT resolve types (won't match
-        `(ok bool, err error)` against a search for `(bool, error)`), can't
-        find references/callers, and has no diagnostics -- use gopls for
-        that. Complementary to, not a replacement for, gopls.
+        This is purely syntactic: it does NOT resolve types and can't find
+        references/callers or diagnostics.
         """
-        results = pattern_search_code(pattern, language, limit=min(limit, 20), repo=repo)
+        results = pattern_search_code(pattern, language, limit=min(limit, 20))
         return _format_pattern_results(pattern, language, results)
 
     if transport == "stdio":
-        log.info("Starting dcm-code MCP server (stdio)")
+        log.info("Starting engram-code MCP server (stdio)")
         mcp.run(transport="stdio")
     else:
-        log.info("Starting dcm-code MCP server on %s:%d (sse)", host, port)
+        log.info("Starting engram-code MCP server on %s:%d (sse)", host, port)
         mcp.run(transport="sse")
 
 
@@ -358,29 +312,27 @@ def _run_cli_query(query: str, limit: int = 10, mode: str = "hybrid") -> None:
     print(_format_results(query, results, mode=mode))
 
 
-def _run_cli_pattern_query(pattern: str, language: str, limit: int = 10, repo: str | None = None) -> None:
-    results = pattern_search_code(pattern, language, limit=limit, repo=repo)
+def _run_cli_pattern_query(pattern: str, language: str, limit: int = 10) -> None:
+    results = pattern_search_code(pattern, language, limit=limit)
     print(_format_pattern_results(pattern, language, results))
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="DCM code search — MCP server + CLI"
+        description="Engram code search — MCP server + CLI"
     )
     parser.add_argument("--query", "-q", help="Run a single query and exit")
     parser.add_argument("--pattern", help="Run a single structural pattern query and exit")
-    parser.add_argument("--language", default="go", help="Language for --pattern (default: go)")
+    parser.add_argument("--language", default="python", help="Language for --pattern (default: python)")
     parser.add_argument("--limit", "-n", type=int, default=10, help="Max results (default: 10)")
     parser.add_argument("--mode", "-m", default="hybrid", choices=["hybrid", "dense", "bm25"],
                         help="Search mode (default: hybrid)")
-    parser.add_argument("--repo", default=None,
-                        help="Scope --pattern to one repo tag (e.g. dcm-cli); default: all 8 repos")
-    parser.add_argument("--port", "-p", type=int, default=8889, help="MCP server port (default: 8889)")
+    parser.add_argument("--port", "-p", type=int, default=8890, help="MCP server port (default: 8890)")
     parser.add_argument("--host", default="127.0.0.1", help="MCP server bind address")
     args = parser.parse_args()
 
     if args.pattern:
-        _run_cli_pattern_query(args.pattern, args.language, limit=args.limit, repo=args.repo)
+        _run_cli_pattern_query(args.pattern, args.language, limit=args.limit)
     elif args.query:
         _run_cli_query(args.query, limit=args.limit, mode=args.mode)
     else:

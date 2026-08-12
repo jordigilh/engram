@@ -8,7 +8,7 @@ import re
 
 import pytest
 
-import correction_gate as cg
+from engram import correction_gate as cg
 
 
 @pytest.fixture(autouse=True)

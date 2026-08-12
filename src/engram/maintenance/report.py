@@ -600,7 +600,7 @@ def count_pending_contradictions(project: str | None = None) -> int:
     Resolve with `python3 review-contradictions.py`; see also
     docs/PENDING_CONTRADICTIONS.md for full detail on each entry and a
     rollup of what the auto-resolve tier has done.
-    Reads the file directly (rather than importing spike/pending_queue.py)
+    Reads the file directly (rather than importing pending_queue.py)
     to keep report.py's system-Python-3.9 runtime decoupled from the
     spike's venv-only dependencies.
 

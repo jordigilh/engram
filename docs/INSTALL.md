@@ -145,7 +145,7 @@ not as a single service — this is what lets the nightly heap-reclaim restart
 and swap script, then install all three plists (proxy + both colors):
 
 ```bash
-ln -sf "$(pwd)/hindsight-proxy.py" ~/.hindsight/hindsight-proxy.py
+ln -sf "$(pwd)/src/engram/pipeline/hindsight_proxy.py" ~/.hindsight/hindsight-proxy.py
 ln -sf "$(pwd)/hindsight-blue-green-restart.sh" ~/.hindsight/hindsight-blue-green-restart.sh
 mkdir -p ~/.hindsight/state
 
@@ -240,35 +240,47 @@ python3 check-rule-sync.py          # reports drift, exit 1 if any
 python3 check-rule-sync.py --fix    # copies canonical -> deployed on drift
 ```
 
-## 9. Install the nightly learning and ingestion scripts
+## 9. Install the engram package
+
+Everything under `src/engram/` (shared modules, per-project CocoIndex flows/
+search, the nightly-learn pipeline, maintenance scripts) is a real, pip-
+installable package now — one editable install replaces the old per-module
+symlinking (`correction_gate.py`, `contradiction_resolution.py`,
+`project_scope.py`, and a `spike/` path hack are no longer symlinked
+individually; they're just importable as `engram.*` from anywhere once
+installed):
 
 ```bash
-ln -sf "$(pwd)/nightly-learn.py" ~/.hindsight/nightly-learn.py
-ln -sf "$(pwd)/ingest-issues.py" ~/.hindsight/ingest-issues.py
-ln -sf "$(pwd)/correction_gate.py" ~/.hindsight/correction_gate.py
-ln -sf "$(pwd)/contradiction_resolution.py" ~/.hindsight/contradiction_resolution.py
-ln -sf "$(pwd)/project_scope.py" ~/.hindsight/project_scope.py
+uv pip install --python ~/.hindsight/venv/bin/python -e .
 ```
 
-`correction_gate.py` is the Haiku-based correction-detection gate,
-`contradiction_resolution.py` the three-tier contradiction check, and
-`project_scope.py` the onboarded-project allowlist gate — all shared by
-`nightly-learn.py` and `cocoindex-flows.py` (see [FINDINGS.md](../docs/FINDINGS.md)).
-`correction_gate.py` and `contradiction_resolution.py` import from `spike/`, so
-also symlink that directory if you haven't already (step 16 does this for
-CocoIndex, but `nightly-learn.py` needs it too):
+This also generates 13 console scripts in `~/.hindsight/venv/bin/` for the
+launchd-invoked entry points: `engram-flows-*` (one per onboarded project),
+`engram-search-*`, `engram-nightly-learn`, `engram-ingest-issues`, and
+`engram-hindsight-proxy`. Manual/on-demand tools (`ingest-docs`, `report`,
+`review-contradictions`, the `backfill-*`/`purge-*` scripts, etc.) aren't
+console scripts — invoke those as `python3 -m engram.<subpackage>.<module>`,
+e.g. `python3 -m engram.maintenance.report` (step 18/[METRICS.md](METRICS.md)).
+
+The launchd plists installed in the next step still invoke the older
+`~/.hindsight/nightly-learn.py` / `ingest-issues.py` symlink paths rather
+than these new console scripts directly (a planned follow-up will switch
+them over and retire the symlinks — not yet done), so keep those two
+symlinks pointed at the package's new location:
 
 ```bash
-ln -sf "$(pwd)/spike" ~/.hindsight/spike
+ln -sf "$(pwd)/src/engram/pipeline/nightly_learn.py" ~/.hindsight/nightly-learn.py
+ln -sf "$(pwd)/src/engram/pipeline/ingest_issues.py" ~/.hindsight/ingest-issues.py
 ```
 
-> **Customize for your projects**: `project_scope.py`'s `ALLOWED_WORKSPACE_PREFIXES`
-> hardcodes which Cursor workspaces feed the shared `cursor-memory` retain
-> pipeline (currently kubernaut/dcm/engram). Edit that list to match your own
-> project(s) before deploying — otherwise `nightly-learn.py` and
-> `cocoindex-flows.py` will retain nothing (or the wrong projects' transcripts)
-> from your workspaces. See [FINDINGS.md](../docs/FINDINGS.md) 2026-07-13 for
-> why this allowlist exists.
+> **Customize for your projects**: `engram.project_scope`'s
+> `ALLOWED_WORKSPACE_PREFIXES` hardcodes which Cursor workspaces feed the
+> shared `cursor-memory` retain pipeline (currently kubernaut/dcm/engram/koku/
+> praxis). Edit `src/engram/project_scope.py` to match your own project(s)
+> before deploying — otherwise the nightly pipeline and the `engram-flows-*`
+> scripts will retain nothing (or the wrong projects' transcripts) from your
+> workspaces. See [FINDINGS.md](../docs/FINDINGS.md) 2026-07-13 for why this
+> allowlist exists.
 
 ## 10. Schedule with launchd
 
@@ -290,14 +302,16 @@ sed "s|__HOME__|$HOME|g" launchd/io.vectorize.hindsight.hourly.plist \
 launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.hourly.plist
 ```
 
-> **Note:** both the hourly and nightly plists run `nightly-learn.py` under
-> `~/.hindsight/venv/bin/python3`, not the macOS system Python. This is required
-> because `correction_gate.py` (via `spike/classify.py`) calls `litellm`, which
-> is only installed in the Hindsight venv — `nightly-learn.py` was pure-stdlib
-> before this and ran fine under system Python, but no longer does. If you ever
+> **Note:** both the hourly and nightly plists run `~/.hindsight/nightly-learn.py`
+> (a symlink into `src/engram/pipeline/nightly_learn.py` -- see step 9) under
+> `~/.hindsight/venv/bin/python3`, not the macOS system Python. This is
+> required because `engram.correction_gate` (via `engram.classify`) calls
+> `litellm`, which is only installed in the Hindsight venv. If you ever
 > revert to `ENGRAM_CORRECTION_DETECTOR=regex` full-time, the venv requirement
-> goes away, but there's no harm in leaving the interpreter pointed at the venv
-> either way.
+> goes away, but there's no harm in leaving it pointed at the venv either way.
+> **Planned follow-up**: these plists will eventually be switched to invoke
+> the `engram-nightly-learn` console script (generated by step 9's install)
+> directly instead of this symlink -- tracked as its own change, not yet done.
 
 ## 11. Ingest project documentation (Knowledge RAG)
 
@@ -305,7 +319,7 @@ This creates a `kubernaut-docs` knowledge bank and ingests the published documen
 for embedding-based recall (zero LLM cost):
 
 ```bash
-python3 ingest-docs.py --docs-dir ~/go/src/github.com/jordigilh/kubernaut-docs/docs
+python3 -m engram.pipeline.ingest_docs --docs-dir ~/go/src/github.com/jordigilh/kubernaut-docs/docs
 ```
 
 The script creates the bank, configures `chunks` extraction mode, and ingests all
@@ -317,7 +331,7 @@ This creates a `kubernaut-issues` knowledge bank and ingests open issues plus
 recently closed issues from the kubernaut repository:
 
 ```bash
-python3 ingest-issues.py
+~/.hindsight/venv/bin/engram-ingest-issues
 ```
 
 Options:
@@ -342,14 +356,14 @@ hierarchy. They provide pre-digested, coherent context blocks — reducing the n
 for the agent to synthesize scattered individual facts at query time.
 
 ```bash
-python3 create-mental-models.py
+python3 -m engram.maintenance.create_mental_models
 ```
 
 This creates 9 mental models across all three banks and triggers initial refresh
 (~$0.50 total, one-time Sonnet 4.6 cost). To check status:
 
 ```bash
-python3 create-mental-models.py --list
+python3 -m engram.maintenance.create_mental_models --list
 ```
 
 Behavioral models (in `cursor-memory`) auto-refresh after nightly consolidation.
@@ -357,7 +371,7 @@ Issues-bank models refresh nightly (after issue ingestion at 1:00 AM). Docs-bank
 models refresh manually when documentation is updated:
 
 ```bash
-python3 create-mental-models.py --refresh
+python3 -m engram.maintenance.create_mental_models --refresh
 ```
 
 ## 14. Install gopls MCP for Go code intelligence
@@ -395,7 +409,7 @@ uv pip install --python ~/.hindsight/venv/bin/python cocoindex
 
 `pdfplumber` (PDF text extraction) rides along as a transitive dependency of
 `cocoindex` at this point, but any flow that ingests manually-curated PDFs
-(e.g. `praxis-cocoindex-flows.py`'s `process_pdf_file`, for supplementary
+(e.g. `engram.flows.praxis`'s `process_pdf_file`, for supplementary
 project-overview PDFs dropped in `~/.hindsight/manual-docs/<project>/`) does
 `import pdfplumber` directly, so pin it explicitly rather than relying on an
 undeclared transitive dependency:
@@ -404,25 +418,29 @@ undeclared transitive dependency:
 uv pip install --python ~/.hindsight/venv/bin/python pdfplumber
 ```
 
-### Symlink flow and search scripts
+### Symlink flow and search scripts (for launchd)
 
 ```bash
-ln -sf "$(pwd)/flows/cocoindex-flows.py" ~/.hindsight/cocoindex-flows.py
-ln -sf "$(pwd)/search/cocoindex-search.py" ~/.hindsight/cocoindex-search.py
-ln -sf "$(pwd)/chunking.py" ~/.hindsight/chunking.py
+ln -sf "$(pwd)/src/engram/flows/kubernaut.py" ~/.hindsight/cocoindex-flows.py
+ln -sf "$(pwd)/src/engram/search/kubernaut.py" ~/.hindsight/cocoindex-search.py
 ```
 
-`cocoindex-flows.py` also imports `correction_gate.py`, `contradiction_resolution.py`,
-and `project_scope.py` directly — make sure step 9's symlinks are in place before
-running this, or CocoIndex's transcript app will fail to start with a
-`ModuleNotFoundError`. It (and every other `*-cocoindex-flows.py`) also imports
-`chunking.py` — the shared, content-stable chunking module (heading-anchored doc
-splitting, comment-ordinal issue/PR splitting) that replaced each flow's own
-positional-offset `_split_text()` on 2026-08-03 to stop cascading re-embeds; see
-[FINDINGS.md](../docs/FINDINGS.md) 2026-08-03. Forgetting this symlink fails the
-same way — `ModuleNotFoundError: No module named 'chunking'` — for **every**
-onboarded project's flows (`dcm-`, `engram-`, `koku-cocoindex-flows.py` all import
-it too), not just kubernaut's.
+The launchd plist installed further down invokes these by their `~/.hindsight/`
+symlink path, not the `engram-flows-kubernaut`/`engram-search-kubernaut`
+console scripts step 9's install already generated in
+`~/.hindsight/venv/bin/` -- use those console scripts directly for any manual
+runs (e.g. the backfill command below), and keep this symlink pair current
+for the launchd-managed continuous-sync job. (A planned follow-up will
+switch the plist itself to invoke the console script directly and retire
+this symlink -- not yet done.) `engram.flows.kubernaut` imports
+`engram.correction_gate`, `engram.contradiction_resolution`,
+`engram.project_scope`, and `engram.chunking` (the shared, content-stable
+chunking module — heading-anchored doc splitting, comment-ordinal issue/PR
+splitting — that replaced each flow's own positional-offset `_split_text()`
+on 2026-08-03 to stop cascading re-embeds; see
+[FINDINGS.md](../docs/FINDINGS.md) 2026-08-03) all as ordinary package
+imports now, so — unlike before the package restructure — there's no risk
+of a `ModuleNotFoundError` from a forgotten shared-module symlink.
 
 ### Configure source directories
 
@@ -438,7 +456,7 @@ ENGRAM_CODE_DIR=~/go/src/github.com/jordigilh/kubernaut
 ### Run initial backfill
 
 ```bash
-python3 flows/cocoindex-flows.py --mode backfill
+~/.hindsight/venv/bin/engram-flows-kubernaut --mode backfill
 ```
 
 This processes all existing docs, issues, code, and transcripts. Subsequent runs
@@ -468,11 +486,16 @@ issue poll cycles completing with the full count of issues + PRs. See
 [CocoIndex Operations](COCOINDEX.md) for monitoring and troubleshooting details.
 
 > **Onboarding additional projects**: the steps above cover the original
-> kubernaut project's single `flows/cocoindex-flows.py`. Each additional onboarded
-> project gets its own `flows/<project>-cocoindex-flows.py` / `search/<project>-cocoindex-search.py`
-> pair, symlinked into `~/.hindsight/` the same way (see `flows/engram-cocoindex-flows.py`/
-> `search/engram-cocoindex-search.py` for a real example), plus its own `launchd` plist.
-> See [NEW_PROJECT_SETUP.md](NEW_PROJECT_SETUP.md) for the full walkthrough,
+> kubernaut project's `engram.flows.kubernaut` / `engram.search.kubernaut`
+> pair. Each additional onboarded project gets its own
+> `src/engram/flows/<project>.py` / `src/engram/search/<project>.py` module
+> pair (see `src/engram/flows/engram.py` / `src/engram/search/engram.py` for
+> a real example), a matching `engram-flows-<project>` /
+> `engram-search-<project>` console-script entry in `pyproject.toml`, a
+> `~/.hindsight/<project>-cocoindex-flows.py` / `-search.py` symlink pair
+> (same reasoning as the kubernaut symlinks above -- launchd needs these
+> until the plist cutover), and its own `launchd` plist. See
+> [NEW_PROJECT_SETUP.md](NEW_PROJECT_SETUP.md) for the full walkthrough,
 > including a lighter tag-scoped-recall variant for sub-repos of an
 > already-onboarded project that don't need a fully separate pipeline.
 
@@ -487,11 +510,11 @@ launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.issues.plist
 rm ~/Library/LaunchAgents/io.vectorize.hindsight.issues.plist
 ```
 
-The old scripts (`ingest-docs.py` and `ingest-issues.py`) remain in the repo
-for reference but are superseded by CocoIndex flows. You can verify data parity
-by comparing recall results before and after migration — CocoIndex ingests the
-same content through the Hindsight retain API, so recall quality should be
-identical or better (due to continuous freshness).
+The old scripts (`engram.pipeline.ingest_docs` and `engram.pipeline.ingest_issues`)
+remain in the package for reference but are superseded by CocoIndex flows. You
+can verify data parity by comparing recall results before and after migration —
+CocoIndex ingests the same content through the Hindsight retain API, so recall
+quality should be identical or better (due to continuous freshness).
 
 ## 18. Restart Cursor
 
@@ -506,7 +529,7 @@ before responding.
 To manually test the nightly pipeline:
 
 ```bash
-python3 ~/.hindsight/nightly-learn.py
+~/.hindsight/venv/bin/engram-nightly-learn
 ```
 
 Check results:
@@ -518,9 +541,9 @@ cat ~/.hindsight/logs/$(date +%Y-%m-%d).json | python3 -m json.tool
 Generate an effectiveness report:
 
 ```bash
-python3 report.py          # last 7 days
-python3 report.py --days 30  # last 30 days
-python3 report.py --json     # machine-readable
+python3 -m engram.maintenance.report          # last 7 days
+python3 -m engram.maintenance.report --days 30  # last 30 days
+python3 -m engram.maintenance.report --json     # machine-readable
 ```
 
 See [METRICS.md](METRICS.md) for full details on what's tracked and how to
@@ -531,18 +554,19 @@ interpret the results.
 ## Running the Test Suite
 
 The `tests/` directory has a `pytest` regression suite covering the shared
-modules (`correction_gate.py`, `contradiction_resolution.py`, `project_scope.py`),
-the `spike/hindsight_client.py` recall client, `review-contradictions.py`'s
-approve/reject/skip/quit flow, and the core retain logic in `nightly-learn.py`
-and `cocoindex-flows.py`. Added 2026-07-13 after three real bugs shipped to
+modules (`engram.correction_gate`, `engram.contradiction_resolution`,
+`engram.project_scope`), the `engram.hindsight_client` recall client,
+`engram.maintenance.review_contradictions`'s approve/reject/skip/quit flow,
+and the core retain logic in `engram.pipeline.nightly_learn` and
+`engram.flows.kubernaut`. Added 2026-07-13 after three real bugs shipped to
 production in one session with zero automated coverage catching any of them
 (see [FINDINGS.md](FINDINGS.md)).
 
-Install the dev dependency into the same venv the production scripts run
-under:
+Install the `dev` extra into the same venv the production scripts run under
+(this is the same `pip install -e .` from step 9, plus `pytest`/`ruff`):
 
 ```bash
-uv pip install --python ~/.hindsight/venv/bin/python -r requirements-dev.txt
+uv pip install --python ~/.hindsight/venv/bin/python -e ".[dev]"
 ```
 
 Run the suite:
@@ -555,9 +579,11 @@ The suite is fully offline — every LLM call (Haiku classification, Sonnet
 contradiction check), Hindsight API call, and CocoIndex file-watch is mocked
 via `pytest`'s `monkeypatch` fixture, so it runs in well under a second and
 never touches your live `~/.hindsight/` data or costs any tokens. `conftest.py`
-adds the repo root and `spike/` to `sys.path` and provides fixtures
-(`nightly_learn`, `cocoindex_flows`, `review_contradictions`, `purge_script`)
-for loading the hyphenated production scripts as importable modules.
+provides fixtures (`nightly_learn`, `cocoindex_flows`, `review_contradictions`,
+`purge_script`, etc.) that import the corresponding `engram.*` package modules
+directly — no `sys.path` hacks needed since `engram` is a real installed
+package. CI (`.github/workflows/ci.yml`) runs this same suite plus
+`ruff check .` on every push/PR.
 
 ---
 

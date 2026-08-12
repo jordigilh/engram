@@ -106,5 +106,12 @@ async def main() -> None:
         await server.serve_forever()
 
 
+def cli_main() -> None:
+    """Sync entry point for the engram-hindsight-proxy console script --
+    [project.scripts] wraps a plain callable, so async main() needs this
+    asyncio.run() shim rather than being pointed at directly."""
+    asyncio.run(main())
+
+
 if __name__ == "__main__":
     asyncio.run(main())

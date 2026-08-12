@@ -26,5 +26,24 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
+# The 13 launchd-invoked entry points only (5 flows + 5 search + nightly-learn
+# + ingest-issues + hindsight-proxy). ingest-docs and the maintenance/backfill
+# tools are run by hand, not by launchd -- invoke those as
+# `python -m engram.pipeline.ingest_docs` / `python -m engram.maintenance.report`.
+[project.scripts]
+engram-flows-kubernaut = "engram.flows.kubernaut:main"
+engram-flows-dcm = "engram.flows.dcm:main"
+engram-flows-engram = "engram.flows.engram:main"
+engram-flows-koku = "engram.flows.koku:main"
+engram-flows-praxis = "engram.flows.praxis:main"
+engram-search-kubernaut = "engram.search.kubernaut:main"
+engram-search-dcm = "engram.search.dcm:main"
+engram-search-engram = "engram.search.engram:main"
+engram-search-koku = "engram.search.koku:main"
+engram-search-praxis = "engram.search.praxis:main"
+engram-nightly-learn = "engram.pipeline.nightly_learn:main"
+engram-ingest-issues = "engram.pipeline.ingest_issues:main"
+engram-hindsight-proxy = "engram.pipeline.hindsight_proxy:cli_main"
+
 [tool.setuptools.packages.find]
 where = ["src"]

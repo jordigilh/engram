@@ -50,12 +50,9 @@ from engram.classify import check_contradiction, HAIKU_MODEL, SONNET_MODEL  # no
 from engram.hindsight_client import recall  # noqa: E402
 import variants  # noqa: E402
 
-# nightly-learn.py has a hyphen, so it can't be `import`ed normally.
-_spec = importlib.util.spec_from_file_location(
-    "nightly_learn", REPO_ROOT / "nightly-learn.py"
-)
-nl = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(nl)
+# nightly-learn.py was promoted into the src/engram/ package (as
+# nightly_learn.py) during the package restructure, so it's a plain import now.
+from engram.pipeline import nightly_learn as nl  # noqa: E402
 
 
 def hr(title: str = "") -> None:

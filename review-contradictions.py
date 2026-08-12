@@ -26,11 +26,11 @@ import importlib.util
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "spike"))
-from pending_queue import load_pending, remove_pending  # noqa: E402
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from contradiction_resolution import delete_document, invalidate_memory  # noqa: E402
+# Shared modules (pending_queue.py, contradiction_resolution.py etc.) live in
+# the src/engram/ package.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+from engram.pending_queue import load_pending, remove_pending  # noqa: E402
+from engram.contradiction_resolution import delete_document, invalidate_memory  # noqa: E402
 
 # cocoindex-flows.py has a hyphen, so it can't be `import`ed normally.
 _spec = importlib.util.spec_from_file_location(

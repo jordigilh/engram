@@ -5,11 +5,16 @@ data in spike_run.py so their precision/recall/cost can be compared directly.
 """
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 import psycopg2
 
-from classify import ClassificationResult, classify_correction
+# classify.py was promoted out of spike/ into the src/engram/ package (it's
+# load-bearing production code, not a throwaway spike -- see docs/FINDINGS.md).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from engram.classify import ClassificationResult, classify_correction  # noqa: E402
 from schema import PG_DSN, embed_text
 
 

@@ -3,8 +3,8 @@
 retain_windows() and cocoindex-flows.py's process_transcript() retain loop.
 
 For each correction-tagged window, before retaining:
-  1. recall() existing memories in the same bank (spike/hindsight_client.py).
-  2. check_contradiction() against them (Sonnet, spike/classify.py).
+  1. recall() existing memories in the same bank (hindsight_client.py).
+  2. check_contradiction() against them (Sonnet, classify.py).
   3. no contradiction -> caller retains the new statement as normal.
   4. contradicts, confidence >= ENGRAM_CONTRADICTION_AUTO_THRESHOLD ->
      auto-resolve: in ENGRAM_CONTRADICTION_AUTO_MODE=live, invalidate the old
@@ -13,7 +13,7 @@ For each correction-tagged window, before retaining:
      Either way, append an audit record to contradictions-auto-resolved.jsonl
      and the caller still retains the new statement (tagged
      supersedes-prior-memory).
-  5. contradicts, confidence < threshold -> queue via spike/pending_queue.py
+  5. contradicts, confidence < threshold -> queue via pending_queue.py
      for human review (review-contradictions.py); the caller withholds the
      new statement from retain entirely (action == "queued" means "do not
      retain yet"), matching pending_queue.py's own contract ("never
@@ -53,7 +53,17 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "spike"))
+# classify.py/hindsight_client.py/pending_queue.py are siblings in this same
+# src/engram/ directory (promoted out of spike/ during the package
+# restructure -- they're load-bearing, not throwaway spikes). Inserting our
+# own resolved directory onto sys.path lets these keep resolving as plain
+# top-level modules regardless of how this file itself was reached: as
+# `engram.contradiction_resolution` (src/ on sys.path) or via the
+# `~/.hindsight/contradiction_resolution.py` flat symlink used by
+# hooks/_hindsight_check_worker.py (no `engram` package context at all there)
+# -- Path(__file__).resolve() always lands on the real src/engram/ directory
+# either way.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from classify import check_contradiction  # noqa: E402
 from hindsight_client import recall  # noqa: E402
 import pending_queue  # noqa: E402

@@ -19,8 +19,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import classify  # noqa: E402
 from ground_truth import DATASET  # noqa: E402
+
+# classify.py was promoted out of spike/ into the src/engram/ package (it's
+# load-bearing production code, not a throwaway spike -- see docs/FINDINGS.md).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from engram import classify  # noqa: E402
 
 # v1 prompt, frozen here for comparison (classify.py now has v2 as the live
 # _CORRECTION_SYSTEM_PROMPT).

@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import time
 from datetime import date, datetime, timedelta, timezone
 from glob import glob
@@ -30,10 +31,12 @@ from typing import Any
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
-import correction_gate
-import contradiction_resolution
-import fallback_extract
-import project_scope
+# Shared modules (correction_gate.py etc.) live in the src/engram/ package.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+from engram import correction_gate  # noqa: E402
+from engram import contradiction_resolution  # noqa: E402
+from engram import fallback_extract  # noqa: E402
+from engram import project_scope  # noqa: E402
 
 HINDSIGHT_URL = "http://localhost:8888"
 BANK_ID = "cursor-memory"

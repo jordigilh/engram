@@ -41,8 +41,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from classify import classify_correction  # noqa: E402
 from prefilters import loose_regex_prefilter, trivial_message_exclusion_filter  # noqa: E402
+
+# classify.py was promoted out of spike/ into the src/engram/ package (it's
+# load-bearing production code, not a throwaway spike -- see docs/FINDINGS.md).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from engram.classify import classify_correction  # noqa: E402
 
 STATE_DIR = Path.home() / ".hindsight"
 WATERMARKS_PATH = STATE_DIR / "logs" / "prefilter-shadow-watermarks.json"

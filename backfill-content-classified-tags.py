@@ -47,8 +47,9 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "spike"))
-import classify
+# Shared modules (classify.py etc.) live in the src/engram/ package.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
+from engram import classify
 
 # backfill-memory-tags.py has a hyphen, so it can't be `import`ed normally.
 _spec = importlib.util.spec_from_file_location(

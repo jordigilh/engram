@@ -37,7 +37,9 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import project_scope
+# Shared modules (project_scope.py etc.) live in the src/engram/ package.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
+from engram import project_scope
 
 HINDSIGHT_URL = "http://localhost:8888"
 TRANSCRIPTS_GLOB = os.path.expanduser(

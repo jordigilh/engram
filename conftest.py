@@ -19,7 +19,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent
 SPIKE_DIR = REPO_ROOT / "spike"
 HOOKS_DIR = REPO_ROOT / "hooks"
-for path in (REPO_ROOT, SPIKE_DIR, HOOKS_DIR):
+SRC_DIR = REPO_ROOT / "src"
+for path in (REPO_ROOT, SPIKE_DIR, HOOKS_DIR, SRC_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 

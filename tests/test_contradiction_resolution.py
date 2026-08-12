@@ -18,7 +18,7 @@ from urllib.error import HTTPError, URLError
 
 import pytest
 
-import contradiction_resolution as cr
+from engram import contradiction_resolution as cr
 
 
 @pytest.fixture(autouse=True)

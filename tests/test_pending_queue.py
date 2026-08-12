@@ -1,4 +1,4 @@
-"""Tests for spike/pending_queue.py's append_pending() dedup guard.
+"""Tests for pending_queue.py's append_pending() dedup guard.
 
 Regression for the 2026-07-31 bug: cocoindex-flows.py's live transcript
 watcher re-reads and re-scans the WHOLE transcript file from scratch on
@@ -12,7 +12,7 @@ over 3 days. See docs/FINDINGS.md.
 """
 from __future__ import annotations
 
-import pending_queue as pq
+from engram import pending_queue as pq
 
 
 class TestAppendPendingDedup:

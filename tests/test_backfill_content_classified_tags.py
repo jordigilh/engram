@@ -11,8 +11,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "spike"))
-import classify  # noqa: E402
+sys.path.insert(0, str(REPO_ROOT / "src"))
+from engram import classify  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
     "backfill_content_classified_tags", REPO_ROOT / "backfill-content-classified-tags.py"

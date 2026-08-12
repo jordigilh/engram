@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import contradiction_resolution as cr
+from engram import contradiction_resolution as cr
 
 
 @pytest.fixture(autouse=True)
@@ -420,7 +420,7 @@ class TestProcessTranscriptWatermarking:
         into the (now watermark-sliced) windows list, so a second call's
         first NEW window would reuse `-w0` and silently overwrite an
         unrelated, already-retained window from the first call."""
-        import contradiction_resolution as cr_module
+        from engram import contradiction_resolution as cr_module
         monkeypatch.setattr(cr_module, "resolve", lambda *a, **k: cr_module.Resolution(action="retain"))
 
         retain_calls = []

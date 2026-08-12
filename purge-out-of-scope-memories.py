@@ -27,13 +27,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-import project_scope
-from contradiction_resolution import delete_document
+# Shared modules (project_scope.py etc.) live in the src/engram/ package.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+from engram import project_scope  # noqa: E402
+from engram.contradiction_resolution import delete_document  # noqa: E402
 
 HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
 BANK_ID = "cursor-memory"

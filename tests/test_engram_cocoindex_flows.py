@@ -189,7 +189,7 @@ class TestProcessCodeFile:
     directly by tests/test_chunking.py::TestEmbedCodeChunks."""
 
     def test_chunks_are_embedded_and_declared_as_rows_in_order(self, engram_cocoindex_flows, monkeypatch):
-        import chunking as chunking_module
+        from engram import chunking as chunking_module
 
         async def fake_embed_code_chunks(chunks):
             return [[float(i)] * 3 for i in range(len(chunks))]
@@ -214,7 +214,7 @@ class TestProcessCodeFile:
         assert row.search_text == f"engram/foo.py {row.code}"
 
     def test_multiple_chunks_get_matching_embeddings_by_position(self, engram_cocoindex_flows, monkeypatch):
-        import chunking as chunking_module
+        from engram import chunking as chunking_module
 
         captured_chunks = []
 
@@ -241,7 +241,7 @@ class TestProcessCodeFile:
             assert row.code == captured_chunks[i]
 
     def test_empty_content_declares_no_rows(self, engram_cocoindex_flows, monkeypatch):
-        import chunking as chunking_module
+        from engram import chunking as chunking_module
 
         embed_calls = []
 

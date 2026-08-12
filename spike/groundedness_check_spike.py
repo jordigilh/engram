@@ -13,7 +13,7 @@ but unsupported self-report would sail through every existing safeguard
 passes because it IS correction-shaped language; contradiction check never
 even fires because there's nothing to conflict with).
 
-Mirrors spike/classify.py's call pattern (litellm/Vertex, Sonnet) and
+Mirrors classify.py's call pattern (litellm/Vertex, Sonnet) and
 spike/contradiction_suite.py's dataclass-cases-with-expected-label pattern.
 Does NOT reuse check_contradiction() itself -- that function only judges
 conflict-with-existing-memory, a different question from "is this claim

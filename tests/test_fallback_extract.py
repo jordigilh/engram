@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-import fallback_extract as fe
+from engram import fallback_extract as fe
 
 
 @pytest.fixture(autouse=True)

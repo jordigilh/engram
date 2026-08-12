@@ -14,9 +14,9 @@ from __future__ import annotations
 import json
 from urllib.error import HTTPError, URLError
 
-import contradiction_resolution as cr
-import fallback_extract
-import project_scope
+from engram import contradiction_resolution as cr
+from engram import fallback_extract
+from engram import project_scope
 
 
 class TestFindRecentTranscripts:

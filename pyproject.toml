@@ -12,6 +12,9 @@ dependencies = [
     "anthropic==0.120.0",
     "litellm==1.93.0",
     "mcp==1.28.1",
+    "httpx==0.28.1",
+    "starlette==1.3.1",
+    "uvicorn==0.51.0",
     "openai==2.48.0",
     "psycopg2-binary==2.9.12",
     "pdfplumber==0.11.10",
@@ -31,10 +34,10 @@ markers = [
     "integration: tests requiring a real Postgres+pgvector instance (see tests/integration/README.md); excluded from the default `pytest` run",
 ]
 
-# The 15 launchd-invoked entry points only (6 flows + 6 search + nightly-learn
-# + ingest-issues + hindsight-proxy). ingest-docs and the maintenance/backfill
-# tools are run by hand, not by launchd -- invoke those as
-# `python -m engram.pipeline.ingest_docs` / `python -m engram.maintenance.report`.
+# The 16 launchd-invoked entry points only (6 flows + 6 search + nightly-learn
+# + ingest-issues + hindsight-proxy + serena-multiplex). ingest-docs and the
+# maintenance/backfill tools are run by hand, not by launchd -- invoke those
+# as `python -m engram.pipeline.ingest_docs` / `python -m engram.maintenance.report`.
 [project.scripts]
 engram-flows-kubernaut = "engram.flows.kubernaut:main"
 engram-flows-dcm = "engram.flows.dcm:main"
@@ -51,6 +54,7 @@ engram-search-rhdh-plugins = "engram.search.rhdh_plugins:main"
 engram-nightly-learn = "engram.pipeline.nightly_learn:main"
 engram-ingest-issues = "engram.pipeline.ingest_issues:main"
 engram-hindsight-proxy = "engram.pipeline.hindsight_proxy:cli_main"
+engram-serena-multiplex = "engram.pipeline.serena_multiplex:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -27,8 +27,9 @@ recall-quality benchmark is built against.
 
 ## Index
 
-### August 2026 (44 entries)
+### August 2026 (45 entries)
 
+- [2026-08-13 (same day, ninth follow-up): Built `engram-serena-multiplex` — an HTTP Wrapper That Gives All 6 Kubernaut-Family Repos Full Read+Write on the Shared Serena Daemon Instead of Just Whichever One Is "Active"](findings/2026-08.md#2026-08-13-same-day-ninth-follow-up-built-engram-serena-multiplex--an-http-wrapper-that-gives-all-6-kubernaut-family-repos-full-readwrite-on-the-shared-serena-daemon-instead-of-just-whichever-one-is-active)
 - [2026-08-13 (same day, seventh and eighth follow-ups): Abandoned the Multi-Root Workspace; Replaced With Real Shared HTTP Daemons for `cocoindex-code` and `serena`](findings/2026-08.md#2026-08-13-same-day-seventh-and-eighth-follow-ups-abandoned-the-multi-root-workspace-replaced-with-real-shared-http-daemons-for-cocoindex-code-and-serena)
 - [2026-08-13 (same day, sixth follow-up): Switched All Scheduled Batch LLM Jobs to Manual-Trigger-Only — Hourly/Nightly `nightly-learn.py` (kubernaut/dcm/koku/praxis) Plus an Open-Ended `prefilter-shadow-trial` Spike](findings/2026-08.md#2026-08-13-same-day-sixth-follow-up-switched-all-scheduled-batch-llm-jobs-to-manual-trigger-only--hourlynightly-nightly-learnpy-kubernautdcmkokupraxis-plus-an-open-ended-prefilter-shadow-trial-spike)
 - [2026-08-13 (same day, fifth follow-up): Consolidated All 6 Kubernaut-Family Repos Into One `kubernaut-family.code-workspace` Multi-Root Workspace With a Single Shared MCP Server Set](findings/2026-08.md#2026-08-13-same-day-fifth-follow-up-consolidated-all-6-kubernaut-family-repos-into-one-kubernaut-familycode-workspace-multi-root-workspace-with-a-single-shared-mcp-server-set)

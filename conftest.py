@@ -143,6 +143,44 @@ def praxis_cocoindex_flows() -> ModuleType:
 
 
 @pytest.fixture(scope="session")
+def ingest_docs() -> ModuleType:
+    from engram.pipeline import ingest_docs
+    return ingest_docs
+
+
+@pytest.fixture(scope="session")
+def dcm_search() -> ModuleType:
+    """dcm.py's code search module (engram.search.dcm) -- same
+    no-flow/no-ContextKey-at-import-time shape as cocoindex_search above."""
+    from engram.search import dcm as dcm_search
+    return dcm_search
+
+
+@pytest.fixture(scope="session")
+def koku_search() -> ModuleType:
+    from engram.search import koku as koku_search
+    return koku_search
+
+
+@pytest.fixture(scope="session")
+def praxis_search() -> ModuleType:
+    from engram.search import praxis as praxis_search
+    return praxis_search
+
+
+@pytest.fixture(scope="session")
+def engram_search() -> ModuleType:
+    from engram.search import engram as engram_search
+    return engram_search
+
+
+@pytest.fixture(scope="session")
+def hindsight_proxy() -> ModuleType:
+    from engram.pipeline import hindsight_proxy
+    return hindsight_proxy
+
+
+@pytest.fixture(scope="session")
 def cocoindex_search() -> ModuleType:
     """kubernaut.py's code search module (engram.search.kubernaut) -- the
     kubernaut-family code search MCP server. Unlike the *_cocoindex_flows

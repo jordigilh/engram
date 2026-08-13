@@ -383,6 +383,33 @@ The workspace-level config uses the same server **names** as kubernaut (`hindsig
 > the family instead of N separate edits. This is easy to miss when
 > retrofitting an existing family — check with `readlink` before assuming a
 > repo's `.cursor/mcp.json` is a plain, independent file.
+>
+> **Evolution (2026-08-13, shared HTTP daemons instead of one stdio process
+> per window)**: for a large family (kubernaut-family: 6 repos), even with
+> the symlinked-template gotcha above, opening N repos as N separate Cursor
+> windows still spawns N `cocoindex-code` subprocesses and N `serena`+`gopls`
+> subprocesses (loading the same ~855-package Go module N times). If that's
+> a real resource concern, run `engram-search-<project>`/`serena
+> start-mcp-server` once each as permanent `launchd` daemons
+> (`--transport streamable-http`, fixed host/port) instead, and point the
+> shared template's `cocoindex-code`/`serena` entries at
+> `"type": "http"` + a fixed `http://127.0.0.1:<port>/mcp` URL instead of
+> `command`/`stdio`. See `launchd/io.vectorize.cocoindex-code.kubernaut-family.plist`,
+> `launchd/io.vectorize.serena.kubernaut-family.plist`, and
+> `launchd/io.vectorize.serena-project-server.plist` for the concrete
+> templates, and `docs/findings/2026-08.md`'s 2026-08-13 (same day, seventh
+> and eighth follow-ups) entry for the full rationale and a real gotcha this
+> surfaced: starting the shared `serena` daemon with a fixed `--project`
+> silently disables the `activate_project` tool for every *other* repo in the
+> family, so the daemon must start with **no** `--project` and
+> `--add-mode query-projects` instead — an agent calls `activate_project`
+> with its own repo's path to get full read+write, or `query_project` for a
+> read-only peek at a different family member without switching. `serena
+> start-project-server` (one instance, not per-repo) must also be running as
+> a separate daemon for `query_project` to work at all. This pattern doesn't
+> replace per-window `stdio` as the *default* for a newly onboarded, standalone
+> project — only worth the added complexity once a family is large enough
+> that N duplicate processes are a measurable resource concern.
 
 ### 9. Slim the Global MCP Config
 

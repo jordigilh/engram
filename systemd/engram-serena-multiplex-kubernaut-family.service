@@ -1,0 +1,40 @@
+# systemd unit (native, Linux) -- HTTP wrapper in front of
+# engram-serena-kubernaut-family.service that gives every one of the 6
+# family repos its own fixed mount (/mcp/<project>) with full read+write,
+# instead of just whichever repo last called activate_project. Direct analog
+# of launchd/io.vectorize.serena-multiplex.kubernaut-family.plist. See
+# src/engram/pipeline/serena_multiplex.py's module docstring and
+# docs/findings/2026-08.md, 2026-08-13 (ninth follow-up) for the full design
+# rationale.
+#
+# --project is repeatable; each value must match a name registered in
+# ~/.serena/serena_config.yml's `projects:` list (specifically each project's
+# own .serena/project.yml `project_name:` field), not a repo path -- same on
+# Linux as macOS, since Serena's own config format doesn't differ by
+# platform.
+#
+# Requires engram's own package installed editable into the venv
+# (`uv pip install --python ~/.hindsight/venv/bin/python -e .` -- see
+# INSTALL-linux.md step 7) so the `engram-serena-multiplex` console script
+# exists in ~/.hindsight/venv/bin/.
+#
+# Install (user-level, mirrors launchd's per-user LaunchAgents):
+#   cp systemd/engram-serena-multiplex-kubernaut-family.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now engram-serena-multiplex-kubernaut-family.service
+
+[Unit]
+Description=Serena multiplex (full read+write per repo, kubernaut-family)
+After=network-online.target engram-serena-kubernaut-family.service
+Wants=engram-serena-kubernaut-family.service
+
+[Service]
+Type=simple
+ExecStart=%h/.hindsight/venv/bin/engram-serena-multiplex --host 127.0.0.1 --port 8893 --upstream-url http://127.0.0.1:8892/mcp --project kubernaut --project kubernaut-operator --project kubernaut-console --project kubernaut-demo-scenarios --project kubernaut-v1.5 --project kubernaut-v1.6
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:%h/.hindsight/logs/serena-multiplex-kubernaut-family-stdout.log
+StandardError=append:%h/.hindsight/logs/serena-multiplex-kubernaut-family-stderr.log
+
+[Install]
+WantedBy=default.target

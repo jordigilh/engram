@@ -383,6 +383,140 @@ The workspace-level config uses the same server **names** as kubernaut (`hindsig
 > the family instead of N separate edits. This is easy to miss when
 > retrofitting an existing family — check with `readlink` before assuming a
 > repo's `.cursor/mcp.json` is a plain, independent file.
+>
+> **Evolution (2026-08-13, shared HTTP daemons instead of one stdio process
+> per window)**: for a large family (kubernaut-family: 6 repos), even with
+> the symlinked-template gotcha above, opening N repos as N separate Cursor
+> windows still spawns N `cocoindex-code` subprocesses and N `serena`+`gopls`
+> subprocesses (loading the same ~855-package Go module N times). If that's
+> a real resource concern, run `engram-search-<project>`/`serena
+> start-mcp-server` once each as permanent `launchd` daemons
+> (`--transport streamable-http`, fixed host/port) instead, and point the
+> shared template's `cocoindex-code`/`serena` entries at
+> `"type": "http"` + a fixed `http://127.0.0.1:<port>/mcp` URL instead of
+> `command`/`stdio`. See `launchd/io.vectorize.cocoindex-code.kubernaut-family.plist`,
+> `launchd/io.vectorize.serena.kubernaut-family.plist`, and
+> `launchd/io.vectorize.serena-project-server.plist` for the concrete
+> templates, and `docs/findings/2026-08.md`'s 2026-08-13 (same day, seventh
+> and eighth follow-ups) entry for the full rationale and a real gotcha this
+> surfaced: starting the shared `serena` daemon with a fixed `--project`
+> silently disables the `activate_project` tool for every *other* repo in the
+> family, so the daemon must start with **no** `--project` and
+> `--add-mode query-projects` instead — an agent calls `activate_project`
+> with its own repo's path to get full read+write, or `query_project` for a
+> read-only peek at a different family member without switching. `serena
+> start-project-server` (one instance, not per-repo) must also be running as
+> a separate daemon for `query_project` to work at all. This pattern doesn't
+> replace per-window `stdio` as the *default* for a newly onboarded, standalone
+> project — only worth the added complexity once a family is large enough
+> that N duplicate processes are a measurable resource concern.
+>
+> **On Linux**: same architecture, `systemd --user` units instead of
+> `launchd` plists — see `docs/INSTALL-linux.md` step 9 and
+> `systemd/engram-cocoindex-code-kubernaut-family.service` /
+> `systemd/engram-serena-kubernaut-family.service` /
+> `systemd/engram-serena-project-server.service` for the direct analogs of
+> this section's 3 plists, including a real Postgres-reachability gotcha
+> specific to Linux's containerized Hindsight deployment that macOS doesn't
+> have (step 9 documents the fix).
+>
+> **This still leaves one gap**, closed by step 8a below: the shared `serena`
+> daemon has exactly one process-global "active project" at a time, so only
+> whichever family repo last called `activate_project` gets full read+write —
+> every other repo is stuck on read-only `query_project` until it "steals"
+> activation back (and two windows on two different repos genuinely race for
+> it). If your family is small/rarely-concurrent enough that "read-only for
+> whichever repo isn't currently active" is acceptable, stop here. If you
+> want every repo to get full read+write all the time, do step 8a too.
+
+### 8a. (Optional, Repo Families Only) Give Every Family Repo Full Read+Write via `engram-serena-multiplex`
+
+If you're setting up a **family of repos under one org that should share one
+Serena instance** (the exact scenario this section exists for), you will hit
+the gap described above as soon as more than one repo is actively being
+worked on. `engram-serena-multiplex` (`src/engram/pipeline/serena_multiplex.py`)
+is the fix: a small daemon that sits in front of the shared `serena` daemon
+from step 8 and gives every family repo its own fixed HTTP mount
+(`http://127.0.0.1:<multiplex-port>/mcp/<project-name>`). Every tool call
+arriving on a mount is preceded — transparently, serialized behind one lock —
+by an `activate_project(<that mount's own project>)` call against the shared
+upstream, so every repo gets full read+write and concurrent calls from
+different repos' windows are safely serialized instead of racing. See
+`docs/findings/2026-08.md`'s 2026-08-13 (same day, ninth follow-up) entry for
+the full design rationale, including a real bug hit and fixed along the way
+(an earlier version built on `fastmcp`'s `Client`/`create_proxy` crashed the
+shared upstream daemon — a known open bug class in the `mcp`/`fastmcp`
+SDKs' SSE-reconnect handling; the shipped version is a minimal one-shot
+`httpx` POST relay that avoids it entirely).
+
+**When to use this**: you already did step 8's shared-daemon setup, your
+family has 2+ repos that get worked on concurrently (even just "you, in two
+Cursor windows"), and read-only access to whichever repo *isn't* currently
+active is not acceptable. **When to skip it**: a single-repo project (there's
+nothing to multiplex), or a family where only one repo is ever actively
+edited at a time (step 8's plain shared daemon is simpler and sufficient).
+
+1. **Prerequisite**: step 8's shared `serena` daemon must already be running
+   with no fixed `--project` and `--add-mode query-projects` (as documented
+   above) — the multiplex calls `activate_project` against that same daemon,
+   so it needs `activate_project` to actually be available.
+
+2. **Add a launchd daemon** for the multiplex itself, one per family (not
+   per repo) — see `launchd/io.vectorize.serena-multiplex.<family>.plist`
+   for the template. Pick a fixed port distinct from the shared `serena`
+   daemon's port (e.g. `serena` on 8892, multiplex on 8893):
+
+   ```xml
+   <key>ProgramArguments</key>
+   <array>
+       <string>__HOME__/.hindsight/venv/bin/engram-serena-multiplex</string>
+       <string>--host</string><string>127.0.0.1</string>
+       <string>--port</string><string>8893</string>
+       <string>--upstream-url</string><string>http://127.0.0.1:8892/mcp</string>
+       <!-- one --project <name> per family repo, matching the names
+            registered in ~/.serena/serena_config.yml, not repo paths -->
+       <string>--project</string><string>my-repo-a</string>
+       <string>--project</string><string>my-repo-b</string>
+   </array>
+   ```
+
+3. **Give each repo its own `.cursor/mcp.json` `serena` entry**, pointed at
+   its own mount:
+
+   ```json
+   "serena": { "type": "http", "url": "http://127.0.0.1:8893/mcp/<project-name>" }
+   ```
+
+   **This breaks the step-8 "one shared template symlinked by every family
+   repo" trick for the `serena` entry specifically** — the URL is now
+   per-repo, so a single template file can no longer serve every repo
+   verbatim. Either give each repo its own small template file (one per
+   project, everything else identical) or drop the symlink for just this key
+   and hand-edit it per repo. `cocoindex-code`/`hindsight-docs`/
+   `hindsight-issues` entries are unaffected (still identical across the
+   family) and can stay shared.
+
+4. **Update your family's git-hook restart script** (step 14) to also
+   `launchctl kickstart -k` the multiplex daemon's label alongside `serena`
+   and `cocoindex-code` — otherwise a `git checkout`/`pull` that changes
+   files on disk won't refresh the multiplex's view of anything it caches
+   (currently nothing beyond the active-project pointer, but keep it
+   symmetric with the other two daemons for when that changes).
+
+5. **Verify**: open two repos' mounts as two independent MCP sessions (or
+   two real Cursor windows) and confirm each keeps reporting its own project
+   via `get_current_config` even after the other activates a different one
+   in between — that's the actual guarantee this buys you, not just "it
+   responds to requests."
+
+> **On Linux**: `systemd/engram-serena-multiplex-kubernaut-family.service`
+> is the direct analog of this step's launchd plist — same
+> `engram-serena-multiplex` console script, same `--project`/
+> `--upstream-url` flags, just `systemctl --user enable --now
+> <unit>.service` instead of `launchctl bootstrap`. See
+> `docs/INSTALL-linux.md` step 9 for the full command sequence (bundled
+> together with steps 2 and 3's plain shared-daemon units, since on Linux
+> there's no reason to install one without the other).
 
 ### 9. Slim the Global MCP Config
 
@@ -710,6 +844,9 @@ variant deliberately omits.
 | `cursor/generate-mdc.sh` | Generates .mdc from template + vars |
 | Each repo's `.cursor/mcp.json` | Workspace-level MCP routing |
 | Each repo's `.serena/project.yml` | Per-repo Serena language-server registration (step 7); cannot be shared/symlinked, keyed by absolute path |
+| `src/engram/pipeline/serena_multiplex.py` / `engram-serena-multiplex` | (Optional, step 8a) Gives every repo in a shared-Serena family full read+write instead of just whichever is "active" |
+| `launchd/io.vectorize.serena-multiplex.<family>.plist` | (Optional, step 8a) macOS service for the multiplex daemon, one per family |
+| `systemd/engram-{cocoindex-code,serena,serena-project-server,serena-multiplex}-kubernaut-family.service` | (Optional, steps 8/8a) Linux (`systemd --user`) analogs of the 4 shared-daemon launchd plists above — see `docs/INSTALL-linux.md` step 9 |
 | `hooks/install.sh` | Installs the Deterministic Correction Enforcement hook family (optional, step 13) |
 | Each opted-in repo's `.cursor/hooks.json` | Harness-enforced plan-kickoff detector + contradiction-check enforcer (+ checklist reminder for non-kubernaut repos) |
 | `hooks/review-checklists/<repo>.md` | Per-repo PR review checklist content, injected by the checklist-reminder hook when present |

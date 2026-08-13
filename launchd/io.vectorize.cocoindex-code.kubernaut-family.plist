@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.vectorize.cocoindex-code.kubernaut-family</string>
+    <!-- Single shared cocoindex-code MCP daemon for all 6 kubernaut-family repos
+         (kubernaut, kubernaut-operator, kubernaut-console, kubernaut-demo-scenarios,
+         kubernaut-v1.5, kubernaut-v1.6). Each repo's .cursor/mcp.json points its
+         "cocoindex-code" entry at this daemon's fixed HTTP URL instead of spawning
+         its own stdio subprocess -- see docs/findings/2026-08.md, 2026-08-13
+         (same day, seventh follow-up). Already multi-repo-aware via --repo/--branch
+         query params; no per-repo instance needed. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.hindsight/venv/bin/engram-search-kubernaut</string>
+        <string>--transport</string>
+        <string>streamable-http</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>8891</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__HOME__/go/src/github.com/jordigilh/kubernaut</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOME__/.hindsight/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>COCOINDEX_PG_URL</key>
+        <string>postgresql://hindsight:hindsight@localhost:5432/hindsight</string>
+        <key>KUBERNAUT_LIVE_CLONE_DIR</key>
+        <string>__HOME__/go/src/github.com/jordigilh/kubernaut</string>
+        <key>HF_HUB_OFFLINE</key>
+        <string>1</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.hindsight/logs/cocoindex-code-kubernaut-family-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.hindsight/logs/cocoindex-code-kubernaut-family-stderr.log</string>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

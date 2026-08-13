@@ -181,6 +181,12 @@ def hindsight_proxy() -> ModuleType:
 
 
 @pytest.fixture(scope="session")
+def serena_multiplex() -> ModuleType:
+    from engram.pipeline import serena_multiplex
+    return serena_multiplex
+
+
+@pytest.fixture(scope="session")
 def cocoindex_search() -> ModuleType:
     """kubernaut.py's code search module (engram.search.kubernaut) -- the
     kubernaut-family code search MCP server. Unlike the *_cocoindex_flows

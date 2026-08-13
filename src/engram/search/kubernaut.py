@@ -543,8 +543,8 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
         log.info("Starting cocoindex-code MCP server (stdio)")
         mcp.run(transport="stdio")
     else:
-        log.info("Starting cocoindex-code MCP server on %s:%d (sse)", host, port)
-        mcp.run(transport="sse")
+        log.info("Starting cocoindex-code MCP server on %s:%d (%s)", host, port, transport)
+        mcp.run(transport=transport)
 
 
 # ---------------------------------------------------------------------------
@@ -583,6 +583,12 @@ def main():
                         help="Release line to scope to (e.g. v1.5) or 'main'; default: auto-detect from KUBERNAUT_LIVE_CLONE_DIR")
     parser.add_argument("--port", "-p", type=int, default=8889, help="MCP server port (default: 8889)")
     parser.add_argument("--host", default="127.0.0.1", help="MCP server bind address")
+    parser.add_argument(
+        "--transport", default="stdio", choices=["stdio", "streamable-http"],
+        help="MCP server transport (default: stdio). Use streamable-http to run "
+             "as a single shared daemon multiple Cursor windows/repos can point "
+             "at via a fixed URL, instead of one stdio subprocess per window.",
+    )
     args = parser.parse_args()
 
     if args.pattern:
@@ -592,7 +598,7 @@ def main():
     elif args.query:
         _run_cli_query(args.query, limit=args.limit, mode=args.mode, repo=args.repo, branch=args.branch)
     else:
-        _run_mcp_server(host=args.host, port=args.port)
+        _run_mcp_server(host=args.host, port=args.port, transport=args.transport)
 
 
 if __name__ == "__main__":

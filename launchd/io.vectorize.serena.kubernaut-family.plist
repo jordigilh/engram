@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.vectorize.serena.kubernaut-family</string>
+    <!-- Single shared serena MCP daemon for all 6 kubernaut-family repos. Each
+         repo's .cursor/mcp.json points its "serena" entry at this daemon's fixed
+         HTTP URL instead of spawning its own stdio subprocess -- see
+         docs/findings/2026-08.md, 2026-08-13 (same day, seventh + eighth
+         follow-ups).
+
+         Deliberately started WITHOUT --project: passing --project at startup in
+         a single-project context (--context ide, used below) hard-disables the
+         activate_project tool (Serena's own "SingleProjectExclusions" -- verified
+         empirically and confirmed in Serena's docs, "The Project Workflow" ->
+         "Multiple Agents Working on Different Projects"). Omitting --project
+         keeps activate_project available, so whichever family repo an agent
+         calls activate_project(<path>) for gets FULL read+write access
+         (find/rename/replace_symbol_body/etc.) -- switchable at runtime instead
+         of being fixed to one repo for the daemon's lifetime.
+
+         --add-mode query-projects additionally exposes query_project /
+         list_queryable_projects, letting an agent read (READ-ONLY only --
+         Serena hard-asserts this, confirmed empirically) symbols/references from
+         any *other* registered project without switching the active one --
+         useful for a quick cross-repo lookup that shouldn't disturb the
+         session's actual active project.
+
+         Known accepted limitation: only ONE project can be "active" (fully
+         read+write) on this daemon at a time. If two Cursor windows have two
+         *different* kubernaut-family repos open concurrently and both call
+         activate_project, whichever call lands last wins for both -- Serena's
+         own docs recommend separate instances for genuinely concurrent
+         different-project editing. Rule files instruct agents to call
+         activate_project(<this repo's path>) at the start of a session/task
+         as a defensive re-assertion. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.local/bin/uvx</string>
+        <string>--from</string>
+        <string>git+https://github.com/oraios/serena</string>
+        <string>serena</string>
+        <string>start-mcp-server</string>
+        <string>--context</string>
+        <string>ide</string>
+        <string>--add-mode</string>
+        <string>no-memories</string>
+        <string>--add-mode</string>
+        <string>query-projects</string>
+        <string>--open-web-dashboard</string>
+        <string>false</string>
+        <string>--transport</string>
+        <string>streamable-http</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>8892</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOME__/.local/bin:/opt/homebrew/bin:__HOME__/go/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>GOPATH</key>
+        <string>__HOME__/go</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.hindsight/logs/serena-kubernaut-family-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.hindsight/logs/serena-kubernaut-family-stderr.log</string>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

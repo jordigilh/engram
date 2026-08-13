@@ -65,33 +65,58 @@ podman build -t localhost/engram-hindsight:latest -f Dockerfile .
 Set up the persistent data directory and credentials. The image runs as a
 **non-root `hindsight` user (uid 1000)** internally, so a bind-mounted host
 directory needs matching ownership, not just SELinux relabeling — this is
-the one real permission gotcha found during the spike (a root-owned, `600`
-credentials file was unreadable in-container until relaxed):
+the one real permission gotcha found during the original spike (a
+root-owned, `600` credentials file was unreadable in-container until
+relaxed):
 
 ```bash
 mkdir -p ~/.hindsight-linux/pg0-data
-chown 1000:1000 ~/.hindsight-linux/pg0-data
+chown "$(id -u):$(id -g)" ~/.hindsight-linux/pg0-data
 chmod 644 ~/.config/gcloud/application_default_credentials.json
 ```
+
+> **Use `$(id -u):$(id -g)`, not a hardcoded `1000:1000`** (fixed
+> 2026-08-13 after a real second-host spike hit this): the ownership above
+> only needs to match container UID 1000 when combined with the
+> `keep-id:uid=1000,gid=1000` form in step 5 below — see that step for why
+> a hardcoded `1000:1000` silently breaks on any host where your deploying
+> user's own UID isn't 1000 (common on shared/multi-user hosts, or simply
+> not the first account created).
 
 ## 5. Install as a systemd service (Podman Quadlet)
 
 ```bash
 mkdir -p ~/.config/containers/systemd
 cp quadlet/hindsight.container ~/.config/containers/systemd/
-# Uncomment `UserNS=keep-id` in the copied file -- required for rootless
-# Podman (a regular, non-root user, which this guide assumes). Without it,
-# rootless Podman's default UID mapping sends your host UID to CONTAINER
-# uid 0, not container uid 1000 -- so the bind-mounted pg0 data directory
-# (owned 1000:1000 per the chown above) shows up owned by uid 0 *inside*
+# Uncomment `UserNS=keep-id:uid=1000,gid=1000` in the copied file --
+# required for rootless Podman (a regular, non-root user, which this guide
+# assumes). Without SOME form of --userns, rootless Podman's default UID
+# mapping sends your host UID to CONTAINER uid 0, not container uid 1000 --
+# so the bind-mounted pg0 data directory shows up owned by uid 0 *inside*
 # the container, and the non-root `hindsight` process silently can't write
-# to it. Confirmed directly during the #9 spike: without this line the
-# mount showed as "0 0" from inside the container; with it, "1000 1000"
-# and retain/recall worked end to end. Leave it commented out only if
-# you're instead deploying this as a root-owned system-level Quadlet
-# (`/etc/containers/systemd/`) -- there it actively breaks startup rather
-# than being a harmless no-op.
-sed -i 's/^#UserNS=keep-id/UserNS=keep-id/' ~/.config/containers/systemd/hindsight.container
+# to it.
+#
+# IMPORTANT -- use `keep-id:uid=1000,gid=1000`, not bare `keep-id` (fixed
+# 2026-08-13, second real-host spike on a shared RHEL 9 lab VM where the
+# deploying user's own UID was 1005, not 1000): bare `keep-id` identity-maps
+# your OWN host UID to itself inside the container (e.g. 1005 -> 1005) --
+# it does NOT map you to container UID 1000, which is where the `hindsight`
+# process actually runs. The original 2026-07-29 spike's `chown 1000:1000` +
+# bare `keep-id` combination only worked because that spike's deploying user
+# happened to itself be UID 1000 (a common but not universal "first regular
+# user" default) -- confirmed reproducible on a second host where the user
+# was a different UID: bare `keep-id` fails outright with the image's own
+# startup check ("embedded database directory ... is not writable by this
+# container (UID 1000)"), regardless of what the host directory is chowned
+# to, since the container never sees your UID as 1000 in the first place.
+# `keep-id:uid=1000,gid=1000` instead maps your OWN host UID to container
+# UID 1000 specifically (whatever your real host UID actually is), which is
+# what makes the plain `chown $(id -u):$(id -g)` in step 4 correct
+# regardless of your deploying user's actual UID. Leave both keep-id forms
+# commented out only if you're instead deploying this as a root-owned
+# system-level Quadlet (`/etc/containers/systemd/`) -- there it actively
+# breaks startup rather than being a harmless no-op.
+sed -i 's/^#UserNS=keep-id:uid=1000,gid=1000/UserNS=keep-id:uid=1000,gid=1000/' ~/.config/containers/systemd/hindsight.container
 loginctl enable-linger "$USER"   # user-level units otherwise stop at logout
 systemctl --user daemon-reload
 systemctl --user enable --now hindsight.service
@@ -193,6 +218,87 @@ journalctl --user -u engram-cocoindex.service -f
 > the direct equivalent of launchd's LaunchAgents starting at login without
 > needing an active terminal session.
 
+## 9. (Optional, Repo Families Only) Shared cocoindex-code/Serena Daemons + Serena Multiplex
+
+If you're onboarding a **family of repos under one org that should share one
+code-intelligence backend** instead of spawning a `cocoindex-code`/`serena`/
+`gopls` subprocess per Cursor window per repo — see
+[`NEW_PROJECT_SETUP.md`](NEW_PROJECT_SETUP.md)'s step 8 "Evolution" note and
+step 8a for the full, platform-agnostic rationale (when this is worth the
+added complexity, the "one active project at a time" limitation of a plain
+shared Serena daemon, and why the multiplex wrapper exists). This section is
+just the Linux (`systemd --user`) command sequence; the concepts, `.cursor/
+mcp.json` shapes, and gotchas are identical to the macOS (`launchd`)
+instructions there.
+
+```bash
+cp systemd/engram-cocoindex-code-kubernaut-family.service ~/.config/systemd/user/
+cp systemd/engram-serena-kubernaut-family.service ~/.config/systemd/user/
+cp systemd/engram-serena-project-server.service ~/.config/systemd/user/
+cp systemd/engram-serena-multiplex-kubernaut-family.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+
+systemctl --user enable --now engram-cocoindex-code-kubernaut-family.service
+systemctl --user enable --now engram-serena-kubernaut-family.service
+systemctl --user enable --now engram-serena-project-server.service
+systemctl --user enable --now engram-serena-multiplex-kubernaut-family.service
+```
+
+The 4 unit files are named/scoped for this project's own repo family
+(`kubernaut`, `kubernaut-operator`, `kubernaut-console`,
+`kubernaut-demo-scenarios`, `kubernaut-v1.5`, `kubernaut-v1.6`) — for a
+different family, copy and rename them, and edit each unit's `--project`/
+`ExecStart` args plus `.cursor/mcp.json`'s ports/URLs to match. See each
+unit file's own header comments (and the direct-analog `launchd/*.plist`
+they mirror) for the full per-flag rationale.
+
+> **Postgres reachability gotcha specific to Linux (confirmed via a live
+> spike, 2026-08-13)**: the `cocoindex-code` daemon's `COCOINDEX_PG_URL`
+> needs `localhost:5432` reachable from a **native** host process. On
+> macOS this works because Postgres either runs natively or its embedded
+> `pg0` is otherwise reachable on the host loopback; on Linux, step 5's
+> Podman Quadlet only publishes port 8888 by default, **not** 5432 — live
+> reproduced on a real RHEL 9 host: with only `PublishPort=8888:8888`, a
+> raw TCP connection attempt to `localhost:5432` got an immediate
+> connection-refused (not a hang), confirming it's genuinely unreachable,
+> not just slow. Fix, also confirmed live: adding `PublishPort=5432:5432`
+> to `~/.config/containers/systemd/hindsight.container` and restarting the
+> service made 5432 immediately reachable, and the `cocoindex-code` daemon
+> started and served `tools/list` correctly against it with no further
+> changes. (Running under that Quadlet's `Network=host` fallback instead
+> would also make 5432 reachable with no `PublishPort` needed, but this
+> wasn't separately re-tested this session — bridge + explicit
+> `PublishPort` was.) Verify with
+> `psql -h localhost -p 5432 -U hindsight -d hindsight -c 'select 1;'`
+> (or a plain `bash -c 'echo > /dev/tcp/localhost/5432'` reachability check
+> if `psql` isn't installed) before enabling the unit.
+
+Give each family repo its own `.cursor/mcp.json` `serena` entry pointed at
+its own multiplex mount, exactly as `NEW_PROJECT_SETUP.md` step 8a
+describes — this part is pure JSON config and identical on every platform:
+
+```json
+"serena": { "type": "http", "url": "http://127.0.0.1:8893/mcp/<project-name>" }
+```
+
+Verify the daemons are up and correctly isolating per project:
+
+```bash
+systemctl --user status engram-serena-multiplex-kubernaut-family.service
+journalctl --user -u engram-serena-multiplex-kubernaut-family.service -f
+```
+
+> **Personal git-hook restart scripts are not part of this repo**: on
+> macOS, `~/.hindsight/git-hooks/_restart-kubernaut-family-daemons.sh`
+> (a personal, uncommitted script — see `NEW_PROJECT_SETUP.md` step 14) uses
+> `launchctl kickstart -k` to restart these 4 daemons after a `git checkout`/
+> `pull`/`rebase` changes files on disk underneath them. If you build the
+> Linux equivalent of that self-healing git-hook family for your own repos,
+> swap the restart calls for `systemctl --user restart
+> <unit-name>.service` — nothing else about the hook logic (detecting HEAD
+> changes, self-provisioning `post-merge`/`reference-transaction`) is
+> platform-specific.
+
 ## Continue with the platform-agnostic steps
 
 Jump to [`INSTALL.md`](INSTALL.md) step 7 ("Configure Cursor MCP") onward —
@@ -211,6 +317,18 @@ journalctl --user -u hindsight.service --no-pager | tail -50
 The container runs as non-root uid 1000. Check the host-side file is
 world-readable (`chmod 644`), not just correctly SELinux-labeled — `:Z` alone
 does not fix a `600`/root-owned file.
+
+### `The embedded database directory /home/hindsight/.pg0 is not writable by this container (UID 1000)`
+You're using bare `UserNS=keep-id` instead of `UserNS=keep-id:uid=1000,gid=1000`
+(step 5), and your deploying user's own UID isn't 1000. Bare `keep-id`
+identity-maps your own UID to itself inside the container (e.g. host UID
+1005 stays 1005 inside), which does nothing for the `hindsight` process,
+still fixed at container UID 1000 — no `chown` value on the host directory
+can fix this, since the container never sees your UID as 1000 in the first
+place. Fix: use `UserNS=keep-id:uid=1000,gid=1000` in the Quadlet, and
+`chown "$(id -u):$(id -g)"` (not a hardcoded `1000:1000`) on
+`~/.hindsight-linux/pg0-data`. Confirmed live 2026-08-13 on a host where
+the deploying user was UID 1005 — this exact error, this exact fix.
 
 ### Connection timeouts / DNS failures only inside the container
 Look for a leftover firewall rule from another container runtime (Docker,

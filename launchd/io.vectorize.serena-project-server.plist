@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.vectorize.serena-project-server</string>
+    <!-- Backend that answers query_project calls from ANY serena MCP daemon
+         (currently just io.vectorize.serena.kubernaut-family, but not tied to
+         that family specifically -- any future shared serena daemon can reuse
+         this same one). Listens on Serena's fixed default port (24225); lazily
+         spawns a language server per queried project on first use, not
+         up front. See docs/findings/2026-08.md, 2026-08-13 (eighth follow-up). -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.local/bin/uvx</string>
+        <string>--from</string>
+        <string>git+https://github.com/oraios/serena</string>
+        <string>serena</string>
+        <string>start-project-server</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOME__/.local/bin:/opt/homebrew/bin:__HOME__/go/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>GOPATH</key>
+        <string>__HOME__/go</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.hindsight/logs/serena-project-server-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.hindsight/logs/serena-project-server-stderr.log</string>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

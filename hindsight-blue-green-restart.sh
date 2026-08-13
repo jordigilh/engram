@@ -36,11 +36,41 @@ HEALTH_POLL_INTERVAL_S=2
 HEALTH_CHECK_TIMEOUT_S=2
 REQUIRED_CONSECUTIVE_HEALTHY=5
 DRAIN_GRACE_S=10
+BOOTSTRAP_MAX_ATTEMPTS=3
+BOOTSTRAP_RETRY_DELAY_S=5
 
 mkdir -p "$STATE_DIR" "$(dirname "$LOG_FILE")"
 
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $*" >>"$LOG_FILE"
+}
+
+# `launchctl bootstrap` into the gui/<uid> domain intermittently fails with
+# "Bootstrap failed: 5: Input/output error" -- observed 4 times in the 8
+# nights before this fix (2026-08-05, 08-06, 08-11, 08-13), always at this
+# nightly 01:00 run when the Mac is most likely asleep/locked and the Aqua
+# session domain isn't fully available yet. Previously this was a single,
+# unguarded call: `set -e` killed the whole script the instant it failed,
+# silently skipping that night's swap with no retry and no rollback need
+# (the active color is untouched either way) -- but also no recovery within
+# the same run. Retry with backoff before giving up for the night.
+bootstrap_with_retry() {
+    local domain="$1" plist="$2" label="$3"
+    local attempt=1
+    local delay="$BOOTSTRAP_RETRY_DELAY_S"
+    local err
+    while [ "$attempt" -le "$BOOTSTRAP_MAX_ATTEMPTS" ]; do
+        if err="$(launchctl bootstrap "$domain" "$plist" 2>&1)"; then
+            return 0
+        fi
+        log "WARN: launchctl bootstrap attempt ${attempt}/${BOOTSTRAP_MAX_ATTEMPTS} failed for ${label}: ${err}"
+        if [ "$attempt" -lt "$BOOTSTRAP_MAX_ATTEMPTS" ]; then
+            sleep "$delay"
+            delay=$((delay * 2))
+        fi
+        attempt=$((attempt + 1))
+    done
+    return 1
 }
 
 active_port="$(cat "$STATE_FILE" 2>/dev/null || true)"
@@ -67,7 +97,10 @@ fi
 # swap before starting a fresh one.
 launchctl bootout "gui/${UID_NUM}/${standby_label}" >/dev/null 2>&1 || true
 
-launchctl bootstrap "gui/${UID_NUM}" "$standby_plist"
+if ! bootstrap_with_retry "gui/${UID_NUM}" "$standby_plist" "$standby_label"; then
+    log "ERROR: launchctl bootstrap failed after ${BOOTSTRAP_MAX_ATTEMPTS} attempts for ${standby_label} -- aborting, leaving ${active_color} running untouched"
+    exit 1
+fi
 log "bootstrapped ${standby_label}, polling http://localhost:${standby_port}/health"
 
 # A single 200 from /health is not sufficient: hindsight-api can pass /health

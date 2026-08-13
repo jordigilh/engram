@@ -27,8 +27,9 @@ recall-quality benchmark is built against.
 
 ## Index
 
-### August 2026 (37 entries)
+### August 2026 (38 entries)
 
+- [2026-08-13: Cursor's "hindsight" MCP Server Shown as Errored Was Reported as a `praxis-grid` Issue — Traced to a Chronic Background-Job Timeout on the Shared `hindsight-api` Backend, Plus a Nightly Blue/Green Restart That Silently No-Ops ~Half the Time](findings/2026-08.md#2026-08-13-cursors-hindsight-mcp-server-shown-as-errored-was-reported-as-a-praxis-grid-issue--traced-to-a-chronic-background-job-timeout-on-the-shared-hindsight-api-backend-plus-a-nightly-bluegreen-restart-that-silently-no-ops-half-the-time)
 - [2026-08-12 (same day, fifth follow-up): Restructured Engram Into a `src/engram/` Package With `pyproject.toml` Console Scripts, Then Cut Over Every Live `launchd` Service and All 35 External Repos' `.cursor/mcp.json` to Use Them](findings/2026-08.md#2026-08-12-same-day-fifth-follow-up-restructured-engram-into-a-srcengram-package-with-pyprojecttoml-console-scripts-then-cut-over-every-live-launchd-service-and-all-35-external-repos-cursormcpjson-to-use-them)
 - [2026-08-12 (same day, fourth follow-up): Host at 100% CPU — `hindsight-api` Grinding a Sonnet-Tier Consolidation Backlog, Compounded by 23 of 45 Mental Models Silently Running Full Re-Synthesis Instead of Delta](findings/2026-08.md#2026-08-12-same-day-fourth-follow-up-host-at-100-cpu-hindsight-api-grinding-a-sonnet-tier-consolidation-backlog-compounded-by-23-of-45-mental-models-silently-running-full-re-synthesis-instead-of-delta)
 - [2026-08-12 (same day, third follow-up): Added a `launchd` Watchdog for the Silent-Live-Service-Outage Failure Class](findings/2026-08.md#2026-08-12-same-day-follow-up-added-a-launchd-watchdog-for-the-silent-live-service-outage-failure-class)

@@ -1,0 +1,183 @@
+---
+description: Recall relevant patterns from Hindsight memory before responding
+alwaysApply: true
+---
+
+## Scope: this onboarding covers workspaces/boost/ only (2026-08-13)
+
+rhdh-plugins is a 23-package Yarn monorepo, but this onboarding is
+deliberately narrow: it covers only `workspaces/boost/` (the package
+touching the AI Catalog Graduated Visibility Permissions work) and Jira
+epic **RHIDP-15270** + its 6 child stories — not the other 22 workspace
+packages or the wider RHIDP project's 166+ open issues. If work shifts to a
+different workspace package or a different epic, treat this as a new
+onboarding scope, not an extension of this one.
+
+## When to recall (MUST)
+
+You MUST call `recall` on your **first turn** when the task involves:
+- TypeScript/React code in `workspaces/boost/` (Backstage plugins for AI
+  Catalog / Graduated Visibility RBAC)
+- Architecture, API design, or permission-model changes
+- Debugging, troubleshooting, or root-cause analysis
+- Anything the user has corrected you on before
+
+Use the appropriate bank(s):
+- **hindsight** — corrections, coding conventions, user preferences
+- **rhdh-plugins-docs** — boost workspace specs/openspec docs (AI Catalog
+  RBAC design, personas, permission model)
+- **rhdh-plugins-issues** — Jira epic RHIDP-15270 and its child stories only
+
+Call one or more banks depending on what the task touches. A single recall to
+**hindsight** with a query summarizing the task intent is sufficient for most work.
+
+## Before planning or implementing (MANDATORY GATE)
+
+Before proposing any plan, writing any implementation, or switching to agent
+mode to begin coding:
+
+1. Recall `hindsight` with query: **"project methodology, workflow, conventions"**,
+   passing `tags: ["rhdh-plugins"], tags_match: "any_strict"` explicitly.
+   **Do not rely on the default or pass the literal string `"strict"`** —
+   `tags_match` defaults to `"any"` (which *includes* untagged memories), and
+   `"strict"` is not a valid value at all (real options: `any`, `all`,
+   `any_strict`, `all_strict`, `exact`); an unrecognized value silently falls
+   back to the unfiltered `"any"` default (see docs/FINDINGS.md in the
+   engram repo, 2026-08-13 entry). This scopes results to rhdh-plugins-tagged
+   facts only, avoiding kubernaut/dcm/koku/praxis/engram cross-project
+   pollution.
+2. Also fetch the 4 rhdh-plugins-scoped mental models
+   (`rhdh-plugins-testing-methodology`, `rhdh-plugins-coding-conventions`,
+   `rhdh-plugins-architecture-decisions`, `rhdh-plugins-workflow-preferences`)
+   via `get_mental_model` and apply them as authoritative context alongside
+   step 1's recall.
+3. Apply the recalled methodology to your plan — TDD sequence, preflight
+   checks, confidence gates.
+4. If your plan does not follow the recalled methodology, **revise it before
+   presenting**.
+
+**Why the `tags` filter matters**: `cursor-memory` is a deliberately shared
+bank across kubernaut/dcm/engram/koku/praxis/rhdh-plugins for universal
+coding-hygiene lessons, but per-project mental models in it have
+historically turned out to be language/project-specific despite carrying no
+project tag (see docs/FINDINGS.md, 2026-07-27 incident) — an untagged recall
+could surface Go/FedRAMP or Python/Django conventions as if they applied to
+this TypeScript/React codebase. rhdh-plugins has its own isolated set
+(above), tagged `["rhdh-plugins"]`, matched with `tags_match: "any_strict"`
+so other projects' content can never enter them. **Known limitation**: only
+newly retained facts carry a project tag going forward — an *untagged,
+ad-hoc* `recall()` call (no `tags` param) can still surface old pre-fix
+content from any project. Always pass
+`tags: ["rhdh-plugins"], tags_match: "any_strict"` on cursor-memory recall
+calls to get the isolation guarantee. Expect rhdh-plugins' own tagged
+content to be sparse at first — it only grows as new retains happen
+post-onboarding (2026-08-13).
+
+This is a blocking gate. Do not skip it even if you believe you know the
+methodology. Context summarization in long sessions can silently drop recalled
+conventions — re-recall ensures they are current.
+
+## Mid-session re-recall (long sessions)
+
+In sessions longer than ~20 agent turns, or whenever a conversation summary
+has been applied, **re-recall `hindsight`** with:
+- "project methodology, workflow, conventions" — may have been lost to summarization
+- Any topic-specific query relevant to the current phase
+
+Rationale: empirical data shows 61% of corrections occur in the second half of
+sessions. Re-recalling counteracts context loss from summarization and prevents
+late-session mistakes.
+
+## Code search: use `rhdh_plugins_code_search` tool
+
+The MCP server **cocoindex-code** provides a tool named
+**`rhdh_plugins_code_search`**. Call it with
+`{"query": "your search terms", "limit": 10}`. Scoped to
+`workspaces/boost/` only (see the onboarding-scope note above).
+
+Use `rhdh_plugins_code_search` when:
+- You need to find code by concept: `rhdh_plugins_code_search(query="how does graduated visibility permission checking work")`
+- You need to locate an identifier: `rhdh_plugins_code_search(query="AiCatalogFilterBlueprint")`
+- You want to understand a subsystem before modifying it
+- You need to find callers or dependents of a function/component
+
+Prefer `rhdh_plugins_code_search` over Grep/SemanticSearch when searching by
+meaning. Use Grep only when you need exact regex matching.
+
+## When to recall again (mid-session)
+
+Call `recall` again if:
+- The task shifts to a different subsystem, file area, or domain
+- The user corrects you — check if this correction already exists in memory
+- You've made 2+ failed attempts at the same problem
+- A new entity (permission, blueprint, Jira story) enters the conversation
+  that wasn't part of the original recall
+- A code search returned results from an unfamiliar file — recall
+  `hindsight` for conventions about that area
+
+### Phase-based triggers (MUST recall when entering these phases)
+
+| Phase | Bank or tool | Query focus |
+|----|---|----|
+| Implementation planning | hindsight | project methodology, TDD, preflight checks |
+| Writing/designing tests | hindsight | test conventions, RTL patterns, assertion patterns |
+| Designing permission model / APIs | rhdh-plugins-docs | AI Catalog RBAC design, permission contracts |
+| PR/commit workflow | hindsight | commit conventions, PR structure, review expectations |
+| Debugging/troubleshooting | rhdh-plugins-issues | epic/story status, known blockers |
+| Exploring unfamiliar code | `rhdh_plugins_code_search` | semantic search for the feature/subsystem being investigated |
+| Understanding blast radius | `rhdh_plugins_code_search` | what depends on the component/permission being changed |
+| Refactoring / renaming | `rhdh_plugins_code_search` | all references and callers of the target symbol |
+
+These are NOT optional. When you transition into one of these phases, recall
+the indicated bank or call the indicated tool BEFORE writing code or proposing a plan.
+
+## When to skip (OK)
+
+- Trivial follow-ups ("yes", "do it", "commit")
+- Pure file reads or terminal commands with no design decisions
+- You already recalled this exact topic earlier in the session and nothing has changed
+
+## How to use results
+
+- **Mental models** (long synthesized documents): use directly as authoritative context
+- **Individual facts**: reason over them to identify relevant patterns
+
+## Data freshness
+
+The `rhdh-plugins-docs` and `rhdh-plugins-issues` banks are continuously
+updated via CocoIndex incremental sync (docs/code file-watching; Jira issues
+polled every 5 minutes). Recalled doc/issue content is live — trust it
+without re-reading source files unless the task requires verifying current state.
+
+## TypeScript code: three-tier code guidance
+
+Use the right tool for the right question:
+
+- **Serena** (typescript-language-server-backed LSP) — precise type info,
+  symbol references, symbol-level edits, diagnostics. Use for "what is the
+  type of X?", "who calls this function/component?", "rename this symbol",
+  "what errors exist?" Note (2026-08-13 spike): an unscoped whole-repo
+  `find_symbol` on this 23-package monorepo can take ~2 minutes cold (first
+  touch indexes every package); pass `relative_path` to scope the query and
+  avoid this, or rely on the cache built up over the session.
+- **`rhdh_plugins_code_search`** — semantic code search by meaning, scoped to
+  `workspaces/boost/`. The tool is on the `cocoindex-code` MCP server. Call
+  it with `{"query": "...", "limit": 10}`. Use for "where do we handle
+  category-scoped permissions?", "how does SkillBundle RBAC filtering work?"
+- **`rhdh_plugins_code_pattern_search`** — structural (by-example) code
+  search, on the same `cocoindex-code` MCP server. Call it with
+  `{"pattern": "export const \\NAME = (\\(A*\\)) =>", "language": "typescript"}`.
+  Use for "find every function shaped like X" (a signature, not a
+  name/concept) — purely syntactic, no type resolution or find-references;
+  not a substitute for Serena.
+- **hindsight** — past mistakes, conventions, behavioral patterns about code.
+  Use for "how should I structure this test?", "what was corrected before?"
+
+Prefer Serena for precise lookups/edits, `rhdh_plugins_code_search` for
+semantic exploration, `rhdh_plugins_code_pattern_search` for structural
+shape queries, and hindsight for behavioral context. Do not redundantly call
+all of these for the same question.
+
+## Do NOT retain
+
+Never call `retain` during sessions. Memory extraction runs nightly.

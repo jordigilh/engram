@@ -209,6 +209,68 @@ MENTAL_MODELS = [
         "trigger": {"mode": "full", "refresh_after_consolidation": False},
         "tags": ["koku"],
     },
+    # rhdh-plugins-docs: narrow-scope onboarding (2026-08-13) -- only
+    # workspaces/boost/ (the package touching the AI Catalog Graduated
+    # Visibility Permissions epic), not the full 23-package monorepo. See
+    # src/engram/flows/rhdh_plugins.py's module docstring for the full
+    # scoping rationale.
+    {
+        "bank": "rhdh-plugins-docs",
+        "id": "rhdh-plugins-ai-catalog-rbac-design",
+        "name": "AI Catalog RBAC Design",
+        "source_query": "How does the AI Catalog Graduated Visibility Permissions design work in the boost workspace? Describe the ai-catalog.* permissions, per-category/per-connector conditional policies, AiCatalogFilterBlueprint, and SkillBundle RBAC filtering as specified in the boost workspace's specifications and openspec change docs.",
+        "max_tokens": 4096,
+        "trigger": {"mode": "full", "refresh_after_consolidation": False},
+    },
+    # rhdh-plugins-issues: requirements/direction (delta, nightly refresh),
+    # scoped to Jira epic RHIDP-15270 and its children only.
+    {
+        "bank": "rhdh-plugins-issues",
+        "id": "rhdh-plugins-active-priorities",
+        "name": "AI Catalog RBAC Epic Progress",
+        "source_query": "What is the status and remaining scope of the AI Catalog Graduated Visibility Permissions epic (RHIDP-15270) and its child stories? What permissions, backend filtering, and frontend gating work remains?",
+        "max_tokens": 4096,
+        "trigger": {"mode": "delta", "refresh_after_consolidation": False},
+    },
+    # cursor-memory, tag-isolated (tags=["rhdh-plugins"]) sibling of
+    # koku's/kubernaut's/dcm's/engram's own scoped models -- same 2026-07-27
+    # fix pattern applied from day one for this onboarding.
+    {
+        "bank": "cursor-memory",
+        "id": "rhdh-plugins-coding-conventions",
+        "name": "rhdh-plugins Coding Conventions",
+        "source_query": "What are the user's coding conventions, naming patterns, and style preferences when working on rhdh-plugins (TypeScript/React Backstage plugins)?",
+        "max_tokens": 2048,
+        "trigger": {"mode": "delta", "refresh_after_consolidation": True},
+        "tags": ["rhdh-plugins"],
+    },
+    {
+        "bank": "cursor-memory",
+        "id": "rhdh-plugins-testing-methodology",
+        "name": "rhdh-plugins Testing Methodology",
+        "source_query": "What testing approach, frameworks, and patterns does the user follow when working on rhdh-plugins?",
+        "max_tokens": 2048,
+        "trigger": {"mode": "delta", "refresh_after_consolidation": True},
+        "tags": ["rhdh-plugins"],
+    },
+    {
+        "bank": "cursor-memory",
+        "id": "rhdh-plugins-workflow-preferences",
+        "name": "rhdh-plugins Development Workflow",
+        "source_query": "What is the user's preferred development workflow, review process, and tooling when working on rhdh-plugins?",
+        "max_tokens": 2048,
+        "trigger": {"mode": "delta", "refresh_after_consolidation": True},
+        "tags": ["rhdh-plugins"],
+    },
+    {
+        "bank": "cursor-memory",
+        "id": "rhdh-plugins-architecture-decisions",
+        "name": "rhdh-plugins Architecture Decisions",
+        "source_query": "What architectural decisions and design patterns has the user established while working on rhdh-plugins?",
+        "max_tokens": 4096,
+        "trigger": {"mode": "full", "refresh_after_consolidation": False},
+        "tags": ["rhdh-plugins"],
+    },
     # praxis-docs: Rust AI gateway/grid architecture, RFC-style design discussions
     {
         "bank": "praxis-docs",
@@ -350,7 +412,7 @@ def refresh_model(bank: str, model_id: str) -> bool:
 
 
 def list_models():
-    banks = ["cursor-memory", "kubernaut-docs", "kubernaut-issues", "dcm-docs", "dcm-issues", "engram-docs", "koku-docs", "koku-issues", "praxis-docs", "praxis-issues"]
+    banks = ["cursor-memory", "kubernaut-docs", "kubernaut-issues", "dcm-docs", "dcm-issues", "engram-docs", "koku-docs", "koku-issues", "praxis-docs", "praxis-issues", "rhdh-plugins-docs", "rhdh-plugins-issues"]
     for bank in banks:
         result = api_request("GET", f"/v1/default/banks/{bank}/mental-models")
         items = result.get("items", [])

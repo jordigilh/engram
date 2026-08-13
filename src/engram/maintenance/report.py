@@ -113,6 +113,15 @@ PROJECT_CONFIGS = {
             "praxis-proxy/demos",
         ],
     },
+    # rhdh-plugins: narrow-scope onboarding (2026-08-13) -- see
+    # nightly-learn.py's matching entry for the full scoping rationale.
+    "rhdh-plugins": {
+        "banks": ["cursor-memory", "rhdh-plugins-docs", "rhdh-plugins-issues"],
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-redhat-developer-rhdh-plugins"],
+        "log_suffix": "-rhdh-plugins",
+        # No issues_repos: this scope's issue tracker is Jira (epic
+        # RHIDP-15270), not GitHub -- same as engram's "zero GitHub issues" entry.
+    },
 }
 
 CORRECTION_PATTERNS = [

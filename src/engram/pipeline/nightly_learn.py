@@ -1174,6 +1174,34 @@ PROJECT_CONFIGS = {
             "praxis-proxy/demos",
         ],
     },
+    # rhdh-plugins: narrow-scope onboarding (2026-08-13) -- covers only
+    # workspaces/boost/ (the package touching the AI Catalog Graduated
+    # Visibility Permissions epic) out of this 23-package monorepo, and only
+    # Jira epic RHIDP-15270 + its 6 child stories, not the wider RHIDP
+    # project's 166+ open issues. See src/engram/flows/rhdh_plugins.py's
+    # module docstring for the full scoping rationale.
+    "rhdh-plugins": {
+        "banks": ["cursor-memory", "rhdh-plugins-docs", "rhdh-plugins-issues"],
+        "mental_models": {
+            "rhdh-plugins-docs": ("rhdh-plugins-ai-catalog-rbac-design",),
+            "rhdh-plugins-issues": ("rhdh-plugins-active-priorities",),
+            # Tag-isolated (tags=["rhdh-plugins"], strict match) sibling of
+            # kubernaut's/dcm's/engram's/koku's/praxis's cursor-memory
+            # models -- same 2026-07-27 pollution fix applied from day one.
+            "cursor-memory": ("rhdh-plugins-workflow-preferences", "rhdh-plugins-architecture-decisions", "rhdh-plugins-testing-methodology", "rhdh-plugins-coding-conventions"),
+        },
+        "probes": [
+            ("rhdh-plugins-docs", "AI Catalog Graduated Visibility permission model and RBAC design"),
+            ("rhdh-plugins-issues", "AI Catalog RBAC epic RHIDP-15270 status and remaining scope"),
+        ],
+        "recall_banks": {"hindsight", "rhdh-plugins-docs", "rhdh-plugins-issues", "rhdh-plugins-code"},
+        "code_bank": "rhdh-plugins-code",
+        "log_suffix": "-rhdh-plugins",
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-redhat-developer-rhdh-plugins"],
+        # No issues_repos: this scope's issue tracker is Jira (epic
+        # RHIDP-15270), not GitHub -- see report.py's identical "engram has
+        # zero GitHub issues" precedent for the same .get(..., []) fallback.
+    },
 }
 
 BANKS = ["cursor-memory", "kubernaut-docs", "kubernaut-issues"]

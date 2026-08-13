@@ -1093,8 +1093,8 @@ def _run_live(selected: set[str]) -> None:
         t.start()
         threads.append(t)
 
-    log.info("All %d apps launched — docs/code/transcripts watching files, issues polling every %ds",
-             len(threads), ISSUES_POLL_INTERVAL)
+    log.info("All %d apps launched (%s), issues polling every %ds",
+             len(threads), ", ".join(sorted(selected)), ISSUES_POLL_INTERVAL)
 
     for t in threads:
         t.join()

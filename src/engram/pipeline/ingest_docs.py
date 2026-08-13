@@ -91,6 +91,7 @@ def ingest(docs_dir: Path):
 
 
 def main():
+    global HINDSIGHT_URL
     import argparse
     parser = argparse.ArgumentParser(description="Ingest kubernaut-docs into Hindsight")
     parser.add_argument("--docs-dir", default=DEFAULT_DOCS_DIR,
@@ -99,7 +100,6 @@ def main():
                         help="Hindsight API URL")
     args = parser.parse_args()
 
-    global HINDSIGHT_URL
     HINDSIGHT_URL = args.hindsight_url
 
     docs_dir = Path(args.docs_dir)

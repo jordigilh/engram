@@ -27,8 +27,9 @@ recall-quality benchmark is built against.
 
 ## Index
 
-### August 2026 (37 entries)
+### August 2026 (38 entries)
 
+- [2026-08-13 (same day, follow-up): "Cross-Project Pollution in Praxis" Traced to Every `hindsight-memory.mdc` Rule Instructing an Invalid `tags_match: "strict"` Value — the 2026-07-27 Isolation Fix Never Actually Worked for Any Project's `recall()` Calls](findings/2026-08.md#2026-08-13-same-day-follow-up-cross-project-pollution-in-praxis-traced-to-every-hindsight-memorymdc-rule-instructing-an-invalid-tags_match-strict-value--the-2026-07-27-isolation-fix-never-actually-worked-for-any-projects-recall-calls)
 - [2026-08-12 (same day, fifth follow-up): Restructured Engram Into a `src/engram/` Package With `pyproject.toml` Console Scripts, Then Cut Over Every Live `launchd` Service and All 35 External Repos' `.cursor/mcp.json` to Use Them](findings/2026-08.md#2026-08-12-same-day-fifth-follow-up-restructured-engram-into-a-srcengram-package-with-pyprojecttoml-console-scripts-then-cut-over-every-live-launchd-service-and-all-35-external-repos-cursormcpjson-to-use-them)
 - [2026-08-12 (same day, fourth follow-up): Host at 100% CPU — `hindsight-api` Grinding a Sonnet-Tier Consolidation Backlog, Compounded by 23 of 45 Mental Models Silently Running Full Re-Synthesis Instead of Delta](findings/2026-08.md#2026-08-12-same-day-fourth-follow-up-host-at-100-cpu-hindsight-api-grinding-a-sonnet-tier-consolidation-backlog-compounded-by-23-of-45-mental-models-silently-running-full-re-synthesis-instead-of-delta)
 - [2026-08-12 (same day, third follow-up): Added a `launchd` Watchdog for the Silent-Live-Service-Outage Failure Class](findings/2026-08.md#2026-08-12-same-day-follow-up-added-a-launchd-watchdog-for-the-silent-live-service-outage-failure-class)

@@ -31,7 +31,7 @@ markers = [
     "integration: tests requiring a real Postgres+pgvector instance (see tests/integration/README.md); excluded from the default `pytest` run",
 ]
 
-# The 13 launchd-invoked entry points only (5 flows + 5 search + nightly-learn
+# The 15 launchd-invoked entry points only (6 flows + 6 search + nightly-learn
 # + ingest-issues + hindsight-proxy). ingest-docs and the maintenance/backfill
 # tools are run by hand, not by launchd -- invoke those as
 # `python -m engram.pipeline.ingest_docs` / `python -m engram.maintenance.report`.
@@ -41,11 +41,13 @@ engram-flows-dcm = "engram.flows.dcm:main"
 engram-flows-engram = "engram.flows.engram:main"
 engram-flows-koku = "engram.flows.koku:main"
 engram-flows-praxis = "engram.flows.praxis:main"
+engram-flows-rhdh-plugins = "engram.flows.rhdh_plugins:main"
 engram-search-kubernaut = "engram.search.kubernaut:main"
 engram-search-dcm = "engram.search.dcm:main"
 engram-search-engram = "engram.search.engram:main"
 engram-search-koku = "engram.search.koku:main"
 engram-search-praxis = "engram.search.praxis:main"
+engram-search-rhdh-plugins = "engram.search.rhdh_plugins:main"
 engram-nightly-learn = "engram.pipeline.nightly_learn:main"
 engram-ingest-issues = "engram.pipeline.ingest_issues:main"
 engram-hindsight-proxy = "engram.pipeline.hindsight_proxy:cli_main"

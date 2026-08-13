@@ -81,6 +81,11 @@ RULE_PAIRS: dict[str, tuple[Path, Path]] = {
         REPO_ROOT / "cursor" / "praxis-hindsight-memory.mdc",
         HOME / "go" / "src" / "github.com" / "praxis-proxy" / "praxis-grid" / ".cursor" / "rules" / "hindsight-memory.mdc",
     ),
+    # rhdh-plugins: narrow-scope onboarding (2026-08-13), single repo.
+    "rhdh-plugins": (
+        REPO_ROOT / "cursor" / "rhdh-plugins-hindsight-memory.mdc",
+        HOME / "go" / "src" / "github.com" / "redhat-developer" / "rhdh-plugins" / ".cursor" / "rules" / "hindsight-memory.mdc",
+    ),
 }
 
 

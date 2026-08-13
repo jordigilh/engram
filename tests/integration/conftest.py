@@ -27,6 +27,12 @@ import time
 import psycopg2
 import pytest
 
+# Defined locally (rather than reusing the root conftest.py's eventual
+# dcm_search fixture from the separate test/unit-coverage-search-modules
+# branch/PR) so this integration-tier PR has no merge-order dependency on
+# that one -- both may land in either order.
+from engram.search import dcm as _dcm_search_module
+
 PGVECTOR_IMAGE = "docker.io/pgvector/pgvector:pg16"
 CONTAINER_READY_TIMEOUT_S = 30
 
@@ -75,6 +81,11 @@ def _spawn_local_container() -> tuple[str, str]:
 
     url = f"postgresql://postgres:postgres@127.0.0.1:{host_port}/postgres"
     return url, container_id
+
+
+@pytest.fixture(scope="session")
+def dcm_search():
+    return _dcm_search_module
 
 
 @pytest.fixture(scope="session")

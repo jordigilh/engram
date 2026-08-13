@@ -572,7 +572,7 @@ uv pip install --python ~/.hindsight/venv/bin/python -e ".[dev]"
 Run the suite:
 
 ```bash
-~/.hindsight/venv/bin/python3 -m pytest tests/ -v
+~/.hindsight/venv/bin/python3 -m pytest tests/ -m "not integration" -v
 ```
 
 The suite is fully offline — every LLM call (Haiku classification, Sonnet
@@ -584,6 +584,16 @@ provides fixtures (`nightly_learn`, `cocoindex_flows`, `review_contradictions`,
 directly — no `sys.path` hacks needed since `engram` is a real installed
 package. CI (`.github/workflows/ci.yml`) runs this same suite plus
 `ruff check .` on every push/PR.
+
+### Integration tests (`tests/integration/`)
+
+A second, opt-in tier under `tests/integration/` runs against a real
+Postgres+pgvector container (via Podman) rather than mocks — see
+[`tests/integration/README.md`](../tests/integration/README.md) for setup
+and the `-m integration` invocation. Excluded from the command above by
+`-m "not integration"`; CI runs it as a separate `integration-tests` job
+against a service container. Never point it at the shared dev Postgres on
+`localhost:5432`.
 
 ---
 

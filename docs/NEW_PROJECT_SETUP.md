@@ -60,6 +60,65 @@ Use the full pattern below when a sub-repo's content volume, access pattern,
 or lifecycle genuinely warrants isolation; use the tag-scoped variant when it
 just needs a narrower lens on data that's already being ingested correctly.
 
+**Jira-scoped issues variant** — for a project whose issue/decision tracking
+lives in Jira rather than GitHub issues, and where only a narrow slice of
+that tracker (one epic, not the whole project) is in scope. First shipped
+2026-08-13 for `rhdh-plugins` (epic RHIDP-15270 "AI Catalog Graduated
+Visibility Permissions" + its child stories, out of a monorepo with 23
+workspaces and a tracker with 166+ open issues project-wide). Differences
+from the full pattern:
+1. Step 1 (fork/clone) is usually just a single `git clone` of one existing
+   checkout, not an org-wide fork loop — the target is often a single
+   monorepo, not a multi-repo org.
+2. Step 4's `issues_app` in the CocoIndex flow authenticates against Jira's
+   REST API instead of `gh`. Shell out to `security find-generic-password`
+   to reuse the same Keychain entry the `jira` CLI already has configured
+   (see "Jira authentication" gotcha below) rather than prompting for a new
+   token or expecting one in an env var — do **not** invoke the `jira` CLI
+   itself as a subprocess for ingestion; its JQL/output flags are meant for
+   interactive use and are awkward to script reliably (e.g. it rejects a
+   trailing `ORDER BY` in some query forms, and silently mis-scopes cross-
+   project queries unless `-p <PROJECT>` is explicit — both hit during the
+   `rhdh-plugins` spike). Call the REST API directly instead, and flatten
+   Jira's Atlassian Document Format (ADF) rich-text fields to plain text
+   before ingestion (see `engram.flows.rhdh_plugins._adf_to_text`).
+3. Scope the JQL to the target epic and its children explicitly (e.g.
+   `parent = <EPIC> OR key = <EPIC> order by created asc`, see
+   `engram.flows.rhdh_plugins._fetch_epic_and_children`), not a broad
+   `project = <PROJECT>` — the latter would pull in every issue in the
+   tracker, defeating the whole point of narrow-scope onboarding. No upper
+   result `LIMIT` is needed here (unlike koku's whole-project ingestion,
+   which caps via `KOKU_JIRA_LIMIT`) since one epic's subtree is expected to
+   be a handful of issues, not thousands.
+4. Omit `issues_repos` from the project's `PROJECT_CONFIGS` entry in both
+   `engram.pipeline.nightly_learn` and `engram.maintenance.report`, same as
+   the no-issues-bank variant above — `issues_repos` specifically means
+   "GitHub repos to total issues/PRs across via `gh`," which doesn't apply
+   to a Jira-sourced bank. The `<project>-issues` Hindsight bank and its
+   mental model(s) still exist and still work normally for `recall`; only
+   the GitHub-specific totals in `report.py` are skipped.
+5. Also narrow the **code** app's scope to match the epic's actual footprint
+   (e.g. one workspace/package directory inside a monorepo, not every
+   package) — a Jira-scoped issues bank paired with a whole-monorepo code
+   index would defeat the same narrow-scope goal from the code side instead.
+
+> **Jira authentication gotcha**: don't require a separate Jira API token
+> setup for ingestion if the machine already has the `jira` CLI
+> (`github.com/ankitpokhrel/jira-cli` or similar) configured and
+> authenticated — its token lives in the macOS Keychain under a
+> predictable service/account name. Read it with the same `-a <account>
+> -s <service>` pair the CLI itself uses (e.g.
+> `security find-generic-password -a jira-cli -s jira-cloud-api-token -w` —
+> see `engram.flows.rhdh_plugins._jira_token`) instead of asking the user
+> for a fresh token; this was the approach the user explicitly chose over
+> prompting for new credentials during the `rhdh-plugins` onboarding. Also
+> prefer calling Jira's REST API (`/rest/api/3/search/jql`) directly with
+> that token over shelling out to the `jira` CLI for ingestion —
+> `jira-cli`'s `--paginate` has a real bug against Jira Cloud's newer
+> `/search/jql` endpoint (see koku's `_jira_token()` docstring for the full
+> history), and its query/output flags are meant for interactive use, not
+> scripted ingestion.
+
 ## Steps
 
 ### 1. Fork and Clone Repositories
@@ -152,20 +211,27 @@ re-run the same `pip install -e .` (it's idempotent to run twice).
 
 Create `launchd/io.vectorize.cocoindex.<project>.plist`:
 
-- Runs `~/.hindsight/<project>-cocoindex-flows.py` in live mode (a symlink to
-  `src/engram/flows/<project>.py` -- see the note in
-  [INSTALL.md](INSTALL.md) step 16 about why launchd still goes through this
-  symlink rather than the `engram-flows-<project>` console script directly)
+- Runs the `engram-flows-<project>` console script (from step 4) directly in
+  live mode via `~/.hindsight/with-config-env.sh` (the shared wrapper that
+  sources `~/.hindsight/config.env` for secrets/URLs at runtime instead of
+  hardcoding them in the plist) — **not** a `~/.hindsight/<project>-
+  cocoindex-flows.py` symlink. Pre-Phase-8 (before 2026-08-12) every
+  project's plist went through such a symlink because there was no
+  installed package to point `ProgramArguments` at yet; that phase is done
+  for every existing project (see docs/findings/2026-08.md's Phase 8 entry)
+  and no new project should reintroduce the symlink pattern. Use an existing
+  plist (e.g. `launchd/io.vectorize.cocoindex.rhdh-plugins.plist`) as the
+  template, not an older one predating Phase 8.
 - Environment variables for all repo paths
-- Separate log files: `~/.hindsight/logs/<project>-cocoindex-{stdout,stderr}.log`
+- Separate log files: `~/.hindsight/logs/cocoindex-<project>-{stdout,stderr}.log`
+  (project name last, not first — matches every existing plist's actual
+  `StandardOutPath`/`StandardErrorPath`, e.g. `cocoindex-koku-stderr.log`)
 - KeepAlive: true
 
-Symlink the new flow/search modules, then install and start:
+Install and start (no flow/search symlinking needed — the console scripts
+from steps 4/5 are already on `PATH` inside `~/.hindsight/venv/bin/`):
 
 ```bash
-ln -sf "$(pwd)/src/engram/flows/<project>.py" ~/.hindsight/<project>-cocoindex-flows.py
-ln -sf "$(pwd)/src/engram/search/<project>.py" ~/.hindsight/<project>-cocoindex-search.py
-
 # Replace __HOME__ with actual home directory
 sed "s|__HOME__|$HOME|g" launchd/io.vectorize.cocoindex.<project>.plist \
   > ~/Library/LaunchAgents/io.vectorize.cocoindex.<project>.plist
@@ -240,11 +306,15 @@ And a `.gitignore` entry (same wording used for every onboarded repo so far
 >   in that case (symbol lookup/find-references are unaffected) until the
 >   pinned toolchain is installed and `~/.cargo/bin` takes `PATH` priority
 >   over Homebrew's own `rustc`/`cargo`.
-> - **TypeScript**: not yet spiked in this project as of 2026-08-10 — treat
->   as its own mini-spike (health-check plus a couple of real
->   `find_symbol`/`find_referencing_symbols` calls against real code) before
->   relying on it for real work, consistent with how Go and Rust were each
->   spiked first (see docs/findings/2026-08.md's 2026-08-10 entries).
+> - **TypeScript**: no extra install — same auto-management as Go/Python, via
+>   `typescript-language-server`. Spiked and confirmed working 2026-08-13
+>   against `rhdh-plugins` (a 23-workspace Yarn/Node monorepo): both
+>   `find_symbol` and `find_referencing_symbols` returned correct results.
+>   One perf note, not a correctness issue: an unscoped whole-repo search can
+>   be slow on first call in a large monorepo (cold index build), but is
+>   cached and fast on repeat calls and with `relative_path` scoping — pass
+>   `relative_path` to the target workspace/package when possible instead of
+>   searching the whole monorepo every time.
 
 **Known limitation (all languages)**: for symbols located inside certain
 non-declaration contexts (e.g. Go's Ginkgo `var _ = Describe(...)` test
@@ -453,7 +523,7 @@ curl -s http://localhost:8888/v1/default/banks | python3 -m json.tool
 launchctl list | grep cocoindex
 
 # Check CocoIndex logs
-tail -20 ~/.hindsight/logs/<project>-cocoindex-stderr.log
+tail -20 ~/.hindsight/logs/cocoindex-<project>-stderr.log
 
 # Check code embeddings
 psql -h localhost -U hindsight -d hindsight \
@@ -467,8 +537,11 @@ curl -X POST http://localhost:8888/v1/default/banks/<project>-docs/memories/reca
 # Health-check the code-intelligence backend (step 7) against real code —
 # do a couple of real find_symbol/find_referencing_symbols calls, not just
 # the health-check CLI, which can land on a file with no top-level symbols
-# (e.g. a Ginkgo test file) and report a false negative
-uvx --from git+https://github.com/oraios/serena serena project health-check --project /path/to/target-repo
+# (e.g. a Ginkgo test file) and report a false negative.
+# NOTE: the target path is a positional argument, not a --project flag --
+# `serena project health-check --project <path>` fails with an unrecognized-
+# option error (verified 2026-08-13); `--help` confirms the positional form.
+uvx --from git+https://github.com/oraios/serena serena project health-check /path/to/target-repo
 ```
 
 ### 13. Install the Deterministic Correction Enforcement Hooks (optional)
@@ -563,6 +636,68 @@ subsequent one; and a `preToolUse` deny always deletes the marker
 immediately, so a denied-then-retried plan never gets a checklist reminder
 either (`postToolUse` never fires after a `preToolUse` deny).
 
+### 14. Install Self-Healing Git Hooks (recommended)
+
+Separate from step 13's correction-enforcement hooks, `~/.hindsight/git-
+hooks/` holds a family of plain git hooks (`post-checkout`, `post-merge`,
+`reference-transaction`) that keep two other things from silently going
+stale as a repo's working tree changes underneath a running Cursor session:
+
+1. **Language-server staleness**: `gopls mcp` / `serena start-mcp-server`
+   processes cache file state at startup. A `git checkout`/`pull`/`merge`/
+   `reset`/`rebase` that rewrites files on disk without restarting these
+   processes leaves them serving stale symbol/reference data. These hooks
+   kill any matching stale process (matched by cwd for `gopls`, by
+   `--project <toplevel>` for `serena`) so the next Cursor MCP call
+   auto-respawns a fresh one.
+2. **(kubernaut/dcm families only) `.cursor/mcp.json` template drift**: for
+   repo families sharing one symlinked `.cursor/mcp.json` template (step 8's
+   "repo families" gotcha), `post-checkout-cursor-mcp.sh`/
+   `post-checkout-dcm-mcp.sh` also re-provision that symlink on checkout.
+
+This gap was found and closed 2026-08-13: koku (3 clones), every
+praxis-proxy repo (10 clones), and engram itself had never received this
+rollout (only kubernaut-family and dcm-project had it), which was the
+concrete, fixable half of Cursor repeatedly showing MCP servers as
+"Disabled" across those projects (see docs/findings/2026-08.md's 2026-08-13
+entry — the other half is a genuine Cursor UI stale-label bug with no
+hook-side fix). A new **generic** variant,
+`post-checkout-generic-mcp.sh`, was added for exactly this case: same
+gopls/serena-restart + self-provisioning behavior as the family-templated
+variants, but deliberately skips the `.cursor/mcp.json` symlink step, since
+koku/praxis-proxy/engram (and any newly onboarded single-repo project like
+`rhdh-plugins`) use real, non-symlinked `mcp.json` files per repo.
+
+Install (symlink, don't copy, so future fixes to the shared script land in
+every repo without a re-run):
+
+```bash
+d=/path/to/target-repo
+ln -sf ~/.hindsight/git-hooks/post-checkout-generic-mcp.sh "$d/.git/hooks/post-checkout"
+ln -sf ~/.hindsight/git-hooks/post-merge-cursor-mcp.sh      "$d/.git/hooks/post-merge"
+ln -sf ~/.hindsight/git-hooks/reference-transaction-cursor-mcp.sh "$d/.git/hooks/reference-transaction"
+```
+
+`post-merge` and `reference-transaction` are also self-provisioned by
+`post-checkout` on its own next run if either is missing, so re-linking just
+`post-checkout` after a fresh clone is normally enough — but link all three
+explicitly for a brand-new onboarding rather than relying on that
+self-healing to fire first. Use the kubernaut-family
+(`post-checkout-cursor-mcp.sh`) or dcm-family (`post-checkout-dcm-mcp.sh`)
+variant instead of the generic one only if the new project *does* share a
+symlinked `.cursor/mcp.json` template with sibling repos (step 8's family
+gotcha) — those two also carry the template-selection logic the generic
+variant deliberately omits.
+
+> **Gotcha**: these are plain POSIX shell hooks in `.git/hooks/`
+> (or the repo's `core.hooksPath` equivalent, if set), not Cursor
+> `hooks.json` entries — they run for *any* git client (command line,
+> Cursor's own git integration, etc.), not just tool calls the agent makes.
+> Verify with a smoke test after installing: run
+> `"$d/.git/hooks/post-checkout"` directly and confirm exit code 0, then
+> check `post-merge`/`reference-transaction` got self-provisioned (or link
+> them explicitly per above).
+
 ## File Checklist
 
 | File | Purpose |
@@ -578,6 +713,8 @@ either (`postToolUse` never fires after a `preToolUse` deny).
 | `hooks/install.sh` | Installs the Deterministic Correction Enforcement hook family (optional, step 13) |
 | Each opted-in repo's `.cursor/hooks.json` | Harness-enforced plan-kickoff detector + contradiction-check enforcer (+ checklist reminder for non-kubernaut repos) |
 | `hooks/review-checklists/<repo>.md` | Per-repo PR review checklist content, injected by the checklist-reminder hook when present |
+| `~/.hindsight/git-hooks/post-checkout-{generic,cursor,dcm}-mcp.sh` + `post-merge-cursor-mcp.sh` + `reference-transaction-cursor-mcp.sh` | Self-healing plain git hooks: restart stale gopls/serena processes (+ re-provision a shared `.cursor/mcp.json` template for family repos) on checkout/merge/rebase/reset (recommended, step 14) |
+| Each opted-in repo's `.git/hooks/{post-checkout,post-merge,reference-transaction}` | Symlinks into the shared git-hooks scripts above (step 14) |
 
 ## Isolation Guarantees
 

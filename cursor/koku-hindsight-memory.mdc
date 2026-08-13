@@ -25,8 +25,14 @@ Before proposing any plan, writing any implementation, or switching to agent
 mode to begin coding:
 
 1. Recall `hindsight` with query: **"project methodology, workflow, conventions"**,
-   passing `tags: ["koku"]` (`tags_match` defaults to strict when tags are
-   given). This scopes results to koku-tagged facts only, avoiding the
+   passing `tags: ["koku"], tags_match: "any_strict"` explicitly. **Do
+   not rely on the default or pass the literal string `"strict"`** —
+   `tags_match` defaults to `"any"` (which *includes* untagged
+   memories), and `"strict"` is not a valid value at all (real
+   options: `any`, `all`, `any_strict`, `all_strict`, `exact`); an
+   unrecognized value silently falls back to the unfiltered `"any"`
+   default (see docs/FINDINGS.md in the engram repo, 2026-08-13
+   entry). This scopes results to koku-tagged facts only, avoiding the
    kubernaut/dcm/engram cross-project pollution described below.
 2. Also fetch the 4 koku-scoped mental models (`koku-testing-methodology`,
    `koku-coding-conventions`, `koku-architecture-decisions`,
@@ -46,11 +52,11 @@ surface kubernaut's FedRAMP/NIST-800-53 control-mapping requirements as if
 they were generic conventions, or Go-specific testing patterns that don't
 apply to this Python/Django codebase. Those 4 models are tagged
 `["kubernaut"]` and koku has its own isolated set (above), tagged `["koku"]`
-with strict tag matching so kubernaut/dcm/engram content can never enter
+matched with `tags_match: "any_strict"` so kubernaut/dcm/engram content can never enter
 them. **Known limitation**: only newly retained facts carry a project tag
 going forward — Hindsight's memory-curation API has no way to retag existing
 facts, so an *untagged, ad-hoc* `recall()` call (no `tags` param) can still
-surface old pre-fix content from any project. Always pass `tags: ["koku"]`
+surface old pre-fix content from any project. Always pass `tags: ["koku"], tags_match: "any_strict"`
 on cursor-memory recall calls to get the isolation guarantee. Also expect
 koku's own tagged content to be sparse at first — it only grows as new
 retains happen post-onboarding (2026-07-31).

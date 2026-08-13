@@ -26,6 +26,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff==0.16.2"]
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests requiring a real Postgres+pgvector instance (see tests/integration/README.md); excluded from the default `pytest` run",
+]
+
 # The 13 launchd-invoked entry points only (5 flows + 5 search + nightly-learn
 # + ingest-issues + hindsight-proxy). ingest-docs and the maintenance/backfill
 # tools are run by hand, not by launchd -- invoke those as

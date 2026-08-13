@@ -1,0 +1,46 @@
+# systemd unit (native, Linux) -- single shared Serena MCP daemon for all 6
+# kubernaut-family repos. Direct analog of
+# launchd/io.vectorize.serena.kubernaut-family.plist -- see that file's
+# comments (identical reasoning applies here, not repeated in full):
+#
+#   - Deliberately started WITHOUT --project: a fixed --project at startup
+#     hard-disables the activate_project tool. Omitting it keeps
+#     activate_project available so any family repo can get full read+write
+#     at runtime instead of being fixed to one repo for the daemon's
+#     lifetime.
+#   - --add-mode query-projects exposes query_project/list_queryable_projects
+#     for a read-only peek at another family member without switching.
+#   - engram-serena-project-server.service (below) must also be running for
+#     query_project to work at all.
+#   - Known limitation: only ONE project can be "active" (full read+write) at
+#     a time -- see engram-serena-multiplex-kubernaut-family.service for the
+#     fix giving every repo full read+write simultaneously.
+#
+# `uvx` here comes from the same `uv` install as INSTALL-linux.md's
+# prerequisites (`curl -LsSf https://astral.sh/uv/install.sh | sh`), which
+# installs to ~/.local/bin on Linux exactly as it does on macOS. Requires Go
+# on PATH (for `gopls`, Serena's Go language server backend) -- adjust
+# GOPATH/PATH below if your Go install differs from the standard
+# `~/go`/`~/.local/bin` layout this unit assumes.
+#
+# Install (user-level, mirrors launchd's per-user LaunchAgents):
+#   cp systemd/engram-serena-kubernaut-family.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now engram-serena-kubernaut-family.service
+
+[Unit]
+Description=Shared Serena MCP daemon (kubernaut-family, no fixed project)
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=PATH=%h/.local/bin:/usr/local/bin:%h/go/bin:/usr/bin:/bin
+Environment=GOPATH=%h/go
+ExecStart=%h/.local/bin/uvx --from git+https://github.com/oraios/serena serena start-mcp-server --context ide --add-mode no-memories --add-mode query-projects --open-web-dashboard false --transport streamable-http --host 127.0.0.1 --port 8892
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:%h/.hindsight/logs/serena-kubernaut-family-stdout.log
+StandardError=append:%h/.hindsight/logs/serena-kubernaut-family-stderr.log
+
+[Install]
+WantedBy=default.target

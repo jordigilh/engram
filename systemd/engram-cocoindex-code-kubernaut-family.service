@@ -1,0 +1,57 @@
+# systemd unit (native, Linux) -- shared cocoindex-code MCP daemon for all 6
+# kubernaut-family repos (kubernaut, kubernaut-operator, kubernaut-console,
+# kubernaut-demo-scenarios, kubernaut-v1.5, kubernaut-v1.6). Direct analog of
+# launchd/io.vectorize.cocoindex-code.kubernaut-family.plist.
+#
+# Each repo's .cursor/mcp.json points its "cocoindex-code" entry at this
+# daemon's fixed HTTP URL (http://127.0.0.1:8891/mcp) instead of spawning its
+# own stdio subprocess. Already multi-repo-aware via --repo/--branch query
+# params; no per-repo instance needed. See docs/findings/2026-08.md,
+# 2026-08-13 (same day, seventh follow-up) for the design rationale (written
+# for the macOS/launchd rollout; identical reasoning applies here).
+#
+# Adjust WorkingDirectory/KUBERNAUT_LIVE_CLONE_DIR below if your kubernaut
+# clone lives somewhere other than the path this repo's own launchd plist
+# assumes.
+#
+# IMPORTANT (Postgres reachability differs from macOS): on macOS,
+# COCOINDEX_PG_URL=postgresql://...@localhost:5432/... works because Postgres
+# either runs natively (docs/INSTALL.md step 5's optional standalone
+# io.vectorize.hindsight.postgres.plist) or its embedded pg0 is otherwise
+# reachable on the host's loopback. On Linux (INSTALL-linux.md), Hindsight
+# -- including its embedded pg0 -- runs inside a Podman Quadlet container
+# whose default networking (`PublishPort=8888:8888`) does NOT expose 5432 to
+# the host at all; a native process on the host (this unit) cannot reach
+# `localhost:5432` unless you either (a) add `PublishPort=5432:5432` to
+# `quadlet/hindsight.container` and restart it, or (b) already run under
+# that quadlet's `Network=host` fallback (see its comments), under which the
+# container's own loopback IS the host's, so 5432 becomes directly reachable
+# with no quadlet change needed. Verify with
+# `psql -h localhost -p 5432 -U hindsight -d hindsight -c 'select 1;'` from
+# the host before assuming this unit will start cleanly.
+#
+# Install (user-level, mirrors launchd's per-user LaunchAgents):
+#   cp systemd/engram-cocoindex-code-kubernaut-family.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now engram-cocoindex-code-kubernaut-family.service
+
+[Unit]
+Description=Shared cocoindex-code MCP daemon (kubernaut-family)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/go/src/github.com/jordigilh/kubernaut
+EnvironmentFile=%h/.hindsight/config.env
+Environment=GOOGLE_APPLICATION_CREDENTIALS=%h/.config/gcloud/application_default_credentials.json
+Environment=COCOINDEX_PG_URL=postgresql://hindsight:hindsight@localhost:5432/hindsight
+Environment=KUBERNAUT_LIVE_CLONE_DIR=%h/go/src/github.com/jordigilh/kubernaut
+Environment=HF_HUB_OFFLINE=1
+ExecStart=%h/.hindsight/venv/bin/engram-search-kubernaut --transport streamable-http --host 127.0.0.1 --port 8891
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:%h/.hindsight/logs/cocoindex-code-kubernaut-family-stdout.log
+StandardError=append:%h/.hindsight/logs/cocoindex-code-kubernaut-family-stderr.log
+
+[Install]
+WantedBy=default.target

@@ -411,6 +411,15 @@ The workspace-level config uses the same server **names** as kubernaut (`hindsig
 > project — only worth the added complexity once a family is large enough
 > that N duplicate processes are a measurable resource concern.
 >
+> **On Linux**: same architecture, `systemd --user` units instead of
+> `launchd` plists — see `docs/INSTALL-linux.md` step 9 and
+> `systemd/engram-cocoindex-code-kubernaut-family.service` /
+> `systemd/engram-serena-kubernaut-family.service` /
+> `systemd/engram-serena-project-server.service` for the direct analogs of
+> this section's 3 plists, including a real Postgres-reachability gotcha
+> specific to Linux's containerized Hindsight deployment that macOS doesn't
+> have (step 9 documents the fix).
+>
 > **This still leaves one gap**, closed by step 8a below: the shared `serena`
 > daemon has exactly one process-global "active project" at a time, so only
 > whichever family repo last called `activate_project` gets full read+write —
@@ -499,6 +508,15 @@ edited at a time (step 8's plain shared daemon is simpler and sufficient).
    via `get_current_config` even after the other activates a different one
    in between — that's the actual guarantee this buys you, not just "it
    responds to requests."
+
+> **On Linux**: `systemd/engram-serena-multiplex-kubernaut-family.service`
+> is the direct analog of this step's launchd plist — same
+> `engram-serena-multiplex` console script, same `--project`/
+> `--upstream-url` flags, just `systemctl --user enable --now
+> <unit>.service` instead of `launchctl bootstrap`. See
+> `docs/INSTALL-linux.md` step 9 for the full command sequence (bundled
+> together with steps 2 and 3's plain shared-daemon units, since on Linux
+> there's no reason to install one without the other).
 
 ### 9. Slim the Global MCP Config
 
@@ -828,6 +846,7 @@ variant deliberately omits.
 | Each repo's `.serena/project.yml` | Per-repo Serena language-server registration (step 7); cannot be shared/symlinked, keyed by absolute path |
 | `src/engram/pipeline/serena_multiplex.py` / `engram-serena-multiplex` | (Optional, step 8a) Gives every repo in a shared-Serena family full read+write instead of just whichever is "active" |
 | `launchd/io.vectorize.serena-multiplex.<family>.plist` | (Optional, step 8a) macOS service for the multiplex daemon, one per family |
+| `systemd/engram-{cocoindex-code,serena,serena-project-server,serena-multiplex}-kubernaut-family.service` | (Optional, steps 8/8a) Linux (`systemd --user`) analogs of the 4 shared-daemon launchd plists above — see `docs/INSTALL-linux.md` step 9 |
 | `hooks/install.sh` | Installs the Deterministic Correction Enforcement hook family (optional, step 13) |
 | Each opted-in repo's `.cursor/hooks.json` | Harness-enforced plan-kickoff detector + contradiction-check enforcer (+ checklist reminder for non-kubernaut repos) |
 | `hooks/review-checklists/<repo>.md` | Per-repo PR review checklist content, injected by the checklist-reminder hook when present |

@@ -1,0 +1,29 @@
+# systemd unit (native, Linux) -- backend that answers query_project calls
+# from ANY Serena MCP daemon (currently just
+# engram-serena-kubernaut-family.service, but not tied to that family
+# specifically). Direct analog of
+# launchd/io.vectorize.serena-project-server.plist. Listens on Serena's fixed
+# default port (24225); lazily spawns a language server per queried project
+# on first use, not up front.
+#
+# Install (user-level, mirrors launchd's per-user LaunchAgents):
+#   cp systemd/engram-serena-project-server.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now engram-serena-project-server.service
+
+[Unit]
+Description=Serena query_project backend (shared across all daemons)
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=PATH=%h/.local/bin:/usr/local/bin:%h/go/bin:/usr/bin:/bin
+Environment=GOPATH=%h/go
+ExecStart=%h/.local/bin/uvx --from git+https://github.com/oraios/serena serena start-project-server
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:%h/.hindsight/logs/serena-project-server-stdout.log
+StandardError=append:%h/.hindsight/logs/serena-project-server-stderr.log
+
+[Install]
+WantedBy=default.target

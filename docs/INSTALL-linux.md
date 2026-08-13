@@ -193,6 +193,79 @@ journalctl --user -u engram-cocoindex.service -f
 > the direct equivalent of launchd's LaunchAgents starting at login without
 > needing an active terminal session.
 
+## 9. (Optional, Repo Families Only) Shared cocoindex-code/Serena Daemons + Serena Multiplex
+
+If you're onboarding a **family of repos under one org that should share one
+code-intelligence backend** instead of spawning a `cocoindex-code`/`serena`/
+`gopls` subprocess per Cursor window per repo — see
+[`NEW_PROJECT_SETUP.md`](NEW_PROJECT_SETUP.md)'s step 8 "Evolution" note and
+step 8a for the full, platform-agnostic rationale (when this is worth the
+added complexity, the "one active project at a time" limitation of a plain
+shared Serena daemon, and why the multiplex wrapper exists). This section is
+just the Linux (`systemd --user`) command sequence; the concepts, `.cursor/
+mcp.json` shapes, and gotchas are identical to the macOS (`launchd`)
+instructions there.
+
+```bash
+cp systemd/engram-cocoindex-code-kubernaut-family.service ~/.config/systemd/user/
+cp systemd/engram-serena-kubernaut-family.service ~/.config/systemd/user/
+cp systemd/engram-serena-project-server.service ~/.config/systemd/user/
+cp systemd/engram-serena-multiplex-kubernaut-family.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+
+systemctl --user enable --now engram-cocoindex-code-kubernaut-family.service
+systemctl --user enable --now engram-serena-kubernaut-family.service
+systemctl --user enable --now engram-serena-project-server.service
+systemctl --user enable --now engram-serena-multiplex-kubernaut-family.service
+```
+
+The 4 unit files are named/scoped for this project's own repo family
+(`kubernaut`, `kubernaut-operator`, `kubernaut-console`,
+`kubernaut-demo-scenarios`, `kubernaut-v1.5`, `kubernaut-v1.6`) — for a
+different family, copy and rename them, and edit each unit's `--project`/
+`ExecStart` args plus `.cursor/mcp.json`'s ports/URLs to match. See each
+unit file's own header comments (and the direct-analog `launchd/*.plist`
+they mirror) for the full per-flag rationale.
+
+> **Postgres reachability gotcha specific to Linux**: the `cocoindex-code`
+> daemon's `COCOINDEX_PG_URL` needs `localhost:5432` reachable from a
+> **native** host process. On macOS this works because Postgres either runs
+> natively or its embedded `pg0` is otherwise reachable on the host
+> loopback; on Linux, step 5's Podman Quadlet only publishes port 8888 by
+> default, **not** 5432 — a native process cannot reach `localhost:5432`
+> unless you either add `PublishPort=5432:5432` to
+> `~/.config/containers/systemd/hindsight.container` and restart it, or are
+> already running under that Quadlet's `Network=host` fallback (see its own
+> comments), which makes 5432 directly reachable with no further change.
+> Verify with `psql -h localhost -p 5432 -U hindsight -d hindsight -c 'select 1;'`
+> before enabling the unit.
+
+Give each family repo its own `.cursor/mcp.json` `serena` entry pointed at
+its own multiplex mount, exactly as `NEW_PROJECT_SETUP.md` step 8a
+describes — this part is pure JSON config and identical on every platform:
+
+```json
+"serena": { "type": "http", "url": "http://127.0.0.1:8893/mcp/<project-name>" }
+```
+
+Verify the daemons are up and correctly isolating per project:
+
+```bash
+systemctl --user status engram-serena-multiplex-kubernaut-family.service
+journalctl --user -u engram-serena-multiplex-kubernaut-family.service -f
+```
+
+> **Personal git-hook restart scripts are not part of this repo**: on
+> macOS, `~/.hindsight/git-hooks/_restart-kubernaut-family-daemons.sh`
+> (a personal, uncommitted script — see `NEW_PROJECT_SETUP.md` step 14) uses
+> `launchctl kickstart -k` to restart these 4 daemons after a `git checkout`/
+> `pull`/`rebase` changes files on disk underneath them. If you build the
+> Linux equivalent of that self-healing git-hook family for your own repos,
+> swap the restart calls for `systemctl --user restart
+> <unit-name>.service` — nothing else about the hook logic (detecting HEAD
+> changes, self-provisioning `post-merge`/`reference-transaction`) is
+> platform-specific.
+
 ## Continue with the platform-agnostic steps
 
 Jump to [`INSTALL.md`](INSTALL.md) step 7 ("Configure Cursor MCP") onward —

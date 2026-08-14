@@ -1,0 +1,10 @@
+{
+  "name": "engram-opencode-plugin",
+  "version": "0.1.0",
+  "description": "Engram plugin for OpenCode: exposes hindsight-docs, hindsight-issues, cocoindex-code, and serena through a minimal project+family config surface.",
+  "type": "module",
+  "main": "index.ts",
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.18.18"
+  }
+}

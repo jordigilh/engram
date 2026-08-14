@@ -119,6 +119,25 @@ Prefer gopls for precise lookups, `cocoindex_search` for semantic exploration,
 and hindsight for behavioral context. Do not redundantly call all three for the
 same question.
 
-## Do NOT retain
+## Retain/reflect: on-demand, suggest-then-confirm
 
-Never call `retain` during sessions. Memory extraction runs nightly.
+No background job does this anymore — `retain`, `sync_retain`, and `reflect`
+are on-demand only, triggered explicitly in-chat (see docs/findings/2026-08.md,
+2026-08-13 "retain/reflect on-demand" decision). This keeps LLM cost visible
+and bounded until there's a stable, well-understood cost baseline for
+background extraction.
+
+**Suggest, don't call silently.** When you notice one of the following during
+a session, propose it to the user and wait for confirmation before calling
+the tool:
+
+- **Retain** — an explicit correction, a decision, a stated preference, or a
+  hard-won discovery (e.g. a root cause that took real effort to find) worth
+  recalling in a future session.
+- **Reflect** — several related retains have accumulated on the same topic,
+  you're about to lean on a mental model that looks stale, or the user
+  directly points out staleness.
+
+Only call `retain`/`sync_retain`/`reflect` after the user confirms, or when
+they ask for it directly ("retain this", "update the mental model", etc.).
+Never call them proactively or as a matter of routine.

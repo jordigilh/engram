@@ -10,16 +10,17 @@
         <string>__HOME__/.hindsight/venv/bin/engram-flows-kubernaut</string>
         <string>--mode</string>
         <string>live</string>
-        <!-- transcripts deliberately excluded: it's the only app in any
-             onboarded project's flow that makes live LLM calls (Haiku
-             correction_gate.is_correction() per new transcript message,
-             occasionally escalating to Sonnet via
-             contradiction_resolution.resolve()) -- see docs/FINDINGS.md
-             2026-08-13. Cut to manually-triggered only
-             (`engram-flows-kubernaut --mode backfill --apps transcripts`)
-             pending a cost/value decision; nightly-learn.py's existing
-             hourly/nightly batch pass still covers correction detection on
-             a much lower-frequency schedule in the meantime. -->
+        <!-- transcripts deliberately excluded: it retains raw chat transcript
+             text into the cursor-memory bank with LLM fact-extraction left on
+             (concise mode) -- that's exactly the automatic LLM-cost surface
+             the 2026-08-13 "retain/reflect on-demand" decision targeted, so
+             it stays on-demand only (call retain/reflect explicitly in chat).
+             docs/issues are back in live mode as of 2026-08-14: their banks
+             (kubernaut-docs, kubernaut-issues) are now configured with
+             retain_extraction_mode=chunks + enable_observations=false, so
+             hindsight_retain() stores raw chunks with local ONNX embeddings
+             only -- no LLM call at all. See docs/findings/2026-08.md
+             2026-08-14 "chunks-mode ingestion" decision. -->
         <string>--apps</string>
         <string>docs</string>
         <string>issues</string>

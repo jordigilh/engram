@@ -10,6 +10,17 @@
         <string>__HOME__/.hindsight/venv/bin/engram-flows-engram</string>
         <string>--mode</string>
         <string>live</string>
+        <!-- docs is back in live mode as of 2026-08-14: its bank
+             (engram-docs) is now configured with
+             retain_extraction_mode=chunks + enable_observations=false, so
+             hindsight_retain() stores raw chunks with local ONNX embeddings
+             only -- no LLM call at all. See docs/findings/2026-08.md
+             2026-08-14 "chunks-mode ingestion" decision (supersedes the
+             2026-08-13 "retain/reflect on-demand" code-only restriction for
+             this app). -->
+        <string>--apps</string>
+        <string>docs</string>
+        <string>code</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>

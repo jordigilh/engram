@@ -62,7 +62,14 @@ export HINDSIGHT_URL="${HINDSIGHT_URL:-http://localhost:8888}"
 export COCOINDEX_PG_URL="${COCOINDEX_PG_URL:-postgresql://hindsight:hindsight@localhost:5432/hindsight}"
 export COCOINDEX_DB="${COCOINDEX_DB:-${HOME}/.hindsight/dcm-cocoindex.db}"
 
-echo "${LOG_PREFIX} Running backfill: docs + code + issues"
-"${FLOWS_CMD}" --mode backfill --apps docs code issues
+# docs/issues are back in the nightly backfill as of 2026-08-14: their banks
+# (dcm-docs, dcm-issues) are now configured with retain_extraction_mode=chunks
+# + enable_observations=false, so hindsight_retain() stores raw chunks with
+# local ONNX embeddings only -- no LLM call at all. See
+# docs/findings/2026-08.md 2026-08-14 "chunks-mode ingestion" decision
+# (supersedes the 2026-08-13 "retain/reflect on-demand" code-only restriction
+# for this app).
+echo "${LOG_PREFIX} Running backfill: docs, issues, code"
+"${FLOWS_CMD}" --mode backfill --apps docs issues code
 
 echo "${LOG_PREFIX} Backfill complete at $(date)"

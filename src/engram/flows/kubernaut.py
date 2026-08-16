@@ -6,7 +6,8 @@ Declares four apps:
                      (kubernaut-docs, kubernaut/docs, kubernaut-operator/docs,
                       kubernaut-console/docs, kubernaut-demo-scenarios/scenarios+docs)
   2. issues-app:     GitHub issues from all kubernaut repos → Hindsight kubernaut-issues bank
-                     (kubernaut, kubernaut-operator, kubernaut-console, kubernaut-demo-scenarios)
+                     (kubernaut, kubernaut-operator, kubernaut-console, kubernaut-demo-scenarios,
+                      kubernaut-docs)
   3. code-app:       Go source → pgvector code_embeddings table
   4. transcript-app: Cursor agent transcripts → Hindsight cursor-memory bank
 
@@ -88,7 +89,7 @@ ENGRAM_TRANSCRIPTS_DIR = pathlib.Path(os.environ.get(
 ))
 ISSUES_REPOS = os.environ.get(
     "ENGRAM_ISSUES_REPOS",
-    "jordigilh/kubernaut,jordigilh/kubernaut-operator,jordigilh/kubernaut-console,jordigilh/kubernaut-demo-scenarios",
+    "jordigilh/kubernaut,jordigilh/kubernaut-operator,jordigilh/kubernaut-console,jordigilh/kubernaut-demo-scenarios,jordigilh/kubernaut-docs",
 ).split(",")
 ISSUES_POLL_INTERVAL = int(os.environ.get("ENGRAM_ISSUES_POLL_SECONDS", "300"))
 

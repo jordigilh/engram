@@ -49,7 +49,7 @@
         <key>ENGRAM_SCENARIOS_DIR</key>
         <string>__HOME__/.hindsight/watch/kubernaut-demo-scenarios</string>
         <key>ENGRAM_ISSUES_REPOS</key>
-        <string>jordigilh/kubernaut,jordigilh/kubernaut-operator,jordigilh/kubernaut-console,jordigilh/kubernaut-demo-scenarios</string>
+        <string>jordigilh/kubernaut,jordigilh/kubernaut-operator,jordigilh/kubernaut-console,jordigilh/kubernaut-demo-scenarios,jordigilh/kubernaut-docs</string>
         <!-- Kept in sync by hand with watch-mirrors-config.sh's RELEASE_LINES
              -- code_main additionally indexes these release-line mirrors
              (docs/issues stay main-only, unchanged). See docs/FINDINGS.md

@@ -772,10 +772,15 @@ either (`postToolUse` never fires after a `preToolUse` deny).
 
 ### 14. Install Self-Healing Git Hooks (recommended)
 
-Separate from step 13's correction-enforcement hooks, `~/.hindsight/git-
-hooks/` holds a family of plain git hooks (`post-checkout`, `post-merge`,
-`reference-transaction`) that keep two other things from silently going
-stale as a repo's working tree changes underneath a running Cursor session:
+Separate from step 13's correction-enforcement hooks, `git-hooks/` in this
+repo holds **templates and ready-to-use scripts** for a family of plain git
+hooks (`post-checkout`, `post-merge`, `reference-transaction`) — see
+`git-hooks/README.md` for the full reference; this step is a summary.
+`~/.hindsight/git-hooks/` is where you *install* (symlink or generate) them
+per-machine — it does not come pre-populated; that directory is created by
+this step, not shipped with engram. These hooks keep two things from
+silently going stale as a repo's working tree changes underneath a running
+Cursor session:
 
 1. **Language-server staleness**: `gopls mcp` / `serena start-mcp-server`
    processes cache file state at startup. A `git checkout`/`pull`/`merge`/
@@ -795,33 +800,48 @@ rollout (only kubernaut-family and dcm-project had it), which was the
 concrete, fixable half of Cursor repeatedly showing MCP servers as
 "Disabled" across those projects (see docs/findings/2026-08.md's 2026-08-13
 entry — the other half is a genuine Cursor UI stale-label bug with no
-hook-side fix). A new **generic** variant,
-`post-checkout-generic-mcp.sh`, was added for exactly this case: same
-gopls/serena-restart + self-provisioning behavior as the family-templated
-variants, but deliberately skips the `.cursor/mcp.json` symlink step, since
-koku/praxis-proxy/engram (and any newly onboarded single-repo project like
-`rhdh-plugins`) use real, non-symlinked `mcp.json` files per repo.
+hook-side fix). A **generic** variant is checked into this repo at
+`git-hooks/generic/` for exactly this case: same gopls/serena-restart +
+self-provisioning behavior as the family variant, but deliberately skips
+the `.cursor/mcp.json` symlink step, since koku/praxis-proxy/engram (and any
+newly onboarded single-repo project like `rhdh-plugins`) use real,
+non-symlinked `mcp.json` files per repo.
 
-Install (symlink, don't copy, so future fixes to the shared script land in
-every repo without a re-run):
+**2026-08-16 correction**: an earlier version of `post-checkout-generic-mcp.sh`
+(and the dcm-family variant) self-provisioned `post-merge`/
+`reference-transaction` from the kubernaut-family-*specific* scripts, which
+restart the kubernaut-family shared serena daemon — completely irrelevant to
+a generic/dcm repo's own per-repo gopls/serena, and it means routine git
+operations across 30 unrelated repos were needlessly restarting
+kubernaut-family's daemon (and never actually refreshing their own). Fixed
+by adding dedicated `post-merge-generic-mcp.sh` /
+`reference-transaction-generic-mcp.sh` (family-agnostic, per-repo restart
+only) and correcting both `post-checkout-generic-mcp.sh` and
+`post-checkout-dcm-mcp.sh` to self-provision those instead. See
+`docs/findings/2026-08.md`, 2026-08-16 entry, for the full incident.
+
+Install the generic variant (symlink, don't copy, so future fixes to the
+shared script land in every repo without a re-run):
 
 ```bash
 d=/path/to/target-repo
-ln -sf ~/.hindsight/git-hooks/post-checkout-generic-mcp.sh "$d/.git/hooks/post-checkout"
-ln -sf ~/.hindsight/git-hooks/post-merge-cursor-mcp.sh      "$d/.git/hooks/post-merge"
-ln -sf ~/.hindsight/git-hooks/reference-transaction-cursor-mcp.sh "$d/.git/hooks/reference-transaction"
+ln -sf /path/to/engram/git-hooks/generic/post-checkout-generic-mcp.sh "$d/.git/hooks/post-checkout"
+ln -sf /path/to/engram/git-hooks/generic/post-merge-generic-mcp.sh      "$d/.git/hooks/post-merge"
+ln -sf /path/to/engram/git-hooks/generic/reference-transaction-generic-mcp.sh "$d/.git/hooks/reference-transaction"
 ```
 
 `post-merge` and `reference-transaction` are also self-provisioned by
 `post-checkout` on its own next run if either is missing, so re-linking just
 `post-checkout` after a fresh clone is normally enough — but link all three
 explicitly for a brand-new onboarding rather than relying on that
-self-healing to fire first. Use the kubernaut-family
-(`post-checkout-cursor-mcp.sh`) or dcm-family (`post-checkout-dcm-mcp.sh`)
-variant instead of the generic one only if the new project *does* share a
-symlinked `.cursor/mcp.json` template with sibling repos (step 8's family
-gotcha) — those two also carry the template-selection logic the generic
-variant deliberately omits.
+self-healing to fire first. Use the **family** variant instead of generic
+only if the new project *does* share either a symlinked `.cursor/mcp.json`
+template or a long-lived shared HTTP MCP daemon with sibling repos (step 8's
+family gotcha / step 8a) — see `git-hooks/README.md` for the family variant's
+templated install (`git-hooks/family/*.sh.tmpl` + `git-hooks/generate-hooks.sh`
++ a real worked example at `git-hooks/families/kubernaut-family.vars`),
+which also carries the `.cursor/mcp.json` template-selection logic the
+generic variant deliberately omits.
 
 > **Gotcha**: these are plain POSIX shell hooks in `.git/hooks/`
 > (or the repo's `core.hooksPath` equivalent, if set), not Cursor
@@ -850,8 +870,10 @@ variant deliberately omits.
 | `hooks/install.sh` | Installs the Deterministic Correction Enforcement hook family (optional, step 13) |
 | Each opted-in repo's `.cursor/hooks.json` | Harness-enforced plan-kickoff detector + contradiction-check enforcer (+ checklist reminder for non-kubernaut repos) |
 | `hooks/review-checklists/<repo>.md` | Per-repo PR review checklist content, injected by the checklist-reminder hook when present |
-| `~/.hindsight/git-hooks/post-checkout-{generic,cursor,dcm}-mcp.sh` + `post-merge-cursor-mcp.sh` + `reference-transaction-cursor-mcp.sh` | Self-healing plain git hooks: restart stale gopls/serena processes (+ re-provision a shared `.cursor/mcp.json` template for family repos) on checkout/merge/rebase/reset (recommended, step 14) |
-| Each opted-in repo's `.git/hooks/{post-checkout,post-merge,reference-transaction}` | Symlinks into the shared git-hooks scripts above (step 14) |
+| `git-hooks/generic/*.sh` | Self-healing plain git hooks, single-repo variant: restart stale gopls/serena processes on checkout/merge/rebase/reset (recommended, step 14) |
+| `git-hooks/family/*.sh.tmpl` + `git-hooks/generate-hooks.sh` + `git-hooks/families/*.vars` | Templated variant for repos sharing a long-lived HTTP MCP daemon: same restart behavior + re-provisions a shared `.cursor/mcp.json` template (optional, steps 8/8a/14) |
+| `~/.hindsight/git-hooks/*.sh` | Per-machine install target: symlinks (generic) or `generate-hooks.sh` output (family) land here (step 14) |
+| Each opted-in repo's `.git/hooks/{post-checkout,post-merge,reference-transaction}` | Symlinks into the installed git-hooks scripts above (step 14) |
 
 ## Isolation Guarantees
 

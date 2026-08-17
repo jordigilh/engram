@@ -5,8 +5,15 @@ alwaysApply: true
 
 ## When to recall (MUST)
 
+This rule is deployed to both `project-koku/koku` (Python) and
+`project-koku/koku-service-operator` (Go) -- see the module docstring in
+`src/engram/flows/koku.py` in the engram repo: koku-service-operator is
+deliberately folded into the same koku-docs/koku-issues/koku-code scope
+rather than getting its own bank, "one product, one Jira project (COST)".
+
 You MUST call `recall` on your **first turn** when the task involves:
 - Python/Django code, koku, cost model, report processing, or masu pipeline work
+- Go code, koku-service-operator, or operator/reconciliation work
 - Architecture, API design, or data-model changes
 - Debugging, troubleshooting, or root-cause analysis
 - Anything the user has corrected you on before
@@ -132,36 +139,77 @@ The `koku-docs` and `koku-issues` banks are continuously updated
 via CocoIndex incremental sync. Recalled doc/issue content is live — trust it
 without re-reading source files unless the task requires verifying current state.
 
-## Python code: three-tier code guidance
+## Serena: one shared daemon serves both koku (Python) and koku-service-operator (Go)
+
+Both repos' `.cursor/mcp.json` point their `"serena"` entry at a fixed HTTP
+mount (`http://127.0.0.1:8895/mcp/koku` or `.../mcp/koku-service-operator`)
+on a single shared serena daemon (`io.vectorize.serena.koku-family`, port
+8894, fronted by `io.vectorize.serena-multiplex.koku-family`, port 8895) --
+not a per-window `uvx ... --project ${workspaceFolder}` stdio subprocess.
+This exists because of a real 2026-08-17 incident (see
+docs/findings/2026-08.md, 2026-08-17 entry, in the engram repo):
+koku-service-operator's previous per-window stdio setup was apparently served
+by an already-running `koku`-scoped serena process instead of spawning its
+own, most likely a Cursor stdio-MCP-client process-pooling quirk keyed on the
+unsubstituted server config (both repos define an identically-named
+`"serena"` server with an identical command template, differing only in the
+runtime-substituted `${workspaceFolder}`). Each project's own
+`.serena/project.yml` `language_servers:` setting (`python` for koku, `go`
+for koku-service-operator) determines which LSP the daemon spawns for that
+project -- both coexist fine on the one daemon since language servers are
+per-project, not fixed at daemon startup.
+
+**If a `koku_code_search`/tool result or an agent session ever reports
+Serena resolving to the wrong repo** (no `go.mod` when you expected Go, or
+vice versa), that's the daemon/multiplex misbehaving, not something fixable
+from within this repo -- flag it rather than working around it, and check
+`launchctl list | grep koku-family` / the logs under
+`~/.hindsight/logs/serena*koku-family*.log` for a stuck or crashed daemon.
+
+Historical footnote: `insights-onprem/koku` (an unrelated downstream fork,
+not part of this koku-family daemon) used to collide on the same Serena
+`project_name: "koku"` -- harmless while every repo ran an isolated stdio
+process, but broken once name resolution mattered. It was renamed to
+`koku-insights-onprem` to fix the collision; if you ever see a third koku
+fork registered with Serena, give it a distinct `project_name` too.
+
+## Code guidance: three-tier, per language
 
 Use the right tool for the right question:
 
-- **Serena** (Pyright-backed LSP) — precise type info, symbol references,
+- **Serena** (Pyright for koku, gopls for koku-service-operator, both via
+  the one shared daemon above) — precise type info, symbol references,
   symbol-level edits, diagnostics. Use for "what is the type of X?", "who
   calls this function?", "rename this symbol", "what errors exist?"
-- **`koku_code_search`** — semantic code search by meaning. The tool is on the
-  `user-koku-code` MCP server. Call it with `{"query": "...", "limit": 10}`.
+- **`koku_code_search`** — semantic code search by meaning, spanning both
+  koku (Python) and koku-service-operator (Go) source in the one shared
+  `koku_code_embeddings` table. The tool is on the `user-koku-code` MCP
+  server. Call it with `{"query": "...", "limit": 10}`.
   Use for "where do we handle cost model markup?", "how does the report
-  processing pipeline work?", "what functions touch this data?"
+  processing pipeline work?", "how does the operator reconcile GatewayReady?"
 - **`koku_code_pattern_search`** — structural (by-example) code search, on
   the same `user-koku-code` MCP server. Call it with
-  `{"pattern": "def \\NAME(\\(A*\\)):", "language": "python"}`. Use for
-  "find every function shaped like X" (a signature, not a name/concept) --
-  purely syntactic, no type resolution or find-references; not a substitute
-  for Serena.
+  `{"pattern": "def \\NAME(\\(A*\\)):", "language": "python"}` (or
+  `"language": "go"` for koku-service-operator patterns). Use for "find
+  every function shaped like X" (a signature, not a name/concept) -- purely
+  syntactic, no type resolution or find-references; not a substitute for
+  Serena.
 - **hindsight** — past mistakes, conventions, behavioral patterns about code.
   Use for "how should I structure this test?", "what was corrected before?"
 
 Prefer Serena for precise lookups/edits, `koku_code_search` for semantic
 exploration, `koku_code_pattern_search` for structural shape queries, and
 hindsight for behavioral context. Do not redundantly call all of these for
-the same question. Note: koku's type-hint coverage is uneven and it makes
-heavy use of Celery tasks/Django signals, so Serena's static analysis has
-real limits here — cross-check against `koku_code_search` or direct reads
-when a symbol's usage looks dynamic (task dispatch, signal receivers) rather
-than a plain function call. `koku_code_pattern_search` matches by AST shape
-regardless of how a function is invoked, so it's unaffected by that
-limitation, but still can't tell you *who* dispatches it.
+the same question. Note: koku's (Python) type-hint coverage is uneven and it
+makes heavy use of Celery tasks/Django signals, so Serena's static analysis
+has real limits there — cross-check against `koku_code_search` or direct
+reads when a symbol's usage looks dynamic (task dispatch, signal receivers)
+rather than a plain function call. `koku_code_pattern_search` matches by AST
+shape regardless of how a function is invoked, so it's unaffected by that
+limitation, but still can't tell you *who* dispatches it. koku-service-operator
+(Go) doesn't have this limitation -- gopls's static analysis is reliable
+there for the usual reasons (static typing, no dynamic dispatch pattern like
+Celery/signals).
 
 ## Do NOT retain
 

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.vectorize.serena-multiplex.koku-family</string>
+    <!-- Sits in front of io.vectorize.serena.koku-family (port 8894) and gives
+         each of the 2 koku-family repos its own fixed HTTP mount
+         (/mcp/<project>) with full read+write, instead of relying on
+         Cursor's per-window stdio process spawning -- see
+         io.vectorize.serena.koku-family.plist's comment for the incident
+         that prompted this, and
+         io.vectorize.serena-multiplex.kubernaut-family.plist's comment (same
+         underlying engram-serena-multiplex module, generic/parametrized --
+         not tied to any one family) for the full design rationale.
+
+         --project is repeatable; each value must match a name registered in
+         ~/.serena/serena_config.yml's `projects:` list (specifically each
+         project's own .serena/project.yml `project_name:` field), not a repo
+         path. koku is Python, koku-service-operator is Go -- both coexist
+         fine since language servers are spawned per-project, not fixed at
+         daemon startup. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.hindsight/venv/bin/engram-serena-multiplex</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>8895</string>
+        <string>--upstream-url</string>
+        <string>http://127.0.0.1:8894/mcp</string>
+        <string>--project</string>
+        <string>koku</string>
+        <string>--project</string>
+        <string>koku-service-operator</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOME__/.hindsight/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.hindsight/logs/serena-multiplex-koku-family-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.hindsight/logs/serena-multiplex-koku-family-stderr.log</string>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

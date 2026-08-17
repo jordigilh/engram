@@ -99,6 +99,19 @@ tier-1 tool is still raw `gopls`, not Serena -- see the still-open
 Serena-migration question for this repo, tracked separately from this
 multi-branch change.)
 
+**If you do reach for Serena's `query_project` anyway** (e.g. from a
+`kubernaut-docs` or cross-repo session) to pull `kubernaut`/`kubernaut-console`
+state into an `kubernaut-operator` task, use the `-mirror`-suffixed project
+names (`kubernaut-mirror`, `kubernaut-release-v1.5-mirror`, etc.), not the
+bare repo names. The bare names are interactive dev clones that get freely
+branch-switched, so they don't reliably reflect any particular branch's
+state -- this caused a real incident (2026-08-16) where a query against
+`kubernaut` silently returned stale pre-merge content because that clone
+happened to be sitting on `release/v1.5` at the time. The `-mirror` projects
+are dedicated, read-only, auto-synced-every-10-minutes worktrees pinned
+one-per-branch. See docs/findings/2026-08.md, 2026-08-16 entry, for the full
+incident and fix.
+
 ## When to recall again (mid-session)
 
 Call `recall` again if:

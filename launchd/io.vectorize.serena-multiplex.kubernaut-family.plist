@@ -37,6 +37,8 @@
         <string>--project</string>
         <string>kubernaut-demo-scenarios</string>
         <string>--project</string>
+        <string>kubernaut-docs</string>
+        <string>--project</string>
         <string>kubernaut-v1.5</string>
         <string>--project</string>
         <string>kubernaut-v1.6</string>

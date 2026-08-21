@@ -135,6 +135,188 @@ class TestActiveProjectTracker:
         assert b_activate_index > a_body_index
 
 
+class TestActiveProjectTrackerInvalidate:
+    def test_invalidate_clears_active_project(self, serena_multiplex):
+        tracker = serena_multiplex.ActiveProjectTracker()
+        tracker.active = "kubernaut-operator"
+
+        asyncio.run(tracker.invalidate())
+
+        assert tracker.active is None
+
+    def test_pinned_reactivates_after_invalidate_for_the_same_project(self, serena_multiplex):
+        """Regression guard for the 2026-08-20 restart-storm bug: a cache hit
+        (same project as last time) must not be trusted forever -- once
+        invalidated, the next pin for the *same* project must re-activate,
+        not skip activation just because the project name didn't change."""
+        tracker = serena_multiplex.ActiveProjectTracker()
+        activated = []
+
+        async def activate(project):
+            activated.append(project)
+
+        async def run():
+            async with tracker.pinned("kubernaut-operator", activate):
+                pass
+            await tracker.invalidate()
+            async with tracker.pinned("kubernaut-operator", activate):
+                pass
+
+        asyncio.run(run())
+
+        assert activated == ["kubernaut-operator", "kubernaut-operator"]
+
+
+class TestLooksLikeNoActiveProjectError:
+    def test_detects_no_active_project_tool_error(self, serena_multiplex):
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "No active project. Ask the user to provide the project path...",
+                        }
+                    ],
+                    "isError": True,
+                },
+            }
+        ).encode()
+
+        assert serena_multiplex._looks_like_no_active_project_error(body) is True
+
+    def test_ignores_successful_result(self, serena_multiplex):
+        body = json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "result": {"content": [], "isError": False}}
+        ).encode()
+
+        assert serena_multiplex._looks_like_no_active_project_error(body) is False
+
+    def test_ignores_unrelated_tool_error(self, serena_multiplex):
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "content": [{"type": "text", "text": "file not found: foo.go"}],
+                    "isError": True,
+                },
+            }
+        ).encode()
+
+        assert serena_multiplex._looks_like_no_active_project_error(body) is False
+
+    def test_handles_non_json_body_gracefully(self, serena_multiplex):
+        assert serena_multiplex._looks_like_no_active_project_error(b"not json at all") is False
+
+    def test_handles_sse_framed_body(self, serena_multiplex):
+        body = (
+            b'event: message\ndata: {"jsonrpc": "2.0", "id": 1, "result": '
+            b'{"content": [{"type": "text", "text": "No active project."}], "isError": true}}\n\n'
+        )
+
+        assert serena_multiplex._looks_like_no_active_project_error(body) is True
+
+
+class TestForwardScoped:
+    """Covers the retry wrapper used by the real HTTP endpoint (see
+    build_app) instead of the bare `async with tracker.pinned(...)` -- see
+    docs/findings/2026-08.md, 2026-08-20 entry: the shared upstream Serena
+    daemon restarts roughly every 10 minutes (a deliberate side effect of the
+    watch-mirror sync's reference-transaction hook), which silently wipes the
+    upstream's real active-project state without this multiplex's own
+    ActiveProjectTracker cache finding out. Left unguarded, every mount
+    that isn't the most recently *switched-to* project starts getting
+    "No active project" errors on every call until something else forces a
+    cache invalidation."""
+
+    class _FakeResponse:
+        def __init__(self, body: bytes):
+            self.body = body
+
+    _OK_BODY = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"isError": False}}).encode()
+    _STALE_BODY = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "content": [{"type": "text", "text": "No active project. Ask the user..."}],
+                "isError": True,
+            },
+        }
+    ).encode()
+
+    def test_success_on_first_try_does_not_retry(self, serena_multiplex):
+        tracker = serena_multiplex.ActiveProjectTracker()
+        activated: list[str] = []
+        calls = 0
+
+        async def activate(project):
+            activated.append(project)
+
+        async def forward_raw():
+            nonlocal calls
+            calls += 1
+            return self._FakeResponse(self._OK_BODY)
+
+        result = asyncio.run(
+            serena_multiplex._forward_scoped("kubernaut-operator", tracker, activate, forward_raw)
+        )
+
+        assert activated == ["kubernaut-operator"]
+        assert calls == 1
+        assert result.body == self._OK_BODY
+        assert tracker.active == "kubernaut-operator"
+
+    def test_stale_cache_after_upstream_restart_triggers_reactivate_and_retry(self, serena_multiplex):
+        tracker = serena_multiplex.ActiveProjectTracker()
+        tracker.active = "kubernaut-operator"  # cache thinks it's already pinned
+        activated: list[str] = []
+        calls = 0
+
+        async def activate(project):
+            activated.append(project)
+
+        async def forward_raw():
+            nonlocal calls
+            calls += 1
+            return self._FakeResponse(self._STALE_BODY if calls == 1 else self._OK_BODY)
+
+        result = asyncio.run(
+            serena_multiplex._forward_scoped("kubernaut-operator", tracker, activate, forward_raw)
+        )
+
+        # First pin was a cache hit (no activate) -- only the retry, after
+        # the stale response forced an invalidation, actually re-activates.
+        assert activated == ["kubernaut-operator"]
+        assert calls == 2
+        assert result.body == self._OK_BODY
+        assert tracker.active == "kubernaut-operator"
+
+    def test_persistent_upstream_failure_retries_only_once(self, serena_multiplex):
+        """Must not loop forever if the upstream is genuinely down/broken --
+        one retry, then return whatever it gets."""
+        tracker = serena_multiplex.ActiveProjectTracker()
+        calls = 0
+
+        async def activate(project):
+            pass
+
+        async def forward_raw():
+            nonlocal calls
+            calls += 1
+            return self._FakeResponse(self._STALE_BODY)
+
+        result = asyncio.run(
+            serena_multiplex._forward_scoped("kubernaut-operator", tracker, activate, forward_raw)
+        )
+
+        assert calls == 2
+        assert result.body == self._STALE_BODY
+
+
 class TestIsProjectAgnosticTool:
     def test_query_project_and_list_queryable_projects_are_agnostic(self, serena_multiplex):
         assert serena_multiplex.is_project_agnostic_tool("query_project") is True

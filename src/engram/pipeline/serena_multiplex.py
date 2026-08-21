@@ -141,6 +141,23 @@ class ActiveProjectTracker:
 
         return _cm()
 
+    async def invalidate(self) -> None:
+        """Force the next `pinned()` call to re-activate, even for the same
+        project this tracker already believes is active.
+
+        Needed because "active" here only reflects what *this multiplex*
+        last told the upstream -- not the upstream's actual state. The
+        shared upstream Serena daemon (io.vectorize.serena.kubernaut-family)
+        gets force-restarted roughly every 10 minutes by the watch-mirror
+        sync's reference-transaction hook (see docs/findings/2026-08.md,
+        2026-08-20 entry), which silently wipes its real active-project
+        state without this cache finding out. Call this once a forwarded
+        response reveals that divergence (see
+        `_looks_like_no_active_project_error`) so the next pin for the same
+        project doesn't wrongly skip re-activation."""
+        async with self.lock:
+            self.active = None
+
 
 def _intercept_response(message: dict, project: str) -> dict:
     """Synthesize a well-formed JSON-RPC tool result for an agent's own
@@ -200,6 +217,51 @@ def _parse_sse_json(body: bytes) -> dict:
         if line.startswith("data:"):
             return json.loads(line[len("data:") :].strip())
     return json.loads(text)
+
+
+def _looks_like_no_active_project_error(body: bytes) -> bool:
+    """True if `body` is an MCP tool-call error response whose text reports
+    Serena has no active project for this session -- the signature of a
+    session that survived an upstream daemon restart while this multiplex's
+    `ActiveProjectTracker` cache didn't get invalidated (see
+    `ActiveProjectTracker.invalidate` and docs/findings/2026-08.md, 2026-08-20
+    entry). Best-effort: any parse failure or unexpected shape is treated as
+    "not this error" rather than raised, since `_forward_scoped` must not
+    itself become a new failure mode on a malformed/unrelated response."""
+    try:
+        message = _parse_sse_json(body)
+    except (ValueError, UnicodeDecodeError):
+        return False
+
+    result = message.get("result")
+    if not isinstance(result, dict) or not result.get("isError"):
+        return False
+
+    content = result.get("content") or []
+    text = " ".join(item.get("text", "") for item in content if isinstance(item, dict))
+    return "No active project" in text
+
+
+async def _forward_scoped(
+    project: str,
+    tracker: ActiveProjectTracker,
+    activate: Callable[[str], Awaitable[None]],
+    forward_raw: Callable[[], Awaitable[object]],
+) -> object:
+    """Pin `project` and forward, retrying exactly once (with a forced
+    re-activation) if the response shows the upstream had no active project
+    -- see `ActiveProjectTracker.invalidate` for why a cache hit here can
+    still be stale. One retry only: if the upstream is genuinely down, a
+    second identical failure is returned as-is rather than looping."""
+    async with tracker.pinned(project, activate):
+        response = await forward_raw()
+
+    if not _looks_like_no_active_project_error(getattr(response, "body", b"")):
+        return response
+
+    await tracker.invalidate()
+    async with tracker.pinned(project, activate):
+        return await forward_raw()
 
 
 def _make_activate(upstream_url: str) -> Callable[[str], Awaitable[None]]:
@@ -334,8 +396,7 @@ def build_app(projects: list[str], upstream_url: str):
             if route == "agnostic":
                 return await forward_raw()
 
-            async with tracker.pinned(project, activate):
-                return await forward_raw()
+            return await _forward_scoped(project, tracker, activate, forward_raw)
 
         return endpoint
 

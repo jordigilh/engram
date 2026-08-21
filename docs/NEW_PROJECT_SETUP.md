@@ -12,6 +12,22 @@ Each project gets:
 - **Dedicated launchd service**: Independent process lifecycle
 - **Workspace-level MCP config**: `.cursor/mcp.json` in each repo so Cursor only sees relevant servers
 
+> **2026-08-21 update**: the four backend servers below (`hindsight-docs`,
+> `hindsight-issues`, `cocoindex-code`, `serena`) are now fronted by one
+> aggregating gateway, `engram-gateway` (`src/engram/pipeline/
+> engram_gateway.py`, supervised by `launchd/io.vectorize.engram-gateway.plist`)
+> instead of each getting its own `.cursor/mcp.json` entry — see
+> `docs/findings/2026-08.md`'s 2026-08-21 rollout entry for the full
+> rationale (recurring Cursor MCP client flakiness with 4 separate
+> connections per repo) and the current registry of every onboarded repo.
+> The steps below (dedicated banks, pgvector table, CocoIndex flow, launchd
+> service) are all still accurate and still what you set up per new
+> project — only the *last* step changes: instead of adding 3-4 raw server
+> entries to `.cursor/mcp.json`, add one entry to
+> `build_project_registry()` in `engram_gateway.py` (with a test in
+> `tests/test_engram_gateway.py`) and point the new repo's
+> `.cursor/mcp.json` at `http://127.0.0.1:8896/mcp/<project>` instead.
+
 ## Prerequisites
 
 - Engram repository cloned at `~/go/src/github.com/jordigilh/engram`

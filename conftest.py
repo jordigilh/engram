@@ -187,6 +187,12 @@ def serena_multiplex() -> ModuleType:
 
 
 @pytest.fixture(scope="session")
+def engram_gateway() -> ModuleType:
+    from engram.pipeline import engram_gateway
+    return engram_gateway
+
+
+@pytest.fixture(scope="session")
 def cocoindex_search() -> ModuleType:
     """kubernaut.py's code search module (engram.search.kubernaut) -- the
     kubernaut-family code search MCP server. Unlike the *_cocoindex_flows

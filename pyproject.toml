@@ -55,6 +55,7 @@ engram-nightly-learn = "engram.pipeline.nightly_learn:main"
 engram-ingest-issues = "engram.pipeline.ingest_issues:main"
 engram-hindsight-proxy = "engram.pipeline.hindsight_proxy:cli_main"
 engram-serena-multiplex = "engram.pipeline.serena_multiplex:main"
+engram-gateway = "engram.pipeline.engram_gateway:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

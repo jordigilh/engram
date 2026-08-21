@@ -1,16 +1,8 @@
 {
   "mcpServers": {
-    "hindsight-docs": {
+    "engram": {
       "type": "http",
-      "url": "http://localhost:8888/mcp/engram-docs/"
-    },
-    "cocoindex-code": {
-      "command": "/Users/jgil/.hindsight/venv/bin/engram-search-engram",
-      "args": [],
-      "type": "stdio",
-      "env": {
-        "COCOINDEX_PG_URL": "postgresql://hindsight:hindsight@localhost:5432/hindsight"
-      }
+      "url": "http://127.0.0.1:8896/mcp/engram"
     }
   }
 }

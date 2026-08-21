@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.vectorize.engram-gateway</string>
+    <!-- Single aggregating MCP gateway fronting every onboarded repo (see
+         src/engram/pipeline/engram_gateway.py's module docstring and
+         docs/findings/2026-08.md's 2026-08-21 entries for the full design
+         and rollout rationale). Supervision here is not optional: the
+         2026-08-21 spike found -- twice, within under an hour of each other
+         -- that a bare, unsupervised `engram-gateway` process started by
+         hand from an agent shell dies silently with no exception, no OOM
+         signature, and no sleep/wake event in the system log, breaking
+         every repo pointed at it via ECONNREFUSED until someone notices and
+         restarts it by hand. KeepAlive here means launchd restarts it
+         automatically instead.
+
+         No LLM/API credentials of any kind are used by this module (it only
+         relays already-authenticated local MCP traffic), so unlike the
+         nightly-learn plists this does NOT need with-config-env.sh -- there
+         is nothing secret to source from config.env. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.hindsight/venv/bin/engram-gateway</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>8896</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOME__/.hindsight/venv/bin:__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.hindsight/logs/engram-gateway-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.hindsight/logs/engram-gateway-stderr.log</string>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+</dict>
+</plist>

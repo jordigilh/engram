@@ -1,0 +1,25 @@
+#!/bin/sh
+# Restarts the shared {{FAMILY_NAME}} MCP daemon(s) (debounced -- see
+# _restart-{{FAMILY_NAME}}-daemons.sh) after `git pull`/`git merge`
+# (including plain fast-forwards) rewrites files on disk without either
+# noticing. Same rationale as post-checkout-{{FAMILY_NAME}}-mcp.sh, which
+# self-provisions this hook's symlink on the next checkout in any repo that
+# doesn't already have it.
+#
+# Known gap: stock git has no dedicated post-rebase hook, so a `git rebase`
+# that doesn't also trigger a checkout/merge won't restart here either --
+# closed by reference-transaction-{{FAMILY_NAME}}-mcp.sh instead.
+#
+# Generated from git-hooks/family/post-merge-family-mcp.sh.tmpl.
+
+set -e
+
+TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+HOOKS_SRC_DIR=$(dirname "$0")
+[ -L "$0" ] && HOOKS_SRC_DIR=$(dirname "$(readlink "$0")")
+
+if [ -f "$HOOKS_SRC_DIR/_restart-{{FAMILY_NAME}}-daemons.sh" ]; then
+    "$HOOKS_SRC_DIR/_restart-{{FAMILY_NAME}}-daemons.sh" 2>/dev/null || true
+fi
+
+exit 0

@@ -1,0 +1,187 @@
+---
+description: Recall relevant patterns from Hindsight memory before responding
+alwaysApply: true
+---
+
+## Scope: documentation repo, read-only cross-repo code lookup (2026-08-16, updated same day)
+
+kubernaut-docs is a pure MkDocs documentation site (architecture, API
+reference, operations, use-cases, getting-started) with no Go source of its
+own. It is **not** part of the kubernaut-family shared CocoIndex-code daemon
+(no `cocoindex-code` entry in this repo's `.cursor/mcp.json` — no source of
+its own for that tool to index).
+
+It **is**, as of 2026-08-16 (same day, follow-up), registered as a project on
+the shared `serena.kubernaut-family` daemon, specifically so it can verify
+documentation against actual code. Its own "active project" role is a minor
+markdown-symbol-nav convenience; the real value is Serena's
+`query_project`/`list_queryable_projects` tools, which let an agent working
+from kubernaut-docs read (read-only, no write/edit tools) symbols and
+references from any other registered project — in particular `kubernaut` and
+`kubernaut-operator` — **without switching this repo's own active project**.
+See docs/findings/2026-08.md, 2026-08-16 entry, in the engram repo, for the
+full setup (serena_config.yml registration, per-project mcp.json template,
+multiplex mount at `http://127.0.0.1:8893/mcp/kubernaut-docs`).
+
+## When to recall (MUST)
+
+You MUST call `recall` on your **first turn** when the task involves:
+- kubernaut documentation structure, content, or site navigation
+- Architecture, API, or CRD documentation changes that must stay consistent
+  with the actual kubernaut/kubernaut-operator/kubernaut-console behavior
+- Debugging broken docs builds, links, or MkDocs config
+- Anything the user has corrected you on before
+
+Use the appropriate bank(s):
+- **hindsight** — corrections, coding conventions, user preferences
+- **hindsight-docs** — kubernaut-docs content itself (architecture, API/CRD
+  contracts, operations, use-cases) — same bank the kubernaut/operator/console
+  code repos recall against, since this repo is one of its sources
+- **hindsight-issues** — kubernaut-docs GitHub issues/PRs (shared
+  `kubernaut-issues` bank with kubernaut/operator/console/demo-scenarios)
+
+Call one or more banks depending on what the task touches. A single recall to
+**hindsight** with a query summarizing the task intent is sufficient for most work.
+
+## Verifying docs against actual code: use Serena's `query_project`
+
+When a documentation task requires confirming that what's written here
+matches the real, current behavior of `kubernaut` or `kubernaut-operator`
+(e.g. an API/CRD field list, a flag, a function's actual signature or
+behavior) — call Serena's `query_project` tool rather than guessing from
+memory or from `hindsight-docs` alone (which reflects *this repo's own*
+content, not the source of truth).
+
+**Always use the `-mirror`-suffixed project names**, not the bare repo names:
+
+```
+query_project(project_name="kubernaut-mirror", tool_name="find_symbol", tool_params_json="{...}")
+query_project(project_name="kubernaut-operator-mirror", tool_name="get_symbols_overview", tool_params_json="{\"relative_path\": \"<file>\"}")
+```
+
+Why: `kubernaut`/`kubernaut-operator` (no suffix) are the **interactive** dev
+clones — freely branch-switched for day-to-day feature work, so whatever
+`query_project` returns from them reflects whoever's active WIP happens to be
+checked out *right now*, not any guaranteed branch. This caused a real
+incident (2026-08-16): a query for a just-merged PR against `kubernaut`
+silently returned stale pre-merge content because that clone happened to be
+sitting on `release/v1.5` at the time. The `-mirror` projects
+(`kubernaut-mirror`, `kubernaut-release-v1.5-mirror`,
+`kubernaut-operator-mirror`, `kubernaut-operator-release-v1.5-mirror`, plus
+`kubernaut-console-mirror`/`-release-v1.5-mirror` and
+`kubernaut-demo-scenarios-mirror`) are dedicated, read-only, detached-HEAD
+worktrees pinned one-per-branch and auto-synced every 10 minutes (`fetch` +
+`reset --hard`) by the same launchd job that already keeps CocoIndex's code
+index current — so they reliably reflect `main` (or `release/v1.5`) with no
+manual upkeep. `release/v1.6` mirrors don't exist yet (upstream branch not
+cut); they'll activate automatically once it is. See
+docs/findings/2026-08.md, 2026-08-16 entry (mirror-based `query_project`
+targets), in the engram repo for the full incident and fix.
+
+Use `list_queryable_projects` if you need to double-check an exact registered
+name. This is read-only regardless of which project you target — you cannot
+edit `kubernaut`/`kubernaut-operator` source from a `kubernaut-docs` session
+this way, which is correct: doc-code discrepancies found this way should be
+written up as a doc fix here (or flagged to the user for a code-side fix),
+not silently patched in the other repo.
+
+## Before planning or implementing (MANDATORY GATE)
+
+Before proposing any plan, writing any implementation, or switching to agent
+mode to begin coding:
+
+1. Recall `hindsight` with query: **"project methodology, workflow, conventions"**,
+   passing `tags: ["kubernaut"], tags_match: "any_strict"` explicitly. **Do
+   not rely on the default or pass the literal string `"strict"`** —
+   `tags_match` defaults to `"any"` (which *includes* untagged memories), and
+   `"strict"` is not a valid value at all (real options: `any`, `all`,
+   `any_strict`, `all_strict`, `exact`); an unrecognized value silently falls
+   back to the unfiltered `"any"` default (see docs/FINDINGS.md in the
+   engram repo, 2026-08-13 entry). This scopes results to kubernaut-tagged
+   facts only, avoiding dcm/koku/praxis/rhdh-plugins/engram cross-project
+   pollution.
+2. Also fetch kubernaut's 4 tagged mental models (`coding-conventions`,
+   `testing-methodology`, `architecture-decisions`, `workflow-preferences`,
+   all tagged `["kubernaut"]` on the shared `cursor-memory` bank) via
+   `get_mental_model` and apply them as authoritative context alongside
+   step 1's recall.
+3. Apply the recalled methodology to your plan.
+4. If your plan does not follow the recalled methodology, **revise it before
+   presenting**.
+
+This is a blocking gate. Do not skip it even if you believe you know the
+methodology. Context summarization in long sessions can silently drop recalled
+conventions — re-recall ensures they are current.
+
+## Mid-session re-recall (long sessions)
+
+In sessions longer than ~20 agent turns, or whenever a conversation summary
+has been applied, **re-recall `hindsight`** with:
+- "project methodology, workflow, conventions" — may have been lost to summarization
+- Any topic-specific query relevant to the current phase
+
+Rationale: empirical data shows 61% of corrections occur in the second half of
+sessions. Re-recalling counteracts context loss from summarization and prevents
+late-session mistakes.
+
+## When to recall again (mid-session)
+
+Call `recall` again if:
+- The task shifts to a different documentation section or domain
+- The user corrects you — check if this correction already exists in memory
+- You've made 2+ failed attempts at the same problem
+- A new entity (CRD, service, package) enters the conversation that wasn't part of the original recall
+
+### Phase-based triggers (MUST recall when entering these phases)
+
+| Phase | Bank or tool | Query focus |
+|-------|------|-------------|
+| Documenting a new architecture/API area | hindsight-docs | existing architecture, API/CRD contracts, operations content already written |
+| Reconciling docs with actual behavior | hindsight-docs | prior architecture decisions to avoid contradicting them |
+| PR/commit workflow | hindsight | commit conventions, PR structure, review expectations |
+| Debugging/troubleshooting a docs issue | hindsight-issues | known bugs, past failures, related issues |
+
+These are NOT optional. When you transition into one of these phases, recall
+the indicated bank BEFORE writing content or proposing a plan.
+
+## When to skip (OK)
+
+- Trivial follow-ups ("yes", "do it", "commit")
+- Pure file reads or terminal commands with no design decisions
+- You already recalled this exact topic earlier in the session and nothing has changed
+
+## How to use results
+
+- **Mental models** (long synthesized documents): use directly as authoritative context
+- **Individual facts**: reason over them to identify relevant patterns
+
+## Data freshness
+
+The `hindsight-docs` and `hindsight-issues` banks are continuously updated
+via CocoIndex incremental sync (docs file-watching on `main` only — no
+release-line mirrors for this repo; GitHub issues polled every 5 minutes).
+Recalled doc/issue content is live — trust it without re-reading source files
+unless the task requires verifying current state.
+
+## Retain/reflect: on-demand, suggest-then-confirm
+
+No background job does this anymore — `retain`, `sync_retain`, and `reflect`
+are on-demand only, triggered explicitly in-chat (see docs/findings/2026-08.md,
+2026-08-13 "retain/reflect on-demand" decision). This keeps LLM cost visible
+and bounded until there's a stable, well-understood cost baseline for
+background extraction.
+
+**Suggest, don't call silently.** When you notice one of the following during
+a session, propose it to the user and wait for confirmation before calling
+the tool:
+
+- **Retain** — an explicit correction, a decision, a stated preference, or a
+  hard-won discovery (e.g. a root cause that took real effort to find) worth
+  recalling in a future session.
+- **Reflect** — several related retains have accumulated on the same topic,
+  you're about to lean on a mental model that looks stale, or the user
+  directly points out staleness.
+
+Only call `retain`/`sync_retain`/`reflect` after the user confirms, or when
+they ask for it directly ("retain this", "update the mental model", etc.).
+Never call them proactively or as a matter of routine.

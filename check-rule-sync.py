@@ -97,6 +97,12 @@ RULE_PAIRS: dict[str, tuple[Path, Path]] = {
         REPO_ROOT / "cursor" / "rhdh-plugins-hindsight-memory.mdc",
         HOME / "go" / "src" / "github.com" / "redhat-developer" / "rhdh-plugins" / ".cursor" / "rules" / "hindsight-memory.mdc",
     ),
+    # kubernaut-docs: narrow-scope onboarding (2026-08-16), docs+issues only,
+    # no code-intelligence section since this repo has no Go source of its own.
+    "kubernaut-docs": (
+        REPO_ROOT / "cursor" / "kubernaut-docs-hindsight-memory.mdc",
+        HOME / "go" / "src" / "github.com" / "jordigilh" / "kubernaut-docs" / ".cursor" / "rules" / "hindsight-memory.mdc",
+    ),
 }
 
 

@@ -890,7 +890,7 @@ class TestProjectConfigsEngram:
         GitHub issues/PRs total was always zero because the loop only ever
         queried jordigilh/kubernaut. Both projects must declare their repos."""
         assert "jordigilh/kubernaut" in nightly_learn.PROJECT_CONFIGS["kubernaut"]["issues_repos"]
-        assert len(nightly_learn.PROJECT_CONFIGS["kubernaut"]["issues_repos"]) == 4
+        assert len(nightly_learn.PROJECT_CONFIGS["kubernaut"]["issues_repos"]) == 5
         assert "dcm-project/dcm" in nightly_learn.PROJECT_CONFIGS["dcm"]["issues_repos"]
         assert len(nightly_learn.PROJECT_CONFIGS["dcm"]["issues_repos"]) == 12
 

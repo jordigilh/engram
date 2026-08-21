@@ -55,6 +55,7 @@ PROJECT_CONFIGS = {
             "jordigilh/kubernaut-operator",
             "jordigilh/kubernaut-console",
             "jordigilh/kubernaut-demo-scenarios",
+            "jordigilh/kubernaut-docs",
         ],
     },
     "dcm": {

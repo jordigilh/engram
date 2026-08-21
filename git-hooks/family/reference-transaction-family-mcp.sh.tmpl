@@ -1,0 +1,46 @@
+#!/bin/sh
+# Restarts the shared {{FAMILY_NAME}} MCP daemon(s) (debounced) after *any*
+# operation that moves the currently-checked-out commit -- not just
+# `git checkout`/`git merge` (already covered by post-checkout/post-merge),
+# but also `git reset` and `git rebase`, neither of which has a dedicated
+# git hook of its own. `reference-transaction` fires for every ref-updating
+# git command -- including background fetches of any read-only mirror
+# repos in this family, likely the dominant source of restart *volume*,
+# which is exactly why _restart-{{FAMILY_NAME}}-daemons.sh debounces instead
+# of kicking unconditionally on every call.
+#
+# Deliberately does NOT touch .cursor/mcp.json (unlike post-checkout) --
+# only restarts daemons. Re-touching the mcp.json symlink on every ref
+# update (this hook fires far more often than checkout/merge, e.g. on
+# background fetches) would multiply exposure to Cursor's MCP-client
+# reload-on-config-change bug.
+#
+# Safety: the exit status of this hook is ignored in "committed" state (see
+# `git help githooks`), but ALWAYS exits 0 defensively anyway -- a
+# non-zero exit during "preparing"/"prepared" states would abort the git
+# transaction, which must never happen here.
+#
+# Generated from git-hooks/family/reference-transaction-family-mcp.sh.tmpl.
+
+[ "$1" = "committed" ] || exit 0
+
+TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+HOOKS_SRC_DIR=$(dirname "$0")
+[ -L "$0" ] && HOOKS_SRC_DIR=$(dirname "$(readlink "$0")")
+
+CURRENT_REF=$(git symbolic-ref -q HEAD 2>/dev/null) || CURRENT_REF=""
+
+head_changed=0
+while read -r _old _new ref; do
+    if [ "$ref" = "HEAD" ]; then
+        head_changed=1
+    elif [ -n "$CURRENT_REF" ] && [ "$ref" = "$CURRENT_REF" ]; then
+        head_changed=1
+    fi
+done
+
+if [ "$head_changed" = "1" ] && [ -f "$HOOKS_SRC_DIR/_restart-{{FAMILY_NAME}}-daemons.sh" ]; then
+    "$HOOKS_SRC_DIR/_restart-{{FAMILY_NAME}}-daemons.sh" 2>/dev/null || true
+fi
+
+exit 0

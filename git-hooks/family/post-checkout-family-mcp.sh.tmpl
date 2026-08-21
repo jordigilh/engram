@@ -1,0 +1,67 @@
+#!/bin/sh
+# Auto-provisions .cursor/mcp.json as a symlink into the shared
+# {{FAMILY_NAME}} template on every checkout (including `git worktree add`).
+# .cursor/mcp.json is gitignored (machine-specific paths), so every new
+# clone/worktree starts without it unless something re-creates it. Also
+# restarts the family's shared MCP daemon(s) (debounced -- see
+# _restart-{{FAMILY_NAME}}-daemons.sh).
+#
+# Use this variant when several repos share one long-lived HTTP MCP daemon
+# (e.g. one shared Serena instance for a family of related repos, the way
+# kubernaut/kubernaut-operator/kubernaut-console/etc. share theirs). For a
+# standalone project with its own per-repo mcp.json and no shared daemon,
+# use ../generic/ instead.
+#
+# Safe to re-run: never touches a real (non-symlink) mcp.json a human placed
+# on purpose. Also a true no-op if the symlink already points at the right
+# place -- avoids unnecessary Cursor MCP-client reload-on-config-change
+# churn (see docs/findings/2026-08.md, 2026-08-13 entry).
+#
+# Generated from git-hooks/family/post-checkout-family-mcp.sh.tmpl -- see
+# git-hooks/README.md and docs/NEW_PROJECT_SETUP.md steps 8a/14.
+
+set -e
+
+TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+HOOKS_SRC_DIR=$(dirname "$0")
+[ -L "$0" ] && HOOKS_SRC_DIR=$(dirname "$(readlink "$0")")
+GIT_HOOKS_DIR=$(git rev-parse --git-path hooks 2>/dev/null) || GIT_HOOKS_DIR=""
+
+if [ -n "$GIT_HOOKS_DIR" ] && [ -d "$GIT_HOOKS_DIR" ] && [ ! -e "$GIT_HOOKS_DIR/post-merge" ]; then
+    ln -sf "$HOOKS_SRC_DIR/post-merge-{{FAMILY_NAME}}-mcp.sh" "$GIT_HOOKS_DIR/post-merge" 2>/dev/null || true
+fi
+if [ -n "$GIT_HOOKS_DIR" ] && [ -d "$GIT_HOOKS_DIR" ] && [ ! -e "$GIT_HOOKS_DIR/reference-transaction" ]; then
+    ln -sf "$HOOKS_SRC_DIR/reference-transaction-{{FAMILY_NAME}}-mcp.sh" "$GIT_HOOKS_DIR/reference-transaction" 2>/dev/null || true
+fi
+
+if [ -f "$HOOKS_SRC_DIR/_restart-{{FAMILY_NAME}}-daemons.sh" ]; then
+    "$HOOKS_SRC_DIR/_restart-{{FAMILY_NAME}}-daemons.sh" 2>/dev/null || true
+fi
+
+TEMPLATE_DIR="$HOME/.hindsight/cursor-mcp-templates"
+TARGET="$TOPLEVEL/.cursor/mcp.json"
+
+if [ -e "$TARGET" ] && [ ! -L "$TARGET" ]; then
+    exit 0
+fi
+
+# Per-project template first (needed once any per-repo daemon URL differs,
+# e.g. a serena-multiplex mount keyed by project name), falling back to a
+# shared go/nogo split for repos that don't need one.
+PROJECT_SRC="$TEMPLATE_DIR/{{FAMILY_NAME}}-$(basename "$TOPLEVEL").json"
+if [ -f "$PROJECT_SRC" ]; then
+    SRC="$PROJECT_SRC"
+elif [ -f "$TOPLEVEL/go.mod" ]; then
+    SRC="$TEMPLATE_DIR/{{FAMILY_NAME}}-go.json"
+else
+    SRC="$TEMPLATE_DIR/{{FAMILY_NAME}}-nogo.json"
+fi
+
+[ -f "$SRC" ] || exit 0
+
+if [ -L "$TARGET" ] && [ "$(readlink "$TARGET")" = "$SRC" ]; then
+    exit 0
+fi
+
+mkdir -p "$TOPLEVEL/.cursor"
+ln -sf "$SRC" "$TARGET"

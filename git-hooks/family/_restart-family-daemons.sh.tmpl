@@ -1,0 +1,53 @@
+#!/bin/sh
+# Restarts the shared {{FAMILY_NAME}} MCP daemon(s) that have genuine
+# per-checkout staleness risk, debounced to collapse a burst of ref-changing
+# git ops across every family repo into a single restart.
+#
+# IMPORTANT -- which daemons belong in DAEMON_LABELS: only list a daemon
+# here if it actually caches live checkout-file/symbol state in memory
+# (typically a Serena/gopls LSP daemon with a shared "active project").
+# Do NOT list:
+#   - A DB/vector-backed code-search daemon whose queries hit a table
+#     populated by a separate ingestion pipeline -- it has no live-file
+#     dependency, so restarting it here buys nothing and just adds
+#     needless downtime/thrash.
+#   - A stateless HTTP relay/proxy in front of another daemon -- it caches
+#     no file state of its own.
+# Getting this wrong in the kubernaut-family deployment caused a real
+# restart storm (all 4 daemons force-killed on every git op in any of 6
+# repos, including background mirror-fetch reference-transactions) that
+# looked like intermittent MCP failures recovering only on relogin -- see
+# docs/findings/2026-08.md, 2026-08-16 entry, for the full incident and
+# root-cause writeup. Also note: any daemon with
+# `KeepAlive: SuccessfulExit=false` in its launchd plist already
+# auto-restarts on a real crash -- this script's job is narrowly "force a
+# restart of an otherwise-healthy process to flush stale in-memory state",
+# not crash recovery, which you get for free from launchd already.
+#
+# Generated from git-hooks/family/_restart-family-daemons.sh.tmpl -- see
+# git-hooks/README.md to regenerate after editing the template or a
+# family's .vars file.
+#
+# Usage: _restart-{{FAMILY_NAME}}-daemons.sh  (no args)
+
+UID_N=$(id -u)
+DEBOUNCE_FILE="${HOME}/.hindsight/.{{FAMILY_NAME}}-restart-debounce"
+DEBOUNCE_SECONDS={{DEBOUNCE_SECONDS}}
+DAEMON_LABELS="{{DAEMON_LABELS}}"
+
+now=$(date +%s)
+last=0
+if [ -f "$DEBOUNCE_FILE" ]; then
+    last=$(cat "$DEBOUNCE_FILE" 2>/dev/null)
+    case "$last" in
+        ''|*[!0-9]*) last=0 ;;
+    esac
+fi
+
+elapsed=$((now - last))
+if [ "$elapsed" -ge "$DEBOUNCE_SECONDS" ]; then
+    echo "$now" >"$DEBOUNCE_FILE" 2>/dev/null || true
+    for label in $DAEMON_LABELS; do
+        launchctl kickstart -k "gui/$UID_N/$label" 2>/dev/null || true
+    done
+fi

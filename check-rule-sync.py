@@ -73,6 +73,17 @@ RULE_PAIRS: dict[str, tuple[Path, Path]] = {
         REPO_ROOT / "cursor" / "koku-hindsight-memory.mdc",
         HOME / "go" / "src" / "github.com" / "project-koku" / "koku" / ".cursor" / "rules" / "hindsight-memory.mdc",
     ),
+    # koku-service-operator shares the SAME canonical source as "koku" above
+    # (one product, one Jira project, folded into the same
+    # docs/issues/code-search scope -- see src/engram/flows/koku.py's module
+    # docstring) but is a genuinely independent repo (different language,
+    # own git history), so it gets its own deployed copy and its own
+    # RULE_PAIRS entry -- unlike the koku forks above, which are the same
+    # fork/branch family as koku itself.
+    "koku-service-operator": (
+        REPO_ROOT / "cursor" / "koku-hindsight-memory.mdc",
+        HOME / "go" / "src" / "github.com" / "project-koku" / "koku-service-operator" / ".cursor" / "rules" / "hindsight-memory.mdc",
+    ),
     # praxis: primary checkout only (praxis-grid, the flagship active-dev
     # repo). The other 9 praxis-* checkouts get the same deployed content
     # copied manually -- not worth a RULE_PAIRS entry each, same rationale

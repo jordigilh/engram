@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.vectorize.serena.koku-family</string>
+    <!-- Single shared serena MCP daemon for the koku family (project-koku/koku,
+         Python, and project-koku/koku-service-operator, Go). Mirrors
+         io.vectorize.serena.kubernaut-family exactly (see that plist's
+         comment for the full rationale on --add-mode query-projects and the
+         deliberate omission of --project) -- created 2026-08-17 after a live
+         incident: koku-service-operator's per-window stdio
+         `uvx serena start-mcp-server --project ${workspaceFolder}` setup was
+         apparently served by an already-running `koku` (Python)-scoped
+         process instead of spawning its own, most likely due to Cursor's
+         stdio MCP client pooling/reusing processes keyed on the
+         *unsubstituted* server config rather than the per-window resolved
+         `${workspaceFolder}` value. A shared HTTP daemon with explicit
+         per-project mount URLs (via engram-serena-multiplex, see
+         io.vectorize.serena-multiplex.koku-family.plist) sidesteps that
+         entirely -- there's no ambiguous shared server name for Cursor to
+         conflate across windows. See docs/findings/2026-08.md, 2026-08-17
+         entry, for the full incident.
+
+         A single serena process serving both a Python project (koku) and a
+         Go project (koku-service-operator) is fine: language servers are
+         spawned per-project based on each project's own
+         .serena/project.yml `language_servers:` setting, not fixed at
+         daemon startup. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.local/bin/uvx</string>
+        <string>--from</string>
+        <string>git+https://github.com/oraios/serena</string>
+        <string>serena</string>
+        <string>start-mcp-server</string>
+        <string>--context</string>
+        <string>ide</string>
+        <string>--add-mode</string>
+        <string>no-memories</string>
+        <string>--add-mode</string>
+        <string>query-projects</string>
+        <string>--open-web-dashboard</string>
+        <string>false</string>
+        <string>--transport</string>
+        <string>streamable-http</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>8894</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOME__/.local/bin:/opt/homebrew/bin:__HOME__/go/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>GOPATH</key>
+        <string>__HOME__/go</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.hindsight/logs/serena-koku-family-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.hindsight/logs/serena-koku-family-stderr.log</string>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

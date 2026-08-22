@@ -2,6 +2,13 @@ version: 2
 
 updates:
   # Python dependencies (pyproject.toml) — the pipeline package itself.
+  # `patterns: ["*"]` with no `update-types` restriction groups every
+  # available bump (major, minor, and patch) for this ecosystem into one PR
+  # per scheduled run, instead of one PR per package. Without this, several
+  # packages bumping in the same week (e.g. mcp, openai, sentence-transformers)
+  # each open their own PR against the same pyproject.toml lines, so the
+  # first one merged makes every other one CONFLICTING (see
+  # docs/findings/2026-08.md).
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
@@ -12,10 +19,17 @@ updates:
       - "dependencies"
       - "python"
     groups:
-      python-patch-and-minor:
-        update-types:
-          - "minor"
-          - "patch"
+      python-dependencies:
+        patterns:
+          - "*"
+    ignore:
+      # litellm==1.97.0 (its latest release as of 2026-08) pins
+      # openai<3.0.0,>=2.20.0, so any openai>=3.0.0 is a guaranteed
+      # ResolutionImpossible pip conflict, not a transient CI failure --
+      # see docs/findings/2026-08.md. Re-check once litellm ships a release
+      # supporting openai 3.x, then drop this ignore.
+      - dependency-name: "openai"
+        update-types: ["version-update:semver-major"]
 
   # npm dependencies for the OpenCode plugin (separate package.json).
   - package-ecosystem: "npm"
@@ -28,10 +42,9 @@ updates:
       - "dependencies"
       - "javascript"
     groups:
-      npm-patch-and-minor:
-        update-types:
-          - "minor"
-          - "patch"
+      npm-dependencies:
+        patterns:
+          - "*"
 
   # Base image used by the Linux/containerized Hindsight Dockerfile.
   - package-ecosystem: "docker"
@@ -43,6 +56,10 @@ updates:
     labels:
       - "dependencies"
       - "docker"
+    groups:
+      docker-dependencies:
+        patterns:
+          - "*"
 
   # Actions used by CI (actions/checkout, actions/setup-python, etc.).
   - package-ecosystem: "github-actions"

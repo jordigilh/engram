@@ -182,18 +182,22 @@ Omitting a body/block entirely means "don't care what's inside":
 ~/.hindsight/venv/bin/engram-search-dcm --pattern 'func \NAME(\(A*\)) error' --language go --repo dcm-cli
 ```
 
-### What this is NOT: complementary to gopls/Serena, not a replacement
+### What this is NOT: complementary to Serena, not a replacement
 
 `CodePattern` is purely syntactic. It has no type resolution (won't match
 `(ok bool, err error)` against a search for `(bool, error)`), can't find
-references/callers, has no call graph, and produces no diagnostics.
-kubernaut/dcm/engram already use `gopls` and koku already uses Serena
-(Pyright-backed) for exactly those type-aware, cross-file needs — adding
-`CodePattern` does not replace either. Its distinct value is answering "find
-every X shaped like this" queries neither LSP tool can do (LSP navigation
-starts from a known symbol/cursor position, not a structural shape), while
-reusing CocoIndex — infrastructure Engram already runs — instead of standing
-up a separate MCP server per language.
+references/callers, has no call graph, and produces no diagnostics. Serena
+(LSP-wrapping — `gopls`/`pyright`/`rust-analyzer`/`typescript-language-server`
+depending on project language, see `docs/NEW_PROJECT_SETUP.md#7-choose-your-code-intelligence-backend`)
+is the default code-intelligence backend across every onboarded project and
+already covers exactly those type-aware, cross-file needs — adding
+`CodePattern` does not replace it. Its distinct value is answering "find
+every X shaped like this" queries Serena can't do (LSP navigation starts from
+a known symbol/cursor position, not a structural shape), while reusing
+CocoIndex — infrastructure Engram already runs — instead of standing up a
+separate MCP server per language. See
+`docs/README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor` for the
+full three-way comparison across all of Hindsight, CocoIndex, and Serena.
 
 ### Why SQL command attachment (not a manual trigger)
 

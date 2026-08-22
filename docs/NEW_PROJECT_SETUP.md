@@ -263,6 +263,11 @@ else in this guide depends on the service actually being loaded.
 
 ### 7. Choose Your Code-Intelligence Backend
 
+> See [docs/README.md's Division of Labor](README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor)
+> for how Serena's role here differs from Hindsight (memory) and CocoIndex
+> (search) — this section is setup instructions only, not a conceptual
+> overview.
+
 Every onboarded project needs a code-intelligence MCP server so agents get
 real symbol lookup/find-references/diagnostics instead of grepping for
 identifiers. **[Serena](https://github.com/oraios/serena)** (an LSP-wrapping

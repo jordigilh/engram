@@ -8,7 +8,7 @@ does and why, see the [root README](../README.md).
 - [How It Works](#how-it-works)
 - [Key Design Decisions](#key-design-decisions)
 - [Architecture](#architecture)
-- [Hindsight vs. CocoIndex: Division of Labor](#hindsight-vs-cocoindex-division-of-labor)
+- [Hindsight vs. CocoIndex vs. Serena: Division of Labor](#hindsight-vs-cocoindex-vs-serena-division-of-labor)
 - [Knowledge Graph and Mental Models](#knowledge-graph-and-mental-models)
 - [How Correction Detection Works](#how-correction-detection-works)
 - [Backup and Restore](#backup-and-restore)
@@ -74,7 +74,7 @@ graph TB
         mcp_cfg["mcp.json"]
         rule["hindsight-memory.mdc"]
         hooks["hooks.json"]
-        gopls["gopls (stdio)"]
+        serena["Serena MCP<br/>(gopls/pyright/rust-analyzer/tsserver)"]
         code_mcp["code-index MCP"]
     end
 
@@ -121,7 +121,7 @@ graph TB
     coco_flows --> pg
     coco_flows -->|"retain API"| api
     coco_search --> pg
-    ```
+```
 
 ### Components
 
@@ -130,7 +130,8 @@ graph TB
 | Project source | `<your-clone>/engram/` | Code pushed to GitHub |
 | LLM config | `~/.hindsight/config.env` | Real project IDs, model names (never committed) |
 | Hindsight process | `~/.hindsight/venv/bin/hindsight-api` | Native macOS service (launchd managed) |
-| MCP config | `~/.cursor/mcp.json` | Connects Cursor to Hindsight (memory + docs + issues) + gopls |
+| MCP config | `~/.cursor/mcp.json` (or a per-repo `.cursor/mcp.json`) | Connects Cursor to Hindsight (memory + docs + issues), CocoIndex code search, and Serena |
+| Serena | [oraios/serena](https://github.com/oraios/serena) (LSP-wrapping MCP server) | Type-aware code intelligence — `find_symbol`/`find_referencing_symbols`/`get_symbols_overview`/diagnostics, backed by the real per-language LSP (`gopls`/`pyright`/`rust-analyzer`/`typescript-language-server`) — see [Division of Labor](#hindsight-vs-cocoindex-vs-serena-division-of-labor) below |
 | Cursor rule | `~/.cursor/rules/hindsight-memory.mdc` | Instructs agent to recall from all three banks |
 | Example rules | `cursor/examples/*.mdc` | Ready-made rules for Go, Python, Rust, TypeScript, minimal |
 | Nightly script | `nightly-learn.py` (symlinked to `~/.hindsight/`) | Processes transcripts, extracts patterns |
@@ -163,21 +164,27 @@ graph TB
 
 ---
 
-## Hindsight vs. CocoIndex: Division of Labor
+## Hindsight vs. CocoIndex vs. Serena: Division of Labor
 
-Hindsight and CocoIndex sit at different layers of the same pipeline and their
+Hindsight, CocoIndex, and Serena sit at three different layers and their
 capabilities barely overlap — they are complementary, not substitutable for
-one another.
+one another. The one-line version: **Hindsight remembers** (distilled facts
+and decisions across sessions), **CocoIndex finds** (search by meaning or by
+structural shape, kept fresh automatically), and **Serena knows** (exact,
+type-resolved facts about the code as it exists *right now*, via the real
+compiler/language server — no memory, no search-by-concept, just ground
+truth for a symbol you already know the name or position of).
 
-| Capability | Hindsight | CocoIndex |
-|---|---|---|
-| **Core job** | Memory: judge what's worth remembering, store it, reason about it, serve it back | Ingestion: detect what changed at the source, keep the index fresh |
-| **LLM involved** | Yes — Haiku extracts durable facts from raw windows (`retain`), Sonnet synthesizes mental models (`reflect`) | No — pure local embeddings (`all-MiniLM-L6-v2`) + tree-sitter parsing, zero LLM cost |
-| **Storage it owns** | `cursor-memory`, `kubernaut-docs`, `kubernaut-issues` banks (its own schema/API) | `code-index` pgvector table only (self-managed table in the same Postgres instance) |
-| **Retrieval it serves** | `recall` — semantic vector search + local reranker over distilled facts | Hybrid dense + BM25 (RRF fusion) — good for exact identifiers *and* concepts |
-| **Higher-order reasoning** | Mental models (synthesizes many facts into a coherent doc), contradiction detection/resolution, project tagging | None — it doesn't synthesize or judge, it just chunks and indexes |
-| **Freshness mechanism** | None built-in — needs something to call `retain` (nightly batch or CocoIndex) | File-watching / 5-min polling — the reason docs/issues/code went from nightly-batch to sub-hour/sub-minute fresh |
-| **Code-aware chunking** | None (would chunk by paragraph/token count) | Tree-sitter AST parsing — chunks by function/type/method boundary |
+| Capability | Hindsight | CocoIndex | Serena |
+|---|---|---|---|
+| **Core job** | Memory: judge what's worth remembering, store it, reason about it, serve it back | Ingestion + search: detect what changed at the source, keep the index fresh, answer "about X" (semantic) and "shaped like X" (structural) queries | Code intelligence: real symbol lookup/find-references/diagnostics via the language's actual LSP, anchored to a known symbol or file position |
+| **LLM involved** | Yes — Haiku extracts durable facts from raw windows (`retain`), Sonnet synthesizes mental models (`reflect`) | No — pure local embeddings (`all-MiniLM-L6-v2`) + tree-sitter parsing, zero LLM cost | No — delegates entirely to the LSP (`gopls`/`pyright`/`rust-analyzer`/`typescript-language-server`), zero LLM cost |
+| **Storage it owns** | `cursor-memory`, `kubernaut-docs`, `kubernaut-issues` banks (its own schema/API) | `code-index` pgvector table only (self-managed table in the same Postgres instance) | None persisted — no index, no database; per-session LSP process state only (`--add-mode no-memories` disables even Serena's own optional memory-notes feature, see `docs/findings/2026-08.md`'s 2026-08-21 entry) |
+| **Retrieval it serves** | `recall` — semantic vector search + local reranker over distilled facts | Hybrid dense + BM25 (RRF fusion) for "about X"; `CodePattern` structural by-example matching for "shaped like X" | `find_symbol` / `find_referencing_symbols` / `get_symbols_overview` / diagnostics — type-resolved, exact; **cannot** search by free-text concept or by shape at all |
+| **Higher-order reasoning** | Mental models (synthesizes many facts into a coherent doc), contradiction detection/resolution, project tagging | None — it doesn't synthesize or judge, it just chunks and indexes | None — no synthesis; every answer is a live fact from the compiler/LSP, nothing remembered between calls |
+| **Freshness mechanism** | None built-in — needs something to call `retain` (nightly batch or CocoIndex) | File-watching / 5-min polling — the reason docs/issues/code went from nightly-batch to sub-hour/sub-minute fresh | Always live by construction — queries the real LSP against the current checkout on every call, so there's no index to go stale (trade-off: slower per-call on cold cache, and only as correct as what's actually on disk right now) |
+| **Query starting point** | Free-text query (semantic) | Free-text query (semantic) or a shape/pattern (structural) | A **known** symbol name or file/line position — cannot answer "find code about rate limiting," only "what is/references/implements *this specific thing*" |
+| **Code-aware chunking / resolution** | None (would chunk by paragraph/token count) | Tree-sitter AST parsing — chunks by function/type/method boundary, syntactic only (no type resolution) | Full type resolution via the real compiler/LSP — the only one of the three that understands imports, generics, and interface satisfaction, not just syntax |
 
 **Relationship, not overlap**: for three of CocoIndex's four flows (docs, issues,
 transcripts), CocoIndex is purely the ingestion/freshness layer — it detects a
@@ -186,9 +193,14 @@ storage and serves it back out over its own MCP tools (`hindsight`,
 `hindsight-docs`, `hindsight-issues`). For the fourth flow (code), CocoIndex is
 fully independent end to end — it writes into its own `code-index` table and
 serves queries itself via `cocoindex_search`/`engram_code_search`; Hindsight
-has no visibility into that data at all.
+has no visibility into that data at all. Serena is independent of *both* — it
+has no launchd service, no Postgres table, and no `retain`/ingestion step; it
+is registered per-project in `~/.serena/serena_config.yml` and answers every
+query live against the checkout via its own MCP tool surface
+(`find_symbol`/`find_referencing_symbols`/etc., see
+[NEW_PROJECT_SETUP.md §7](NEW_PROJECT_SETUP.md#7-choose-your-code-intelligence-backend)).
 
-**Could one replace the other?** No, not cleanly in either direction:
+**Could one replace another?** No, not cleanly in any direction:
 
 - **CocoIndex replacing Hindsight** would leave a searchable log of raw,
   un-distilled chunks — losing the things that make it a *memory* system
@@ -206,16 +218,35 @@ has no visibility into that data at all.
   search is weak at "find the exact function `ParseConfig`," which is exactly
   what hybrid RRF fusion was built for. Hindsight also has no file-watching of
   its own; something still has to notice a source changed and call `retain`.
+- **CocoIndex (or Hindsight) replacing Serena** doesn't work either: neither
+  has type resolution. `CodePattern`'s structural search is purely syntactic
+  — it can't tell that `(ok bool, err error)` satisfies a search for
+  `(bool, error)`, can't find references/callers, has no call graph, and
+  produces no diagnostics. Only a real LSP knows that.
+- **Serena replacing CocoIndex or Hindsight** doesn't work either, in the
+  other direction: Serena has no free-text/semantic search at all (see
+  "Query starting point" above) and no memory across sessions — it can't
+  answer "find code about rate limiting" or "what did we decide about X last
+  week," only "what does *this specific, already-identified* symbol
+  reference/implement." Its `docs/COCOINDEX.md` section on `CodePattern`
+  states this explicitly: Serena/gopls-style LSP tools and CocoIndex's
+  structural search are "complementary... not a replacement" for each other.
 
 The short version: CocoIndex is the freshness + structural-indexing layer in
-front of three of Hindsight's banks, plus a fully independent hybrid search
-engine for the one content type (code) that needs AST-aware chunking and
-exact-identifier matching Hindsight was never built to do. Remove CocoIndex
-and Hindsight still works, just back to stale nightly-batch ingestion and zero
-code search. Remove Hindsight and CocoIndex still works for code search, but
+front of three of Hindsight's banks, plus a fully independent hybrid/structural
+search engine for the one content type (code) that needs AST-aware chunking
+and exact-identifier matching Hindsight was never built to do. Serena sits
+orthogonally to both — it's the only one with real compiler-level
+understanding of the code, but purely reactive (must already know what symbol
+to ask about) and stateless across sessions. Remove CocoIndex and Hindsight
+still works, just back to stale nightly-batch ingestion and zero code search.
+Remove Hindsight and CocoIndex still works for code search, but
 `cursor-memory`/docs/issues lose all LLM-based judgment, becoming a dumb,
 ever-growing chunk store with no forgetting, synthesis, or contradiction
-handling.
+handling. Remove Serena and both Hindsight and CocoIndex keep working exactly
+as before — but the agent loses type-aware navigation and is back to
+grep/glob plus approximate semantic search for anything requiring real
+type/reference resolution.
 
 ### Security Boundary
 

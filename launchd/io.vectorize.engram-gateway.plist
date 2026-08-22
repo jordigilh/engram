@@ -30,8 +30,21 @@
     </array>
     <key>EnvironmentVariables</key>
     <dict>
+        <!-- __HOME__/go/bin (+ GOPATH) matter here because this process spawns
+             a Serena MCP subprocess in-process for any onboarded repo not
+             covered by a dedicated *-family multiplex daemon, and that
+             Serena instance invokes `gopls` directly for Go projects. Without
+             this, gopls (installed via `go install golang.org/x/tools/gopls`,
+             landing in $GOPATH/bin) can't be found and every such Go project
+             fails language-server init with "Found a Go version but gopls
+             is not installed" -- see docs/findings/2026-08.md, 2026-08-22
+             entry. Same fix already applied to the serena.*-family and
+             serena-project-server plists; this was the one template that
+             had been missed. -->
         <key>PATH</key>
-        <string>__HOME__/.hindsight/venv/bin:__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>__HOME__/.hindsight/venv/bin:__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:__HOME__/go/bin:/usr/bin:/bin</string>
+        <key>GOPATH</key>
+        <string>__HOME__/go</string>
         <key>HOME</key>
         <string>__HOME__</string>
     </dict>

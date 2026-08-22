@@ -22,6 +22,14 @@ updates:
       python-dependencies:
         patterns:
           - "*"
+    ignore:
+      # litellm==1.97.0 (its latest release as of 2026-08) pins
+      # openai<3.0.0,>=2.20.0, so any openai>=3.0.0 is a guaranteed
+      # ResolutionImpossible pip conflict, not a transient CI failure --
+      # see docs/findings/2026-08.md. Re-check once litellm ships a release
+      # supporting openai 3.x, then drop this ignore.
+      - dependency-name: "openai"
+        update-types: ["version-update:semver-major"]
 
   # npm dependencies for the OpenCode plugin (separate package.json).
   - package-ecosystem: "npm"

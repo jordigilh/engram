@@ -144,6 +144,75 @@ def route_call(tool_name: str, catalog: dict[str, tuple[str, str]]) -> tuple[str
     return catalog.get(tool_name)
 
 
+# Tools rarely exercised by the documented recall/retain/reflect/mental-model
+# workflow (hindsight-memory.mdc) or by Serena's symbol/search/edit tools
+# (local-mcp-tool-preference.mdc) get dropped from the aggregated catalog
+# entirely, not just hidden client-side -- every extra tool definition costs
+# context-window budget and counts against Cursor's own active-tool ceiling.
+# A single hindsight-api backend's raw catalog is 29 tools (mostly bank/
+# document/operation/directive administration never used day-to-day); a repo
+# wired to BOTH hindsight-docs and hindsight-issues plus serena's 27 tools
+# (kubernaut-family) hit 87 total -- more than double Cursor's ~40-tool
+# ceiling, and got stuck permanently `Disabled` no matter how many times it
+# was re-enabled (see docs/findings/2026-08.md, 2026-08-22 "MCP shows
+# Disabled, root cause: tool-count ceiling" entry). Trimming every hindsight-
+# shaped and serena backend to its actually-used subset keeps every onboarded
+# repo well under budget without losing any tool actually exercised in
+# practice; the dropped administrative tools remain reachable via a direct
+# curl against hindsight-api / the serena daemon if ever genuinely needed.
+RELEVANT_HINDSIGHT_TOOLS = frozenset(
+    {
+        "retain",
+        "sync_retain",
+        "recall",
+        "reflect",
+        "list_mental_models",
+        "get_mental_model",
+        "refresh_mental_model",
+    }
+)
+
+RELEVANT_SERENA_TOOLS = frozenset(
+    {
+        "replace_content",
+        "replace_in_files",
+        "replace_symbol_body",
+        "insert_after_symbol",
+        "insert_before_symbol",
+        "search_for_pattern",
+        "get_symbols_overview",
+        "find_symbol",
+        "find_referencing_symbols",
+        "find_implementations",
+        "find_declaration",
+        "get_diagnostics_for_file",
+        "rename_symbol",
+        "safe_delete_symbol",
+        "activate_project",
+        "list_queryable_projects",
+        "query_project",
+    }
+)
+
+# Backends with no entry here (code/cocoindex, and any future family) pass
+# through unfiltered -- their catalogs are already small (2 tools today).
+RELEVANT_TOOLS_BY_BACKEND: dict[str, frozenset[str]] = {
+    "docs": RELEVANT_HINDSIGHT_TOOLS,
+    "issues": RELEVANT_HINDSIGHT_TOOLS,
+    "serena": RELEVANT_SERENA_TOOLS,
+}
+
+
+def filter_relevant_tools(backend_key: str, tools: list[dict]) -> list[dict]:
+    """Drop rarely-used administrative tools for backends known to expose an
+    oversized catalog. See `RELEVANT_TOOLS_BY_BACKEND`'s module-level comment
+    for why this exists."""
+    allowed = RELEVANT_TOOLS_BY_BACKEND.get(backend_key)
+    if allowed is None:
+        return tools
+    return [tool for tool in tools if tool["name"] in allowed]
+
+
 async def _fetch_backend_tools(backend_key: str, adapter: BackendAdapter) -> tuple[str, list[dict] | Exception]:
     try:
         tools = await adapter.list_tools()
@@ -168,7 +237,7 @@ async def aggregate_tools_list(
             errors[backend_key] = str(outcome)
             log.warning("backend %r failed to list tools: %s", backend_key, outcome)
             continue
-        per_backend_tools[backend_key] = outcome
+        per_backend_tools[backend_key] = filter_relevant_tools(backend_key, outcome)
 
     catalog, tool_defs = build_catalog(per_backend_tools)
     return tool_defs, catalog, errors

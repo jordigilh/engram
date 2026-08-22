@@ -126,6 +126,45 @@ class TestRouteCall:
         assert engram_gateway.route_call("nonexistent_tool", {}) is None
 
 
+class TestFilterRelevantTools:
+    """Covers the tool-count-ceiling fix (docs/findings/2026-08.md,
+    2026-08-22 "MCP shows Disabled" entry): hindsight-shaped and serena
+    backends get trimmed to their actually-used subset before ever reaching
+    `build_catalog`, so a repo wired to multiple heavy backends can't blow
+    past Cursor's active-tool ceiling and get stuck `Disabled`."""
+
+    def test_hindsight_backend_keeps_only_relevant_tools(self, engram_gateway):
+        tools = [_tool("recall"), _tool("retain"), _tool("delete_bank"), _tool("clear_memories")]
+
+        filtered = engram_gateway.filter_relevant_tools("docs", tools)
+
+        assert {t["name"] for t in filtered} == {"recall", "retain"}
+
+    def test_issues_backend_uses_the_same_relevant_set_as_docs(self, engram_gateway):
+        tools = [_tool("reflect"), _tool("list_directives")]
+
+        filtered = engram_gateway.filter_relevant_tools("issues", tools)
+
+        assert {t["name"] for t in filtered} == {"reflect"}
+
+    def test_serena_backend_keeps_only_relevant_tools(self, engram_gateway):
+        tools = [_tool("find_symbol"), _tool("write_memory"), _tool("open_dashboard")]
+
+        filtered = engram_gateway.filter_relevant_tools("serena", tools)
+
+        assert {t["name"] for t in filtered} == {"find_symbol"}
+
+    def test_unfiltered_backend_passes_through_unchanged(self, engram_gateway):
+        tools = [_tool("praxis_code_search")]
+
+        filtered = engram_gateway.filter_relevant_tools("code", tools)
+
+        assert filtered == tools
+
+    def test_empty_tool_list_stays_empty(self, engram_gateway):
+        assert engram_gateway.filter_relevant_tools("docs", []) == []
+
+
 class TestAggregateToolsList:
     def test_merges_catalogs_from_all_healthy_backends(self, engram_gateway):
         backends = {
@@ -141,6 +180,24 @@ class TestAggregateToolsList:
         assert names == {"docs_recall", "issues_recall", "praxis_code_search", "find_symbol"}
         assert catalog["docs_recall"] == ("docs", "recall")
         assert errors == {}
+
+    def test_drops_irrelevant_tools_from_oversized_backends_before_aggregating(self, engram_gateway):
+        """The exact kubernaut-family shape that triggered the ceiling bug:
+        docs+issues+serena combined raw catalogs way over budget, trimmed
+        down to the actually-used subset in the final aggregated list."""
+        backends = {
+            "docs": FakeAdapter(tools=[_tool("recall"), _tool("delete_bank")]),
+            "issues": FakeAdapter(tools=[_tool("retain"), _tool("list_directives")]),
+            "serena": FakeAdapter(tools=[_tool("find_symbol"), _tool("write_memory")]),
+        }
+
+        tool_defs, catalog, _errors = asyncio.run(engram_gateway.aggregate_tools_list(backends))
+
+        names = {t["name"] for t in tool_defs}
+        assert names == {"docs_recall", "issues_retain", "find_symbol"}
+        assert "docs_delete_bank" not in catalog
+        assert "issues_list_directives" not in catalog
+        assert "write_memory" not in catalog
 
     def test_backend_failure_is_excluded_but_others_still_returned(self, engram_gateway):
         backends = {

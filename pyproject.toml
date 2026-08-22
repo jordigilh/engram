@@ -15,7 +15,7 @@ dependencies = [
     "httpx==0.28.1",
     "starlette==1.6.0",
     "uvicorn==0.52.4",
-    "openai==2.48.0",
+    "openai==3.3.0",
     "psycopg2-binary==2.9.12",
     "pdfplumber==0.11.10",
     "sentence-transformers==6.0.0",

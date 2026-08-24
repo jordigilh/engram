@@ -239,14 +239,21 @@ matching CLI flags) that build a cross-file call graph from the same
 ```
 
 Every call rebuilds the graph fresh (no persisted index) and logs elapsed
-time + node/edge/unresolved-call counts at `log.info`. Same accuracy ceiling
-as structural pattern search, plus one more: call resolution is name-based
-with no type info, so a function name duplicated across files (this repo has
-several — `pattern_search_code` is defined once per `*_code_pattern_search`
-module) can produce false-positive edges. Measured via a Serena cross-check:
-100% recall, ~58% precision in a 5-function sample, precision loss
-concentrated entirely in that duplicated-name case. All 3 tool docstrings
-state this explicitly.
+time + node/edge/unresolved/ambiguous-call counts at `log.info`. Same
+accuracy ceiling as structural pattern search, plus one more: call
+resolution is name-based with no type info, so a function name duplicated
+across files (this repo has several — `pattern_search_code` is defined once
+per `*_code_pattern_search` module) is a genuine risk of false-positive
+edges. Measured via a Serena cross-check: 100% recall, ~58% precision in a
+5-function sample, precision loss concentrated entirely in that
+duplicated-name case — then fixed with signature-compatibility filtering
+(candidates whose parameter list can't accept a call's keyword arguments are
+dropped) plus Graphify-style ambiguous-edge reporting (an edge is only added
+when exactly one candidate survives filtering; 2+ surviving candidates are
+recorded in `graph.graph["ambiguous_calls"]` and surfaced via
+`blast_radius`'s output instead of guessed at). Re-measured after the fix:
+the `pattern_search_code` false positives went to zero. See
+`docs/CALL_GRAPH_CLUSTERING.md` for the full before/after numbers.
 
 ---
 

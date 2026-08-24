@@ -33,19 +33,42 @@ a call inside a decorator's own argument list (resolves to no caller --
 correct, since it isn't inside any function's body), and a module-level call
 sitting between two function defs (same).
 
-Name resolution is intentionally simple and repo-wide: a call's bare/dotted
-name's *trailing* segment is matched against every known qualified function
-name across the whole graph. Common method names shared by unrelated
-functions/classes will produce false-positive edges; calls to names CocoIndex
-never saw a definition for (external libraries, builtins, dynamic dispatch)
-are dropped but counted (`graph.graph["unresolved_calls"]`) as a first-class
-signal of how much of a bank the extraction actually covers -- not swallowed
-silently.
+Name resolution is repo-wide: a call's bare/dotted name's *trailing* segment
+is matched against every known qualified function name across the whole
+graph, narrowed by two filters (see Serena cross-check findings,
+docs/CALL_GRAPH_CLUSTERING.md -- name-alone resolution measured ~58%
+precision, almost entirely from one duplicated-name function):
+
+1. **Same-file preference**: if any candidate lives in the call site's own
+ file, only same-file candidates are considered (the common "private
+ helper" case).
+2. **Signature-compatibility filtering**: a candidate is dropped if the
+ call passes a keyword argument the candidate's parameter list doesn't
+ accept (and the candidate has no `**kwargs` catch-all). This is the same
+ signal that resolved the Serena cross-check's dominant false-positive
+ case (a `repo=` keyword argument only some same-named candidates accept).
+
+Following Graphify-Labs/graphify's precision-over-recall policy: an edge is
+only added when filtering narrows the candidates to *exactly one* — never an
+arbitrary pick among several. Calls matching zero known defs are dropped but
+counted (`graph.graph["unresolved_calls"]`); calls where filtering still
+leaves 2+ viable candidates are dropped from the graph too, but never
+silently -- they're recorded in `graph.graph["ambiguous_calls"]` (list of
+dicts: caller, callee_name, display_path, line, candidates) so callers of
+this module can surface them rather than have them vanish. Both counters are
+first-class signals of how much of a repo the extraction actually covers.
+
+The signature/keyword parsing (`_split_top_level`, `_parse_def_param_names`,
+`_parse_call_keyword_args`) is a lightweight bracket/quote-aware splitter,
+not a real Python parser -- good enough to pull parameter/keyword-argument
+*names* out of `match_code`'s raw captured argument-list text, not intended
+to handle every possible Python expression shape correctly.
 """
 from __future__ import annotations
 
 import dataclasses
 import pathlib
+import re
 
 import networkx as nx
 
@@ -82,6 +105,13 @@ class FunctionDef:
     body_end_line: int
     """Approximate last line still considered part of this def's body (see
     module docstring). Inclusive."""
+    param_keywords: frozenset[str] = frozenset()
+    """Names of parameters a caller could pass by keyword (i.e. everything
+    except bare `*`/`/` separators and the `*args`/`**kwargs` names
+    themselves). Used for signature-compatibility filtering."""
+    accepts_arbitrary_keywords: bool = False
+    """True if the signature has a `**kwargs`-shaped parameter, making it
+    compatible with any keyword argument a caller passes."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -93,6 +123,10 @@ class CallEdge:
     callee_name: str
     display_path: str
     line: int
+    keyword_args: frozenset[str] = frozenset()
+    """Names of keyword arguments (`name=value` shape) passed at this call's
+    top level. A `**forwarded`-style argument contributes nothing here --
+    its contents can't be known statically."""
 
 
 def _indent_of(line: str) -> int:
@@ -111,6 +145,82 @@ def _approximate_body_end_line(lines: list[str], header_end_line: int, def_inden
         if _indent_of(line) <= def_indent:
             return i  # last 0-indexed body line is i-1 -> 1-indexed i
     return len(lines)
+
+
+_KEYWORD_ARG_RE = re.compile(r"^([A-Za-z_]\w*)\s*=(?!=)")
+"""Matches a leading `name=` at the start of a call-argument chunk, but not
+`name==value` (equality) or `name<=`/`name>=`/`name!=` -- the lookahead
+rejects a second `=` immediately following, and the character class before
+`=` only matches identifier characters, so `x >= y` (whose first char before
+`=` is `>`) never matches at position 0 either."""
+
+
+def _split_top_level(text: str) -> list[str]:
+    """Split `text` on commas that aren't nested inside (), [], {}, or a
+    quoted string. Good enough for pulling apart a parameter list or a call's
+    argument list one item at a time; not a full Python parser (e.g. doesn't
+    handle triple-quoted strings or f-string braces specially)."""
+    parts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    quote: str | None = None
+    for i, ch in enumerate(text):
+        if quote:
+            current.append(ch)
+            if ch == quote and text[i - 1] != "\\":
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+            current.append(ch)
+        elif ch in "([{":
+            depth += 1
+            current.append(ch)
+        elif ch in ")]}":
+            depth -= 1
+            current.append(ch)
+        elif ch == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current))
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _parse_def_param_names(param_text: str) -> tuple[frozenset[str], bool]:
+    """Returns (param_keywords, accepts_arbitrary_keywords) from a def's raw
+    captured parameter-list text (see `FunctionDef` field docs)."""
+    keywords: set[str] = set()
+    accepts_arbitrary_keywords = False
+    for part in _split_top_level(param_text):
+        if part in ("*", "/"):
+            continue  # keyword-only/positional-only markers, not real params
+        if part.startswith("**"):
+            accepts_arbitrary_keywords = True
+            continue
+        if part.startswith("*"):
+            continue  # *args -- can't be passed by keyword under its own name
+        name = part.split(":", 1)[0].split("=", 1)[0].strip()
+        if name.isidentifier():
+            keywords.add(name)
+    return frozenset(keywords), accepts_arbitrary_keywords
+
+
+def _parse_call_keyword_args(arg_text: str) -> frozenset[str]:
+    """Returns the set of keyword-argument names (`name=value` shape) at a
+    call's top level, from its raw captured argument-list text. A
+    `**forwarded` argument is skipped -- its contents aren't statically
+    knowable, so it contributes no specific keyword names (see
+    `_signature_compatible`, which treats missing information as "don't
+    filter on this")."""
+    keywords: set[str] = set()
+    for part in _split_top_level(arg_text):
+        if part.startswith("**"):
+            continue
+        m = _KEYWORD_ARG_RE.match(part)
+        if m:
+            keywords.add(m.group(1))
+    return frozenset(keywords)
 
 
 def extract_definitions(source: str, language: str, display_path: str) -> list[FunctionDef]:
@@ -139,6 +249,8 @@ def extract_definitions(source: str, language: str, display_path: str) -> list[F
         start_line = chunk.start.line
         def_indent = _indent_of(lines[start_line - 1])
         body_end_line = _approximate_body_end_line(lines, chunk.end.line, def_indent)
+        param_text = m.captures["A"][0].text if m.captures.get("A") else ""
+        param_keywords, accepts_arbitrary_keywords = _parse_def_param_names(param_text)
         defs.append(
             FunctionDef(
                 qualified_name=f"{display_path}::{name}",
@@ -146,6 +258,8 @@ def extract_definitions(source: str, language: str, display_path: str) -> list[F
                 name=name,
                 start_line=start_line,
                 body_end_line=body_end_line,
+                param_keywords=param_keywords,
+                accepts_arbitrary_keywords=accepts_arbitrary_keywords,
             )
         )
     return sorted(defs, key=lambda d: d.start_line)
@@ -184,15 +298,29 @@ def extract_call_sites(
             continue
         callee_name = name_captures[0].text
         line = m.chunks[0].start.line
+        arg_text = m.captures["A"][0].text if m.captures.get("A") else ""
         edges.append(
             CallEdge(
                 caller=_resolve_caller(defs_in_file, line),
                 callee_name=callee_name,
                 display_path=display_path,
                 line=line,
+                keyword_args=_parse_call_keyword_args(arg_text),
             )
         )
     return edges
+
+
+def _signature_compatible(defn: FunctionDef, call: CallEdge) -> bool:
+    """A candidate target is compatible with a call if it accepts every
+    keyword argument the call passes (or has `**kwargs` and so accepts
+    anything). Purely a *keyword* check -- arity/positional-count checking
+    was deliberately left out: defaults, `*args`, and bound `self` all make
+    "how many positional args does this accept" too fuzzy to be a reliable
+    filter, whereas a keyword name is unambiguous when present."""
+    if defn.accepts_arbitrary_keywords:
+        return True
+    return call.keyword_args <= defn.param_keywords
 
 
 def build_call_graph(
@@ -207,18 +335,22 @@ def build_call_graph(
     calls into a directed graph: node = qualified function name, edge =
     caller calls callee.
 
-    Callee resolution is repo-wide and trailing-segment-based: a dotted call
-    name's last segment is matched against every known qualified name.
-    Common names shared across files/classes get an edge to *every* match
-    (conservative -- documented over-connection risk, see module docstring)
-    rather than an arbitrary pick. Calls matching zero known defs are
-    dropped but counted in `graph.graph["unresolved_calls"]`.
+    Callee resolution is repo-wide and trailing-segment-based: a dotted
+    call name's last segment is matched against every known qualified name,
+    then narrowed by same-file preference and signature-compatibility
+    filtering (see module docstring). An edge is only added when exactly one
+    candidate survives -- Graphify's precision-over-recall policy, not an
+    arbitrary pick among several. Calls matching zero known defs are dropped
+    but counted in `graph.graph["unresolved_calls"]`; calls where 2+
+    candidates remain after filtering are dropped from the graph but
+    recorded in `graph.graph["ambiguous_calls"]` instead of vanishing.
     """
     from engram import chunking
 
     graph = nx.DiGraph()
     graph.graph["unresolved_calls"] = 0
     graph.graph["total_calls"] = 0
+    graph.graph["ambiguous_calls"] = []
 
     all_defs: list[FunctionDef] = []
     calls_by_file: list[list[CallEdge]] = []
@@ -233,6 +365,7 @@ def build_call_graph(
     for d in all_defs:
         graph.add_node(d.qualified_name)
 
+    defs_by_qualified_name = {d.qualified_name: d for d in all_defs}
     name_index: dict[str, list[str]] = {}
     for d in all_defs:
         name_index.setdefault(d.name, []).append(d.qualified_name)
@@ -259,8 +392,29 @@ def build_call_graph(
             # match when nothing in the same file defines that name.
             same_file_prefix = f"{call.display_path}::"
             same_file_targets = [t for t in targets if t.startswith(same_file_prefix)]
-            for target in same_file_targets or targets:
-                graph.add_edge(call.caller, target)
+            pool = same_file_targets or targets
+
+            compatible = [t for t in pool if _signature_compatible(defs_by_qualified_name[t], call)]
+            if not compatible:
+                # Our own keyword parsing is a heuristic, not a real parser
+                # (see _parse_def_param_names/_parse_call_keyword_args) --
+                # if it eliminates every candidate the same_file/name_index
+                # match legitimately found, don't trust it over silently
+                # discarding a real match; fall back to the unfiltered pool.
+                compatible = pool
+
+            if len(compatible) == 1:
+                graph.add_edge(call.caller, compatible[0])
+            else:
+                graph.graph["ambiguous_calls"].append(
+                    {
+                        "caller": call.caller,
+                        "callee_name": call.callee_name,
+                        "display_path": call.display_path,
+                        "line": call.line,
+                        "candidates": sorted(compatible),
+                    }
+                )
 
     return graph
 

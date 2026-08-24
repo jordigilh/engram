@@ -268,9 +268,10 @@ def _build_graph_with_timing():
     )
     elapsed = time.monotonic() - start
     log.info(
-        "call graph built in %.2fs (%d nodes, %d edges, %d/%d calls unresolved)",
+        "call graph built in %.2fs (%d nodes, %d edges, %d/%d calls unresolved, %d ambiguous)",
         elapsed, graph.number_of_nodes(), graph.number_of_edges(),
         graph.graph.get("unresolved_calls", 0), graph.graph.get("total_calls", 0),
+        len(graph.graph.get("ambiguous_calls", [])),
     )
     return graph
 
@@ -321,6 +322,7 @@ def call_graph_blast_radius(function: str, depth: int = 2) -> dict[str, Any]:
         "callers_by_depth": callers_by_depth,
         "unresolved_calls": graph.graph.get("unresolved_calls", 0),
         "total_calls": graph.graph.get("total_calls", 0),
+        "ambiguous_calls": len(graph.graph.get("ambiguous_calls", [])),
     }
 
 
@@ -371,7 +373,9 @@ def _format_blast_radius_result(result: dict) -> str:
         lines.append(f"  depth {depth_i}: " + ", ".join(callers))
     lines.append(
         f"\n(name-based resolution, no type info -- {result['unresolved_calls']}/{result['total_calls']} "
-        "calls in this repo could not be resolved to a known definition; see docs/CALL_GRAPH_CLUSTERING.md)"
+        f"calls in this repo could not be resolved to a known definition, and "
+        f"{result['ambiguous_calls']} matched 2+ candidates and were dropped rather than guessed; "
+        "see docs/CALL_GRAPH_CLUSTERING.md)"
     )
     return "\n".join(lines)
 

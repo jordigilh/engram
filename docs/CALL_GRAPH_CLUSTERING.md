@@ -133,13 +133,55 @@ resolved against *all six* modules' definitions, not just the one actually
 imported -- because there's no same-file definition for the same-file
 preference fix (above) to prefer, and resolving the actual import binding
 would require real type/import resolution, i.e. exactly the LSP-based
-approach already ruled out at scale in finding 1 below. This is not a bug to
-chase further within this approach; it's the honest, expected shape of the
-name-based-resolution ceiling, now measured rather than assumed. **Practical
-implication for consumers of `blast_radius`**: high confidence in what it
-finds (recall), lower confidence that every item it lists is a real edge
-when the target function's name is duplicated across several files
-(precision) -- exactly what the tool docstrings already disclose.
+approach already ruled out at scale in finding 1 below.
+
+Root-caused further: the false positives weren't from direct lexical
+imports (which import-aware static parsing could resolve) but from pytest
+fixtures -- e.g. `test_dcm_cocoindex_search.py` calls `dcm_search.pattern_search_code(...)`
+where `dcm_search` is a fixture (defined in `conftest.py`) bound to a specific
+module at fixture-setup time, not an importable name a static parser could
+trace back to one module. Import-aware resolution would have fixed nothing
+here.
+
+### Precision fix: signature-compatibility filtering + Graphify-style ambiguous-edge reporting
+
+Compared against Graphify-Labs/graphify's own approach (also purely
+syntactic, no type resolution): Graphify tags every edge EXTRACTED /
+INFERRED / AMBIGUOUS and **skips** ambiguous matches outright, explicitly
+choosing precision over recall rather than guessing. Adopted the same
+policy here, via a filter that's still name/text-based (no new dependency,
+no import/type resolution):
+
+1. **Signature-compatibility filtering**: a same-named candidate is dropped
+   if the call passes a keyword argument (`repo=`, `limit=`, etc.) the
+   candidate's own parameter list doesn't accept (and it has no `**kwargs`
+   catch-all). This is a generic filter, not special-cased to
+   `pattern_search_code` -- it directly explains the fixture case above:
+   `dcm_search.pattern_search_code(pattern, "go", repo="engram")`'s `repo=`
+   keyword is only accepted by the five `*_search.py` modules' copies (each
+   takes a `repo` param for multi-root scoping), not by
+   `search/engram.py`'s single-root copy -- so the filter alone rules out
+   exactly the false-positive target.
+2. **Graphify's "one confirmed match or nothing" policy**: an edge is only
+   added when filtering (same-file preference, then signature
+   compatibility) narrows candidates to *exactly one*. Calls where 2+
+   candidates remain are dropped from the graph but never silently -- they're
+   recorded in `graph.graph["ambiguous_calls"]` (surfaced via
+   `unresolved_calls`/`ambiguous_calls` counts in the `blast_radius` tool's
+   output) so they're visible as "known-uncertain" rather than either
+   corrupting the graph or vanishing without a trace.
+
+Re-ran the same cross-check after the fix: `search/engram.py::pattern_search_code`
+now resolves to exactly its 2 true-positive callers (`engram_code_pattern_search`,
+`_run_cli_pattern_query` -- both same-file) and zero false positives; the 20
+former false-positive edges are now reported as ambiguous (2-6 candidates
+each) instead of confidently wrong. Whole-repo re-run: 1,417 edges (down
+from the pre-fix count, as expected -- ambiguous fan-out edges no longer
+silently added) and 585 calls now explicitly flagged ambiguous rather than
+resolved to an arbitrary target. **Practical implication for consumers of
+`blast_radius`**: precision on the demonstrated failure mode (duplicated
+function names) is now high without sacrificing the recall measured above --
+ambiguity is reported, not hidden, and not guessed at.
 
 ### Persistence go/no-go recommendation (for issue #43 phase 2)
 

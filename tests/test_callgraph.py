@@ -95,6 +95,24 @@ class TestExtractDefinitions:
         assert defs[0].start_line == 1
         assert defs[0].body_end_line >= 5
 
+    def test_captures_keyword_capable_param_names(self):
+        src = "def f(a, b=1, *args, c, **kwargs):\n    return 1\n"
+        defs = callgraph.extract_definitions(src, "python", "mod.py")
+        assert defs[0].param_keywords == frozenset({"a", "b", "c"})
+        assert defs[0].accepts_arbitrary_keywords is True
+
+    def test_no_var_keyword_param_reports_false(self):
+        src = "def f(a, b=1):\n    return 1\n"
+        defs = callgraph.extract_definitions(src, "python", "mod.py")
+        assert defs[0].param_keywords == frozenset({"a", "b"})
+        assert defs[0].accepts_arbitrary_keywords is False
+
+    def test_no_params_gives_empty_keyword_set(self):
+        src = "def f():\n    return 1\n"
+        defs = callgraph.extract_definitions(src, "python", "mod.py")
+        assert defs[0].param_keywords == frozenset()
+        assert defs[0].accepts_arbitrary_keywords is False
+
 
 class TestExtractCallSites:
     def test_distinguishes_call_from_function_definition_kind(self):
@@ -221,6 +239,47 @@ class TestExtractCallSites:
         calls = callgraph.extract_call_sites(src, "python", "mod.py", defs)
         assert calls[0].caller is None
 
+    def test_captures_keyword_argument_names(self):
+        src = (
+            "def helper():\n"
+            "    return 1\n"
+            "\n"
+            "def caller():\n"
+            "    return helper(1, repo='x', limit=10)\n"
+        )
+        defs = callgraph.extract_definitions(src, "python", "mod.py")
+        calls = callgraph.extract_call_sites(src, "python", "mod.py", defs)
+        assert calls[0].keyword_args == frozenset({"repo", "limit"})
+
+    def test_forwarded_kwargs_not_treated_as_named_keyword(self):
+        """`**kw` forwarding can't be resolved statically -- it must not be
+        parsed as a keyword argument named "kw"."""
+        src = (
+            "def helper():\n"
+            "    return 1\n"
+            "\n"
+            "def caller(**kw):\n"
+            "    return helper(**kw)\n"
+        )
+        defs = callgraph.extract_definitions(src, "python", "mod.py")
+        calls = callgraph.extract_call_sites(src, "python", "mod.py", defs)
+        assert calls[0].keyword_args == frozenset()
+
+    def test_equality_comparison_argument_not_treated_as_keyword(self):
+        """Regression guard: `helper(x == 1)` must not be misparsed as a
+        keyword argument named "x" (an early naive `"=" in part` check
+        would have matched the first `=` inside `==`)."""
+        src = (
+            "def helper():\n"
+            "    return 1\n"
+            "\n"
+            "def caller(x):\n"
+            "    return helper(x == 1)\n"
+        )
+        defs = callgraph.extract_definitions(src, "python", "mod.py")
+        calls = callgraph.extract_call_sites(src, "python", "mod.py", defs)
+        assert calls[0].keyword_args == frozenset()
+
 
 class TestBuildCallGraph:
     def _make_tree(self, tmp_path):
@@ -295,6 +354,86 @@ class TestBuildCallGraph:
         missing = tmp_path / "does-not-exist"
         graph = callgraph.build_call_graph(missing, included=["**/*.py"], excluded=[], language="python")
         assert list(graph.nodes) == []
+
+    def test_signature_incompatible_candidate_filtered_out(self, tmp_path):
+        """Regression test for the Serena cross-check's dominant false
+        positive (docs/CALL_GRAPH_CLUSTERING.md): a same-named function in
+        another file that doesn't accept a keyword the call passes must be
+        filtered out, leaving the one compatible candidate as a confirmed
+        edge -- not a same-file match, so this exercises signature filtering
+        specifically, not the same-file preference."""
+        (tmp_path / "caller.py").write_text(
+            "import one\n"
+            "import two\n"
+            "\n"
+            "def main():\n"
+            "    return one.run(repo='x')\n"
+        )
+        (tmp_path / "one.py").write_text(
+            "def run(repo=None):\n"
+            "    return repo\n"
+        )
+        (tmp_path / "two.py").write_text(
+            "def run(other=None):\n"
+            "    return other\n"
+        )
+        graph = callgraph.build_call_graph(tmp_path, included=["**/*.py"], excluded=[], language="python")
+
+        assert graph.has_edge("caller.py::main", "one.py::run")
+        assert not graph.has_edge("caller.py::main", "two.py::run")
+        assert graph.graph["ambiguous_calls"] == []
+
+    def test_genuinely_ambiguous_call_surfaced_not_silently_added_or_dropped(self, tmp_path):
+        """Graphify-style policy: when signature filtering still leaves 2+
+        viable candidates (same bare name, same-compatible signature, no
+        same-file match), no edge is guessed -- the call is recorded in
+        `ambiguous_calls` instead of vanishing or picking an arbitrary
+        target."""
+        (tmp_path / "caller.py").write_text(
+            "import one\n"
+            "\n"
+            "def main():\n"
+            "    return one.run()\n"
+        )
+        (tmp_path / "one.py").write_text(
+            "def run():\n"
+            "    return 1\n"
+        )
+        (tmp_path / "two.py").write_text(
+            "def run():\n"
+            "    return 2\n"
+        )
+        graph = callgraph.build_call_graph(tmp_path, included=["**/*.py"], excluded=[], language="python")
+
+        assert not graph.has_edge("caller.py::main", "one.py::run")
+        assert not graph.has_edge("caller.py::main", "two.py::run")
+        ambiguous = graph.graph["ambiguous_calls"]
+        assert len(ambiguous) == 1
+        assert ambiguous[0]["caller"] == "caller.py::main"
+        assert ambiguous[0]["callee_name"] == "one.run"
+        assert set(ambiguous[0]["candidates"]) == {"one.py::run", "two.py::run"}
+
+    def test_signature_filtering_eliminating_lone_candidate_still_resolves(self, tmp_path):
+        """If the (heuristic, non-parser) keyword filter is wrong for some
+        edge case and rejects the only known candidate, that must not
+        silently turn a real match into "unresolved" or "ambiguous" -- with
+        only one candidate to begin with, the fallback-to-unfiltered-pool
+        still resolves to it as a confirmed edge."""
+        (tmp_path / "caller.py").write_text(
+            "import one\n"
+            "\n"
+            "def main():\n"
+            "    return one.run(unexpected_kw=1)\n"
+        )
+        (tmp_path / "one.py").write_text(
+            "def run():\n"
+            "    return 1\n"
+        )
+        graph = callgraph.build_call_graph(tmp_path, included=["**/*.py"], excluded=[], language="python")
+
+        assert graph.has_edge("caller.py::main", "one.py::run")
+        assert graph.graph["unresolved_calls"] == 0
+        assert graph.graph["ambiguous_calls"] == []
 
 
 class TestComputeClusters:

@@ -215,6 +215,41 @@ the full schema under CocoIndex's control.
 
 ---
 
+## Call-Graph Queries (spike)
+
+**Status: spike, engram-only, live-rebuild-per-query, no persistence yet.**
+See `docs/CALL_GRAPH_CLUSTERING.md` for the full feasibility study, measured
+numbers, and Serena cross-check results; this is a short pointer, not a
+duplicate.
+
+Structural pattern search above answers "find code shaped like X" within one
+file at a time. `engram-search-engram` additionally exposes 3 MCP tools (plus
+matching CLI flags) that build a cross-file call graph from the same
+`CodePattern` infrastructure and answer relational questions about it:
+
+```bash
+# Who (transitively) calls this function -- "what breaks if I change this":
+~/.hindsight/venv/bin/engram-search-engram --blast-radius 'pattern_search_code' --depth 2
+
+# Does A ever reach B through a chain of calls, and how:
+~/.hindsight/venv/bin/engram-search-engram --shortest-path 'main' 'find_code_files'
+
+# Which Leiden-detected cluster of related functions does X belong to:
+~/.hindsight/venv/bin/engram-search-engram --cluster 'find_code_files'
+```
+
+Every call rebuilds the graph fresh (no persisted index) and logs elapsed
+time + node/edge/unresolved-call counts at `log.info`. Same accuracy ceiling
+as structural pattern search, plus one more: call resolution is name-based
+with no type info, so a function name duplicated across files (this repo has
+several — `pattern_search_code` is defined once per `*_code_pattern_search`
+module) can produce false-positive edges. Measured via a Serena cross-check:
+100% recall, ~58% precision in a 5-function sample, precision loss
+concentrated entirely in that duplicated-name case. All 3 tool docstrings
+state this explicitly.
+
+---
+
 ## Running Modes
 
 ### Live mode (default)

@@ -4,3 +4,8 @@ __pycache__/
 *.log
 .DS_Store
 config.env
+
+# Personal, machine-local Serena onboarding state (project.yml/cache/memories
+# for whoever's local install has this repo activated) -- not shared repo
+# config, same rationale as config.env above.
+.serena/

@@ -28,7 +28,7 @@ from typing import Any
 # `engram` resolves as a top-level package rather than needing this file to
 # be run via `-m`/an installed console script (not yet true in this repo).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
-from engram import chunking  # noqa: E402
+from engram import callgraph, chunking  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,14 +49,16 @@ ENGRAM_REPO_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_REPO_DIR", os.path.expanduser("~/.hindsight/watch/engram"),
 ))
 
+_EXCLUDED_PY_PATTERNS = [
+    "**/__pycache__/**", "**/.pytest_cache/**", "**/.git/**",
+    "**/venv/**", "**/.venv/**", "**/node_modules/**",
+]
+
 # (repo_tag, root, included_patterns, excluded_patterns) -- mirrors
 # engram-cocoindex-flows.py's localfs.walk_dir(path_matcher=
 # PatternFilePathMatcher(...)) call exactly.
 _PATTERN_SEARCH_ROOTS = [
-    ("engram", ENGRAM_REPO_DIR, ["**/*.py"], [
-        "**/__pycache__/**", "**/.pytest_cache/**", "**/.git/**",
-        "**/venv/**", "**/node_modules/**",
-    ]),
+    ("engram", ENGRAM_REPO_DIR, ["**/*.py"], _EXCLUDED_PY_PATTERNS),
 ]
 
 _model = None
@@ -248,6 +250,157 @@ def _format_pattern_results(pattern: str, language: str, results: list[dict]) ->
 
 
 # ---------------------------------------------------------------------------
+# Call-graph queries (spike -- see docs/CALL_GRAPH_CLUSTERING.md, issue #43)
+# ---------------------------------------------------------------------------
+#
+# Live-rebuild-per-query, deliberately (scope confirmed for this spike): every
+# call below re-walks this repo's own checkout via callgraph.build_call_graph()
+# rather than reading a persisted index. Whether a larger repo needs
+# persistence is a decision for later, made from the elapsed-time/node/edge
+# numbers logged here, not decided up front.
+
+def _build_graph_with_timing():
+    import time
+
+    start = time.monotonic()
+    graph = callgraph.build_call_graph(
+        ENGRAM_REPO_DIR, included=["**/*.py"], excluded=_EXCLUDED_PY_PATTERNS, language="python",
+    )
+    elapsed = time.monotonic() - start
+    log.info(
+        "call graph built in %.2fs (%d nodes, %d edges, %d/%d calls unresolved)",
+        elapsed, graph.number_of_nodes(), graph.number_of_edges(),
+        graph.graph.get("unresolved_calls", 0), graph.graph.get("total_calls", 0),
+    )
+    return graph
+
+
+def _resolve_node(graph, identifier: str) -> tuple[str | None, list[str]]:
+    """Resolve a user-given identifier to exactly one graph node.
+
+    Accepts either a full qualified name ("search/engram.py::pattern_search_code")
+    or a bare function name ("pattern_search_code") -- the latter resolves
+    only if unambiguous. Returns (resolved_name, candidates); resolved_name
+    is None if zero or more-than-one match was found, in which case
+    candidates lists what was found (empty if truly nothing matched)."""
+    if identifier in graph.nodes:
+        return identifier, [identifier]
+    candidates = [n for n in graph.nodes if n.rsplit("::", 1)[-1] == identifier]
+    if len(candidates) == 1:
+        return candidates[0], candidates
+    return None, candidates
+
+
+def call_graph_blast_radius(function: str, depth: int = 2) -> dict[str, Any]:
+    """Who (transitively) calls `function`, up to `depth` hops -- "what
+    breaks if I change this." See module docstring above and
+    docs/CALL_GRAPH_CLUSTERING.md for the accuracy ceiling (name-based
+    resolution, no type info)."""
+    graph = _build_graph_with_timing()
+    resolved, candidates = _resolve_node(graph, function)
+    if resolved is None:
+        return {"error": f"'{function}' not found or ambiguous", "candidates": candidates}
+
+    callers_by_depth: list[list[str]] = []
+    seen = {resolved}
+    frontier = [resolved]
+    for _ in range(depth):
+        next_frontier = []
+        for node in frontier:
+            for pred in graph.predecessors(node):
+                if pred not in seen:
+                    seen.add(pred)
+                    next_frontier.append(pred)
+        if not next_frontier:
+            break
+        callers_by_depth.append(sorted(next_frontier))
+        frontier = next_frontier
+
+    return {
+        "function": resolved,
+        "callers_by_depth": callers_by_depth,
+        "unresolved_calls": graph.graph.get("unresolved_calls", 0),
+        "total_calls": graph.graph.get("total_calls", 0),
+    }
+
+
+def call_graph_shortest_path(source: str, target: str) -> dict[str, Any]:
+    """Does `source` ever reach `target` through a chain of calls, and how."""
+    import networkx as nx
+
+    graph = _build_graph_with_timing()
+    resolved_source, source_candidates = _resolve_node(graph, source)
+    resolved_target, target_candidates = _resolve_node(graph, target)
+    if resolved_source is None:
+        return {"error": f"'{source}' not found or ambiguous", "candidates": source_candidates}
+    if resolved_target is None:
+        return {"error": f"'{target}' not found or ambiguous", "candidates": target_candidates}
+
+    try:
+        path = nx.shortest_path(graph, resolved_source, resolved_target)
+    except nx.NetworkXNoPath:
+        return {"source": resolved_source, "target": resolved_target, "path": None}
+    return {"source": resolved_source, "target": resolved_target, "path": path}
+
+
+def call_graph_get_cluster(function: str) -> dict[str, Any]:
+    """Which Leiden community `function` belongs to, and its other members.
+
+    Clustering quality depends entirely on the underlying graph's structure:
+    a small, centralized codebase may legitimately produce one dominant
+    cluster or many singletons -- that reflects the codebase, not a broken
+    clustering step (see docs/CALL_GRAPH_CLUSTERING.md)."""
+    graph = _build_graph_with_timing()
+    resolved, candidates = _resolve_node(graph, function)
+    if resolved is None:
+        return {"error": f"'{function}' not found or ambiguous", "candidates": candidates}
+
+    clusters = callgraph.compute_clusters(graph)
+    cluster_id = clusters.get(resolved)
+    members = sorted(n for n, c in clusters.items() if c == cluster_id)
+    return {"function": resolved, "cluster_id": cluster_id, "members": members}
+
+
+def _format_blast_radius_result(result: dict) -> str:
+    if "error" in result:
+        return _format_lookup_error(result)
+    lines = [f"Blast radius for {result['function']}:"]
+    if not result["callers_by_depth"]:
+        lines.append("  (nothing in this repo calls it, directly or transitively)")
+    for depth_i, callers in enumerate(result["callers_by_depth"], 1):
+        lines.append(f"  depth {depth_i}: " + ", ".join(callers))
+    lines.append(
+        f"\n(name-based resolution, no type info -- {result['unresolved_calls']}/{result['total_calls']} "
+        "calls in this repo could not be resolved to a known definition; see docs/CALL_GRAPH_CLUSTERING.md)"
+    )
+    return "\n".join(lines)
+
+
+def _format_shortest_path_result(result: dict) -> str:
+    if "error" in result:
+        return _format_lookup_error(result)
+    if result["path"] is None:
+        return f"No call path found from {result['source']} to {result['target']}."
+    return f"{result['source']} -> {result['target']}:\n  " + " -> ".join(result["path"])
+
+
+def _format_cluster_result(result: dict) -> str:
+    if "error" in result:
+        return _format_lookup_error(result)
+    lines = [f"{result['function']} is in cluster {result['cluster_id']} ({len(result['members'])} members):"]
+    lines.extend(f"  {m}" for m in result["members"])
+    return "\n".join(lines)
+
+
+def _format_lookup_error(result: dict) -> str:
+    candidates = result.get("candidates") or []
+    message = result["error"]
+    if candidates:
+        return f"{message}, candidates: " + ", ".join(candidates)
+    return f"{message} (use a qualified name like 'search/engram.py::pattern_search_code')"
+
+
+# ---------------------------------------------------------------------------
 # MCP server
 # ---------------------------------------------------------------------------
 
@@ -295,6 +448,48 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8890, transport: str = 
         results = pattern_search_code(pattern, language, limit=min(limit, 20))
         return _format_pattern_results(pattern, language, results)
 
+    @mcp.tool()
+    def engram_call_graph_blast_radius(function: str, depth: int = 2) -> str:
+        """What (transitively) calls `function` in the Engram tooling codebase,
+        up to `depth` hops -- "what breaks if I change this."
+
+        `function` may be a bare name ("pattern_search_code") if unambiguous,
+        or a qualified name ("search/engram.py::pattern_search_code").
+
+        SPIKE, engram-only (docs/CALL_GRAPH_CLUSTERING.md, issue #43): call
+        resolution is purely name-based (no type info), so common method
+        names shared across unrelated functions can produce false-positive
+        edges, and dynamic dispatch/external calls can't be seen at all.
+        Rebuilds the call graph fresh on every call (no persisted index).
+        """
+        result = call_graph_blast_radius(function, depth=depth)
+        return _format_blast_radius_result(result)
+
+    @mcp.tool()
+    def engram_call_graph_shortest_path(source: str, target: str) -> str:
+        """Does `source` ever reach `target` through a chain of calls in the
+        Engram tooling codebase, and how.
+
+        Same name-based-resolution caveat as engram_call_graph_blast_radius
+        applies (see its docstring) -- this is a SPIKE, engram-only.
+        """
+        result = call_graph_shortest_path(source, target)
+        return _format_shortest_path_result(result)
+
+    @mcp.tool()
+    def engram_call_graph_get_cluster(function: str) -> str:
+        """Which cluster of related functions (via Leiden community detection
+        over the call graph) `function` belongs to in the Engram tooling
+        codebase, and its other members.
+
+        Same name-based-resolution caveat as engram_call_graph_blast_radius
+        applies (see its docstring) -- this is a SPIKE, engram-only. A small,
+        centralized codebase may legitimately produce one dominant cluster or
+        many singletons; that reflects the codebase, not a broken tool.
+        """
+        result = call_graph_get_cluster(function)
+        return _format_cluster_result(result)
+
     if transport == "stdio":
         log.info("Starting engram-code MCP server (stdio)")
         mcp.run(transport="stdio")
@@ -317,6 +512,21 @@ def _run_cli_pattern_query(pattern: str, language: str, limit: int = 10) -> None
     print(_format_pattern_results(pattern, language, results))
 
 
+def _run_cli_blast_radius(function: str, depth: int) -> None:
+    result = call_graph_blast_radius(function, depth=depth)
+    print(_format_blast_radius_result(result))
+
+
+def _run_cli_shortest_path(source: str, target: str) -> None:
+    result = call_graph_shortest_path(source, target)
+    print(_format_shortest_path_result(result))
+
+
+def _run_cli_cluster(function: str) -> None:
+    result = call_graph_get_cluster(function)
+    print(_format_cluster_result(result))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Engram code search — MCP server + CLI"
@@ -327,12 +537,23 @@ def main():
     parser.add_argument("--limit", "-n", type=int, default=10, help="Max results (default: 10)")
     parser.add_argument("--mode", "-m", default="hybrid", choices=["hybrid", "dense", "bm25"],
                         help="Search mode (default: hybrid)")
+    parser.add_argument("--blast-radius", help="Call-graph spike: who (transitively) calls this function")
+    parser.add_argument("--depth", type=int, default=2, help="Depth for --blast-radius (default: 2)")
+    parser.add_argument("--shortest-path", nargs=2, metavar=("SOURCE", "TARGET"),
+                        help="Call-graph spike: shortest call chain SOURCE -> TARGET")
+    parser.add_argument("--cluster", help="Call-graph spike: which Leiden cluster this function belongs to")
     parser.add_argument("--port", "-p", type=int, default=8890, help="MCP server port (default: 8890)")
     parser.add_argument("--host", default="127.0.0.1", help="MCP server bind address")
     args = parser.parse_args()
 
     if args.pattern:
         _run_cli_pattern_query(args.pattern, args.language, limit=args.limit)
+    elif args.blast_radius:
+        _run_cli_blast_radius(args.blast_radius, depth=args.depth)
+    elif args.shortest_path:
+        _run_cli_shortest_path(*args.shortest_path)
+    elif args.cluster:
+        _run_cli_cluster(args.cluster)
     elif args.query:
         _run_cli_query(args.query, limit=args.limit, mode=args.mode)
     else:

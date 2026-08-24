@@ -24,6 +24,13 @@ dependencies = [
     "numpy==2.5.2",
     "torch==2.13.0",
     "asyncpg==0.31.0",
+    # Call-graph extraction spike (docs/CALL_GRAPH_CLUSTERING.md, issue #43):
+    # networkx holds the directed call graph and answers blast-radius/
+    # shortest-path queries; igraph+leidenalg (not the heavier graspologic
+    # stack) do Leiden community detection. ~5-6MB combined footprint.
+    "networkx==3.6.1",
+    "python-igraph==1.0.0",
+    "leidenalg==0.12.0",
 ]
 
 [project.optional-dependencies]

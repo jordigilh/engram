@@ -63,37 +63,232 @@ The signature/keyword parsing (`_split_top_level`, `_parse_def_param_names`,
 not a real Python parser -- good enough to pull parameter/keyword-argument
 *names* out of `match_code`'s raw captured argument-list text, not intended
 to handle every possible Python expression shape correctly.
+
+**Multi-org query/format layer** (`build_call_graph_with_stats`,
+`resolve_node`, `query_*`, `format_*` below): originally these lived as
+engram-only private helpers in `engram/search/engram.py`. They contain
+nothing engram-specific -- only *which* root/language to build from differs
+per org -- so as of the multi-org rollout (docs/CALL_GRAPH_CLUSTERING.md)
+they live here instead, and every org's `*_call_graph_*` MCP tools
+(starting with engram's own) are thin wrappers around this shared layer.
 """
 from __future__ import annotations
 
 import dataclasses
+import logging
 import pathlib
 import re
+import time
+from typing import Any, Callable
 
 import networkx as nx
 
-# Per-language (def_pattern) config. Python-only for this spike (engram's own
-# codebase); adding go/rust later is a matter of adding rows here and to
-# _CALL_PATTERN if a language ever needs a different call shape (none of the
-# languages surveyed for docs/CALL_GRAPH_CLUSTERING.md do -- `\NAME(\(A*\))`
-# is a call expression in all three).
+log = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass(frozen=True)
+class DefSpec:
+    """One pattern+kind(s) shape that counts as a function/method definition.
+
+    A language may need more than one of these -- e.g. TypeScript needs a
+    `function`-keyword pattern for declarations, a bare pattern filtered to
+    `method_definition` for class methods, and a third pattern for
+    arrow-function consts (`const Foo = (...) => {...}`), which aren't
+    reachable through either of the other two shapes.
+
+    `pattern` ending in `\\BODY` captures the definition's *whole* body as one
+    node (tree-sitter treats a brace-delimited block, or -- for an arrow
+    function -- the entire `arrow_function` node including its body, as a
+    single child), giving an exact `body_end_line` instead of the
+    indentation-approximated one `_approximate_body_end_line` falls back to
+    for a pattern with no `\\BODY` capture (Python's, whose body isn't a
+    single bracketed node `match_code` can capture as one unit).
+    """
+    pattern: str
+    kinds: frozenset[str]
+    extra_filter: Callable[[str, str], bool] | None = None
+    """Optional (name_text, body_text) -> bool predicate, checked after the
+    kind filter. Only TypeScript's arrow-const spec uses this: `const \\NAME
+    = \\BODY` alone over-matches *every* const (data literals, destructuring
+    assignments where NAME captures literal `{...}`/`[...]` text instead of
+    an identifier, etc.) -- see `_is_arrow_function_const`."""
+
+
+_IDENT_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
+_ARROW_BODY_RE = re.compile(r"^(async\s+)?(\(|[A-Za-z_$][A-Za-z0-9_$]*\s*=>)")
+
+
+def _is_arrow_function_const(name_text: str, body_text: str) -> bool:
+    """Filters `const \\NAME = \\BODY` matches down to real arrow-function
+    components. Two checks, both required (verified against the real
+    rhdh-plugins/workspaces/boost corpus, docs/CALL_GRAPH_CLUSTERING.md):
+
+    1. `name_text` must be a plain identifier -- a destructuring assignment
+       (`const { t } = useTranslation()`, `const [a, b] = useState()`) makes
+       tree-sitter's NAME capture the literal `{ t }`/`[a, b]` text instead of
+       a real name, which this rejects.
+    2. `body_text` must *start* like a (possibly `async`) arrow function --
+       `(` for a parameter list, or a single bare identifier immediately
+       followed by `=>` for a one-arg arrow with no parens (`x => x + 1`).
+       Rejects plain data consts (`const N = 60`), object/regex/string
+       literals, and `const X = someFactory({...})`-shaped calls (a common
+       false-positive source: a `=>` appears deep inside the call's own
+       arguments, but the const's own value is a call, not a function).
+    """
+    return bool(_IDENT_RE.match(name_text)) and bool(_ARROW_BODY_RE.match(body_text.strip()))
+
+
+def _looks_like_real_block_body(text: str) -> bool:
+    """Guards against a `match_code` positional-matching quirk found while
+    preflighting Rust/TS return-typed functions (2026-08-24, Phase 3): a
+    brace-body `DefSpec` pattern written for one return-type "arity" (e.g.
+    no explicit return type) doesn't fail to match a definition with a
+    *different* arity (e.g. `fn f() -> T { .. }` / `function f(): T { .. }`)
+    -- it still matches, but `\\BODY` silently binds to the return-type
+    annotation's own text (the literal `"->"` token for Rust; `": T"` for
+    TypeScript) instead of the real block, because the pattern has no field
+    in that position to align the annotation against. This is invisible in
+    isolation (still "a match"), and dangerous rather than merely
+    incomplete: it produces a `FunctionDef` with a wrong, tiny
+    `body_end_line` (often equal to its own `start_line`) instead of no
+    entry at all, silently breaking caller attribution for every call
+    inside that function's real body.
+
+    Every real block body, in every brace-delimited language this module
+    supports, starts with `{` once stripped -- no return-type annotation
+    text ever does -- so this one check reliably tells them apart. Only
+    applies when a spec has no `extra_filter` of its own (arrow-function
+    consts have a legitimately different, non-`{`-prefixed body shape,
+    already validated by `_is_arrow_function_const`)."""
+    return text.strip().startswith("{")
+
+
+# Per-language config. `language` here is the *config key* an org passes to
+# build_call_graph() -- not necessarily the literal grammar name passed to
+# match_code(): see `_grammar_for_path`, which resolves the real per-file
+# grammar (needed because TypeScript's `.ts` and `.tsx` files require two
+# different tree-sitter grammars -- "typescript" has no JSX support at all,
+# "tsx" does -- despite sharing one language config below; see
+# docs/CALL_GRAPH_CLUSTERING.md, 2026-08-24 Phase 2 entry).
 #
-# Deliberately has NO trailing `:` -- discovered mid-spike (verified against
-# this repo's own real, heavily-typed code) that `def \NAME(\(A*\)):` fails
-# to match any function with a return-type annotation (`def f(x: int) -> int:`
-# doesn't match `...):` since the annotation sits between the parameter
-# list's closing paren and the colon). Dropping the trailing colon still
-# matches only `function_definition`-kind nodes (never a bare call, which
-# `\NAME(\(A*\))` alone -- see _CALL_PATTERN -- separately reports as kind
-# "call"), and `CodeMatch.chunks[0].end.line` still lands on the correct
-# physical header line either way (through the closing paren, which for any
-# non-pathological formatting is the same line the colon is on).
-_DEF_PATTERNS = {
-    "python": r"def \NAME(\(A*\))",
+# Every brace-bodied shape below (TypeScript function decls/methods, Rust
+# fns, Go funcs/methods) needs its DefSpecs split along up to TWO
+# independent axes, each verified empirically to need its own literal
+# pattern rather than one "flexible" pattern (see
+# docs/CALL_GRAPH_CLUSTERING.md, 2026-08-24 Phase 2/3/4 entries;
+# `_looks_like_real_block_body`'s docstring explains the failure mode):
+#
+# 1. generic/lifetime type params (`<T>`/`<'a>` for TS/Rust, `[T any]` for
+#    Go) -- a pattern with the literal bracket pair in it only matches a def
+#    that actually has them, and a plain pattern never matches one that
+#    does. Go methods are the one exception: a method can't have its own
+#    type parameters (only its receiver type can be generic, e.g.
+#    `func (s *Server[T]) M(x T) T`), and that's already fully inside the
+#    `\(R*\)` receiver capture -- so Go's `method_declaration` spec only
+#    needs the return-type axis below, not this one.
+# 2. an explicit return-type annotation (`-> T` for Rust, `: T` for
+#    TypeScript, bare ` T`/` (a, b)` for Go -- no separator token at all) --
+#    same story: a pattern missing the annotation doesn't just fail to
+#    match a def that has one, it matches with `\BODY` bound to the
+#    annotation's own text instead of the real block (a *wrong* result, not
+#    a missing one) -- so every DefSpec without an explicit return-type
+#    placeholder must be paired with an explicit-return-type twin, and
+#    `_looks_like_real_block_body` (applied below in extract_definitions)
+#    discards whichever twin's `\BODY` capture doesn't actually look like a
+#    block, since a def can only ever really satisfy one of the two.
+#
+# That's 2x2 = 4 patterns per brace-bodied node kind for TypeScript
+# (`function_declaration`, `method_definition`) and Rust (`function_item`,
+# covering free fns, impl methods, and trait-impl methods alike --
+# visibility/async modifiers and enclosing impl/trait blocks are separate
+# AST nodes, not part of this match); Go needs 4 for `function_declaration`
+# but only 2 (just the return-type axis) for `method_declaration` per the
+# generics exception above. A bodyless interface method signature (Go's
+# `method_elem`) or trait method signature (Rust's
+# `function_signature_item`) is a different kind from its real,
+# body-bearing counterpart in each language, naturally excluded by the kind
+# filter without needing its own spec.
+#
+# Python's def pattern deliberately has NO trailing `:` -- discovered
+# mid-spike (verified against this repo's own real, heavily-typed code) that
+# `def \NAME(\(A*\)):` fails to match any function with a return-type
+# annotation (`def f(x: int) -> int:` doesn't match `...):` since the
+# annotation sits between the parameter list's closing paren and the colon).
+# Dropping the trailing colon still matches only `function_definition`-kind
+# nodes (never a bare call, which the call pattern below separately reports
+# as kind "call"), and `CodeMatch.chunks[0].end.line` still lands on the
+# correct physical header line either way (through the closing paren, which
+# for any non-pathological formatting is the same line the colon is on). It
+# has no `\BODY` capture -- Python's body isn't a single bracketed node --
+# so its body end is approximated instead (see `_approximate_body_end_line`),
+# and the generic/return-type-annotation split above doesn't apply to it at
+# all (no `\BODY` capture means no wrong-body-binding failure mode to guard
+# against).
+_DEF_SPECS: dict[str, tuple[DefSpec, ...]] = {
+    "python": (
+        DefSpec(pattern=r"def \NAME(\(A*\))", kinds=frozenset({"function_definition"})),
+    ),
+    "typescript": (
+        DefSpec(pattern=r"function \NAME(\(A*\)) \BODY", kinds=frozenset({"function_declaration"})),
+        DefSpec(pattern=r"function \NAME<\(G*\)>(\(A*\)) \BODY", kinds=frozenset({"function_declaration"})),
+        DefSpec(pattern=r"function \NAME(\(A*\)): \RET \BODY", kinds=frozenset({"function_declaration"})),
+        DefSpec(pattern=r"function \NAME<\(G*\)>(\(A*\)): \RET \BODY", kinds=frozenset({"function_declaration"})),
+        DefSpec(pattern=r"\NAME(\(A*\)) \BODY", kinds=frozenset({"method_definition"})),
+        DefSpec(pattern=r"\NAME<\(G*\)>(\(A*\)) \BODY", kinds=frozenset({"method_definition"})),
+        DefSpec(pattern=r"\NAME(\(A*\)): \RET \BODY", kinds=frozenset({"method_definition"})),
+        DefSpec(pattern=r"\NAME<\(G*\)>(\(A*\)): \RET \BODY", kinds=frozenset({"method_definition"})),
+        DefSpec(
+            pattern=r"const \NAME = \BODY",
+            kinds=frozenset({"lexical_declaration"}),
+            extra_filter=_is_arrow_function_const,
+        ),
+    ),
+    "rust": (
+        DefSpec(pattern=r"fn \NAME(\(A*\)) \BODY", kinds=frozenset({"function_item"})),
+        DefSpec(pattern=r"fn \NAME<\(G*\)>(\(A*\)) \BODY", kinds=frozenset({"function_item"})),
+        DefSpec(pattern=r"fn \NAME(\(A*\)) -> \RET \BODY", kinds=frozenset({"function_item"})),
+        DefSpec(pattern=r"fn \NAME<\(G*\)>(\(A*\)) -> \RET \BODY", kinds=frozenset({"function_item"})),
+    ),
+    "go": (
+        DefSpec(pattern=r"func \NAME(\(A*\)) \BODY", kinds=frozenset({"function_declaration"})),
+        DefSpec(pattern=r"func \NAME[\(G*\)](\(A*\)) \BODY", kinds=frozenset({"function_declaration"})),
+        DefSpec(pattern=r"func \NAME(\(A*\)) \RET \BODY", kinds=frozenset({"function_declaration"})),
+        DefSpec(pattern=r"func \NAME[\(G*\)](\(A*\)) \RET \BODY", kinds=frozenset({"function_declaration"})),
+        DefSpec(pattern=r"func (\(R*\)) \NAME(\(A*\)) \BODY", kinds=frozenset({"method_declaration"})),
+        DefSpec(pattern=r"func (\(R*\)) \NAME(\(A*\)) \RET \BODY", kinds=frozenset({"method_declaration"})),
+    ),
 }
-_CALL_PATTERN = r"\NAME(\(A*\))"
-_DEF_KIND = "function_definition"
-_CALL_KIND = "call"
+_CALL_PATTERNS: dict[str, str] = {
+    "python": r"\NAME(\(A*\))",
+    "typescript": r"\NAME(\(A*\))",
+    "rust": r"\NAME(\(A*\))",
+    "go": r"\NAME(\(A*\))",
+}
+_CALL_KINDS: dict[str, frozenset[str]] = {
+    "python": frozenset({"call"}),
+    "typescript": frozenset({"call_expression"}),
+    "rust": frozenset({"call_expression"}),
+    "go": frozenset({"call_expression"}),
+}
+
+
+def _grammar_for_path(display_path: str, language: str) -> str:
+    """The actual tree-sitter grammar to pass to match_code() for this file.
+
+    Almost always just `language` itself -- but TypeScript's `.ts`/`.tsx`
+    extensions need two different grammars despite one shared `"typescript"`
+    config key above (`detect_code_language` already knows this distinction
+    perfectly; reuse it instead of hand-rolling a second extension check).
+    Feeding `.tsx` (JSX) content to the plain "typescript" grammar (no JSX
+    support) doesn't error -- tree-sitter's error recovery quietly produces a
+    parse-error node around the JSX and keeps going -- so this isn't a
+    correctness edge case, it's silent, unbounded data loss from that point
+    in the file onward. See docs/CALL_GRAPH_CLUSTERING.md, 2026-08-24 Phase 2
+    entry, for how this was found (a single real ~150-line miss looked like a
+    match_code bug until traced to this)."""
+    from cocoindex.ops.text import detect_code_language
+
+    return detect_code_language(filename=pathlib.Path(display_path).name) or language
 
 
 @dataclasses.dataclass(frozen=True)
@@ -226,42 +421,80 @@ def _parse_call_keyword_args(arg_text: str) -> frozenset[str]:
 def extract_definitions(source: str, language: str, display_path: str) -> list[FunctionDef]:
     """Extract every function/method definition in `source`, sorted by
     start line. `display_path` is purely a label (used to build
-    `qualified_name` and populate `display_path`/`file` fields) -- this
+    `qualified_name` and populate `display_path`/`file` fields, and to
+    resolve the real per-file grammar -- see `_grammar_for_path`) -- this
     function does no file I/O itself, so it's usable directly against a
-    real file's content or a synthetic fixture string alike."""
+    real file's content or a synthetic fixture string alike.
+
+    Runs every `DefSpec` registered for `language` (see `_DEF_SPECS`) and
+    merges their results -- a language may need several distinct pattern
+    shapes to cover every way it defines a function (TypeScript needs nine,
+    Rust needs four -- see `_DEF_SPECS`'s module-level comment for why).
+    Two universal guards apply across every spec (not just ones with their
+    own `extra_filter`), both discovered via the same 2026-08-24 Phase 3
+    investigation into wrong-shape pattern/definition mismatches:
+
+    - `NAME` must be a real identifier -- a spec applied to a definition
+      shaped for a *different* spec (e.g. the no-generic pattern against a
+      generic def) can still "match", with `NAME` bound to some unrelated
+      fragment of the signature (observed: literal `"<T>"` text) instead of
+      the real name.
+    - Absent a spec-specific `extra_filter`, a `BODY` capture must look like
+      a real block (see `_looks_like_real_block_body`) -- the return-type-
+      annotation-arity mismatch described in `_DEF_SPECS`'s comment.
+
+    Both guards mean a def with the "wrong" spec applied to it is silently
+    dropped rather than kept with garbage data -- exactly one of a def's
+    matching specs (by construction, since the generic/return-type axes are
+    mutually exclusive per real definition) should ever survive both."""
     from cocoindex.ops.code import match_code
 
-    pattern = _DEF_PATTERNS.get(language)
-    if pattern is None:
+    specs = _DEF_SPECS.get(language)
+    if not specs:
         return []
 
+    grammar = _grammar_for_path(display_path, language)
     lines = source.splitlines()
-    matches = match_code(pattern, source, language=language)
     defs: list[FunctionDef] = []
-    for m in matches:
-        if m.kind != _DEF_KIND:
-            continue
-        name_captures = m.captures.get("NAME")
-        if not name_captures:
-            continue
-        name = name_captures[0].text
-        chunk = m.chunks[0]
-        start_line = chunk.start.line
-        def_indent = _indent_of(lines[start_line - 1])
-        body_end_line = _approximate_body_end_line(lines, chunk.end.line, def_indent)
-        param_text = m.captures["A"][0].text if m.captures.get("A") else ""
-        param_keywords, accepts_arbitrary_keywords = _parse_def_param_names(param_text)
-        defs.append(
-            FunctionDef(
-                qualified_name=f"{display_path}::{name}",
-                display_path=display_path,
-                name=name,
-                start_line=start_line,
-                body_end_line=body_end_line,
-                param_keywords=param_keywords,
-                accepts_arbitrary_keywords=accepts_arbitrary_keywords,
+    for spec in specs:
+        matches = match_code(spec.pattern, source, language=grammar)
+        for m in matches:
+            if m.kind not in spec.kinds:
+                continue
+            name_captures = m.captures.get("NAME")
+            if not name_captures:
+                continue
+            name = name_captures[0].text
+            if not _IDENT_RE.match(name):
+                continue
+            body_captures = m.captures.get("BODY")
+            if spec.extra_filter is not None:
+                body_text = body_captures[0].text if body_captures else ""
+                if not spec.extra_filter(name, body_text):
+                    continue
+            elif body_captures is not None and not _looks_like_real_block_body(body_captures[0].text):
+                continue
+            chunk = m.chunks[0]
+            start_line = chunk.start.line
+            if body_captures is not None:
+                # Real body extent (see DefSpec docstring) -- no approximation needed.
+                body_end_line = body_captures[0].end.line
+            else:
+                def_indent = _indent_of(lines[start_line - 1])
+                body_end_line = _approximate_body_end_line(lines, chunk.end.line, def_indent)
+            param_text = m.captures["A"][0].text if m.captures.get("A") else ""
+            param_keywords, accepts_arbitrary_keywords = _parse_def_param_names(param_text)
+            defs.append(
+                FunctionDef(
+                    qualified_name=f"{display_path}::{name}",
+                    display_path=display_path,
+                    name=name,
+                    start_line=start_line,
+                    body_end_line=body_end_line,
+                    param_keywords=param_keywords,
+                    accepts_arbitrary_keywords=accepts_arbitrary_keywords,
+                )
             )
-        )
     return sorted(defs, key=lambda d: d.start_line)
 
 
@@ -279,19 +512,23 @@ def _resolve_caller(defs_in_file: list[FunctionDef], line: int) -> str | None:
 def extract_call_sites(
     source: str, language: str, display_path: str, defs_in_file: list[FunctionDef]
 ) -> list[CallEdge]:
-    """Extract every call expression in `source` (kind == "call" only --
-    the same bare pattern also matches function_definition headers and, for
-    a call nested inside another call's arguments, a spurious
-    "argument_list"-kind duplicate; both are dropped here)."""
+    """Extract every call expression in `source` (kind filtered to this
+    language's `_CALL_KINDS` entry only -- the same bare pattern also
+    matches definition headers and, for a call nested inside another call's
+    arguments, a spurious "argument_list"-kind duplicate; both are dropped
+    here)."""
     from cocoindex.ops.code import match_code
 
-    if language not in _DEF_PATTERNS:
+    call_pattern = _CALL_PATTERNS.get(language)
+    call_kinds = _CALL_KINDS.get(language)
+    if call_pattern is None or call_kinds is None:
         return []
 
-    matches = match_code(_CALL_PATTERN, source, language=language)
+    grammar = _grammar_for_path(display_path, language)
+    matches = match_code(call_pattern, source, language=grammar)
     edges: list[CallEdge] = []
     for m in matches:
-        if m.kind != _CALL_KIND:
+        if m.kind not in call_kinds:
             continue
         name_captures = m.captures.get("NAME")
         if not name_captures:
@@ -328,6 +565,7 @@ def build_call_graph(
     included: list[str],
     excluded: list[str],
     language: str,
+    repo_tag: str = "",
 ) -> nx.DiGraph:
     """Walk `root` (reusing the same `chunking.find_code_files()` every
     `*_code_pattern_search` tool already uses, so this never drifts from
@@ -335,15 +573,23 @@ def build_call_graph(
     calls into a directed graph: node = qualified function name, edge =
     caller calls callee.
 
-    Callee resolution is repo-wide and trailing-segment-based: a dotted
-    call name's last segment is matched against every known qualified name,
-    then narrowed by same-file preference and signature-compatibility
-    filtering (see module docstring). An edge is only added when exactly one
-    candidate survives -- Graphify's precision-over-recall policy, not an
-    arbitrary pick among several. Calls matching zero known defs are dropped
-    but counted in `graph.graph["unresolved_calls"]`; calls where 2+
-    candidates remain after filtering are dropped from the graph but
-    recorded in `graph.graph["ambiguous_calls"]` instead of vanishing.
+    Callee resolution is repo-wide (within this one call) and
+    trailing-segment-based: a dotted/`::`-qualified call name's last segment
+    is matched against every known qualified name, then narrowed by
+    same-file preference and signature-compatibility filtering (see module
+    docstring). An edge is only added when exactly one candidate survives --
+    Graphify's precision-over-recall policy, not an arbitrary pick among
+    several. Calls matching zero known defs are dropped but counted in
+    `graph.graph["unresolved_calls"]`; calls where 2+ candidates remain
+    after filtering are dropped from the graph but recorded in
+    `graph.graph["ambiguous_calls"]` instead of vanishing.
+
+    `repo_tag`, if given, is prefixed onto every `display_path` as
+    `f"{repo_tag}/{rel_path}"` -- for orgs whose MCP tool searches several
+    independent repo checkouts in one call (`praxis.py`'s 7 Rust repos,
+    `dcm.py`'s 8 Go repos), this keeps qualified names disambiguated by repo
+    even if two repos happen to share a relative file path. See
+    `build_multi_repo_call_graph`, the caller that actually supplies this.
     """
     from engram import chunking
 
@@ -356,7 +602,8 @@ def build_call_graph(
     calls_by_file: list[list[CallEdge]] = []
 
     for path in chunking.find_code_files(root, included, excluded):
-        display_path = str(path.relative_to(root))
+        rel_path = str(path.relative_to(root))
+        display_path = f"{repo_tag}/{rel_path}" if repo_tag else rel_path
         source = path.read_text(encoding="utf-8", errors="ignore")
         defs_in_file = extract_definitions(source, language, display_path)
         all_defs.extend(defs_in_file)
@@ -375,7 +622,13 @@ def build_call_graph(
             if call.caller is None:
                 continue
             graph.graph["total_calls"] += 1
-            bare_callee = call.callee_name.rsplit(".", 1)[-1]
+            # Rust's associated-function/path-qualified calls (`Foo::new(..)`,
+            # `std::mem::swap(..)`) use `::`, not `.`, as the segment
+            # separator -- normalize both to get the trailing name either
+            # way. `.` alone would leave `Foo::new` unsplit (no literal `.`
+            # in it) and it would never resolve against name_index, which
+            # only ever stores bare names.
+            bare_callee = call.callee_name.replace("::", ".").rsplit(".", 1)[-1]
             targets = name_index.get(bare_callee)
             if not targets:
                 graph.graph["unresolved_calls"] += 1
@@ -433,3 +686,368 @@ def compute_clusters(graph: nx.DiGraph) -> dict[str, int]:
     ig_graph = ig.Graph.from_networkx(graph.to_undirected())
     partition = leidenalg.find_partition(ig_graph, leidenalg.ModularityVertexPartition)
     return {ig_graph.vs[i]["_nx_name"]: partition.membership[i] for i in range(len(ig_graph.vs))}
+
+
+# ---------------------------------------------------------------------------
+# Multi-org query/format layer (see module docstring)
+# ---------------------------------------------------------------------------
+#
+# Live-rebuild-per-query, deliberately, for every org (scope confirmed for
+# the rollout): every query below re-walks the target root fresh via
+# build_call_graph_with_stats() rather than reading a persisted index.
+# Whether any given org's repo needs persistence is a decision made later
+# from the elapsed-time/node/edge numbers logged here, not decided up front
+# -- see docs/CALL_GRAPH_CLUSTERING.md.
+
+def build_call_graph_with_stats(
+    root: pathlib.Path,
+    included: list[str],
+    excluded: list[str],
+    language: str,
+    logger: logging.Logger | None = None,
+) -> nx.DiGraph:
+    """build_call_graph() plus elapsed-time/size logging, shared by every
+    org's `*_call_graph_*` tools. Pass the calling module's own `logger` so
+    log lines are attributed to that org's MCP server, not to this module."""
+    logger = logger or log
+    start = time.monotonic()
+    graph = build_call_graph(root, included=included, excluded=excluded, language=language)
+    elapsed = time.monotonic() - start
+    logger.info(
+        "call graph built in %.2fs (%d nodes, %d edges, %d/%d calls unresolved, %d ambiguous)",
+        elapsed, graph.number_of_nodes(), graph.number_of_edges(),
+        graph.graph.get("unresolved_calls", 0), graph.graph.get("total_calls", 0),
+        len(graph.graph.get("ambiguous_calls", [])),
+    )
+    return graph
+
+
+def build_multi_repo_call_graph(
+    roots: list[tuple[str, pathlib.Path, list[str], list[str]]],
+    language: str,
+) -> nx.DiGraph:
+    """Same contract as `build_call_graph`, but for orgs whose MCP server
+    searches several independently-checked-out repos in one call (`praxis.py`'s
+    7 Rust repos, `dcm.py`'s 8 Go repos) -- `roots` is that org's
+    `_PATTERN_SEARCH_ROOTS` list verbatim: `(repo_tag, root, included,
+    excluded)` tuples.
+
+    Each repo is walked and resolved independently (own `build_call_graph`
+    call, own `repo_tag`-prefixed display paths) and the resulting graphs are
+    merged by node/edge union; resolution is deliberately *not* global
+    across the merge -- a call in one repo can never resolve to a
+    same-named function in another repo, since each repo's `name_index` is
+    built and discarded before the next repo starts. None of these orgs
+    vendor shared library code across repo boundaries that way, so this
+    isn't a recall loss versus a single combined walk, and it keeps one
+    repo's private helper names from silently leaking into another's
+    resolution the same way same-file preference already prevents that
+    within a single repo (see `build_call_graph`'s docstring)."""
+    graph = nx.DiGraph()
+    graph.graph["unresolved_calls"] = 0
+    graph.graph["total_calls"] = 0
+    graph.graph["ambiguous_calls"] = []
+    for repo_tag, root, included, excluded in roots:
+        repo_graph = build_call_graph(root, included=included, excluded=excluded, language=language, repo_tag=repo_tag)
+        graph.add_nodes_from(repo_graph.nodes)
+        graph.add_edges_from(repo_graph.edges)
+        graph.graph["unresolved_calls"] += repo_graph.graph.get("unresolved_calls", 0)
+        graph.graph["total_calls"] += repo_graph.graph.get("total_calls", 0)
+        graph.graph["ambiguous_calls"].extend(repo_graph.graph.get("ambiguous_calls", []))
+    return graph
+
+
+def build_multi_repo_call_graph_with_stats(
+    roots: list[tuple[str, pathlib.Path, list[str], list[str]]],
+    language: str,
+    logger: logging.Logger | None = None,
+) -> nx.DiGraph:
+    """`build_multi_repo_call_graph()` plus elapsed-time/size logging --
+    the multi-repo counterpart to `build_call_graph_with_stats`."""
+    logger = logger or log
+    start = time.monotonic()
+    graph = build_multi_repo_call_graph(roots, language=language)
+    elapsed = time.monotonic() - start
+    logger.info(
+        "call graph built in %.2fs across %d repos (%d nodes, %d edges, %d/%d calls unresolved, %d ambiguous)",
+        elapsed, len(roots), graph.number_of_nodes(), graph.number_of_edges(),
+        graph.graph.get("unresolved_calls", 0), graph.graph.get("total_calls", 0),
+        len(graph.graph.get("ambiguous_calls", [])),
+    )
+    return graph
+
+
+# ---------------------------------------------------------------------------
+# Postgres-backed cache (kubernaut only, docs/CALL_GRAPH_CLUSTERING.md
+# 2026-08-24 Phase 5)
+#
+# Every other org's full rebuild-per-call stayed under 33s, an accepted cost
+# for always-fresh results with zero cache-invalidation logic to get wrong.
+# kubernaut's ~55s single-repo build broke that budget badly enough to
+# revisit it -- but the fix reuses Postgres (already a hard dependency for
+# every org's search_code(), already running, already shared across
+# processes) rather than adding a new service: a `psycopg2-binary` import
+# every org already carries, one small BYTEA table, no new component to
+# install/run/monitor.
+#
+# Explicitly NOT time-based (no TTL): a fixed expiry would force a rebuild
+# of an *unchanged* tree on some arbitrary schedule -- wasted work on a
+# quiet weekend, and still no guarantee of catching an edit made just
+# before expiry anyway. Invalidation is instead keyed on a content
+# fingerprint (file count + max mtime across the exact same included/
+# excluded globs the build itself walks) checked on every call: a cache
+# entry is used only if the fingerprint matches bit-for-bit, so an edit is
+# always caught on the very next call, and a quiet tree never rebuilds at
+# all, no matter how much wall-clock time passes. The fingerprint check
+# itself is a stat()-only walk (no parsing), measured at well under a
+# second even across kubernaut's ~1,000+ files -- negligible next to either
+# a cache hit or a 25s+ rebuild.
+#
+# Any error talking to Postgres (unreachable, table missing and somehow
+# uncreatable, corrupted row) is caught and logged, falling back to an
+# uncached rebuild -- exactly the pre-Phase-5 behavior every other org
+# already has -- rather than failing the tool call outright.
+# ---------------------------------------------------------------------------
+
+_CACHE_TABLE_READY = False
+
+
+def _ensure_cache_table(conn) -> None:
+    """Idempotent -- safe to call on every cache access, but only actually
+    issues DDL once per process via the module-level ready flag."""
+    global _CACHE_TABLE_READY
+    if _CACHE_TABLE_READY:
+        return
+    with conn.cursor() as cur:
+        cur.execute("CREATE SCHEMA IF NOT EXISTS cocoindex")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cocoindex.call_graph_cache (
+                cache_key TEXT PRIMARY KEY,
+                fingerprint TEXT NOT NULL,
+                graph_data BYTEA NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
+    conn.commit()
+    _CACHE_TABLE_READY = True
+
+
+def compute_fingerprint(roots: list[tuple[str, pathlib.Path, list[str], list[str]]]) -> str:
+    """Cheap staleness signal for `roots` (same `(repo_tag, root, included,
+    excluded)` shape as `build_multi_repo_call_graph`): file count + max
+    mtime across every file `chunking.find_code_files` would walk for the
+    real build. A `stat()`-only pass, not a parse -- see this section's
+    module-level comment for why this (not a TTL) is the cache's
+    invalidation signal."""
+    from engram import chunking
+
+    max_mtime = 0.0
+    count = 0
+    for _repo_tag, root, included, excluded in roots:
+        for path in chunking.find_code_files(root, included, excluded):
+            count += 1
+            mtime = path.stat().st_mtime
+            if mtime > max_mtime:
+                max_mtime = mtime
+    return f"{count}:{max_mtime:.6f}"
+
+
+def build_multi_repo_call_graph_with_stats_cached(
+    roots: list[tuple[str, pathlib.Path, list[str], list[str]]],
+    language: str,
+    cache_key: str,
+    pg_url: str,
+    logger: logging.Logger | None = None,
+) -> nx.DiGraph:
+    """`build_multi_repo_call_graph_with_stats()`, but checking a Postgres-
+    backed cache (`cocoindex.call_graph_cache`) first. `cache_key` scopes
+    the cache row (e.g. "kubernaut-go" to distinguish it from a future
+    second cached org). See this section's module-level comment for the
+    fingerprint-only (no TTL) invalidation policy and the fall-back-to-
+    uncached-rebuild behavior on any Postgres error."""
+    import pickle
+
+    import psycopg2
+
+    logger = logger or log
+    fingerprint = compute_fingerprint(roots)
+
+    try:
+        conn = psycopg2.connect(pg_url)
+        try:
+            _ensure_cache_table(conn)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT fingerprint, graph_data FROM cocoindex.call_graph_cache WHERE cache_key = %s",
+                    (cache_key,),
+                )
+                row = cur.fetchone()
+        finally:
+            conn.close()
+    except Exception:
+        logger.warning("call graph cache unavailable for %s (read) -- rebuilding uncached", cache_key, exc_info=True)
+        return build_multi_repo_call_graph_with_stats(roots, language=language, logger=logger)
+
+    if row is not None and row[0] == fingerprint:
+        try:
+            graph = pickle.loads(bytes(row[1]))
+        except Exception:
+            logger.warning("call graph cache row for %s is corrupt -- rebuilding uncached", cache_key, exc_info=True)
+        else:
+            logger.info(
+                "call graph cache HIT for %s (fingerprint %s, %d nodes, %d edges, %d/%d calls unresolved, %d ambiguous)",
+                cache_key, fingerprint, graph.number_of_nodes(), graph.number_of_edges(),
+                graph.graph.get("unresolved_calls", 0), graph.graph.get("total_calls", 0),
+                len(graph.graph.get("ambiguous_calls", [])),
+            )
+            return graph
+
+    logger.info("call graph cache MISS for %s (fingerprint %s) -- rebuilding", cache_key, fingerprint)
+    graph = build_multi_repo_call_graph_with_stats(roots, language=language, logger=logger)
+
+    try:
+        conn = psycopg2.connect(pg_url)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO cocoindex.call_graph_cache (cache_key, fingerprint, graph_data, updated_at)
+                    VALUES (%s, %s, %s, now())
+                    ON CONFLICT (cache_key) DO UPDATE
+                        SET fingerprint = EXCLUDED.fingerprint,
+                            graph_data = EXCLUDED.graph_data,
+                            updated_at = now()
+                    """,
+                    (cache_key, fingerprint, pickle.dumps(graph)),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        logger.warning("failed to persist call graph cache for %s -- next call will rebuild again", cache_key, exc_info=True)
+
+    return graph
+
+
+def resolve_node(graph: nx.DiGraph, identifier: str) -> tuple[str | None, list[str]]:
+    """Resolve a user-given identifier to exactly one graph node.
+
+    Accepts either a full qualified name ("search/engram.py::pattern_search_code")
+    or a bare function name ("pattern_search_code") -- the latter resolves
+    only if unambiguous. Returns (resolved_name, candidates); resolved_name
+    is None if zero or more-than-one match was found, in which case
+    candidates lists what was found (empty if truly nothing matched)."""
+    if identifier in graph.nodes:
+        return identifier, [identifier]
+    candidates = [n for n in graph.nodes if n.rsplit("::", 1)[-1] == identifier]
+    if len(candidates) == 1:
+        return candidates[0], candidates
+    return None, candidates
+
+
+def query_blast_radius(graph: nx.DiGraph, function: str, depth: int = 2) -> dict[str, Any]:
+    """Who (transitively) calls `function`, up to `depth` hops -- "what
+    breaks if I change this." See module docstring for the accuracy ceiling
+    (name-based resolution, no type info)."""
+    resolved, candidates = resolve_node(graph, function)
+    if resolved is None:
+        return {"error": f"'{function}' not found or ambiguous", "candidates": candidates}
+
+    callers_by_depth: list[list[str]] = []
+    seen = {resolved}
+    frontier = [resolved]
+    for _ in range(depth):
+        next_frontier = []
+        for node in frontier:
+            for pred in graph.predecessors(node):
+                if pred not in seen:
+                    seen.add(pred)
+                    next_frontier.append(pred)
+        if not next_frontier:
+            break
+        callers_by_depth.append(sorted(next_frontier))
+        frontier = next_frontier
+
+    return {
+        "function": resolved,
+        "callers_by_depth": callers_by_depth,
+        "unresolved_calls": graph.graph.get("unresolved_calls", 0),
+        "total_calls": graph.graph.get("total_calls", 0),
+        "ambiguous_calls": len(graph.graph.get("ambiguous_calls", [])),
+    }
+
+
+def query_shortest_path(graph: nx.DiGraph, source: str, target: str) -> dict[str, Any]:
+    """Does `source` ever reach `target` through a chain of calls, and how."""
+    resolved_source, source_candidates = resolve_node(graph, source)
+    resolved_target, target_candidates = resolve_node(graph, target)
+    if resolved_source is None:
+        return {"error": f"'{source}' not found or ambiguous", "candidates": source_candidates}
+    if resolved_target is None:
+        return {"error": f"'{target}' not found or ambiguous", "candidates": target_candidates}
+
+    try:
+        path = nx.shortest_path(graph, resolved_source, resolved_target)
+    except nx.NetworkXNoPath:
+        return {"source": resolved_source, "target": resolved_target, "path": None}
+    return {"source": resolved_source, "target": resolved_target, "path": path}
+
+
+def query_get_cluster(graph: nx.DiGraph, function: str) -> dict[str, Any]:
+    """Which Leiden community `function` belongs to, and its other members.
+
+    Clustering quality depends entirely on the underlying graph's structure:
+    a small, centralized codebase may legitimately produce one dominant
+    cluster or many singletons -- that reflects the codebase, not a broken
+    clustering step (see docs/CALL_GRAPH_CLUSTERING.md)."""
+    resolved, candidates = resolve_node(graph, function)
+    if resolved is None:
+        return {"error": f"'{function}' not found or ambiguous", "candidates": candidates}
+
+    clusters = compute_clusters(graph)
+    cluster_id = clusters.get(resolved)
+    members = sorted(n for n, c in clusters.items() if c == cluster_id)
+    return {"function": resolved, "cluster_id": cluster_id, "members": members}
+
+
+def format_blast_radius_result(result: dict) -> str:
+    if "error" in result:
+        return format_lookup_error(result)
+    lines = [f"Blast radius for {result['function']}:"]
+    if not result["callers_by_depth"]:
+        lines.append("  (nothing in this repo calls it, directly or transitively)")
+    for depth_i, callers in enumerate(result["callers_by_depth"], 1):
+        lines.append(f"  depth {depth_i}: " + ", ".join(callers))
+    lines.append(
+        f"\n(name-based resolution, no type info -- {result['unresolved_calls']}/{result['total_calls']} "
+        f"calls in this repo could not be resolved to a known definition, and "
+        f"{result['ambiguous_calls']} matched 2+ candidates and were dropped rather than guessed; "
+        "see docs/CALL_GRAPH_CLUSTERING.md)"
+    )
+    return "\n".join(lines)
+
+
+def format_shortest_path_result(result: dict) -> str:
+    if "error" in result:
+        return format_lookup_error(result)
+    if result["path"] is None:
+        return f"No call path found from {result['source']} to {result['target']}."
+    return f"{result['source']} -> {result['target']}:\n  " + " -> ".join(result["path"])
+
+
+def format_cluster_result(result: dict) -> str:
+    if "error" in result:
+        return format_lookup_error(result)
+    lines = [f"{result['function']} is in cluster {result['cluster_id']} ({len(result['members'])} members):"]
+    lines.extend(f"  {m}" for m in result["members"])
+    return "\n".join(lines)
+
+
+def format_lookup_error(result: dict) -> str:
+    candidates = result.get("candidates") or []
+    message = result["error"]
+    if candidates:
+        return f"{message}, candidates: " + ", ".join(candidates)
+    return f"{message} (use a qualified name like 'path/to/file.py::function_name')"

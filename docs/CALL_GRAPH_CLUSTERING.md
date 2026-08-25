@@ -1,4 +1,4 @@
-# Call-Graph Extraction + Clustering — Feasibility Study
+# Call-Graph Extraction + Clustering
 
 Status: **spike landed on `engram` (2026-08-24), rollout complete: koku, rhdh-plugins, praxis, dcm, and kubernaut all done** -- extraction, clustering, and 3 MCP tools implemented and verified against real, live checkouts, cross-checked against Serena/gopls ground truth. Kubernaut additionally required a Postgres-backed cache (fingerprint-invalidated, no TTL) to stay interactive -- see Phase 5. See [issue #43](https://github.com/jordigilh/engram/issues/43) for the actionable summary and acceptance criteria; this document holds the detailed study and results so `docs/findings/2026-08.md` doesn't have to carry it in full. See "Spike results" below for what was actually measured on `engram`; "Multi-org rollout" below that for koku/rhdh-plugins/praxis/dcm/kubernaut; the sections after that are the original preflight, unchanged.
 

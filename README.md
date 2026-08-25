@@ -47,42 +47,80 @@ flowchart LR
 **Recall is local and free** — embeddings and reranking run on-device (~600ms).
 LLM calls only happen overnight for pattern extraction.
 
-## What it solves
+## Why three components
 
-| Problem | How Engram fixes it |
-|---------|-------------------|
-| Agent burns many grep/glob/read sweeps just to answer "what calls this" or "how does X work" | Call-graph tools (blast radius, shortest path, clustering) + hybrid code search answer relational and semantic questions directly, in one call |
-| Training data and mental context go stale the moment code changes, risking wrong or outdated reviews/features | CocoIndex live-syncs docs/code/issues continuously — recall and call-graph results always reflect the current corpus, not a snapshot |
-| Reviews and new features can contradict past decisions or repeat already-solved mistakes | Knowledge graph + mental models surface prior corrections, conventions, and architecture decisions automatically |
-| Scattered knowledge across docs/issues/PRs | Mental models synthesize coherent context instead of scattered facts |
-| Every session starts with amnesia, repeating the same mistakes | Recall surfaces past corrections automatically; they become persistent patterns |
-| No way to know if any of this is actually helping | Weekly trend metrics track corrections, rework, exploration efficiency, and productivity over time |
-| *(side effect)* Exploration and rework waste tokens | Fewer sweeps + fewer repeated mistakes → lower token cost — tracked as a metric, not the primary goal |
+None of Hindsight, CocoIndex, or Serena can substitute for the other two —
+each closes a different gap in what makes an agent's context both fresh and
+correct.
+
+- **CocoIndex — keeps the corpus fresh, continuously.** Docs, code,
+  issues/PRs, and transcripts all drift constantly under a real repo;
+  CocoIndex notices immediately (filesystem watching for docs/code/
+  transcripts, 5-minute GitHub polling for issues/PRs) instead of waiting
+  for a nightly batch. For docs/issues/transcripts, it hands what changed to
+  Hindsight's `retain` API, so distilled memory is never far behind the
+  source. For code, it's fully self-contained — owns the `code-index`
+  pgvector table and serves hybrid search, structural pattern search, and
+  call-graph extraction/clustering directly. No LLM anywhere in this layer.
+- **Hindsight — remembers, synthesizes, and forgets on purpose.** Raw facts
+  (many arriving fresh via CocoIndex) are worth little on their own —
+  Hindsight turns a messy correction exchange into a durable, generalized
+  lesson (`retain`, Haiku), synthesizes many such facts into one coherent
+  mental model (`reflect`, Sonnet), detects when a new fact contradicts
+  something already stored, and prunes ephemeral/stale/duplicate noise
+  nightly. The only layer with any LLM involvement, and the only one
+  reasoning across sessions rather than answering one live query.
+- **Serena — knows and safely edits, live and exact.** Neither of the above
+  has real compiler-level understanding of code — Serena does, via each
+  language's actual LSP (`gopls`/`pyright`/`rust-analyzer`/
+  `typescript-language-server`) behind one consistent, language-agnostic
+  tool surface. Type-resolved certainty instead of an embedding's
+  approximation, and the only one of the three that can safely mutate code
+  at all (`rename_symbol`/`replace_symbol_body`, applied through that same
+  compiler-level understanding — real references update correctly,
+  unrelated same-named matches are left alone). Fully independent of the
+  other two: no ingestion step, no stored index, always live against
+  whatever's on disk right now.
+- **Together**: an accurate review or a well-grounded new feature needs all
+  three at once — Hindsight supplies *what was decided and why* (so the
+  agent doesn't contradict or repeat itself), CocoIndex supplies *what's
+  actually in the repo right now* (so it isn't reasoning from a stale
+  snapshot), and Serena supplies *exact ground truth and safe edits* for
+  whatever specific symbol is in play. Removing any one doesn't just weaken
+  the result — it removes a category of correctness the other two can't
+  provide. Fewer sweeps and fewer repeated mistakes also mean lower token
+  consumption, but that's a measured side effect, not the goal (see
+  [Value](#value-measuring-effectiveness) below and
+  [docs/README.md's Division of Labor](docs/README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor)
+  for the full capability-by-capability breakdown).
 
 ## Key features
 
-**Accuracy — grounded in what's actually true right now:**
+**CocoIndex — freshness, search, and structural/relational code intelligence:**
 
-- **Call-graph extraction + clustering** — cross-file call graphs built from `CodePattern`'s tree-sitter matching answer relational questions grep/glob can't: blast radius ("what breaks if I change this"), shortest path between two functions, and Leiden-based clustering of related functions. Rolled out across every onboarded project (Python/TypeScript/Rust/Go), with a Postgres-backed cache for the one repo large enough to need it — see [docs/CALL_GRAPH_DESIGN.md](docs/CALL_GRAPH_DESIGN.md) for how it works and [docs/CALL_GRAPH_CLUSTERING.md](docs/CALL_GRAPH_CLUSTERING.md) for the findings behind it
-- **LSP-backed code intelligence, language-agnostic by construction** — [Serena](https://github.com/oraios/serena) is the default code-intelligence MCP backend across every onboarded project, wrapping each language's real LSP (`gopls`, `pyright`, `rust-analyzer`, `typescript-language-server`) behind one consistent tool surface — the same tool calls work identically whether the repo is Go, Python, Rust, or TypeScript, so agents get real symbol lookup/find-references/diagnostics instead of grepping for identifiers. That surface includes **semantic refactoring** (`rename_symbol`, `replace_symbol_body`): a rename or body replacement is resolved and applied via the compiler's own understanding of the code, not text search-replace, so every real reference updates correctly and an unrelated same-named match elsewhere is never touched — see [docs/NEW_PROJECT_SETUP.md §7](docs/NEW_PROJECT_SETUP.md#7-choose-your-code-intelligence-backend) for setup and [docs/README.md's Division of Labor](docs/README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor) for how it differs from Hindsight/CocoIndex
+- **CocoIndex live sync** — docs, code, and transcripts watch for filesystem changes in real time; issues and PRs poll GitHub every 5 minutes, so recall never reflects a stale snapshot. All four flows run concurrently as threads in a single launchd service
 - **Hybrid code search** — tree-sitter AST-aware chunking (via cocoindex's `RecursiveSplitter`) keeps chunk boundaries on function/type/block nodes instead of arbitrary character offsets; dense embeddings (pgvector) handle semantic queries while BM25 (tsvector + GIN) handles exact identifiers — results fused via Reciprocal Rank Fusion
 - **Structural pattern search** — tree-sitter by-example matching (cocoindex's `CodePattern`) answers "find code shaped like X" (e.g. every function matching a signature) as a distinct MCP tool per project, complementing (not replacing) hybrid search's "find code about X" and Serena's type-aware navigation (find_symbol/find_referencing_symbols/diagnostics) — see docs/COCOINDEX.md
-- **CocoIndex live sync** — docs, code, and transcripts watch for filesystem changes in real time; issues and PRs poll GitHub every 5 minutes, so recall never reflects a stale snapshot. All four flows run concurrently as threads in a single launchd service
+- **Call-graph extraction + clustering** — cross-file call graphs built from `CodePattern`'s tree-sitter matching answer relational questions grep/glob can't: blast radius ("what breaks if I change this"), shortest path between two functions, and Leiden-based clustering of related functions. Rolled out across every onboarded project (Python/TypeScript/Rust/Go), with a Postgres-backed cache for the one repo large enough to need it — see [docs/CALL_GRAPH_DESIGN.md](docs/CALL_GRAPH_DESIGN.md) for how it works and [docs/CALL_GRAPH_CLUSTERING.md](docs/CALL_GRAPH_CLUSTERING.md) for the findings behind it
+
+**Hindsight — memory that learns, synthesizes, and cleans up after itself:**
+
+- **Zero-cost recall** — local vector search, no tokens consumed during work
+- **Learns from corrections** — detects when you correct the agent, extracts the lesson
 - **Knowledge graph** — entities link across sessions for richer retrieval
 - **Mental models** — pre-synthesized documents (not scattered facts)
-
-**Learning — never repeat the same mistake twice:**
-
-- **Learns from corrections** — detects when you correct the agent, extracts the lesson
-- **Multi-bank architecture** — behavioral memory + project docs + GitHub issues/PRs + code index
-
-**Operational — low-maintenance, self-monitoring:**
-
+- **Multi-bank architecture** — behavioral memory + project docs + GitHub issues/PRs, plus CocoIndex's code index
 - **Self-cleaning** — nightly triage removes ephemeral, stale, and duplicate memories
-- **Self-evaluating** — weekly trend metrics (corrections/session, rework %, exploration efficiency, productivity density), ingestion coverage, data freshness
 - **Recoverable** — transcripts are source of truth; `python3 -m engram.maintenance.recover_memories` rebuilds the bank
+
+**Serena — live, exact, language-agnostic code intelligence and safe edits:**
+
+- **LSP-backed code intelligence, language-agnostic by construction** — [Serena](https://github.com/oraios/serena) is the default code-intelligence MCP backend across every onboarded project, wrapping each language's real LSP (`gopls`, `pyright`, `rust-analyzer`, `typescript-language-server`) behind one consistent tool surface — the same tool calls work identically whether the repo is Go, Python, Rust, or TypeScript, so agents get real symbol lookup/find-references/diagnostics instead of grepping for identifiers. That surface includes **semantic refactoring** (`rename_symbol`, `replace_symbol_body`): a rename or body replacement is resolved and applied via the compiler's own understanding of the code, not text search-replace, so every real reference updates correctly and an unrelated same-named match elsewhere is never touched — see [docs/NEW_PROJECT_SETUP.md §7](docs/NEW_PROJECT_SETUP.md#7-choose-your-code-intelligence-backend) for setup and [docs/README.md's Division of Labor](docs/README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor) for how it differs from Hindsight/CocoIndex
+
+**Operational — low-maintenance, self-monitoring, across all three:**
+
+- **Self-evaluating** — weekly trend metrics (corrections/session, rework %, exploration efficiency, productivity density), ingestion coverage, data freshness
 - **Runs as macOS service** — launchd-managed, survives reboots, auto-restarts
-- **Zero-cost recall** — local vector search, no tokens consumed during work; the accuracy gains above come at negligible marginal cost (see [Value](#value-measuring-effectiveness))
 
 ## Quick start
 

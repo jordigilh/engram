@@ -47,52 +47,24 @@ flowchart LR
 **Recall is local and free** — embeddings and reranking run on-device (~600ms).
 LLM calls only happen overnight for pattern extraction.
 
-## Why three components
+## What it solves
 
-None of Hindsight, CocoIndex, or Serena can substitute for the other two —
-each closes a different gap in what makes an agent's context both fresh and
-correct.
+Three components, each closing a different gap, working together:
 
-- **CocoIndex — keeps the corpus fresh, continuously.** Docs, code,
-  issues/PRs, and transcripts all drift constantly under a real repo;
-  CocoIndex notices immediately (filesystem watching for docs/code/
-  transcripts, 5-minute GitHub polling for issues/PRs) instead of waiting
-  for a nightly batch. For docs/issues/transcripts, it hands what changed to
-  Hindsight's `retain` API, so distilled memory is never far behind the
-  source. For code, it's fully self-contained — owns the `code-index`
-  pgvector table and serves hybrid search, structural pattern search, and
-  call-graph extraction/clustering directly. No LLM anywhere in this layer.
-- **Hindsight — remembers, synthesizes, and forgets on purpose.** Raw facts
-  (many arriving fresh via CocoIndex) are worth little on their own —
-  Hindsight turns a messy correction exchange into a durable, generalized
-  lesson (`retain`, Haiku), synthesizes many such facts into one coherent
-  mental model (`reflect`, Sonnet), detects when a new fact contradicts
-  something already stored, and prunes ephemeral/stale/duplicate noise
-  nightly. The only layer with any LLM involvement, and the only one
-  reasoning across sessions rather than answering one live query.
-- **Serena — knows and safely edits, live and exact.** Neither of the above
-  has real compiler-level understanding of code — Serena does, via each
-  language's actual LSP (`gopls`/`pyright`/`rust-analyzer`/
-  `typescript-language-server`) behind one consistent, language-agnostic
-  tool surface. Type-resolved certainty instead of an embedding's
-  approximation, and the only one of the three that can safely mutate code
-  at all (`rename_symbol`/`replace_symbol_body`, applied through that same
-  compiler-level understanding — real references update correctly,
-  unrelated same-named matches are left alone). Fully independent of the
-  other two: no ingestion step, no stored index, always live against
-  whatever's on disk right now.
-- **Together**: an accurate review or a well-grounded new feature needs all
-  three at once — Hindsight supplies *what was decided and why* (so the
-  agent doesn't contradict or repeat itself), CocoIndex supplies *what's
-  actually in the repo right now* (so it isn't reasoning from a stale
-  snapshot), and Serena supplies *exact ground truth and safe edits* for
-  whatever specific symbol is in play. Removing any one doesn't just weaken
-  the result — it removes a category of correctness the other two can't
-  provide. Fewer sweeps and fewer repeated mistakes also mean lower token
-  consumption, but that's a measured side effect, not the goal (see
-  [Value](#value-measuring-effectiveness) below and
-  [docs/README.md's Division of Labor](docs/README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor)
-  for the full capability-by-capability breakdown).
+| Problem | How Engram fixes it |
+|---------|-------------------|
+| Agent burns many grep/glob/read sweeps just to answer "what calls this" or "how does X work" | **CocoIndex**'s call-graph tools (blast radius, shortest path, clustering) + hybrid/structural code search answer relational and semantic questions directly, in one call |
+| Training data and mental context go stale the moment code changes, risking wrong or outdated reviews/features | **CocoIndex** live-syncs docs/code/issues continuously, so results always reflect the current corpus, not a snapshot |
+| Reviews and new features can contradict past decisions or repeat already-solved mistakes | **Hindsight**'s knowledge graph + mental models surface prior corrections, conventions, and architecture decisions automatically |
+| Every session starts with amnesia, repeating the same mistakes | **Hindsight**'s recall surfaces past corrections automatically; they become persistent patterns |
+| Text-based rename/refactor risks missed references or false-positive matches across languages | **Serena**'s LSP-backed `rename_symbol`/`replace_symbol_body` apply refactors via real compiler semantics, language-agnostically |
+| No way to know if any of this is actually helping | Weekly trend metrics track corrections, rework, exploration efficiency, and productivity over time |
+| *(side effect)* Exploration and rework waste tokens | Fewer sweeps + fewer repeated mistakes → lower token cost — tracked as a metric, not the primary goal |
+
+Each component covers genuinely distinct ground and none can substitute for
+the other two — see [docs/README.md's Division of Labor](docs/README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor)
+for the full breakdown of how CocoIndex, Hindsight, and Serena divide
+responsibility.
 
 ## Key features
 

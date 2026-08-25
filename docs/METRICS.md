@@ -14,8 +14,8 @@ reduces mistakes and improves productivity:
 
 Engram's primary goal is developer effectiveness — more accurate reviews and
 feature work, grounded in the current corpus, with fewer exploratory sweeps
-to get there (see the main [README](../README.md)'s "Why three components"
-and "Key features"). Lower token consumption follows directly from that (fewer
+to get there (see the main [README](../README.md)'s "What it solves" and "Key
+features"). Lower token consumption follows directly from that (fewer
 sweeps, fewer correction loops to redo work) — it's a measured consequence,
 not the reason Engram exists. The numbers below quantify that side effect.
 

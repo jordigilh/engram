@@ -198,6 +198,77 @@ class TestFormatPatternResults:
         assert "fn score_backends() -> u32 { ... }" in out
 
 
+class TestCallGraphWiring:
+    """These exercise the praxis.py <-> callgraph.py plumbing itself (root
+    selection, multi-repo delegation), not call-graph correctness -- that's
+    already covered exhaustively in tests/test_callgraph.py against the
+    shared implementation every org reuses. Praxis differs from koku.py/
+    rhdh_plugins.py (single root each) in searching all seven
+    _PATTERN_SEARCH_ROOTS repos in one call via
+    callgraph.build_multi_repo_call_graph_with_stats, so these also pin down
+    the repo-tag-prefixed qualified names and per-repo-only resolution that
+    implies."""
+
+    def _write_two_repo_roots(self, tmp_path, monkeypatch, praxis_search):
+        repo_a = tmp_path / "praxis"
+        repo_b = tmp_path / "praxis-ai"
+        repo_a.mkdir()
+        repo_b.mkdir()
+        (repo_a / "lib.rs").write_text(
+            "fn helper() -> i32 {\n    1\n}\n\nfn get_score() -> i32 {\n    helper()\n}\n"
+        )
+        (repo_b / "lib.rs").write_text(
+            "fn helper() -> i32 {\n    2\n}\n\nfn caller_b() -> i32 {\n    unknown_in_b()\n}\n"
+        )
+        monkeypatch.setattr(praxis_search, "_PATTERN_SEARCH_ROOTS", [
+            ("praxis", repo_a, ["**/*.rs"], ["**/target/**"]),
+            ("praxis-ai", repo_b, ["**/*.rs"], ["**/target/**"]),
+        ])
+
+    def test_blast_radius_builds_graph_from_all_configured_roots(self, praxis_search, monkeypatch, tmp_path):
+        self._write_two_repo_roots(tmp_path, monkeypatch, praxis_search)
+        result = praxis_search.call_graph_blast_radius("praxis/lib.rs::helper")
+        assert result["function"] == "praxis/lib.rs::helper"
+        assert result["callers_by_depth"] == [["praxis/lib.rs::get_score"]]
+
+    def test_same_named_function_in_two_repos_is_ambiguous_by_bare_name(self, praxis_search, monkeypatch, tmp_path):
+        """Both repos define `helper` -- a bare-name lookup across all seven
+        roots must report it as ambiguous (candidates from both repos)
+        rather than silently picking one, mirroring resolve_node's existing
+        multi-candidate behavior within a single repo."""
+        self._write_two_repo_roots(tmp_path, monkeypatch, praxis_search)
+        result = praxis_search.call_graph_blast_radius("helper")
+        assert "error" in result
+        assert set(result["candidates"]) == {"praxis/lib.rs::helper", "praxis-ai/lib.rs::helper"}
+
+    def test_shortest_path_builds_graph_from_all_configured_roots(self, praxis_search, monkeypatch, tmp_path):
+        self._write_two_repo_roots(tmp_path, monkeypatch, praxis_search)
+        result = praxis_search.call_graph_shortest_path("praxis/lib.rs::get_score", "praxis/lib.rs::helper")
+        assert result["path"] == ["praxis/lib.rs::get_score", "praxis/lib.rs::helper"]
+
+    def test_get_cluster_builds_graph_from_all_configured_roots(self, praxis_search, monkeypatch, tmp_path):
+        self._write_two_repo_roots(tmp_path, monkeypatch, praxis_search)
+        result = praxis_search.call_graph_get_cluster("praxis/lib.rs::helper")
+        assert set(result["members"]) == {"praxis/lib.rs::helper", "praxis/lib.rs::get_score"}
+
+    def test_call_does_not_resolve_across_repo_boundary(self, praxis_search, monkeypatch, tmp_path):
+        self._write_two_repo_roots(tmp_path, monkeypatch, praxis_search)
+        result = praxis_search.call_graph_blast_radius("praxis-ai/lib.rs::caller_b")
+        assert result["callers_by_depth"] == []
+        assert result["unresolved_calls"] >= 1
+
+    def test_unknown_function_returns_error_dict(self, praxis_search, monkeypatch, tmp_path):
+        self._write_two_repo_roots(tmp_path, monkeypatch, praxis_search)
+        result = praxis_search.call_graph_blast_radius("does_not_exist")
+        assert "error" in result
+
+    def test_format_functions_delegate_to_shared_callgraph_formatters(self, praxis_search):
+        error_result = {"error": "boom", "candidates": []}
+        assert praxis_search._format_blast_radius_result(error_result) == praxis_search.callgraph.format_blast_radius_result(error_result)
+        assert praxis_search._format_shortest_path_result(error_result) == praxis_search.callgraph.format_shortest_path_result(error_result)
+        assert praxis_search._format_cluster_result(error_result) == praxis_search.callgraph.format_cluster_result(error_result)
+
+
 class TestMainRouting:
     def test_pattern_flag_takes_priority_over_query(self, praxis_search, monkeypatch):
         calls = []

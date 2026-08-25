@@ -12,6 +12,9 @@ Usage:
     python3 praxis-cocoindex-search.py --query "score_backends" --mode dense
     python3 praxis-cocoindex-search.py --query "score_backends" --mode bm25
     python3 praxis-cocoindex-search.py --pattern 'fn \NAME(\(A*\))' --language rust
+    python3 praxis-cocoindex-search.py --blast-radius score_backends --depth 2
+    python3 praxis-cocoindex-search.py --shortest-path handle_request score_backends
+    python3 praxis-cocoindex-search.py --cluster score_backends
 """
 
 import argparse
@@ -28,7 +31,7 @@ from typing import Any
 # `engram` resolves as a top-level package rather than needing this file to
 # be run via `-m`/an installed console script (not yet true in this repo).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
-from engram import chunking  # noqa: E402
+from engram import callgraph, chunking  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -242,6 +245,60 @@ def _format_pattern_results(pattern: str, language: str, results: list[dict]) ->
 
 
 # ---------------------------------------------------------------------------
+# Call graph -- thin wrappers around callgraph.py's generic multi-org query/
+# format layer: this module only supplies which roots/language to build
+# from. Praxis differs from koku.py/rhdh_plugins.py (single root each) in
+# searching seven independently-checked-out Rust repos in one call, so this
+# uses build_multi_repo_call_graph_with_stats (all of _PATTERN_SEARCH_ROOTS,
+# not just its first entry) -- see that function's docstring in callgraph.py
+# for why cross-repo call resolution is deliberately NOT attempted.
+# ---------------------------------------------------------------------------
+
+def _build_graph_with_timing():
+    return callgraph.build_multi_repo_call_graph_with_stats(
+        _PATTERN_SEARCH_ROOTS, language="rust", logger=log,
+    )
+
+
+def call_graph_blast_radius(function: str, depth: int = 2) -> dict[str, Any]:
+    """Who (transitively) calls `function`, up to `depth` hops -- "what
+    breaks if I change this." See docs/CALL_GRAPH_CLUSTERING.md for the
+    accuracy ceiling (name-based resolution, no type info, and no
+    cross-repo resolution -- a call can only resolve within its own repo)."""
+    graph = _build_graph_with_timing()
+    return callgraph.query_blast_radius(graph, function, depth=depth)
+
+
+def call_graph_shortest_path(source: str, target: str) -> dict[str, Any]:
+    """Does `source` ever reach `target` through a chain of calls, and how."""
+    graph = _build_graph_with_timing()
+    return callgraph.query_shortest_path(graph, source, target)
+
+
+def call_graph_get_cluster(function: str) -> dict[str, Any]:
+    """Which Leiden community `function` belongs to, and its other members.
+
+    Clustering quality depends entirely on the underlying graph's structure:
+    a small, centralized codebase may legitimately produce one dominant
+    cluster or many singletons -- that reflects the codebase, not a broken
+    clustering step (see docs/CALL_GRAPH_CLUSTERING.md)."""
+    graph = _build_graph_with_timing()
+    return callgraph.query_get_cluster(graph, function)
+
+
+def _format_blast_radius_result(result: dict) -> str:
+    return callgraph.format_blast_radius_result(result)
+
+
+def _format_shortest_path_result(result: dict) -> str:
+    return callgraph.format_shortest_path_result(result)
+
+
+def _format_cluster_result(result: dict) -> str:
+    return callgraph.format_cluster_result(result)
+
+
+# ---------------------------------------------------------------------------
 # MCP server
 # ---------------------------------------------------------------------------
 
@@ -290,6 +347,56 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
         results = pattern_search_code(pattern, language, limit=min(limit, 20))
         return _format_pattern_results(pattern, language, results)
 
+    @mcp.tool()
+    def praxis_call_graph_blast_radius(function: str, depth: int = 2) -> str:
+        """What (transitively) calls `function` across the Praxis/Grid Rust
+        codebases, up to `depth` hops -- "what breaks if I change this."
+
+        `function` may be a bare name ("score_backends") if unambiguous
+        across all seven repos, or a qualified name including the repo tag
+        ("praxis-ai/src/lib.rs::score_backends").
+
+        Call resolution is purely name-based (no type info) and per-repo
+        only -- a call in one repo can never resolve to a same-named
+        function in a different repo, even if both are searched in one
+        call. Common method names shared across unrelated types (Rust has
+        no cross-file import qualification the way Python/Go do) can
+        produce false-positive edges within a repo; associated-function
+        calls (`Type::method()`) and method calls (`x.method()`) are both
+        supported. See docs/CALL_GRAPH_CLUSTERING.md. Rebuilds the call
+        graph fresh across all seven repos on every call (no persisted
+        index).
+        """
+        result = call_graph_blast_radius(function, depth=depth)
+        return _format_blast_radius_result(result)
+
+    @mcp.tool()
+    def praxis_call_graph_shortest_path(source: str, target: str) -> str:
+        """Does `source` ever reach `target` through a chain of calls across
+        the Praxis/Grid Rust codebases, and how.
+
+        Same name-based, per-repo-only resolution caveat as
+        praxis_call_graph_blast_radius applies (see its docstring) -- a
+        path can only be found within a single repo, never across two.
+        """
+        result = call_graph_shortest_path(source, target)
+        return _format_shortest_path_result(result)
+
+    @mcp.tool()
+    def praxis_call_graph_get_cluster(function: str) -> str:
+        """Which cluster of related functions (via Leiden community
+        detection over the call graph) `function` belongs to, and its other
+        members.
+
+        Same name-based, per-repo-only resolution caveat as
+        praxis_call_graph_blast_radius applies (see its docstring). A
+        small, centralized module may legitimately produce one dominant
+        cluster or many singletons; that reflects the codebase, not a
+        broken tool.
+        """
+        result = call_graph_get_cluster(function)
+        return _format_cluster_result(result)
+
     if transport == "stdio":
         log.info("Starting praxis-code MCP server (stdio)")
         mcp.run(transport="stdio")
@@ -312,6 +419,21 @@ def _run_cli_pattern_query(pattern: str, language: str, limit: int = 10) -> None
     print(_format_pattern_results(pattern, language, results))
 
 
+def _run_cli_blast_radius(function: str, depth: int) -> None:
+    result = call_graph_blast_radius(function, depth=depth)
+    print(_format_blast_radius_result(result))
+
+
+def _run_cli_shortest_path(source: str, target: str) -> None:
+    result = call_graph_shortest_path(source, target)
+    print(_format_shortest_path_result(result))
+
+
+def _run_cli_cluster(function: str) -> None:
+    result = call_graph_get_cluster(function)
+    print(_format_cluster_result(result))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Praxis code search — MCP server + CLI"
@@ -322,12 +444,23 @@ def main():
     parser.add_argument("--limit", "-n", type=int, default=10, help="Max results (default: 10)")
     parser.add_argument("--mode", "-m", default="hybrid", choices=["hybrid", "dense", "bm25"],
                         help="Search mode (default: hybrid)")
+    parser.add_argument("--blast-radius", help="Call graph: who (transitively) calls this function")
+    parser.add_argument("--depth", type=int, default=2, help="Depth for --blast-radius (default: 2)")
+    parser.add_argument("--shortest-path", nargs=2, metavar=("SOURCE", "TARGET"),
+                        help="Call graph: shortest call chain SOURCE -> TARGET")
+    parser.add_argument("--cluster", help="Call graph: which Leiden cluster this function belongs to")
     parser.add_argument("--port", "-p", type=int, default=8889, help="MCP server port (default: 8889)")
     parser.add_argument("--host", default="127.0.0.1", help="MCP server bind address")
     args = parser.parse_args()
 
     if args.pattern:
         _run_cli_pattern_query(args.pattern, args.language, limit=args.limit)
+    elif args.blast_radius:
+        _run_cli_blast_radius(args.blast_radius, depth=args.depth)
+    elif args.shortest_path:
+        _run_cli_shortest_path(*args.shortest_path)
+    elif args.cluster:
+        _run_cli_cluster(args.cluster)
     elif args.query:
         _run_cli_query(args.query, limit=args.limit, mode=args.mode)
     else:

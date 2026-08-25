@@ -169,6 +169,25 @@ def praxis_search() -> ModuleType:
 
 
 @pytest.fixture(scope="session")
+def kubernaut_search() -> ModuleType:
+    """kubernaut.py's code search module (engram.search.kubernaut) -- same
+    no-flow/no-ContextKey-at-import-time shape as the other *_search
+    fixtures."""
+    from engram.search import kubernaut as kubernaut_search
+    return kubernaut_search
+
+
+@pytest.fixture(scope="session")
+def rhdh_plugins_search() -> ModuleType:
+    """rhdh_plugins.py's code search module (engram.search.rhdh_plugins) --
+    same no-flow/no-ContextKey-at-import-time shape as the other *_search
+    fixtures. Scoped to workspaces/boost/ only -- see the module's own
+    docstring."""
+    from engram.search import rhdh_plugins as rhdh_plugins_search
+    return rhdh_plugins_search
+
+
+@pytest.fixture(scope="session")
 def engram_search() -> ModuleType:
     from engram.search import engram as engram_search
     return engram_search

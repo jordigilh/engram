@@ -68,31 +68,22 @@ responsibility.
 
 ## Key features
 
-**CocoIndex — freshness, search, and structural/relational code intelligence:**
-
-- **CocoIndex live sync** — docs, code, and transcripts watch for filesystem changes in real time; issues and PRs poll GitHub every 5 minutes, so recall never reflects a stale snapshot. All four flows run concurrently as threads in a single launchd service
-- **Hybrid code search** — tree-sitter AST-aware chunking (via cocoindex's `RecursiveSplitter`) keeps chunk boundaries on function/type/block nodes instead of arbitrary character offsets; dense embeddings (pgvector) handle semantic queries while BM25 (tsvector + GIN) handles exact identifiers — results fused via Reciprocal Rank Fusion
-- **Structural pattern search** — tree-sitter by-example matching (cocoindex's `CodePattern`) answers "find code shaped like X" (e.g. every function matching a signature) as a distinct MCP tool per project, complementing (not replacing) hybrid search's "find code about X" and Serena's type-aware navigation (find_symbol/find_referencing_symbols/diagnostics) — see docs/COCOINDEX.md
-- **Call-graph extraction + clustering** — cross-file call graphs built from `CodePattern`'s tree-sitter matching answer relational questions grep/glob can't: blast radius ("what breaks if I change this"), shortest path between two functions, and Leiden-based clustering of related functions. Rolled out across every onboarded project (Python/TypeScript/Rust/Go), with a Postgres-backed cache for the one repo large enough to need it — see [docs/CALL_GRAPH_DESIGN.md](docs/CALL_GRAPH_DESIGN.md) for how it works and [docs/CALL_GRAPH_CLUSTERING.md](docs/CALL_GRAPH_CLUSTERING.md) for the findings behind it
-
-**Hindsight — memory that learns, synthesizes, and cleans up after itself:**
-
-- **Zero-cost recall** — local vector search, no tokens consumed during work
-- **Learns from corrections** — detects when you correct the agent, extracts the lesson
+- **Call-graph extraction + clustering** — cross-file call graphs answer relational questions grep/glob can't: blast radius ("what breaks if I change this"), shortest path between two functions, and Leiden-based clustering of related functions. Rolled out across every onboarded project (Python/TypeScript/Rust/Go), with a Postgres-backed cache for the one repo large enough to need it — see [docs/CALL_GRAPH_DESIGN.md](docs/CALL_GRAPH_DESIGN.md) for how it works and [docs/CALL_GRAPH_CLUSTERING.md](docs/CALL_GRAPH_CLUSTERING.md) for the findings behind it
+- **LSP-backed code intelligence, language-agnostic by construction** — the same tool surface (`find_symbol`/`find_referencing_symbols`/diagnostics) works identically whether the repo is Go, Python, Rust, or TypeScript, wrapping each language's real LSP (`gopls`, `pyright`, `rust-analyzer`, `typescript-language-server`). Includes **semantic refactoring** (`rename_symbol`, `replace_symbol_body`): a rename or body replacement is resolved and applied via the compiler's own understanding of the code, not text search-replace, so every real reference updates correctly and an unrelated same-named match elsewhere is never touched — see [docs/NEW_PROJECT_SETUP.md §7](docs/NEW_PROJECT_SETUP.md#7-choose-your-code-intelligence-backend) for setup
+- **Hybrid code search** — tree-sitter AST-aware chunking keeps chunk boundaries on function/type/block nodes instead of arbitrary character offsets; dense embeddings (pgvector) handle semantic queries while BM25 (tsvector + GIN) handles exact identifiers — results fused via Reciprocal Rank Fusion
+- **Structural pattern search** — tree-sitter by-example matching answers "find code shaped like X" (e.g. every function matching a signature) as a distinct MCP tool per project — see docs/COCOINDEX.md
+- **Live sync** — docs, code, and transcripts watch for filesystem changes in real time; issues and PRs poll GitHub every 5 minutes, so nothing reflects a stale snapshot
 - **Knowledge graph** — entities link across sessions for richer retrieval
 - **Mental models** — pre-synthesized documents (not scattered facts)
-- **Multi-bank architecture** — behavioral memory + project docs + GitHub issues/PRs, plus CocoIndex's code index
+- **Learns from corrections** — detects when you correct the agent, extracts the lesson
+- **Zero-cost recall** — local vector search, no tokens consumed during work
+- **Multi-bank architecture** — behavioral memory + project docs + GitHub issues/PRs + code index
 - **Self-cleaning** — nightly triage removes ephemeral, stale, and duplicate memories
-- **Recoverable** — transcripts are source of truth; `python3 -m engram.maintenance.recover_memories` rebuilds the bank
-
-**Serena — live, exact, language-agnostic code intelligence and safe edits:**
-
-- **LSP-backed code intelligence, language-agnostic by construction** — [Serena](https://github.com/oraios/serena) is the default code-intelligence MCP backend across every onboarded project, wrapping each language's real LSP (`gopls`, `pyright`, `rust-analyzer`, `typescript-language-server`) behind one consistent tool surface — the same tool calls work identically whether the repo is Go, Python, Rust, or TypeScript, so agents get real symbol lookup/find-references/diagnostics instead of grepping for identifiers. That surface includes **semantic refactoring** (`rename_symbol`, `replace_symbol_body`): a rename or body replacement is resolved and applied via the compiler's own understanding of the code, not text search-replace, so every real reference updates correctly and an unrelated same-named match elsewhere is never touched — see [docs/NEW_PROJECT_SETUP.md §7](docs/NEW_PROJECT_SETUP.md#7-choose-your-code-intelligence-backend) for setup and [docs/README.md's Division of Labor](docs/README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor) for how it differs from Hindsight/CocoIndex
-
-**Operational — low-maintenance, self-monitoring, across all three:**
-
 - **Self-evaluating** — weekly trend metrics (corrections/session, rework %, exploration efficiency, productivity density), ingestion coverage, data freshness
+- **Recoverable** — transcripts are source of truth; `python3 -m engram.maintenance.recover_memories` rebuilds the bank
 - **Runs as macOS service** — launchd-managed, survives reboots, auto-restarts
+
+See [docs/README.md's Division of Labor](docs/README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor) for which of Hindsight, CocoIndex, or Serena is responsible for each of these.
 
 ## Quick start
 

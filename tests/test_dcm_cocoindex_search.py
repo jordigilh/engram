@@ -254,6 +254,90 @@ class TestPatternSearchCodeRepoScoping:
         assert len(results) == 1
 
 
+class TestCallGraphWiring:
+    """These exercise the dcm.py <-> callgraph.py plumbing itself (root
+    selection/scoping, multi-repo delegation), not call-graph correctness --
+    that's already covered exhaustively in tests/test_callgraph.py against
+    the shared implementation every org reuses. DCM differs from praxis.py
+    (always searches all repos) in additionally supporting a `repo=` scope
+    on every call-graph function, mirroring pattern_search_code's own
+    `repo` param above."""
+
+    def _write_two_repo_roots(self, tmp_path, monkeypatch, dcm_search):
+        repo_a = tmp_path / "control-plane"
+        repo_b = tmp_path / "cli"
+        repo_a.mkdir()
+        repo_b.mkdir()
+        (repo_a / "main.go").write_text(
+            "package main\n\n"
+            "func helper() int {\n    return 1\n}\n\n"
+            "func GetScore() int {\n    return helper()\n}\n"
+        )
+        (repo_b / "main.go").write_text(
+            "package main\n\n"
+            "func helper() int {\n    return 2\n}\n\n"
+            "func CallerB() int {\n    return unknownInB()\n}\n"
+        )
+        monkeypatch.setattr(dcm_search, "_PATTERN_SEARCH_ROOTS", [
+            ("dcm-control-plane", repo_a, ["**/*.go"], []),
+            ("dcm-cli", repo_b, ["**/*.go"], []),
+        ])
+
+    def test_blast_radius_builds_graph_from_all_configured_roots_by_default(self, dcm_search, monkeypatch, tmp_path):
+        self._write_two_repo_roots(tmp_path, monkeypatch, dcm_search)
+        result = dcm_search.call_graph_blast_radius("dcm-control-plane/main.go::helper")
+        assert result["function"] == "dcm-control-plane/main.go::helper"
+        assert result["callers_by_depth"] == [["dcm-control-plane/main.go::GetScore"]]
+
+    def test_repo_scoping_excludes_other_repos_from_the_build(self, dcm_search, monkeypatch, tmp_path):
+        self._write_two_repo_roots(tmp_path, monkeypatch, dcm_search)
+        result = dcm_search.call_graph_blast_radius("dcm-control-plane/main.go::helper", repo="dcm-control-plane")
+        assert result["callers_by_depth"] == [["dcm-control-plane/main.go::GetScore"]]
+
+    def test_same_named_function_in_two_repos_is_ambiguous_by_bare_name(self, dcm_search, monkeypatch, tmp_path):
+        """Both repos define `helper` -- a bare-name lookup across both
+        configured roots must report it as ambiguous (candidates from both
+        repos) rather than silently picking one, mirroring resolve_node's
+        existing multi-candidate behavior within a single repo."""
+        self._write_two_repo_roots(tmp_path, monkeypatch, dcm_search)
+        result = dcm_search.call_graph_blast_radius("helper")
+        assert "error" in result
+        assert set(result["candidates"]) == {
+            "dcm-control-plane/main.go::helper", "dcm-cli/main.go::helper",
+        }
+
+    def test_shortest_path_builds_graph_from_all_configured_roots(self, dcm_search, monkeypatch, tmp_path):
+        self._write_two_repo_roots(tmp_path, monkeypatch, dcm_search)
+        result = dcm_search.call_graph_shortest_path(
+            "dcm-control-plane/main.go::GetScore", "dcm-control-plane/main.go::helper",
+        )
+        assert result["path"] == ["dcm-control-plane/main.go::GetScore", "dcm-control-plane/main.go::helper"]
+
+    def test_get_cluster_builds_graph_from_all_configured_roots(self, dcm_search, monkeypatch, tmp_path):
+        self._write_two_repo_roots(tmp_path, monkeypatch, dcm_search)
+        result = dcm_search.call_graph_get_cluster("dcm-control-plane/main.go::helper")
+        assert set(result["members"]) == {
+            "dcm-control-plane/main.go::helper", "dcm-control-plane/main.go::GetScore",
+        }
+
+    def test_call_does_not_resolve_across_repo_boundary(self, dcm_search, monkeypatch, tmp_path):
+        self._write_two_repo_roots(tmp_path, monkeypatch, dcm_search)
+        result = dcm_search.call_graph_blast_radius("dcm-cli/main.go::CallerB")
+        assert result["callers_by_depth"] == []
+        assert result["unresolved_calls"] >= 1
+
+    def test_unknown_function_returns_error_dict(self, dcm_search, monkeypatch, tmp_path):
+        self._write_two_repo_roots(tmp_path, monkeypatch, dcm_search)
+        result = dcm_search.call_graph_blast_radius("does_not_exist")
+        assert "error" in result
+
+    def test_format_functions_delegate_to_shared_callgraph_formatters(self, dcm_search):
+        error_result = {"error": "boom", "candidates": []}
+        assert dcm_search._format_blast_radius_result(error_result) == dcm_search.callgraph.format_blast_radius_result(error_result)
+        assert dcm_search._format_shortest_path_result(error_result) == dcm_search.callgraph.format_shortest_path_result(error_result)
+        assert dcm_search._format_cluster_result(error_result) == dcm_search.callgraph.format_cluster_result(error_result)
+
+
 class TestMainRouting:
     """main()'s only real business decision: which of --pattern / --query /
     neither wins when a user could in principle pass more than one."""
@@ -292,6 +376,46 @@ class TestMainRouting:
         dcm_search.main()
 
         assert [c[0] for c in calls] == ["mcp"]
+
+    def test_blast_radius_flag_dispatches_with_repo_scope(self, dcm_search, monkeypatch):
+        calls = []
+        monkeypatch.setattr(dcm_search.sys, "argv", [
+            "dcm-cocoindex-search.py", "--blast-radius", "Reconcile", "--repo", "dcm-cli",
+        ])
+        monkeypatch.setattr(dcm_search, "_run_cli_blast_radius", lambda *a, **k: calls.append(("blast", a, k)))
+        monkeypatch.setattr(dcm_search, "_run_cli_query", lambda *a, **k: calls.append(("query", a, k)))
+        monkeypatch.setattr(dcm_search, "_run_mcp_server", lambda *a, **k: calls.append(("mcp", a, k)))
+
+        dcm_search.main()
+
+        assert len(calls) == 1
+        assert calls[0][0] == "blast"
+        assert calls[0][1] == ("Reconcile",)
+        assert calls[0][2] == {"depth": 2, "repo": "dcm-cli"}
+
+    def test_shortest_path_flag_dispatches_with_both_positional_args_and_repo(self, dcm_search, monkeypatch):
+        calls = []
+        monkeypatch.setattr(dcm_search.sys, "argv", [
+            "dcm-cocoindex-search.py", "--shortest-path", "a", "b", "--repo", "dcm-cli",
+        ])
+        monkeypatch.setattr(dcm_search, "_run_cli_shortest_path", lambda *a, **k: calls.append((a, k)))
+        monkeypatch.setattr(dcm_search, "_run_mcp_server", lambda *a, **k: calls.append(("mcp", a, k)))
+
+        dcm_search.main()
+
+        assert calls == [(("a", "b"), {"repo": "dcm-cli"})]
+
+    def test_cluster_flag_dispatches_with_repo_scope(self, dcm_search, monkeypatch):
+        calls = []
+        monkeypatch.setattr(dcm_search.sys, "argv", [
+            "dcm-cocoindex-search.py", "--cluster", "Reconcile", "--repo", "dcm-cli",
+        ])
+        monkeypatch.setattr(dcm_search, "_run_cli_cluster", lambda *a, **k: calls.append((a, k)))
+        monkeypatch.setattr(dcm_search, "_run_mcp_server", lambda *a, **k: calls.append(("mcp", a, k)))
+
+        dcm_search.main()
+
+        assert calls == [(("Reconcile",), {"repo": "dcm-cli"})]
 
 
 class TestFormatPatternResults:

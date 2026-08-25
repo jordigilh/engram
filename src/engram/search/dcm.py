@@ -12,6 +12,9 @@ Usage:
     python3 dcm-cocoindex-search.py --query "ParseConfig" --mode dense
     python3 dcm-cocoindex-search.py --query "ParseConfig" --mode bm25
     python3 dcm-cocoindex-search.py --pattern 'func \NAME(\(A*\)) error' --language go
+    python3 dcm-cocoindex-search.py --blast-radius Reconcile --depth 2 --repo dcm-control-plane
+    python3 dcm-cocoindex-search.py --shortest-path Run Reconcile --repo dcm-control-plane
+    python3 dcm-cocoindex-search.py --cluster Reconcile --repo dcm-control-plane
 """
 
 import argparse
@@ -28,7 +31,7 @@ from typing import Any
 # `engram` resolves as a top-level package rather than needing this file to
 # be run via `-m`/an installed console script (not yet true in this repo).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
-from engram import chunking  # noqa: E402
+from engram import callgraph, chunking  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -288,6 +291,66 @@ def _format_pattern_results(pattern: str, language: str, results: list[dict]) ->
 
 
 # ---------------------------------------------------------------------------
+# Call graph (blast radius, shortest path, Leiden clustering)
+#
+# DCM differs from praxis.py in one respect worth calling out: like
+# pattern_search_code above, these accept an optional `repo` to scope the
+# build to one of DCM's 8 Go repos (default: all 8, same
+# build_multi_repo_call_graph_with_stats path praxis.py uses for its 7 Rust
+# repos) -- useful here since 8 repos is a larger multi-repo walk than
+# praxis's 7, and most blast-radius/cluster questions are naturally scoped
+# to a single repo the caller already knows. Cross-repo call resolution is
+# still deliberately NOT attempted regardless of scoping (see
+# build_multi_repo_call_graph's docstring in callgraph.py).
+# ---------------------------------------------------------------------------
+
+def _build_graph_with_timing(repo: str | None = None):
+    roots = [r for r in _PATTERN_SEARCH_ROOTS if repo is None or r[0] == repo]
+    return callgraph.build_multi_repo_call_graph_with_stats(
+        roots, language="go", logger=log,
+    )
+
+
+def call_graph_blast_radius(function: str, depth: int = 2, repo: str | None = None) -> dict[str, Any]:
+    """Who (transitively) calls `function`, up to `depth` hops -- "what
+    breaks if I change this." See docs/CALL_GRAPH_CLUSTERING.md for the
+    accuracy ceiling (name-based resolution, no type info, and no
+    cross-repo resolution -- a call can only resolve within its own repo).
+    Pass repo to scope the build to one of DCM's 8 repos."""
+    graph = _build_graph_with_timing(repo=repo)
+    return callgraph.query_blast_radius(graph, function, depth=depth)
+
+
+def call_graph_shortest_path(source: str, target: str, repo: str | None = None) -> dict[str, Any]:
+    """Does `source` ever reach `target` through a chain of calls, and how."""
+    graph = _build_graph_with_timing(repo=repo)
+    return callgraph.query_shortest_path(graph, source, target)
+
+
+def call_graph_get_cluster(function: str, repo: str | None = None) -> dict[str, Any]:
+    """Which Leiden community `function` belongs to, and its other members.
+
+    Clustering quality depends entirely on the underlying graph's structure:
+    a small, centralized codebase may legitimately produce one dominant
+    cluster or many singletons -- that reflects the codebase, not a broken
+    clustering step (see docs/CALL_GRAPH_CLUSTERING.md)."""
+    graph = _build_graph_with_timing(repo=repo)
+    return callgraph.query_get_cluster(graph, function)
+
+
+def _format_blast_radius_result(result: dict) -> str:
+    return callgraph.format_blast_radius_result(result)
+
+
+def _format_shortest_path_result(result: dict) -> str:
+    return callgraph.format_shortest_path_result(result)
+
+
+def _format_cluster_result(result: dict) -> str:
+    return callgraph.format_cluster_result(result)
+
+
+# ---------------------------------------------------------------------------
 # MCP server
 # ---------------------------------------------------------------------------
 
@@ -343,6 +406,59 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
         results = pattern_search_code(pattern, language, limit=min(limit, 20), repo=repo)
         return _format_pattern_results(pattern, language, results)
 
+    @mcp.tool()
+    def dcm_call_graph_blast_radius(function: str, depth: int = 2, repo: str | None = None) -> str:
+        """What (transitively) calls `function` across DCM's Go repos, up to
+        `depth` hops -- "what breaks if I change this."
+
+        `function` may be a bare name ("Reconcile") if unambiguous across
+        the repos searched, or a qualified name including the repo tag
+        ("dcm-control-plane/internal/reconciler.go::Reconcile"). Pass repo
+        (e.g. "dcm-cli") to scope the build to one repo; omit it to search
+        all 8 (slower, and more likely to hit bare-name ambiguity across
+        repos).
+
+        Call resolution is purely name-based (no type info) and per-repo
+        only -- a call in one repo can never resolve to a same-named
+        function in a different repo, even if both are searched in one
+        call. Common method names shared across unrelated types can
+        produce false-positive edges within a repo. See
+        docs/CALL_GRAPH_CLUSTERING.md. Rebuilds the call graph fresh on
+        every call (no persisted index).
+        """
+        result = call_graph_blast_radius(function, depth=depth, repo=repo)
+        return _format_blast_radius_result(result)
+
+    @mcp.tool()
+    def dcm_call_graph_shortest_path(source: str, target: str, repo: str | None = None) -> str:
+        """Does `source` ever reach `target` through a chain of calls across
+        DCM's Go repos, and how.
+
+        Same name-based, per-repo-only resolution caveat as
+        dcm_call_graph_blast_radius applies (see its docstring) -- a path
+        can only be found within a single repo, never across two. Pass
+        repo to scope the build to one repo (recommended: cross-repo
+        blast-radius/path queries can never actually connect across a repo
+        boundary anyway, so scoping just saves build time).
+        """
+        result = call_graph_shortest_path(source, target, repo=repo)
+        return _format_shortest_path_result(result)
+
+    @mcp.tool()
+    def dcm_call_graph_get_cluster(function: str, repo: str | None = None) -> str:
+        """Which cluster of related functions (via Leiden community
+        detection over the call graph) `function` belongs to, and its other
+        members.
+
+        Same name-based, per-repo-only resolution caveat as
+        dcm_call_graph_blast_radius applies (see its docstring). Pass repo
+        to scope the build to one repo. A small, centralized module may
+        legitimately produce one dominant cluster or many singletons; that
+        reflects the codebase, not a broken tool.
+        """
+        result = call_graph_get_cluster(function, repo=repo)
+        return _format_cluster_result(result)
+
     if transport == "stdio":
         log.info("Starting dcm-code MCP server (stdio)")
         mcp.run(transport="stdio")
@@ -365,6 +481,21 @@ def _run_cli_pattern_query(pattern: str, language: str, limit: int = 10, repo: s
     print(_format_pattern_results(pattern, language, results))
 
 
+def _run_cli_blast_radius(function: str, depth: int, repo: str | None = None) -> None:
+    result = call_graph_blast_radius(function, depth=depth, repo=repo)
+    print(_format_blast_radius_result(result))
+
+
+def _run_cli_shortest_path(source: str, target: str, repo: str | None = None) -> None:
+    result = call_graph_shortest_path(source, target, repo=repo)
+    print(_format_shortest_path_result(result))
+
+
+def _run_cli_cluster(function: str, repo: str | None = None) -> None:
+    result = call_graph_get_cluster(function, repo=repo)
+    print(_format_cluster_result(result))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="DCM code search — MCP server + CLI"
@@ -376,13 +507,24 @@ def main():
     parser.add_argument("--mode", "-m", default="hybrid", choices=["hybrid", "dense", "bm25"],
                         help="Search mode (default: hybrid)")
     parser.add_argument("--repo", default=None,
-                        help="Scope --pattern to one repo tag (e.g. dcm-cli); default: all 8 repos")
+                        help="Scope --pattern/call-graph flags to one repo tag (e.g. dcm-cli); default: all 8 repos")
+    parser.add_argument("--blast-radius", help="Call graph: who (transitively) calls this function")
+    parser.add_argument("--depth", type=int, default=2, help="Depth for --blast-radius (default: 2)")
+    parser.add_argument("--shortest-path", nargs=2, metavar=("SOURCE", "TARGET"),
+                        help="Call graph: shortest call chain SOURCE -> TARGET")
+    parser.add_argument("--cluster", help="Call graph: which Leiden cluster this function belongs to")
     parser.add_argument("--port", "-p", type=int, default=8889, help="MCP server port (default: 8889)")
     parser.add_argument("--host", default="127.0.0.1", help="MCP server bind address")
     args = parser.parse_args()
 
     if args.pattern:
         _run_cli_pattern_query(args.pattern, args.language, limit=args.limit, repo=args.repo)
+    elif args.blast_radius:
+        _run_cli_blast_radius(args.blast_radius, depth=args.depth, repo=args.repo)
+    elif args.shortest_path:
+        _run_cli_shortest_path(*args.shortest_path, repo=args.repo)
+    elif args.cluster:
+        _run_cli_cluster(args.cluster, repo=args.repo)
     elif args.query:
         _run_cli_query(args.query, limit=args.limit, mode=args.mode)
     else:

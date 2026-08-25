@@ -10,6 +10,43 @@ reduces mistakes and improves productivity:
 3. **Proactive Recall** — Whether the agent uses memory autonomously without user prompting
 4. **Recall Quality** — Latency and result counts from nightly health probes
 
+## Token and Cost Side Effects
+
+Engram's primary goal is developer effectiveness — more accurate reviews and
+feature work, grounded in the current corpus, with fewer exploratory sweeps
+to get there (see the main [README](../README.md)'s "What it solves" and "Key
+features"). Lower token consumption follows directly from that (fewer
+sweeps, fewer correction loops to redo work) — it's a measured consequence,
+not the reason Engram exists. The numbers below quantify that side effect.
+
+**Engram's own operating cost** (retain/reflect run nightly against Vertex
+AI; recall and CocoIndex sync are local and free):
+
+| Operation | Model | Frequency | Cost |
+|-----------|-------|-----------|------|
+| Recall | Local (no LLM) | Every response | $0 |
+| Retain | Haiku 4.5 | ~23 windows/night | ~$0.02 |
+| Reflect | Sonnet 4.6 | Once/night | ~$0.10 |
+| CocoIndex sync | Local (no LLM) | Continuous | $0 |
+
+**≈ $0.12/night** for a full learning cycle.
+
+**Where that shows up in session token cost** (fewer exploration sweeps +
+fewer correction loops, not a change to the productive work itself):
+
+| Phase | Without Engram | With Engram |
+|-------|---------------|-------------|
+| Context loading (exploration/education) | ~8,400 tokens | ~200 tokens |
+| Corrections (rework) | ~3.2/session × ~5K each | ~0.8/session × ~5K each |
+| Productive work | Same | Same |
+| **Total session cost** | **~62K tokens** | **~45K tokens** |
+
+At 5 sessions/day over a month, this translates to:
+
+- **~17K fewer tokens/session** in wasted context loading and corrections
+- **~1.7M tokens/month saved** (20 working days × 5 sessions)
+- At Sonnet pricing (~$15/M tokens): **~$25/month saved** for **$3.60/month** cost
+
 ## Data Collection
 
 ### Real-time: Cursor Hook

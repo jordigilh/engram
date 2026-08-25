@@ -40,9 +40,26 @@
              is not installed" -- see docs/findings/2026-08.md, 2026-08-22
              entry. Same fix already applied to the serena.*-family and
              serena-project-server plists; this was the one template that
-             had been missed. -->
+             had been missed.
+
+             __HOME__/.cargo/bin (2026-08-25 fix, same category of bug as
+             the gopls one above, this time for Rust): must come BEFORE
+             /opt/homebrew/bin. Without it, rust-analyzer's `cargo check`
+             flycheck resolves the raw Homebrew `cargo`/`rustc` (fixed at
+             whatever version brew has, e.g. 1.93.0) instead of rustup's
+             version-aware shim at ~/.cargo/bin/cargo, which reads each
+             repo's rust-toolchain.toml and dispatches to the pinned
+             version. For a repo pinned above Homebrew's version (e.g.
+             praxis-grid's rust-toolchain.toml pins 1.96.0), flycheck then
+             fails on every member crate requiring the newer version,
+             which stalls/breaks Serena's LSP init for that project and
+             makes the gateway's `list_tools()` for its `serena` backend
+             fail identically on every single call (no self-healing,
+             since list_tools() -- unlike call_tool() -- has no
+             restart-on-failure retry) -- see docs/findings/2026-08.md,
+             2026-08-25 entry. -->
         <key>PATH</key>
-        <string>__HOME__/.hindsight/venv/bin:__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:__HOME__/go/bin:/usr/bin:/bin</string>
+        <string>__HOME__/.hindsight/venv/bin:__HOME__/.local/bin:__HOME__/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:__HOME__/go/bin:/usr/bin:/bin</string>
         <key>GOPATH</key>
         <string>__HOME__/go</string>
         <key>HOME</key>

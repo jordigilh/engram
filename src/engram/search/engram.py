@@ -253,96 +253,29 @@ def _format_pattern_results(pattern: str, language: str, results: list[dict]) ->
 # Call-graph queries (spike -- see docs/CALL_GRAPH_CLUSTERING.md, issue #43)
 # ---------------------------------------------------------------------------
 #
-# Live-rebuild-per-query, deliberately (scope confirmed for this spike): every
-# call below re-walks this repo's own checkout via callgraph.build_call_graph()
-# rather than reading a persisted index. Whether a larger repo needs
-# persistence is a decision for later, made from the elapsed-time/node/edge
-# numbers logged here, not decided up front.
+# Thin wrappers around callgraph.py's generic multi-org query/format layer
+# (Phase 0 of the rollout -- see docs/CALL_GRAPH_CLUSTERING.md): this module
+# only supplies *which* root/language to build from. No behavior change from
+# when this logic lived here directly.
 
 def _build_graph_with_timing():
-    import time
-
-    start = time.monotonic()
-    graph = callgraph.build_call_graph(
-        ENGRAM_REPO_DIR, included=["**/*.py"], excluded=_EXCLUDED_PY_PATTERNS, language="python",
+    return callgraph.build_call_graph_with_stats(
+        ENGRAM_REPO_DIR, included=["**/*.py"], excluded=_EXCLUDED_PY_PATTERNS, language="python", logger=log,
     )
-    elapsed = time.monotonic() - start
-    log.info(
-        "call graph built in %.2fs (%d nodes, %d edges, %d/%d calls unresolved, %d ambiguous)",
-        elapsed, graph.number_of_nodes(), graph.number_of_edges(),
-        graph.graph.get("unresolved_calls", 0), graph.graph.get("total_calls", 0),
-        len(graph.graph.get("ambiguous_calls", [])),
-    )
-    return graph
-
-
-def _resolve_node(graph, identifier: str) -> tuple[str | None, list[str]]:
-    """Resolve a user-given identifier to exactly one graph node.
-
-    Accepts either a full qualified name ("search/engram.py::pattern_search_code")
-    or a bare function name ("pattern_search_code") -- the latter resolves
-    only if unambiguous. Returns (resolved_name, candidates); resolved_name
-    is None if zero or more-than-one match was found, in which case
-    candidates lists what was found (empty if truly nothing matched)."""
-    if identifier in graph.nodes:
-        return identifier, [identifier]
-    candidates = [n for n in graph.nodes if n.rsplit("::", 1)[-1] == identifier]
-    if len(candidates) == 1:
-        return candidates[0], candidates
-    return None, candidates
 
 
 def call_graph_blast_radius(function: str, depth: int = 2) -> dict[str, Any]:
     """Who (transitively) calls `function`, up to `depth` hops -- "what
-    breaks if I change this." See module docstring above and
-    docs/CALL_GRAPH_CLUSTERING.md for the accuracy ceiling (name-based
-    resolution, no type info)."""
+    breaks if I change this." See docs/CALL_GRAPH_CLUSTERING.md for the
+    accuracy ceiling (name-based resolution, no type info)."""
     graph = _build_graph_with_timing()
-    resolved, candidates = _resolve_node(graph, function)
-    if resolved is None:
-        return {"error": f"'{function}' not found or ambiguous", "candidates": candidates}
-
-    callers_by_depth: list[list[str]] = []
-    seen = {resolved}
-    frontier = [resolved]
-    for _ in range(depth):
-        next_frontier = []
-        for node in frontier:
-            for pred in graph.predecessors(node):
-                if pred not in seen:
-                    seen.add(pred)
-                    next_frontier.append(pred)
-        if not next_frontier:
-            break
-        callers_by_depth.append(sorted(next_frontier))
-        frontier = next_frontier
-
-    return {
-        "function": resolved,
-        "callers_by_depth": callers_by_depth,
-        "unresolved_calls": graph.graph.get("unresolved_calls", 0),
-        "total_calls": graph.graph.get("total_calls", 0),
-        "ambiguous_calls": len(graph.graph.get("ambiguous_calls", [])),
-    }
+    return callgraph.query_blast_radius(graph, function, depth=depth)
 
 
 def call_graph_shortest_path(source: str, target: str) -> dict[str, Any]:
     """Does `source` ever reach `target` through a chain of calls, and how."""
-    import networkx as nx
-
     graph = _build_graph_with_timing()
-    resolved_source, source_candidates = _resolve_node(graph, source)
-    resolved_target, target_candidates = _resolve_node(graph, target)
-    if resolved_source is None:
-        return {"error": f"'{source}' not found or ambiguous", "candidates": source_candidates}
-    if resolved_target is None:
-        return {"error": f"'{target}' not found or ambiguous", "candidates": target_candidates}
-
-    try:
-        path = nx.shortest_path(graph, resolved_source, resolved_target)
-    except nx.NetworkXNoPath:
-        return {"source": resolved_source, "target": resolved_target, "path": None}
-    return {"source": resolved_source, "target": resolved_target, "path": path}
+    return callgraph.query_shortest_path(graph, source, target)
 
 
 def call_graph_get_cluster(function: str) -> dict[str, Any]:
@@ -353,55 +286,23 @@ def call_graph_get_cluster(function: str) -> dict[str, Any]:
     cluster or many singletons -- that reflects the codebase, not a broken
     clustering step (see docs/CALL_GRAPH_CLUSTERING.md)."""
     graph = _build_graph_with_timing()
-    resolved, candidates = _resolve_node(graph, function)
-    if resolved is None:
-        return {"error": f"'{function}' not found or ambiguous", "candidates": candidates}
-
-    clusters = callgraph.compute_clusters(graph)
-    cluster_id = clusters.get(resolved)
-    members = sorted(n for n, c in clusters.items() if c == cluster_id)
-    return {"function": resolved, "cluster_id": cluster_id, "members": members}
+    return callgraph.query_get_cluster(graph, function)
 
 
 def _format_blast_radius_result(result: dict) -> str:
-    if "error" in result:
-        return _format_lookup_error(result)
-    lines = [f"Blast radius for {result['function']}:"]
-    if not result["callers_by_depth"]:
-        lines.append("  (nothing in this repo calls it, directly or transitively)")
-    for depth_i, callers in enumerate(result["callers_by_depth"], 1):
-        lines.append(f"  depth {depth_i}: " + ", ".join(callers))
-    lines.append(
-        f"\n(name-based resolution, no type info -- {result['unresolved_calls']}/{result['total_calls']} "
-        f"calls in this repo could not be resolved to a known definition, and "
-        f"{result['ambiguous_calls']} matched 2+ candidates and were dropped rather than guessed; "
-        "see docs/CALL_GRAPH_CLUSTERING.md)"
-    )
-    return "\n".join(lines)
+    return callgraph.format_blast_radius_result(result)
 
 
 def _format_shortest_path_result(result: dict) -> str:
-    if "error" in result:
-        return _format_lookup_error(result)
-    if result["path"] is None:
-        return f"No call path found from {result['source']} to {result['target']}."
-    return f"{result['source']} -> {result['target']}:\n  " + " -> ".join(result["path"])
+    return callgraph.format_shortest_path_result(result)
 
 
 def _format_cluster_result(result: dict) -> str:
-    if "error" in result:
-        return _format_lookup_error(result)
-    lines = [f"{result['function']} is in cluster {result['cluster_id']} ({len(result['members'])} members):"]
-    lines.extend(f"  {m}" for m in result["members"])
-    return "\n".join(lines)
+    return callgraph.format_cluster_result(result)
 
 
 def _format_lookup_error(result: dict) -> str:
-    candidates = result.get("candidates") or []
-    message = result["error"]
-    if candidates:
-        return f"{message}, candidates: " + ", ".join(candidates)
-    return f"{message} (use a qualified name like 'search/engram.py::pattern_search_code')"
+    return callgraph.format_lookup_error(result)
 
 
 # ---------------------------------------------------------------------------

@@ -45,6 +45,7 @@ LLM calls only happen overnight for pattern extraction.
 | Repeating the same mistakes | Corrections are stored as persistent patterns |
 | Scattered knowledge across docs/issues/PRs | Mental models synthesize coherent context |
 | Agent wastes tokens exploring the codebase | CocoIndex front-loads semantic code context via recall |
+| "What breaks if I change this?" requires manual tracing | Call-graph tools answer blast radius, shortest path, and clustering directly |
 | No way to know if memory helps | Weekly trend metrics track corrections, rework, and productivity over time |
 
 ## Key features
@@ -57,6 +58,7 @@ LLM calls only happen overnight for pattern extraction.
 - **CocoIndex live sync** — docs, code, and transcripts watch for filesystem changes in real time; issues and PRs poll GitHub every 5 minutes. All four flows run concurrently as threads in a single launchd service
 - **Hybrid code search** — tree-sitter AST-aware chunking (via cocoindex's `RecursiveSplitter`) keeps chunk boundaries on function/type/block nodes instead of arbitrary character offsets; dense embeddings (pgvector) handle semantic queries while BM25 (tsvector + GIN) handles exact identifiers — results fused via Reciprocal Rank Fusion
 - **Structural pattern search** — tree-sitter by-example matching (cocoindex's `CodePattern`) answers "find code shaped like X" (e.g. every function matching a signature) as a distinct MCP tool per project, complementing (not replacing) hybrid search's "find code about X" and Serena's type-aware navigation (find_symbol/find_referencing_symbols/diagnostics) — see docs/COCOINDEX.md
+- **Call-graph extraction + clustering** — cross-file call graphs built from the same `CodePattern` infrastructure (no new tree-sitter dependency) answer relational questions `CodePattern` alone can't: blast radius ("what breaks if I change this"), shortest path between two functions, and Leiden-based clustering of related functions. Rolled out across every onboarded project (Python/TypeScript/Rust/Go), with a Postgres-backed cache for the one repo large enough to need it — see [docs/CALL_GRAPH_DESIGN.md](docs/CALL_GRAPH_DESIGN.md) for how it works and [docs/CALL_GRAPH_CLUSTERING.md](docs/CALL_GRAPH_CLUSTERING.md) for the findings behind it
 - **LSP-backed code intelligence** — [Serena](https://github.com/oraios/serena) is the default code-intelligence MCP backend across every onboarded project, wrapping each language's real LSP (`gopls`, `pyright`, `rust-analyzer`, `typescript-language-server`) behind one consistent tool surface, so agents get real symbol lookup/find-references/diagnostics instead of grepping for identifiers — see [docs/NEW_PROJECT_SETUP.md §7](docs/NEW_PROJECT_SETUP.md#7-choose-your-code-intelligence-backend) for setup and [docs/README.md's Division of Labor](docs/README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor) for how it differs from Hindsight/CocoIndex
 - **Self-cleaning** — nightly triage removes ephemeral, stale, and duplicate memories
 - **Self-evaluating** — weekly trend metrics (corrections/session, rework %, productivity density), exploration efficiency, ingestion coverage, data freshness
@@ -212,6 +214,8 @@ Key metrics to watch:
 | [Customizing the Rule](docs/INSTALL.md#customizing-the-rule) | Ready-made rules for Go, Python, Rust, TypeScript, or any stack |
 | [Architecture & Internals](docs/README.md) | Design decisions, knowledge graph, correction detection |
 | [CocoIndex Operations](docs/COCOINDEX.md) | Flow catalog, running modes, monitoring, troubleshooting |
+| [Call-Graph Design](docs/CALL_GRAPH_DESIGN.md) | How call-graph extraction, resolution, clustering, and caching actually work |
+| [Call-Graph Findings](docs/CALL_GRAPH_CLUSTERING.md) | Chronological spike + multi-org rollout findings, bugs found, precision measurements |
 | [Metrics & Monitoring](docs/METRICS.md) | Effectiveness tracking, proactive recall, triage, report interpretation |
 | [Effectiveness Dashboard](docs/DASHBOARD.md) | Daily metrics trend, auto-updated by nightly pipeline |
 | [Research Findings](docs/FINDINGS.md) | Empirical results, incidents, and lessons learned |

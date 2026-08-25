@@ -219,9 +219,12 @@ the full schema under CocoIndex's control.
 
 **Status: rolled out to all five onboarded projects (engram, koku,
 rhdh-plugins, praxis-proxy, dcm, kubernaut).** See
-`docs/CALL_GRAPH_CLUSTERING.md` for the full feasibility study, per-language
-findings, and Serena cross-check results; this is a short pointer plus the
-setup-relevant parts (caching, branch scoping), not a duplicate.
+[`docs/CALL_GRAPH_DESIGN.md`](CALL_GRAPH_DESIGN.md) for how the extraction/
+resolution/caching mechanism actually works, and
+`docs/CALL_GRAPH_CLUSTERING.md` for the chronological findings (per-language
+bugs found, precision measurements, Serena cross-check results, per-org
+rollout numbers); this section is a short pointer plus the setup-relevant
+parts (caching, branch scoping), not a duplicate of either.
 
 Structural pattern search above answers "find code shaped like X" within one
 file at a time. Every onboarded project's `*-search.py` additionally exposes

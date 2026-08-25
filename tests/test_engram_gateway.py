@@ -452,3 +452,129 @@ class TestBuildApp:
         response = client.get("/mcp/praxis-grid")
 
         assert response.status_code == 405
+
+
+class TestStdioSubprocessAdapterCallToolSerialization:
+    """2026-08-25: koku team hit a consistent (not transient) failure where
+    every call_tool through this adapter -- koku_code_search, find_symbol,
+    etc. -- failed client-side with a generic "backend is currently down"
+    even though the backend executed successfully and returned real data.
+    Root cause: `content.model_dump()` (no exclude_none) serializes the mcp
+    SDK's optional `annotations`/`meta` fields as explicit `null` rather
+    than omitting them, and MCP clients that validate content blocks
+    against the schema (which requires `annotations` to be a real object or
+    absent, never `null`) reject the whole result before the caller ever
+    sees the data."""
+
+    def test_call_tool_omits_none_valued_optional_fields_from_content(self, engram_gateway):
+        from mcp.types import TextContent
+
+        adapter = engram_gateway.StdioSubprocessAdapter(command="cmd", args=[])
+
+        class _FakeResult:
+            content = [TextContent(type="text", text="hello")]
+            isError = False
+
+        class _FakeSession:
+            async def call_tool(self, name, arguments):
+                return _FakeResult()
+
+        adapter._session = _FakeSession()  # bypasses _ensure_started's subprocess spawn
+
+        result = asyncio.run(adapter.call_tool("some_tool", {}))
+
+        assert result["content"] == [{"type": "text", "text": "hello"}]
+        assert "annotations" not in result["content"][0]
+        assert "meta" not in result["content"][0]
+
+
+class TestPrewarmStdioBackends:
+    """2026-08-25: praxis-grid got stuck showing 16 tools after a gateway
+    restart, even after the user restarted Cursor and disabled/re-enabled
+    the MCP server. Root cause: Cursor calls tools/list once per session and
+    caches the result, with no re-fetch trigger from this gateway -- so if
+    that one call races a cold Serena/cocoindex LSP startup, the client is
+    stuck with the degraded snapshot until a reconnect whose tools/list call
+    happens to land after the backend is already warm. Pre-warming at
+    startup closes that race window for the common case (a client connects
+    more than a few seconds after the gateway process starts)."""
+
+    def test_prewarms_every_stdio_backend_across_all_projects(self, engram_gateway):
+        stdio_a = engram_gateway.StdioSubprocessAdapter(command="cmd-a", args=[])
+        stdio_b = engram_gateway.StdioSubprocessAdapter(command="cmd-b", args=[])
+        http_like = FakeAdapter(tools=[_tool("x")])  # not a StdioSubprocessAdapter -- must be skipped
+
+        calls: list[str] = []
+
+        async def _fake_list_a():
+            calls.append("a")
+            return []
+
+        async def _fake_list_b():
+            calls.append("b")
+            return []
+
+        stdio_a.list_tools = _fake_list_a
+        stdio_b.list_tools = _fake_list_b
+
+        projects = {
+            "proj1": {"serena": stdio_a, "docs": http_like},
+            "proj2": {"cocoindex-code": stdio_b},
+        }
+
+        asyncio.run(engram_gateway._prewarm_stdio_backends(projects))
+
+        assert sorted(calls) == ["a", "b"]
+        assert http_like.list_calls == 0
+
+    def test_prewarm_failure_for_one_backend_does_not_raise(self, engram_gateway):
+        stdio_ok = engram_gateway.StdioSubprocessAdapter(command="cmd-ok", args=[])
+        stdio_broken = engram_gateway.StdioSubprocessAdapter(command="cmd-broken", args=[])
+
+        ok_calls: list[str] = []
+
+        async def _fake_list_ok():
+            ok_calls.append("ok")
+            return []
+
+        async def _fake_list_broken():
+            raise RuntimeError("cold LSP startup timed out")
+
+        stdio_ok.list_tools = _fake_list_ok
+        stdio_broken.list_tools = _fake_list_broken
+
+        projects = {"proj": {"good": stdio_ok, "bad": stdio_broken}}
+
+        # Must not raise -- a slow/broken backend shouldn't take down
+        # pre-warming (or the gateway) for every other project's backends.
+        asyncio.run(engram_gateway._prewarm_stdio_backends(projects))
+
+        assert ok_calls == ["ok"]
+
+    def test_build_app_schedules_prewarm_on_startup_without_blocking(self, engram_gateway):
+        import time
+
+        from starlette.testclient import TestClient
+
+        stdio = engram_gateway.StdioSubprocessAdapter(command="cmd", args=[])
+        warmed = {"done": False}
+
+        async def _fake_list_tools():
+            warmed["done"] = True
+            return []
+
+        stdio.list_tools = _fake_list_tools
+
+        app = engram_gateway.build_app(projects={"proj": {"serena": stdio}})
+
+        with TestClient(app) as client:
+            # Lifespan startup completes synchronously (TestClient waits for
+            # it), but the pre-warm task itself is merely *scheduled* there,
+            # not awaited to completion -- poll briefly for it to run.
+            deadline = time.monotonic() + 2.0
+            while not warmed["done"] and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert warmed["done"]
+            # And normal request handling still works while/after this runs.
+            response = client.get("/mcp/proj")
+            assert response.status_code == 405

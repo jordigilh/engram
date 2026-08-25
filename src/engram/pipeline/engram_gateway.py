@@ -456,15 +456,67 @@ class StdioSubprocessAdapter:
                 await self._restart()
                 result = await self._session.call_tool(name, arguments)
             return {
-                "content": [c.model_dump() if hasattr(c, "model_dump") else c for c in result.content],
+                # exclude_none=True matters: mcp SDK content models (TextContent
+                # etc.) have optional fields like `annotations`/`meta` that
+                # default to None, and a bare model_dump() serializes those as
+                # explicit `null` rather than omitting the key. Several MCP
+                # clients' schemas require `annotations` to be either a real
+                # object or absent -- `null` fails validation and the client
+                # discards the whole result before the caller ever sees the
+                # data, surfacing as a generic "backend is currently down"
+                # (see docs/findings/2026-08.md, 2026-08-25 entry).
+                "content": [c.model_dump(exclude_none=True) if hasattr(c, "model_dump") else c for c in result.content],
                 "isError": result.isError,
             }
+
+
+_prewarm_tasks: set[asyncio.Task] = set()
+
+
+async def _prewarm_stdio_backends(projects: dict[str, dict[str, BackendAdapter]]) -> None:
+    """Fire off a background `list_tools()` for every stdio backend (Serena,
+    cocoindex-code) right at gateway startup, without blocking the gateway
+    from accepting other traffic while these are still warming up.
+
+    Why this exists: most MCP clients (Cursor included) call `tools/list`
+    exactly once per session, right after `initialize`, and cache the
+    result for the life of that connection -- there's no server-initiated
+    `notifications/tools/list_changed` push from this gateway to make a
+    client re-fetch later. So if that one `tools/list` call happens to race
+    a cold LSP/language-server startup (which can take several seconds) and
+    gets cancelled or returns a reduced tool set, the client is stuck with
+    that degraded snapshot until its *next* fresh reconnect -- no amount of
+    "disable/enable" or "restart Cursor" helps if the reconnect's own
+    `tools/list` call lands in the same race window again. Pre-warming here
+    means that by the time any real client connects (almost always more
+    than a few seconds after this process starts), the subprocess is
+    already up and `list_tools()` returns immediately. See
+    docs/findings/2026-08.md, 2026-08-25 entry (`praxis-grid` stuck on a
+    16-tool snapshot from exactly this race, right after a gateway restart)."""
+
+    async def _warm_one(label: str, adapter: BackendAdapter) -> None:
+        try:
+            await adapter.list_tools()
+            log.info("pre-warmed backend %r", label)
+        except Exception:
+            log.warning(
+                "pre-warm failed for backend %r -- will retry lazily on first real request", label, exc_info=True
+            )
+
+    for project, backends in projects.items():
+        for key, adapter in backends.items():
+            if isinstance(adapter, StdioSubprocessAdapter):
+                task = asyncio.create_task(_warm_one(f"{project}/{key}", adapter))
+                _prewarm_tasks.add(task)
+                task.add_done_callback(_prewarm_tasks.discard)
 
 
 def build_app(projects: dict[str, dict[str, BackendAdapter]]):
     """Build the Starlette app: one route per project, each aggregating
     that project's own set of backend adapters. `projects` maps project
     name -> {backend_key: BackendAdapter}."""
+    from contextlib import asynccontextmanager
+
     from starlette.applications import Starlette
     from starlette.requests import Request
     from starlette.responses import Response
@@ -474,6 +526,14 @@ def build_app(projects: dict[str, dict[str, BackendAdapter]]):
     # tools/list, refreshed whenever a new tools/list comes in -- backends
     # that flap back up are picked up on the next list without a restart.
     state: dict[str, dict] = {name: {"catalog": {}, "backends": backends} for name, backends in projects.items()}
+
+    @asynccontextmanager
+    async def _lifespan(_app):
+        # Scheduled, not awaited-to-completion: returns almost immediately
+        # so the gateway can start accepting requests for other projects
+        # while these stdio backends warm up in the background.
+        asyncio.create_task(_prewarm_stdio_backends(projects))
+        yield
 
     def _make_endpoint(project: str):
         async def endpoint(request: Request) -> Response:
@@ -531,7 +591,7 @@ def build_app(projects: dict[str, dict[str, BackendAdapter]]):
         return endpoint
 
     routes = [Route(f"/mcp/{project}", _make_endpoint(project), methods=["GET", "POST", "DELETE"]) for project in projects]
-    return Starlette(routes=routes)
+    return Starlette(routes=routes, lifespan=_lifespan)
 
 
 # ---------------------------------------------------------------------------

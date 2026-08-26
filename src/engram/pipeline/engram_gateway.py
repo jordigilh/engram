@@ -144,6 +144,75 @@ def route_call(tool_name: str, catalog: dict[str, tuple[str, str]]) -> tuple[str
     return catalog.get(tool_name)
 
 
+# Tools rarely exercised by the documented recall/retain/reflect/mental-model
+# workflow (hindsight-memory.mdc) or by Serena's symbol/search/edit tools
+# (local-mcp-tool-preference.mdc) get dropped from the aggregated catalog
+# entirely, not just hidden client-side -- every extra tool definition costs
+# context-window budget and counts against Cursor's own active-tool ceiling.
+# A single hindsight-api backend's raw catalog is 29 tools (mostly bank/
+# document/operation/directive administration never used day-to-day); a repo
+# wired to BOTH hindsight-docs and hindsight-issues plus serena's 27 tools
+# (kubernaut-family) hit 87 total -- more than double Cursor's ~40-tool
+# ceiling, and got stuck permanently `Disabled` no matter how many times it
+# was re-enabled (see docs/findings/2026-08.md, 2026-08-22 "MCP shows
+# Disabled, root cause: tool-count ceiling" entry). Trimming every hindsight-
+# shaped and serena backend to its actually-used subset keeps every onboarded
+# repo well under budget without losing any tool actually exercised in
+# practice; the dropped administrative tools remain reachable via a direct
+# curl against hindsight-api / the serena daemon if ever genuinely needed.
+RELEVANT_HINDSIGHT_TOOLS = frozenset(
+    {
+        "retain",
+        "sync_retain",
+        "recall",
+        "reflect",
+        "list_mental_models",
+        "get_mental_model",
+        "refresh_mental_model",
+    }
+)
+
+RELEVANT_SERENA_TOOLS = frozenset(
+    {
+        "replace_content",
+        "replace_in_files",
+        "replace_symbol_body",
+        "insert_after_symbol",
+        "insert_before_symbol",
+        "search_for_pattern",
+        "get_symbols_overview",
+        "find_symbol",
+        "find_referencing_symbols",
+        "find_implementations",
+        "find_declaration",
+        "get_diagnostics_for_file",
+        "rename_symbol",
+        "safe_delete_symbol",
+        "activate_project",
+        "list_queryable_projects",
+        "query_project",
+    }
+)
+
+# Backends with no entry here (code/cocoindex, and any future family) pass
+# through unfiltered -- their catalogs are already small (2 tools today).
+RELEVANT_TOOLS_BY_BACKEND: dict[str, frozenset[str]] = {
+    "docs": RELEVANT_HINDSIGHT_TOOLS,
+    "issues": RELEVANT_HINDSIGHT_TOOLS,
+    "serena": RELEVANT_SERENA_TOOLS,
+}
+
+
+def filter_relevant_tools(backend_key: str, tools: list[dict]) -> list[dict]:
+    """Drop rarely-used administrative tools for backends known to expose an
+    oversized catalog. See `RELEVANT_TOOLS_BY_BACKEND`'s module-level comment
+    for why this exists."""
+    allowed = RELEVANT_TOOLS_BY_BACKEND.get(backend_key)
+    if allowed is None:
+        return tools
+    return [tool for tool in tools if tool["name"] in allowed]
+
+
 async def _fetch_backend_tools(backend_key: str, adapter: BackendAdapter) -> tuple[str, list[dict] | Exception]:
     try:
         tools = await adapter.list_tools()
@@ -168,7 +237,7 @@ async def aggregate_tools_list(
             errors[backend_key] = str(outcome)
             log.warning("backend %r failed to list tools: %s", backend_key, outcome)
             continue
-        per_backend_tools[backend_key] = outcome
+        per_backend_tools[backend_key] = filter_relevant_tools(backend_key, outcome)
 
     catalog, tool_defs = build_catalog(per_backend_tools)
     return tool_defs, catalog, errors
@@ -387,15 +456,67 @@ class StdioSubprocessAdapter:
                 await self._restart()
                 result = await self._session.call_tool(name, arguments)
             return {
-                "content": [c.model_dump() if hasattr(c, "model_dump") else c for c in result.content],
+                # exclude_none=True matters: mcp SDK content models (TextContent
+                # etc.) have optional fields like `annotations`/`meta` that
+                # default to None, and a bare model_dump() serializes those as
+                # explicit `null` rather than omitting the key. Several MCP
+                # clients' schemas require `annotations` to be either a real
+                # object or absent -- `null` fails validation and the client
+                # discards the whole result before the caller ever sees the
+                # data, surfacing as a generic "backend is currently down"
+                # (see docs/findings/2026-08.md, 2026-08-25 entry).
+                "content": [c.model_dump(exclude_none=True) if hasattr(c, "model_dump") else c for c in result.content],
                 "isError": result.isError,
             }
+
+
+_prewarm_tasks: set[asyncio.Task] = set()
+
+
+async def _prewarm_stdio_backends(projects: dict[str, dict[str, BackendAdapter]]) -> None:
+    """Fire off a background `list_tools()` for every stdio backend (Serena,
+    cocoindex-code) right at gateway startup, without blocking the gateway
+    from accepting other traffic while these are still warming up.
+
+    Why this exists: most MCP clients (Cursor included) call `tools/list`
+    exactly once per session, right after `initialize`, and cache the
+    result for the life of that connection -- there's no server-initiated
+    `notifications/tools/list_changed` push from this gateway to make a
+    client re-fetch later. So if that one `tools/list` call happens to race
+    a cold LSP/language-server startup (which can take several seconds) and
+    gets cancelled or returns a reduced tool set, the client is stuck with
+    that degraded snapshot until its *next* fresh reconnect -- no amount of
+    "disable/enable" or "restart Cursor" helps if the reconnect's own
+    `tools/list` call lands in the same race window again. Pre-warming here
+    means that by the time any real client connects (almost always more
+    than a few seconds after this process starts), the subprocess is
+    already up and `list_tools()` returns immediately. See
+    docs/findings/2026-08.md, 2026-08-25 entry (`praxis-grid` stuck on a
+    16-tool snapshot from exactly this race, right after a gateway restart)."""
+
+    async def _warm_one(label: str, adapter: BackendAdapter) -> None:
+        try:
+            await adapter.list_tools()
+            log.info("pre-warmed backend %r", label)
+        except Exception:
+            log.warning(
+                "pre-warm failed for backend %r -- will retry lazily on first real request", label, exc_info=True
+            )
+
+    for project, backends in projects.items():
+        for key, adapter in backends.items():
+            if isinstance(adapter, StdioSubprocessAdapter):
+                task = asyncio.create_task(_warm_one(f"{project}/{key}", adapter))
+                _prewarm_tasks.add(task)
+                task.add_done_callback(_prewarm_tasks.discard)
 
 
 def build_app(projects: dict[str, dict[str, BackendAdapter]]):
     """Build the Starlette app: one route per project, each aggregating
     that project's own set of backend adapters. `projects` maps project
     name -> {backend_key: BackendAdapter}."""
+    from contextlib import asynccontextmanager
+
     from starlette.applications import Starlette
     from starlette.requests import Request
     from starlette.responses import Response
@@ -405,6 +526,14 @@ def build_app(projects: dict[str, dict[str, BackendAdapter]]):
     # tools/list, refreshed whenever a new tools/list comes in -- backends
     # that flap back up are picked up on the next list without a restart.
     state: dict[str, dict] = {name: {"catalog": {}, "backends": backends} for name, backends in projects.items()}
+
+    @asynccontextmanager
+    async def _lifespan(_app):
+        # Scheduled, not awaited-to-completion: returns almost immediately
+        # so the gateway can start accepting requests for other projects
+        # while these stdio backends warm up in the background.
+        asyncio.create_task(_prewarm_stdio_backends(projects))
+        yield
 
     def _make_endpoint(project: str):
         async def endpoint(request: Request) -> Response:
@@ -462,7 +591,7 @@ def build_app(projects: dict[str, dict[str, BackendAdapter]]):
         return endpoint
 
     routes = [Route(f"/mcp/{project}", _make_endpoint(project), methods=["GET", "POST", "DELETE"]) for project in projects]
-    return Starlette(routes=routes)
+    return Starlette(routes=routes, lifespan=_lifespan)
 
 
 # ---------------------------------------------------------------------------
@@ -510,7 +639,7 @@ PRAXIS_REPOS_WITH_SERENA = [
     "praxis-operator",
     "praxis-policy",
 ]
-PRAXIS_REPOS_WITHOUT_SERENA = ["praxis-conventions", "praxis-experiments", "praxis-proxy.github.io"]
+PRAXIS_REPOS_WITHOUT_SERENA = ["praxis-conventions", "praxis-enhancements", "praxis-experiments", "praxis-proxy.github.io"]
 
 
 def _hindsight(bank: str) -> dict:

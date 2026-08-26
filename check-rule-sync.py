@@ -85,7 +85,7 @@ RULE_PAIRS: dict[str, tuple[Path, Path]] = {
         HOME / "go" / "src" / "github.com" / "project-koku" / "koku-service-operator" / ".cursor" / "rules" / "hindsight-memory.mdc",
     ),
     # praxis: primary checkout only (praxis-grid, the flagship active-dev
-    # repo). The other 9 praxis-* checkouts get the same deployed content
+    # repo). The other 10 praxis-* checkouts get the same deployed content
     # copied manually -- not worth a RULE_PAIRS entry each, same rationale
     # as koku's comment above.
     "praxis": (

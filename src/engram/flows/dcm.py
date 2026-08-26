@@ -92,6 +92,19 @@ DCM_SHARED_WORKFLOWS_DIR = pathlib.Path(os.environ.get(
     "DCM_SHARED_WORKFLOWS_DIR",
     os.path.expanduser("~/go/src/github.com/dcm-project/shared-workflows"),
 ))
+# osac-project/osac (the upstream OSAC backend osac-service-provider talks
+# to -- distinct org, distinct repo, read-only for us) is folded into this
+# same dcm project rather than getting its own PROJECT_CONFIGS entry, same
+# pattern as koku-service-operator folding into koku (see docs/FINDINGS.md).
+# Points at the watch-mirror worktree (see watch-mirrors-config.sh), not a
+# live dev clone -- this repo is never locally edited, so its only source
+# of freshness is the existing 10-minute fetch+reset-hard refresh cycle
+# (refresh-watch-mirrors.sh), same convention as kubernaut.py/engram.py's
+# ~/.hindsight/watch/<repo> dirs.
+DCM_OSAC_DIR = pathlib.Path(os.environ.get(
+    "DCM_OSAC_DIR",
+    os.path.expanduser("~/.hindsight/watch/osac"),
+))
 
 ISSUES_REPOS = os.environ.get(
     "DCM_ISSUES_REPOS",
@@ -100,7 +113,8 @@ ISSUES_REPOS = os.environ.get(
     "dcm-project/acm-cluster-service-provider,dcm-project/three-tier-app-demo-service-provider,"
     "dcm-project/osac-service-provider,"
     "dcm-project/utilities,dcm-project/dcm-project.github.io,dcm-project/enhancements,"
-    "dcm-project/shared-workflows,dcm-project/quadlet-deploy",
+    "dcm-project/shared-workflows,dcm-project/quadlet-deploy,"
+    "osac-project/osac",
 ).split(",")
 ISSUES_POLL_INTERVAL = int(os.environ.get("DCM_ISSUES_POLL_SECONDS", "300"))
 
@@ -265,6 +279,7 @@ async def docs_main(
     acm_cluster_sp_dir: pathlib.Path,
     k8s_container_sp_dir: pathlib.Path,
     utilities_dir: pathlib.Path,
+    osac_dir: pathlib.Path,
 ) -> None:
     architecture_docs = localfs.walk_dir(
         architecture_dir,
@@ -401,6 +416,25 @@ async def docs_main(
         utilities_dir, "dcm-utilities",
     )
 
+    osac_docs = localfs.walk_dir(
+        osac_dir,
+        recursive=True,
+        path_matcher=PatternFilePathMatcher(
+            included_patterns=[
+                "README.md",
+                "AGENTS.md",
+                "CLAUDE.md",
+                "docs/**/*.md",
+            ],
+        ),
+        live=True,
+    )
+    await coco.mount_each(
+        coco.component_subpath("osac-docs"),
+        process_doc_file, osac_docs.items(),
+        osac_dir, "dcm-osac",
+    )
+
 
 docs_app = coco.App(
     "dcm-docs", docs_main,
@@ -412,6 +446,7 @@ docs_app = coco.App(
     acm_cluster_sp_dir=DCM_ACM_CLUSTER_SP_DIR,
     k8s_container_sp_dir=DCM_K8S_CONTAINER_SP_DIR,
     utilities_dir=DCM_UTILITIES_DIR,
+    osac_dir=DCM_OSAC_DIR,
 )
 
 
@@ -605,6 +640,7 @@ async def code_main(
     osac_sp_dir: pathlib.Path,
     utilities_dir: pathlib.Path,
     shared_workflows_dir: pathlib.Path,
+    osac_dir: pathlib.Path,
 ) -> None:
     from cocoindex.connectors import postgres
 
@@ -673,6 +709,12 @@ async def code_main(
         (three_tier_sp_dir, "dcm-three-tier-sp"),
         (osac_sp_dir, "dcm-osac-sp"),
         (utilities_dir, "dcm-utilities"),
+        # osac-project/osac (upstream OSAC backend, read-only, folded into
+        # dcm -- see DCM_OSAC_DIR comment above). One walk over the monorepo
+        # root picks up every Go submodule (fulfillment-service,
+        # osac-operator, bare-metal-fulfillment-operator, osac-csi-driver,
+        # osac-metering) in one pass.
+        (osac_dir, "dcm-osac"),
     ]
 
     for repo_dir, repo_tag in go_repos:
@@ -717,6 +759,7 @@ code_app = coco.App(
     osac_sp_dir=DCM_OSAC_SP_DIR,
     utilities_dir=DCM_UTILITIES_DIR,
     shared_workflows_dir=DCM_SHARED_WORKFLOWS_DIR,
+    osac_dir=DCM_OSAC_DIR,
 )
 
 
@@ -799,6 +842,7 @@ def main():
     log.info("  OSAC SP dir:         %s", DCM_OSAC_SP_DIR)
     log.info("  Utilities dir:       %s", DCM_UTILITIES_DIR)
     log.info("  Shared workflows:    %s", DCM_SHARED_WORKFLOWS_DIR)
+    log.info("  OSAC dir:            %s", DCM_OSAC_DIR)
     log.info("  Issues repos:        %s", ", ".join(ISSUES_REPOS))
     log.info("  Hindsight URL:       %s", HINDSIGHT_URL)
     log.info("  CocoIndex DB:        %s", COCOINDEX_DB)

@@ -213,3 +213,88 @@ class TestMainRouting:
         koku_search.main()
 
         assert calls == ["mcp"]
+
+    def test_blast_radius_flag_dispatches_to_its_cli_runner(self, koku_search, monkeypatch):
+        calls = []
+        monkeypatch.setattr(koku_search.sys, "argv", [
+            "koku-cocoindex-search.py", "--blast-radius", "get_report",
+        ])
+        monkeypatch.setattr(koku_search, "_run_cli_blast_radius", lambda *a, **k: calls.append(("blast", a, k)))
+        monkeypatch.setattr(koku_search, "_run_cli_query", lambda *a, **k: calls.append("query"))
+        monkeypatch.setattr(koku_search, "_run_mcp_server", lambda *a, **k: calls.append("mcp"))
+
+        koku_search.main()
+
+        assert len(calls) == 1
+        assert calls[0][0] == "blast"
+        assert calls[0][1] == ("get_report",)
+
+    def test_shortest_path_flag_dispatches_with_both_positional_args(self, koku_search, monkeypatch):
+        calls = []
+        monkeypatch.setattr(koku_search.sys, "argv", [
+            "koku-cocoindex-search.py", "--shortest-path", "a", "b",
+        ])
+        monkeypatch.setattr(koku_search, "_run_cli_shortest_path", lambda *a, **k: calls.append(a))
+        monkeypatch.setattr(koku_search, "_run_mcp_server", lambda *a, **k: calls.append("mcp"))
+
+        koku_search.main()
+
+        assert calls == [("a", "b")]
+
+    def test_cluster_flag_dispatches_to_its_cli_runner(self, koku_search, monkeypatch):
+        calls = []
+        monkeypatch.setattr(koku_search.sys, "argv", [
+            "koku-cocoindex-search.py", "--cluster", "get_report",
+        ])
+        monkeypatch.setattr(koku_search, "_run_cli_cluster", lambda *a, **k: calls.append(a))
+        monkeypatch.setattr(koku_search, "_run_mcp_server", lambda *a, **k: calls.append("mcp"))
+
+        koku_search.main()
+
+        assert calls == [("get_report",)]
+
+
+class TestCallGraphWiring:
+    """These exercise the koku.py <-> callgraph.py plumbing itself (root
+    selection, delegation), not call-graph correctness -- that's already
+    covered exhaustively in tests/test_callgraph.py against the shared
+    implementation every org reuses."""
+
+    def _write_sample_repo(self, tmp_path, monkeypatch, koku_search):
+        (tmp_path / "report.py").write_text(
+            "def helper():\n"
+            "    return 1\n"
+            "\n"
+            "def get_report():\n"
+            "    return helper()\n"
+        )
+        monkeypatch.setattr(koku_search, "_PATTERN_SEARCH_ROOTS", [
+            ("koku", tmp_path, ["**/*.py"], []),
+        ])
+
+    def test_blast_radius_builds_graph_from_the_configured_root(self, koku_search, monkeypatch, tmp_path):
+        self._write_sample_repo(tmp_path, monkeypatch, koku_search)
+        result = koku_search.call_graph_blast_radius("helper")
+        assert result["function"] == "report.py::helper"
+        assert result["callers_by_depth"] == [["report.py::get_report"]]
+
+    def test_shortest_path_builds_graph_from_the_configured_root(self, koku_search, monkeypatch, tmp_path):
+        self._write_sample_repo(tmp_path, monkeypatch, koku_search)
+        result = koku_search.call_graph_shortest_path("get_report", "helper")
+        assert result["path"] == ["report.py::get_report", "report.py::helper"]
+
+    def test_get_cluster_builds_graph_from_the_configured_root(self, koku_search, monkeypatch, tmp_path):
+        self._write_sample_repo(tmp_path, monkeypatch, koku_search)
+        result = koku_search.call_graph_get_cluster("helper")
+        assert set(result["members"]) == {"report.py::helper", "report.py::get_report"}
+
+    def test_unknown_function_returns_error_dict(self, koku_search, monkeypatch, tmp_path):
+        self._write_sample_repo(tmp_path, monkeypatch, koku_search)
+        result = koku_search.call_graph_blast_radius("does_not_exist")
+        assert "error" in result
+
+    def test_format_functions_delegate_to_shared_callgraph_formatters(self, koku_search):
+        error_result = {"error": "boom", "candidates": []}
+        assert koku_search._format_blast_radius_result(error_result) == koku_search.callgraph.format_blast_radius_result(error_result)
+        assert koku_search._format_shortest_path_result(error_result) == koku_search.callgraph.format_shortest_path_result(error_result)
+        assert koku_search._format_cluster_result(error_result) == koku_search.callgraph.format_cluster_result(error_result)

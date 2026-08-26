@@ -485,6 +485,17 @@ You should see all four apps starting (docs, code, transcripts, issues) and
 issue poll cycles completing with the full count of issues + PRs. See
 [CocoIndex Operations](COCOINDEX.md) for monitoring and troubleshooting details.
 
+> **Call-graph tools**: every onboarded project's search MCP server also
+> exposes `--blast-radius`/`--shortest-path`/`--cluster` (structural
+> call-graph queries) alongside `--query`/`--pattern` above -- no extra setup
+> needed, they reuse the same live checkout. kubernaut specifically caches
+> its (larger, slower-to-build) graph in Postgres rather than rebuilding on
+> every call, using the `COCOINDEX_PG_URL` connection already configured
+> above -- no new service to install. See
+> [CocoIndex Operations](COCOINDEX.md#call-graph-queries) for why Postgres
+> was chosen over a dedicated cache service, and for kubernaut's
+> `main`/`release-vX.Y` branch-scoping behavior.
+
 > **Onboarding additional projects**: the steps above cover the original
 > kubernaut project's `engram.flows.kubernaut` / `engram.search.kubernaut`
 > pair. Each additional onboarded project gets its own

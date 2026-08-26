@@ -170,21 +170,64 @@ Hindsight, CocoIndex, and Serena sit at three different layers and their
 capabilities barely overlap — they are complementary, not substitutable for
 one another. The one-line version: **Hindsight remembers** (distilled facts
 and decisions across sessions), **CocoIndex finds** (search by meaning or by
-structural shape, kept fresh automatically), and **Serena knows** (exact,
-type-resolved facts about the code as it exists *right now*, via the real
-compiler/language server — no memory, no search-by-concept, just ground
-truth for a symbol you already know the name or position of).
+structural shape, kept fresh automatically), and **Serena knows and edits**
+(exact, type-resolved facts about the code as it exists *right now*, via the
+real compiler/language server, plus refactors applied through that same
+compiler-level understanding — no memory, no search-by-concept, just ground
+truth and safe edits for a symbol you already know the name or position of).
+
+None can substitute for the other two — each closes a different gap in what
+makes an agent's context both fresh and correct:
+
+- **CocoIndex — keeps the corpus fresh, continuously.** Docs, code,
+  issues/PRs, and transcripts all drift constantly under a real repo;
+  CocoIndex notices immediately (filesystem watching for docs/code/
+  transcripts, 5-minute GitHub polling for issues/PRs) instead of waiting
+  for a nightly batch. For docs/issues/transcripts, it hands what changed to
+  Hindsight's `retain` API, so distilled memory is never far behind the
+  source. For code, it's fully self-contained — owns the `code-index`
+  pgvector table and serves hybrid search, structural pattern search, and
+  call-graph extraction/clustering directly. No LLM anywhere in this layer.
+- **Hindsight — remembers, synthesizes, and forgets on purpose.** Raw facts
+  (many arriving fresh via CocoIndex) are worth little on their own —
+  Hindsight turns a messy correction exchange into a durable, generalized
+  lesson (`retain`, Haiku), synthesizes many such facts into one coherent
+  mental model (`reflect`, Sonnet), detects when a new fact contradicts
+  something already stored, and prunes ephemeral/stale/duplicate noise
+  nightly. The only layer with any LLM involvement, and the only one
+  reasoning across sessions rather than answering one live query.
+- **Serena — knows and safely edits, live and exact.** Neither of the above
+  has real compiler-level understanding of code — Serena does, via each
+  language's actual LSP (`gopls`/`pyright`/`rust-analyzer`/
+  `typescript-language-server`) behind one consistent, language-agnostic
+  tool surface. Type-resolved certainty instead of an embedding's
+  approximation, and the only one of the three that can safely mutate code
+  at all (`rename_symbol`/`replace_symbol_body`, applied through that same
+  compiler-level understanding — real references update correctly,
+  unrelated same-named matches are left alone). Fully independent of the
+  other two: no ingestion step, no stored index, always live against
+  whatever's on disk right now.
+- **Together**: an accurate review or a well-grounded new feature needs all
+  three at once — Hindsight supplies *what was decided and why* (so the
+  agent doesn't contradict or repeat itself), CocoIndex supplies *what's
+  actually in the repo right now* (so it isn't reasoning from a stale
+  snapshot), and Serena supplies *exact ground truth and safe edits* for
+  whatever specific symbol is in play. Removing any one doesn't just weaken
+  the result — it removes a category of correctness the other two can't
+  provide.
 
 | Capability | Hindsight | CocoIndex | Serena |
 |---|---|---|---|
-| **Core job** | Memory: judge what's worth remembering, store it, reason about it, serve it back | Ingestion + search: detect what changed at the source, keep the index fresh, answer "about X" (semantic) and "shaped like X" (structural) queries | Code intelligence: real symbol lookup/find-references/diagnostics via the language's actual LSP, anchored to a known symbol or file position |
+| **Core job** | Memory: judge what's worth remembering, store it, reason about it, serve it back | Ingestion + search: detect what changed at the source, keep the index fresh, answer "about X" (semantic) and "shaped like X" (structural) queries | Code intelligence: real symbol lookup/find-references/diagnostics *and* semantic refactoring, via the language's actual LSP, anchored to a known symbol or file position |
 | **LLM involved** | Yes — Haiku extracts durable facts from raw windows (`retain`), Sonnet synthesizes mental models (`reflect`) | No — pure local embeddings (`all-MiniLM-L6-v2`) + tree-sitter parsing, zero LLM cost | No — delegates entirely to the LSP (`gopls`/`pyright`/`rust-analyzer`/`typescript-language-server`), zero LLM cost |
 | **Storage it owns** | `cursor-memory`, `kubernaut-docs`, `kubernaut-issues` banks (its own schema/API) | `code-index` pgvector table only (self-managed table in the same Postgres instance) | None persisted — no index, no database; per-session LSP process state only (`--add-mode no-memories` disables even Serena's own optional memory-notes feature, see `docs/findings/2026-08.md`'s 2026-08-21 entry) |
 | **Retrieval it serves** | `recall` — semantic vector search + local reranker over distilled facts | Hybrid dense + BM25 (RRF fusion) for "about X"; `CodePattern` structural by-example matching for "shaped like X" | `find_symbol` / `find_referencing_symbols` / `get_symbols_overview` / diagnostics — type-resolved, exact; **cannot** search by free-text concept or by shape at all |
+| **Edits it can perform** | None — read/reason/store only, no code mutation | None — indexing/search only, no code mutation | `rename_symbol` / `replace_symbol_body` — applied via the compiler's own understanding of the code, not text search-replace, so every real reference updates correctly and an unrelated same-named match in a different scope is never touched. The only one of the three that can safely mutate code at all |
 | **Higher-order reasoning** | Mental models (synthesizes many facts into a coherent doc), contradiction detection/resolution, project tagging | None — it doesn't synthesize or judge, it just chunks and indexes | None — no synthesis; every answer is a live fact from the compiler/LSP, nothing remembered between calls |
 | **Freshness mechanism** | None built-in — needs something to call `retain` (nightly batch or CocoIndex) | File-watching / 5-min polling — the reason docs/issues/code went from nightly-batch to sub-hour/sub-minute fresh | Always live by construction — queries the real LSP against the current checkout on every call, so there's no index to go stale (trade-off: slower per-call on cold cache, and only as correct as what's actually on disk right now) |
-| **Query starting point** | Free-text query (semantic) | Free-text query (semantic) or a shape/pattern (structural) | A **known** symbol name or file/line position — cannot answer "find code about rate limiting," only "what is/references/implements *this specific thing*" |
+| **Query starting point** | Free-text query (semantic) | Free-text query (semantic) or a shape/pattern (structural) | A **known** symbol name or file/line position — cannot answer "find code about rate limiting," only "what is/references/implements/should-become *this specific thing*" |
 | **Code-aware chunking / resolution** | None (would chunk by paragraph/token count) | Tree-sitter AST parsing — chunks by function/type/method boundary, syntactic only (no type resolution) | Full type resolution via the real compiler/LSP — the only one of the three that understands imports, generics, and interface satisfaction, not just syntax |
+| **Language coverage** | Language-agnostic — banks are plain text/facts, no code-shape awareness at all | Language-agnostic where CocoIndex ships a tree-sitter grammar (Python/TypeScript/Rust/Go here) | Language-agnostic by construction — one consistent tool surface regardless of which real LSP backs it (`gopls`/`pyright`/`rust-analyzer`/`typescript-language-server`); adding a new language means adding an LSP, not new Serena logic |
 
 **Relationship, not overlap**: for three of CocoIndex's four flows (docs, issues,
 transcripts), CocoIndex is purely the ingestion/freshness layer — it detects a
@@ -244,9 +287,10 @@ Remove Hindsight and CocoIndex still works for code search, but
 `cursor-memory`/docs/issues lose all LLM-based judgment, becoming a dumb,
 ever-growing chunk store with no forgetting, synthesis, or contradiction
 handling. Remove Serena and both Hindsight and CocoIndex keep working exactly
-as before — but the agent loses type-aware navigation and is back to
-grep/glob plus approximate semantic search for anything requiring real
-type/reference resolution.
+as before — but the agent loses type-aware navigation and safe, compiler-
+verified refactoring, falling back to grep/glob plus approximate semantic
+search for lookups and to text search-replace (with all its false-positive/
+missed-reference risk) for renames and edits.
 
 ### Security Boundary
 

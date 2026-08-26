@@ -28,7 +28,7 @@ from typing import Any
 # `engram` resolves as a top-level package rather than needing this file to
 # be run via `-m`/an installed console script (not yet true in this repo).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
-from engram import chunking  # noqa: E402
+from engram import callgraph, chunking  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,14 +49,16 @@ ENGRAM_REPO_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_REPO_DIR", os.path.expanduser("~/.hindsight/watch/engram"),
 ))
 
+_EXCLUDED_PY_PATTERNS = [
+    "**/__pycache__/**", "**/.pytest_cache/**", "**/.git/**",
+    "**/venv/**", "**/.venv/**", "**/node_modules/**",
+]
+
 # (repo_tag, root, included_patterns, excluded_patterns) -- mirrors
 # engram-cocoindex-flows.py's localfs.walk_dir(path_matcher=
 # PatternFilePathMatcher(...)) call exactly.
 _PATTERN_SEARCH_ROOTS = [
-    ("engram", ENGRAM_REPO_DIR, ["**/*.py"], [
-        "**/__pycache__/**", "**/.pytest_cache/**", "**/.git/**",
-        "**/venv/**", "**/node_modules/**",
-    ]),
+    ("engram", ENGRAM_REPO_DIR, ["**/*.py"], _EXCLUDED_PY_PATTERNS),
 ]
 
 _model = None
@@ -248,6 +250,62 @@ def _format_pattern_results(pattern: str, language: str, results: list[dict]) ->
 
 
 # ---------------------------------------------------------------------------
+# Call-graph queries (spike -- see docs/CALL_GRAPH_CLUSTERING.md, issue #43)
+# ---------------------------------------------------------------------------
+#
+# Thin wrappers around callgraph.py's generic multi-org query/format layer
+# (Phase 0 of the rollout -- see docs/CALL_GRAPH_CLUSTERING.md): this module
+# only supplies *which* root/language to build from. No behavior change from
+# when this logic lived here directly.
+
+def _build_graph_with_timing():
+    return callgraph.build_call_graph_with_stats(
+        ENGRAM_REPO_DIR, included=["**/*.py"], excluded=_EXCLUDED_PY_PATTERNS, language="python", logger=log,
+    )
+
+
+def call_graph_blast_radius(function: str, depth: int = 2) -> dict[str, Any]:
+    """Who (transitively) calls `function`, up to `depth` hops -- "what
+    breaks if I change this." See docs/CALL_GRAPH_CLUSTERING.md for the
+    accuracy ceiling (name-based resolution, no type info)."""
+    graph = _build_graph_with_timing()
+    return callgraph.query_blast_radius(graph, function, depth=depth)
+
+
+def call_graph_shortest_path(source: str, target: str) -> dict[str, Any]:
+    """Does `source` ever reach `target` through a chain of calls, and how."""
+    graph = _build_graph_with_timing()
+    return callgraph.query_shortest_path(graph, source, target)
+
+
+def call_graph_get_cluster(function: str) -> dict[str, Any]:
+    """Which Leiden community `function` belongs to, and its other members.
+
+    Clustering quality depends entirely on the underlying graph's structure:
+    a small, centralized codebase may legitimately produce one dominant
+    cluster or many singletons -- that reflects the codebase, not a broken
+    clustering step (see docs/CALL_GRAPH_CLUSTERING.md)."""
+    graph = _build_graph_with_timing()
+    return callgraph.query_get_cluster(graph, function)
+
+
+def _format_blast_radius_result(result: dict) -> str:
+    return callgraph.format_blast_radius_result(result)
+
+
+def _format_shortest_path_result(result: dict) -> str:
+    return callgraph.format_shortest_path_result(result)
+
+
+def _format_cluster_result(result: dict) -> str:
+    return callgraph.format_cluster_result(result)
+
+
+def _format_lookup_error(result: dict) -> str:
+    return callgraph.format_lookup_error(result)
+
+
+# ---------------------------------------------------------------------------
 # MCP server
 # ---------------------------------------------------------------------------
 
@@ -295,6 +353,48 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8890, transport: str = 
         results = pattern_search_code(pattern, language, limit=min(limit, 20))
         return _format_pattern_results(pattern, language, results)
 
+    @mcp.tool()
+    def engram_call_graph_blast_radius(function: str, depth: int = 2) -> str:
+        """What (transitively) calls `function` in the Engram tooling codebase,
+        up to `depth` hops -- "what breaks if I change this."
+
+        `function` may be a bare name ("pattern_search_code") if unambiguous,
+        or a qualified name ("search/engram.py::pattern_search_code").
+
+        SPIKE, engram-only (docs/CALL_GRAPH_CLUSTERING.md, issue #43): call
+        resolution is purely name-based (no type info), so common method
+        names shared across unrelated functions can produce false-positive
+        edges, and dynamic dispatch/external calls can't be seen at all.
+        Rebuilds the call graph fresh on every call (no persisted index).
+        """
+        result = call_graph_blast_radius(function, depth=depth)
+        return _format_blast_radius_result(result)
+
+    @mcp.tool()
+    def engram_call_graph_shortest_path(source: str, target: str) -> str:
+        """Does `source` ever reach `target` through a chain of calls in the
+        Engram tooling codebase, and how.
+
+        Same name-based-resolution caveat as engram_call_graph_blast_radius
+        applies (see its docstring) -- this is a SPIKE, engram-only.
+        """
+        result = call_graph_shortest_path(source, target)
+        return _format_shortest_path_result(result)
+
+    @mcp.tool()
+    def engram_call_graph_get_cluster(function: str) -> str:
+        """Which cluster of related functions (via Leiden community detection
+        over the call graph) `function` belongs to in the Engram tooling
+        codebase, and its other members.
+
+        Same name-based-resolution caveat as engram_call_graph_blast_radius
+        applies (see its docstring) -- this is a SPIKE, engram-only. A small,
+        centralized codebase may legitimately produce one dominant cluster or
+        many singletons; that reflects the codebase, not a broken tool.
+        """
+        result = call_graph_get_cluster(function)
+        return _format_cluster_result(result)
+
     if transport == "stdio":
         log.info("Starting engram-code MCP server (stdio)")
         mcp.run(transport="stdio")
@@ -317,6 +417,21 @@ def _run_cli_pattern_query(pattern: str, language: str, limit: int = 10) -> None
     print(_format_pattern_results(pattern, language, results))
 
 
+def _run_cli_blast_radius(function: str, depth: int) -> None:
+    result = call_graph_blast_radius(function, depth=depth)
+    print(_format_blast_radius_result(result))
+
+
+def _run_cli_shortest_path(source: str, target: str) -> None:
+    result = call_graph_shortest_path(source, target)
+    print(_format_shortest_path_result(result))
+
+
+def _run_cli_cluster(function: str) -> None:
+    result = call_graph_get_cluster(function)
+    print(_format_cluster_result(result))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Engram code search — MCP server + CLI"
@@ -327,12 +442,23 @@ def main():
     parser.add_argument("--limit", "-n", type=int, default=10, help="Max results (default: 10)")
     parser.add_argument("--mode", "-m", default="hybrid", choices=["hybrid", "dense", "bm25"],
                         help="Search mode (default: hybrid)")
+    parser.add_argument("--blast-radius", help="Call-graph spike: who (transitively) calls this function")
+    parser.add_argument("--depth", type=int, default=2, help="Depth for --blast-radius (default: 2)")
+    parser.add_argument("--shortest-path", nargs=2, metavar=("SOURCE", "TARGET"),
+                        help="Call-graph spike: shortest call chain SOURCE -> TARGET")
+    parser.add_argument("--cluster", help="Call-graph spike: which Leiden cluster this function belongs to")
     parser.add_argument("--port", "-p", type=int, default=8890, help="MCP server port (default: 8890)")
     parser.add_argument("--host", default="127.0.0.1", help="MCP server bind address")
     args = parser.parse_args()
 
     if args.pattern:
         _run_cli_pattern_query(args.pattern, args.language, limit=args.limit)
+    elif args.blast_radius:
+        _run_cli_blast_radius(args.blast_radius, depth=args.depth)
+    elif args.shortest_path:
+        _run_cli_shortest_path(*args.shortest_path)
+    elif args.cluster:
+        _run_cli_cluster(args.cluster)
     elif args.query:
         _run_cli_query(args.query, limit=args.limit, mode=args.mode)
     else:

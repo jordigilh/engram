@@ -215,6 +215,100 @@ the full schema under CocoIndex's control.
 
 ---
 
+## Call-Graph Queries
+
+**Status: rolled out to all five onboarded projects (engram, koku,
+rhdh-plugins, praxis-proxy, dcm, kubernaut).** See
+[`docs/CALL_GRAPH_DESIGN.md`](CALL_GRAPH_DESIGN.md) for how the extraction/
+resolution/caching mechanism actually works, and
+`docs/CALL_GRAPH_CLUSTERING.md` for the chronological findings (per-language
+bugs found, precision measurements, Serena cross-check results, per-org
+rollout numbers); this section is a short pointer plus the setup-relevant
+parts (caching, branch scoping), not a duplicate of either.
+
+Structural pattern search above answers "find code shaped like X" within one
+file at a time. Every onboarded project's `*-search.py` additionally exposes
+3 MCP tools (plus matching CLI flags) that build a cross-file call graph
+from the same `CodePattern` infrastructure and answer relational questions
+about it:
+
+```bash
+# Who (transitively) calls this function -- "what breaks if I change this":
+~/.hindsight/venv/bin/engram-search-engram --blast-radius 'pattern_search_code' --depth 2
+
+# Does A ever reach B through a chain of calls, and how:
+~/.hindsight/venv/bin/engram-search-engram --shortest-path 'main' 'find_code_files'
+
+# Which Leiden-detected cluster of related functions does X belong to:
+~/.hindsight/venv/bin/engram-search-engram --cluster 'find_code_files'
+```
+
+Same accuracy ceiling as structural pattern search, plus one more: call
+resolution is name-based with no type info, so a function name duplicated
+across files is a genuine risk of false-positive edges. Fixed with
+signature-compatibility filtering (candidates whose parameter list can't
+accept a call's keyword arguments are dropped) plus Graphify-style
+ambiguous-edge reporting (an edge is only added when exactly one candidate
+survives filtering; 2+ surviving candidates are recorded in
+`graph.graph["ambiguous_calls"]` and surfaced via `blast_radius`'s output
+instead of guessed at). See `docs/CALL_GRAPH_CLUSTERING.md` for the
+before/after numbers and the per-language (Python/TypeScript/Rust/Go)
+extraction findings.
+
+### Rebuild policy: live rebuild-per-query, except kubernaut (Postgres-cached)
+
+Every project except kubernaut rebuilds the graph fresh on every call (no
+persisted index) and logs elapsed time + node/edge/unresolved/ambiguous-call
+counts at `log.info` -- deliberately: no invalidation logic to get wrong,
+always-fresh results, and every measured build stayed comfortably
+interactive (under ~33s even for dcm's 8-repo Go build).
+
+**kubernaut is the one exception**, and requires no extra setup beyond what
+step 16 of `INSTALL.md` already configures: its own repo alone (1,000+ Go
+files) took ~55s to rebuild, too slow to pay on every call, so
+`kubernaut-search.py`'s call-graph tools go through a Postgres-backed cache
+(`cocoindex.call_graph_cache`, auto-created on first use in the same
+database `COCOINDEX_PG_URL` already points at) instead of rebuilding every
+time. No TTL: a cache entry is invalidated purely by content fingerprint
+(file count + max mtime across the exact files the build itself walks,
+recomputed on every call) -- an unchanged tree never rebuilds no matter how
+much wall-clock time passes, and an edit is caught on the very next call.
+Any Postgres error (unreachable, corrupted row) falls back to an uncached
+rebuild rather than failing the call.
+
+**Why Postgres instead of a dedicated cache service (e.g. Valkey/Redis):**
+Valkey (TTL-native) was the first design tried, but was reverted before
+landing -- Postgres was chosen instead because (1) no TTL was actually
+needed once the invalidation policy was fingerprint-based rather than
+time-based (TTL would only add a "rebuild an unchanged tree on some
+arbitrary schedule" cost with no correctness benefit), and (2) Postgres is
+already a hard dependency of every `*_search.py` module
+(`psycopg2`/`COCOINDEX_PG_URL`) and already running for embeddings storage
+-- reusing it for one small `BYTEA` table adds zero new components to
+install, run, or monitor, versus a whole new service to operate on a
+resource-constrained shared host. See `docs/CALL_GRAPH_CLUSTERING.md`'s
+Phase 5 section for the full design rationale and the reverted Valkey
+exploration.
+
+### Branch scoping (kubernaut only)
+
+kubernaut is a multi-branch project: `main` plus `release/vX.Y` lines
+(currently `v1.5`; `v1.6` will activate automatically once cut -- see
+`KUBERNAUT_RELEASE_LINES`). Every kubernaut-family workspace is a dedicated
+clone targeting exactly one of these, so the call-graph tools are
+branch-aware in the same way `cocoindex_search`/`cocoindex_pattern_search`
+already are: by default they auto-detect which line the caller's checkout
+is on (via `KUBERNAUT_LIVE_CLONE_DIR`) and build/cache that line's graph;
+pass `branch` (e.g. `"v1.5"`) to override, or `"main"` to force main
+regardless of checkout. The Postgres cache key folds in the *resolved*
+release line (not the raw argument), so main and each release line always
+get independent, non-colliding cache entries -- a v1.5 workspace's cache
+write can never overwrite main's entry, or vice versa. No other onboarded
+project has multi-branch call-graph coverage; this is kubernaut-specific,
+mirroring its existing multi-branch `_PATTERN_SEARCH_ROOTS` setup.
+
+---
+
 ## Running Modes
 
 ### Live mode (default)

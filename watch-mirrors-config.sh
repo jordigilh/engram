@@ -30,6 +30,7 @@ WATCH_MIRRORS=(
     "kubernaut-demo-scenarios|${HOME}/go/src/github.com/jordigilh/kubernaut-demo-scenarios|main|${HOME}/.hindsight/watch/kubernaut-demo-scenarios"
     "kubernaut-docs|${HOME}/go/src/github.com/jordigilh/kubernaut-docs|main|${HOME}/.hindsight/watch/kubernaut-docs"
     "engram|${HOME}/go/src/github.com/jordigilh/engram|main|${HOME}/.hindsight/watch/engram"
+    "osac|${HOME}/go/src/github.com/osac-project/osac|main|${HOME}/.hindsight/watch/osac"
 )
 
 # Manually-curated release lines for the kubernaut family's *code* index only

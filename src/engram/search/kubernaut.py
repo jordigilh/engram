@@ -12,6 +12,10 @@ Usage:
     python3 cocoindex-search.py --query "ParseConfig" --mode dense   # dense only
     python3 cocoindex-search.py --query "ParseConfig" --mode bm25    # BM25 only
     python3 cocoindex-search.py --pattern 'func \NAME(\(A*\)) error' --language go
+    python3 cocoindex-search.py --blast-radius Reconcile --depth 2  # Go repos only, cached
+    python3 cocoindex-search.py --shortest-path Reconcile buildRequest
+    python3 cocoindex-search.py --cluster Reconcile --repo kubernaut-operator
+    python3 cocoindex-search.py --blast-radius Reconcile --branch v1.5  # release-line-scoped, separate cache entry
 """
 
 import argparse
@@ -30,7 +34,7 @@ from typing import Any
 # `engram` resolves as a top-level package rather than needing this file to
 # be run via `-m`/an installed console script (not yet true in this repo).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
-from engram import chunking  # noqa: E402
+from engram import callgraph, chunking  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,6 +76,27 @@ _PATTERN_SEARCH_ROOTS = [
     ("kubernaut-console", KUBERNAUT_CONSOLE_DIR,
      ["**/*.ts", "**/*.tsx"],
      ["**/node_modules/**", "**/dist/**", "**/storybook-static/**", "**/*.d.ts"]),
+]
+
+# Call-graph scope (docs/CALL_GRAPH_CLUSTERING.md, 2026-08-24 Phase 5):
+# deliberately narrower than _PATTERN_SEARCH_ROOTS above in one dimension --
+# Go only (kubernaut + kubernaut-operator, the two repos the whole
+# call-graph spike was originally scoped against; kubernaut-console/
+# TypeScript stays an explicit, documented gap, the same "don't chase every
+# remaining axis" call already made for Rust's `where` clauses in Phase 3).
+# NOT narrower on release-line coverage, though (2026-08-24 same-day
+# follow-up): every kubernaut-family workspace is a dedicated clone
+# targeting one specific branch (main or a release/vX.Y line), so a
+# main-only call graph would silently return the wrong repo's code, or
+# "not found", for every v1.5/v1.6 workspace -- this list is extended with
+# each Go repo's @release-vX.Y mirrors just below, right after
+# KUBERNAUT_RELEASE_LINES/_release_line_dir are defined (mirrors
+# _PATTERN_SEARCH_ROOTS's own extension loop exactly).
+_CALL_GRAPH_ROOTS = [
+    ("kubernaut", KUBERNAUT_CODE_DIR,
+     ["**/*.go"], ["**/vendor/**", "**/*_test.go", "**/zz_generated*"]),
+    ("kubernaut-operator", KUBERNAUT_OPERATOR_DIR,
+     ["**/*.go"], ["**/vendor/**", "**/*_test.go", "**/zz_generated*"]),
 ]
 
 # --- Multi-branch (2026-08-10) ------------------------------------------
@@ -117,6 +142,23 @@ for _repo_name, _root, _included, _excluded in [
 ]:
     for _line in KUBERNAUT_RELEASE_LINES:
         _PATTERN_SEARCH_ROOTS.append((
+            f"{_repo_name}@release-{_line}", _release_line_dir(_repo_name, _line),
+            _included, _excluded,
+        ))
+del _repo_name, _root, _included, _excluded, _line
+
+# Call-graph release-line mirrors (2026-08-24 same-day Phase 5 follow-up):
+# Go repos only (kubernaut-console/TypeScript call-graph coverage stays out
+# of scope, per _CALL_GRAPH_ROOTS's own comment above) -- otherwise
+# identical extension shape to _PATTERN_SEARCH_ROOTS just above.
+for _repo_name, _root, _included, _excluded in [
+    ("kubernaut", KUBERNAUT_CODE_DIR,
+     ["**/*.go"], ["**/vendor/**", "**/*_test.go", "**/zz_generated*"]),
+    ("kubernaut-operator", KUBERNAUT_OPERATOR_DIR,
+     ["**/*.go"], ["**/vendor/**", "**/*_test.go", "**/zz_generated*"]),
+]:
+    for _line in KUBERNAUT_RELEASE_LINES:
+        _CALL_GRAPH_ROOTS.append((
             f"{_repo_name}@release-{_line}", _release_line_dir(_repo_name, _line),
             _included, _excluded,
         ))
@@ -387,6 +429,20 @@ def _select_pattern_roots(repo: str | None, release_line: str | None) -> list[tu
     return [root for root in _PATTERN_SEARCH_ROOTS if root[0] in target_tags]
 
 
+def _select_call_graph_roots(repo: str | None, release_line: str | None) -> list[tuple]:
+    """Call-graph counterpart to _select_pattern_roots -- identical logic,
+    scoped to _CALL_GRAPH_ROOTS's narrower repo set (Go only, no
+    kubernaut-console)."""
+    repo_names = ("kubernaut", "kubernaut-operator")
+    if release_line is not None:
+        target_tags = {
+            f"{r}@release-{release_line}" for r in ((repo,) if repo else repo_names)
+        }
+    else:
+        target_tags = {repo} if repo else set(repo_names)
+    return [root for root in _CALL_GRAPH_ROOTS if root[0] in target_tags]
+
+
 def pattern_search_code(
     pattern: str,
     language: str,
@@ -456,6 +512,100 @@ def _format_pattern_results(pattern: str, language: str, results: list[dict]) ->
         lines.append(r["text"])
         lines.append("")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Call graph (blast radius, shortest path, Leiden clustering)
+#
+# The one org whose full rebuild time (~55s for kubernaut's Go repo alone,
+# preflight-measured) broke the sub-33s budget every other org's
+# rebuild-every-call policy stayed under -- see docs/CALL_GRAPH_CLUSTERING.md,
+# 2026-08-24 Phase 5, for the full investigation (a thread-pool-only fix
+# only got to ~25-29s; Postgres-backed, fingerprint-invalidated caching
+# (no TTL -- an unchanged tree never rebuilds, no matter how much wall-clock
+# time passes) is what actually fixes the interactive-UX problem). Every
+# other org intentionally stays on the plain (uncached)
+# build_multi_repo_call_graph_with_stats -- their rebuild cost was already
+# acceptable, and caching isn't free (a Postgres round-trip, a pickle
+# blob, one more thing that can go subtly stale if the fingerprint logic
+# itself ever has a bug) -- so this is deliberately kubernaut-only, not a
+# blanket policy change.
+# ---------------------------------------------------------------------------
+
+def _build_graph_with_timing(repo: str | None = None, branch: str | None = None):
+    """Branch-aware (2026-08-24 same-day Phase 5 follow-up): resolves
+    `branch` through the exact same _resolve_release_line() every other
+    branch-aware function here uses (explicit override wins, else
+    auto-detect from KUBERNAUT_LIVE_CLONE_DIR, "main" forces main), then
+    selects the matching main or @release-vX.Y roots. The cache key folds
+    in the resolved release line (not the raw `branch` argument, so an
+    explicit "v1.5" and an auto-detected v1.5 checkout share one cache
+    entry) -- this is what actually makes the Postgres cache branch-safe:
+    without it, a v1.5 workspace's first cache write would poison every
+    later main-workspace call (and vice versa) into serving the wrong
+    branch's graph. See docs/CALL_GRAPH_CLUSTERING.md's Phase 5 section."""
+    release_line = _resolve_release_line(branch)
+    roots = _select_call_graph_roots(repo, release_line)
+    cache_key = f"kubernaut-go:{repo or 'all'}:{release_line or 'main'}"
+    return callgraph.build_multi_repo_call_graph_with_stats_cached(
+        roots, language="go", cache_key=cache_key, pg_url=PG_URL, logger=log,
+    )
+
+
+def call_graph_blast_radius(
+    function: str, depth: int = 2, repo: str | None = None, branch: str | None = None,
+) -> dict[str, Any]:
+    """Who (transitively) calls `function`, up to `depth` hops -- "what
+    breaks if I change this." See docs/CALL_GRAPH_CLUSTERING.md for the
+    accuracy ceiling (name-based resolution, no type info, and no
+    cross-repo resolution -- a call can only resolve within its own repo).
+    Scoped to kubernaut + kubernaut-operator (Go) only -- see
+    _CALL_GRAPH_ROOTS. Pass repo ("kubernaut" or "kubernaut-operator") to
+    scope the build to just one.
+
+    branch controls release-line scoping exactly like search_code()/
+    pattern_search_code(): omit to auto-detect from KUBERNAUT_LIVE_CLONE_DIR,
+    pass an explicit line ("v1.5") to override, or "main" to force main. A
+    resolved main vs. v1.5 graph never share a cache entry, so callers on
+    different branches can never see each other's results."""
+    graph = _build_graph_with_timing(repo=repo, branch=branch)
+    return callgraph.query_blast_radius(graph, function, depth=depth)
+
+
+def call_graph_shortest_path(
+    source: str, target: str, repo: str | None = None, branch: str | None = None,
+) -> dict[str, Any]:
+    """Does `source` ever reach `target` through a chain of calls, and how.
+
+    Same branch scoping as call_graph_blast_radius (see its docstring)."""
+    graph = _build_graph_with_timing(repo=repo, branch=branch)
+    return callgraph.query_shortest_path(graph, source, target)
+
+
+def call_graph_get_cluster(
+    function: str, repo: str | None = None, branch: str | None = None,
+) -> dict[str, Any]:
+    """Which Leiden community `function` belongs to, and its other members.
+
+    Clustering quality depends entirely on the underlying graph's structure:
+    a small, centralized codebase may legitimately produce one dominant
+    cluster or many singletons -- that reflects the codebase, not a broken
+    clustering step (see docs/CALL_GRAPH_CLUSTERING.md). Same branch
+    scoping as call_graph_blast_radius (see its docstring)."""
+    graph = _build_graph_with_timing(repo=repo, branch=branch)
+    return callgraph.query_get_cluster(graph, function)
+
+
+def _format_blast_radius_result(result: dict) -> str:
+    return callgraph.format_blast_radius_result(result)
+
+
+def _format_shortest_path_result(result: dict) -> str:
+    return callgraph.format_shortest_path_result(result)
+
+
+def _format_cluster_result(result: dict) -> str:
+    return callgraph.format_cluster_result(result)
 
 
 # ---------------------------------------------------------------------------
@@ -539,6 +689,74 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
         )
         return _format_pattern_results(pattern, language, results)
 
+    @mcp.tool()
+    def cocoindex_call_graph_blast_radius(
+        function: str, depth: int = 2, repo: str | None = None, branch: str | None = None,
+    ) -> str:
+        """What (transitively) calls `function` across kubernaut's Go repos,
+        up to `depth` hops -- "what breaks if I change this."
+
+        Scoped to kubernaut + kubernaut-operator (Go) only --
+        kubernaut-console (TypeScript) call-graph coverage isn't available
+        here, only cocoindex_search/cocoindex_pattern_search cover that.
+        `function` may be a bare name ("Reconcile") if unambiguous across
+        both repos, or a qualified name including the repo tag
+        ("kubernaut/internal/reconciler.go::Reconcile"). Pass repo
+        ("kubernaut" or "kubernaut-operator") to scope the build to just one.
+
+        branch (2026-08-24): same release-line scoping as cocoindex_search/
+        cocoindex_pattern_search -- by default auto-detects which release
+        line your current checkout is on (via KUBERNAUT_LIVE_CLONE_DIR) and
+        builds the graph from that line's code, so a main workspace and a
+        release/v1.5 workspace each get their own branch's call graph and
+        never share a cache entry. Pass an explicit line ("v1.5") to
+        override, or "main" to force main regardless of your checkout.
+
+        Call resolution is purely name-based (no type info) and per-repo
+        only -- a call in one repo can never resolve to a same-named
+        function in the other. Results are served from a Postgres-backed
+        cache keyed on (repo, release line, content fingerprint) -- the
+        first call after any edit on that specific branch rebuilds fresh
+        (kubernaut's main line alone takes ~55s), every call after that
+        until the next edit on that same branch is near-instant. See
+        docs/CALL_GRAPH_CLUSTERING.md.
+        """
+        result = call_graph_blast_radius(function, depth=depth, repo=repo, branch=branch)
+        return _format_blast_radius_result(result)
+
+    @mcp.tool()
+    def cocoindex_call_graph_shortest_path(
+        source: str, target: str, repo: str | None = None, branch: str | None = None,
+    ) -> str:
+        """Does `source` ever reach `target` through a chain of calls across
+        kubernaut's Go repos, and how.
+
+        Same scope (kubernaut + kubernaut-operator, Go), per-repo-only
+        resolution caveat, and branch scoping as
+        cocoindex_call_graph_blast_radius applies (see its docstring) -- a
+        path can only be found within a single repo, never across two, and
+        only within the one branch's graph (main or a release/vX.Y line).
+        """
+        result = call_graph_shortest_path(source, target, repo=repo, branch=branch)
+        return _format_shortest_path_result(result)
+
+    @mcp.tool()
+    def cocoindex_call_graph_get_cluster(
+        function: str, repo: str | None = None, branch: str | None = None,
+    ) -> str:
+        """Which cluster of related functions (via Leiden community
+        detection over the call graph) `function` belongs to, and its other
+        members.
+
+        Same scope, per-repo-only resolution caveat, and branch scoping as
+        cocoindex_call_graph_blast_radius applies (see its docstring). A
+        small, centralized module may legitimately produce one dominant
+        cluster or many singletons; that reflects the codebase, not a
+        broken tool.
+        """
+        result = call_graph_get_cluster(function, repo=repo, branch=branch)
+        return _format_cluster_result(result)
+
     if transport == "stdio":
         log.info("Starting cocoindex-code MCP server (stdio)")
         mcp.run(transport="stdio")
@@ -567,6 +785,21 @@ def _run_cli_pattern_query(
     print(_format_pattern_results(pattern, language, results))
 
 
+def _run_cli_blast_radius(function: str, depth: int, repo: str | None = None, branch: str | None = None) -> None:
+    result = call_graph_blast_radius(function, depth=depth, repo=repo, branch=branch)
+    print(_format_blast_radius_result(result))
+
+
+def _run_cli_shortest_path(source: str, target: str, repo: str | None = None, branch: str | None = None) -> None:
+    result = call_graph_shortest_path(source, target, repo=repo, branch=branch)
+    print(_format_shortest_path_result(result))
+
+
+def _run_cli_cluster(function: str, repo: str | None = None, branch: str | None = None) -> None:
+    result = call_graph_get_cluster(function, repo=repo, branch=branch)
+    print(_format_cluster_result(result))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="CocoIndex code search — MCP server + CLI"
@@ -578,9 +811,16 @@ def main():
     parser.add_argument("--mode", "-m", default="hybrid", choices=["hybrid", "dense", "bm25"],
                         help="Search mode for --query (default: hybrid)")
     parser.add_argument("--repo", default=None,
-                        help="Scope results to one repo tag (e.g. kubernaut-operator); default: whole platform")
+                        help="Scope results to one repo tag (e.g. kubernaut-operator); default: whole platform "
+                             "(call-graph flags: scope to 'kubernaut' or 'kubernaut-operator' only)")
     parser.add_argument("--branch", default=None,
-                        help="Release line to scope to (e.g. v1.5) or 'main'; default: auto-detect from KUBERNAUT_LIVE_CLONE_DIR")
+                        help="Release line to scope to (e.g. v1.5) or 'main'; default: auto-detect from "
+                             "KUBERNAUT_LIVE_CLONE_DIR. Applies to --query/--pattern and the call-graph flags alike.")
+    parser.add_argument("--blast-radius", help="Call graph (Go repos only, cached): who (transitively) calls this function")
+    parser.add_argument("--depth", type=int, default=2, help="Depth for --blast-radius (default: 2)")
+    parser.add_argument("--shortest-path", nargs=2, metavar=("SOURCE", "TARGET"),
+                        help="Call graph: shortest call chain SOURCE -> TARGET")
+    parser.add_argument("--cluster", help="Call graph: which Leiden cluster this function belongs to")
     parser.add_argument("--port", "-p", type=int, default=8889, help="MCP server port (default: 8889)")
     parser.add_argument("--host", default="127.0.0.1", help="MCP server bind address")
     parser.add_argument(
@@ -595,6 +835,12 @@ def main():
         if not args.language:
             parser.error("--pattern requires --language")
         _run_cli_pattern_query(args.pattern, args.language, limit=args.limit, repo=args.repo, branch=args.branch)
+    elif args.blast_radius:
+        _run_cli_blast_radius(args.blast_radius, depth=args.depth, repo=args.repo, branch=args.branch)
+    elif args.shortest_path:
+        _run_cli_shortest_path(*args.shortest_path, repo=args.repo, branch=args.branch)
+    elif args.cluster:
+        _run_cli_cluster(args.cluster, repo=args.repo, branch=args.branch)
     elif args.query:
         _run_cli_query(args.query, limit=args.limit, mode=args.mode, repo=args.repo, branch=args.branch)
     else:

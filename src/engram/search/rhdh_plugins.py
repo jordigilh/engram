@@ -15,7 +15,7 @@ Usage:
     python3 rhdh-plugins-cocoindex-search.py --query "how does graduated visibility work"
     python3 rhdh-plugins-cocoindex-search.py --query "AiCatalogFilterBlueprint" --mode dense
     python3 rhdh-plugins-cocoindex-search.py --query "AiCatalogFilterBlueprint" --mode bm25
-    python3 rhdh-plugins-cocoindex-search.py --pattern 'export const \NAME = (\(A*\)) =>' --language typescript
+    python3 rhdh-plugins-cocoindex-search.py --pattern 'export const \NAME = (\(A*\)) =>' --language tsx
 """
 
 import argparse
@@ -32,7 +32,7 @@ from typing import Any
 # `engram` resolves as a top-level package rather than needing this file to
 # be run via `-m`/an installed console script (not yet true in this repo).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
-from engram import chunking  # noqa: E402
+from engram import callgraph, chunking  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -204,6 +204,22 @@ def pattern_search_code(pattern: str, language: str, limit: int = 10) -> list[di
     (workspaces/boost/ only). See koku's search/koku.py for the general
     rationale: complements, not replaces, search_code() (semantic/BM25) and
     Serena (type-aware find-references/diagnostics).
+
+    **`language` must match the target files' *exact* detected grammar --
+    "typescript" and "tsx" are different tree-sitter grammars for two
+    different extensions, not aliases.** `detect_code_language()` reports
+    `.ts` files as "typescript" and `.tsx` files as "tsx"; passing
+    "typescript" (this function's/the CLI's default) silently searches only
+    `.ts` files and skips every `.tsx` file in the tree -- most of
+    workspaces/boost/'s actual React components. Pass `language="tsx"`
+    explicitly for any pattern meant to match `.tsx` content (this is *not*
+    a special case for JSX-shaped patterns specifically -- a plain
+    `function \\NAME(\\(A*\\))` pattern misses `.tsx` files just the same
+    under the "typescript" default). See engram/callgraph.py's
+    `_grammar_for_path` docstring and docs/CALL_GRAPH_CLUSTERING.md's
+    2026-08-24 Phase 2 entry for how this was found; the `call_graph_*`
+    functions below resolve this automatically per file and need no such
+    caller-side care.
     """
     from cocoindex.ops.code import CodePattern, render_match
     from cocoindex.ops.text import detect_code_language
@@ -246,6 +262,65 @@ def _format_pattern_results(pattern: str, language: str, results: list[dict]) ->
         lines.append(r["text"])
         lines.append("")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Call-graph queries (docs/CALL_GRAPH_CLUSTERING.md, issue #43 -- rollout
+# Phase 2: first org needing TypeScript. Extraction covers three definition
+# shapes (function declarations, class methods, arrow-function consts) and
+# resolves the correct per-file tree-sitter grammar ("typescript" vs "tsx")
+# automatically -- see callgraph.py's `_grammar_for_path` docstring for why
+# that distinction matters for a workspace that's almost entirely .tsx.
+# ---------------------------------------------------------------------------
+#
+# Thin wrappers around callgraph.py's generic multi-org query/format layer:
+# this module only supplies which root/language to build from. Reuses
+# _PATTERN_SEARCH_ROOTS's single entry so the call graph is built from
+# exactly the same file set pattern_search_code() already searches -- never
+# a second, drifting definition of "what counts as rhdh-plugins' source."
+
+def _build_graph_with_timing():
+    _repo_tag, root, included, excluded = _PATTERN_SEARCH_ROOTS[0]
+    return callgraph.build_call_graph_with_stats(
+        root, included=included, excluded=excluded, language="typescript", logger=log,
+    )
+
+
+def call_graph_blast_radius(function: str, depth: int = 2) -> dict[str, Any]:
+    """Who (transitively) calls `function`, up to `depth` hops -- "what
+    breaks if I change this." See docs/CALL_GRAPH_CLUSTERING.md for the
+    accuracy ceiling (name-based resolution, no type info)."""
+    graph = _build_graph_with_timing()
+    return callgraph.query_blast_radius(graph, function, depth=depth)
+
+
+def call_graph_shortest_path(source: str, target: str) -> dict[str, Any]:
+    """Does `source` ever reach `target` through a chain of calls, and how."""
+    graph = _build_graph_with_timing()
+    return callgraph.query_shortest_path(graph, source, target)
+
+
+def call_graph_get_cluster(function: str) -> dict[str, Any]:
+    """Which Leiden community `function` belongs to, and its other members.
+
+    Clustering quality depends entirely on the underlying graph's structure:
+    a small, centralized codebase may legitimately produce one dominant
+    cluster or many singletons -- that reflects the codebase, not a broken
+    clustering step (see docs/CALL_GRAPH_CLUSTERING.md)."""
+    graph = _build_graph_with_timing()
+    return callgraph.query_get_cluster(graph, function)
+
+
+def _format_blast_radius_result(result: dict) -> str:
+    return callgraph.format_blast_radius_result(result)
+
+
+def _format_shortest_path_result(result: dict) -> str:
+    return callgraph.format_shortest_path_result(result)
+
+
+def _format_cluster_result(result: dict) -> str:
+    return callgraph.format_cluster_result(result)
 
 
 # ---------------------------------------------------------------------------
@@ -293,9 +368,63 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
         This is purely syntactic: it does NOT resolve types, can't find
         references/callers, and has no diagnostics -- use Serena for that.
         Complementary to, not a replacement for, Serena.
+
+        `language` must be the *exact* grammar: "typescript" for `.ts`
+        files, "tsx" for `.tsx` files (different tree-sitter grammars, not
+        aliases) -- the default ("typescript") silently skips every `.tsx`
+        file, which is most of this codebase's actual components. Pass
+        `language="tsx"` explicitly to search `.tsx` files.
         """
         results = pattern_search_code(pattern, language, limit=min(limit, 20))
         return _format_pattern_results(pattern, language, results)
+
+    @mcp.tool()
+    def rhdh_plugins_call_graph_blast_radius(function: str, depth: int = 2) -> str:
+        """What (transitively) calls `function` in the rhdh-plugins codebase
+        (workspaces/boost/ only), up to `depth` hops -- "what breaks if I
+        change this."
+
+        `function` may be a bare name ("useAiAssets") if unambiguous, or a
+        qualified name ("plugins/boost/src/hooks/useAiAssets.ts::useAiAssets").
+
+        Covers three TypeScript definition shapes: `function` declarations,
+        class methods, and arrow-function consts (the dominant React
+        component style here, e.g. `export const Foo = (...) => {...}`).
+        Call resolution is purely name-based (no type info), so common
+        method/handler names shared across unrelated components can produce
+        false-positive edges, and dynamic dispatch/external calls can't be
+        seen at all (see docs/CALL_GRAPH_CLUSTERING.md). Rebuilds the call
+        graph fresh on every call (no persisted index).
+        """
+        result = call_graph_blast_radius(function, depth=depth)
+        return _format_blast_radius_result(result)
+
+    @mcp.tool()
+    def rhdh_plugins_call_graph_shortest_path(source: str, target: str) -> str:
+        """Does `source` ever reach `target` through a chain of calls in the
+        rhdh-plugins codebase (workspaces/boost/ only), and how.
+
+        Same name-based-resolution caveat as
+        rhdh_plugins_call_graph_blast_radius applies (see its docstring).
+        """
+        result = call_graph_shortest_path(source, target)
+        return _format_shortest_path_result(result)
+
+    @mcp.tool()
+    def rhdh_plugins_call_graph_get_cluster(function: str) -> str:
+        """Which cluster of related functions/components (via Leiden
+        community detection over the call graph) `function` belongs to in
+        the rhdh-plugins codebase (workspaces/boost/ only), and its other
+        members.
+
+        Same name-based-resolution caveat as
+        rhdh_plugins_call_graph_blast_radius applies (see its docstring). A
+        small, centralized module may legitimately produce one dominant
+        cluster or many singletons; that reflects the codebase, not a
+        broken tool.
+        """
+        result = call_graph_get_cluster(function)
+        return _format_cluster_result(result)
 
     if transport == "stdio":
         log.info("Starting rhdh-plugins-code MCP server (stdio)")
@@ -319,6 +448,21 @@ def _run_cli_pattern_query(pattern: str, language: str, limit: int = 10) -> None
     print(_format_pattern_results(pattern, language, results))
 
 
+def _run_cli_blast_radius(function: str, depth: int) -> None:
+    result = call_graph_blast_radius(function, depth=depth)
+    print(_format_blast_radius_result(result))
+
+
+def _run_cli_shortest_path(source: str, target: str) -> None:
+    result = call_graph_shortest_path(source, target)
+    print(_format_shortest_path_result(result))
+
+
+def _run_cli_cluster(function: str) -> None:
+    result = call_graph_get_cluster(function)
+    print(_format_cluster_result(result))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="rhdh-plugins code search — MCP server + CLI"
@@ -329,12 +473,23 @@ def main():
     parser.add_argument("--limit", "-n", type=int, default=10, help="Max results (default: 10)")
     parser.add_argument("--mode", "-m", default="hybrid", choices=["hybrid", "dense", "bm25"],
                         help="Search mode (default: hybrid)")
+    parser.add_argument("--blast-radius", help="Call graph: who (transitively) calls this function")
+    parser.add_argument("--depth", type=int, default=2, help="Depth for --blast-radius (default: 2)")
+    parser.add_argument("--shortest-path", nargs=2, metavar=("SOURCE", "TARGET"),
+                        help="Call graph: shortest call chain SOURCE -> TARGET")
+    parser.add_argument("--cluster", help="Call graph: which Leiden cluster this function belongs to")
     parser.add_argument("--port", "-p", type=int, default=8889, help="MCP server port (default: 8889)")
     parser.add_argument("--host", default="127.0.0.1", help="MCP server bind address")
     args = parser.parse_args()
 
     if args.pattern:
         _run_cli_pattern_query(args.pattern, args.language, limit=args.limit)
+    elif args.blast_radius:
+        _run_cli_blast_radius(args.blast_radius, depth=args.depth)
+    elif args.shortest_path:
+        _run_cli_shortest_path(*args.shortest_path)
+    elif args.cluster:
+        _run_cli_cluster(args.cluster)
     elif args.query:
         _run_cli_query(args.query, limit=args.limit, mode=args.mode)
     else:

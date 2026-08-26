@@ -26,6 +26,32 @@ class TestSplitFixedWindow:
         assert len(chunks) > 1
         assert all(len(c) > 0 for c in chunks)
 
+    def test_regression_no_near_empty_trailing_chunk_from_overshot_end(self):
+        """2026-08-26 bug (found via osac-project/osac onboarding backfill,
+        see docs/FINDINGS.md): `end` can overshoot len(text) since slicing
+        clamps silently, but the *uncapped* end value was still used to
+        compute the next window's start. When end overshoot by more than
+        chunk_overlap, the next start landed just shy of len(text),
+        producing a bogus final chunk containing only the text's last
+        character(s) -- in production this was just a lone "\\n", which then
+        failed hindsight-api's "content cannot be empty" validation after
+        stripping. Reproduces the exact failing shape (a ~1193-char section,
+        chunk_size=800, chunk_overlap=200) instead of asserting on the
+        implementation's internal offsets."""
+        text = "x" * 592 + "\n" + "y" * 599 + "\n"  # len == 1193, no other newlines
+        assert len(text) == 1193
+        chunks = chunking.split_fixed_window(text, chunk_size=800, chunk_overlap=200)
+        assert all(c.strip() for c in chunks), f"found an empty/whitespace-only chunk: {chunks!r}"
+
+    def test_no_chunk_is_whitespace_only_across_a_range_of_lengths(self):
+        """Broader sweep around the regression above: no length near a
+        chunk_size/chunk_overlap boundary should ever produce a trailing
+        chunk that strips to empty."""
+        for length in range(700, 1700):
+            text = ("a" * (length - 1)) + "\n"
+            chunks = chunking.split_fixed_window(text, chunk_size=800, chunk_overlap=200)
+            assert all(c.strip() for c in chunks), (length, chunks)
+
 
 _SAMPLE_GO = '''package main
 

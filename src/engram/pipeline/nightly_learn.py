@@ -1080,6 +1080,9 @@ PROJECT_CONFIGS = {
             "dcm-project/enhancements",
             "dcm-project/shared-workflows",
             "dcm-project/quadlet-deploy",
+            # Upstream OSAC backend (distinct org, read-only), folded into
+            # dcm -- see engram.flows.dcm's DCM_OSAC_DIR comment.
+            "osac-project/osac",
         ],
     },
     "engram": {

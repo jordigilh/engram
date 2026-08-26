@@ -36,6 +36,15 @@ class TestModuleLoads:
         assert dcm_cocoindex_flows.issues_app is not None
         assert dcm_cocoindex_flows.code_app is not None
 
+    def test_osac_project_osac_is_registered(self, dcm_cocoindex_flows):
+        """osac-project/osac (upstream OSAC backend, read-only) is folded
+        into dcm rather than getting its own PROJECT_CONFIGS entry -- see
+        DCM_OSAC_DIR's comment. Must show up in issues polling and default
+        to the watch-mirror worktree, not a live dev clone."""
+        assert dcm_cocoindex_flows.DCM_OSAC_DIR is not None
+        assert str(dcm_cocoindex_flows.DCM_OSAC_DIR).endswith(".hindsight/watch/osac")
+        assert "osac-project/osac" in dcm_cocoindex_flows.ISSUES_REPOS
+
 
 class TestProcessDocFile:
     def test_root_level_doc_gets_root_section_tag(self, dcm_cocoindex_flows, monkeypatch):

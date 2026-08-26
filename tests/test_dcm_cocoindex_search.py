@@ -43,6 +43,16 @@ class _FakeConn:
         pass
 
 
+class TestPatternSearchRootsRegistration:
+    def test_osac_project_osac_is_registered_as_a_pattern_search_root(self, dcm_search):
+        """osac-project/osac (folded into dcm, see engram.flows.dcm's
+        DCM_OSAC_DIR comment) must be queryable via
+        dcm_code_pattern_search/dcm_call_graph_* like any other DCM repo."""
+        tags = [root[0] for root in dcm_search._PATTERN_SEARCH_ROOTS]
+        assert "dcm-osac" in tags
+        assert len(tags) == len(set(tags))
+
+
 class TestRrfFuse:
     def test_item_present_in_both_lists_is_deduped_and_scores_combine(self, dcm_search):
         dense = [{"id": "a", "v": 1}, {"id": "b", "v": 2}]

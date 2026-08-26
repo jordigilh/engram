@@ -74,6 +74,19 @@ def split_fixed_window(text: str, chunk_size: int = 800, chunk_overlap: int = 20
             if break_point > start + chunk_size // 2:
                 end = break_point + 1
         chunks.append(text[start:end])
+        # `end` can overshoot len(text) (slicing just clamps silently) --
+        # e.g. text len 1193, chunk_size 800, chunk_overlap 200: chunk 1 is
+        # text[592:1392], which slices down to text[592:1193] (601 chars),
+        # but the *uncapped* end=1392 was what got used to compute the next
+        # start (1192, still < 1193) instead of the true end (1193). That
+        # produced a bogus almost-empty trailing chunk on the next
+        # iteration (here, just the section's final "\n") that then failed
+        # hindsight-api's "content cannot be empty" validation after
+        # stripping. Once a chunk's (possibly overshooting) end has reached
+        # len(text), the text is fully covered -- stop instead of computing
+        # a next start from the overshot value.
+        if end >= len(text):
+            break
         start = end - chunk_overlap
     return chunks
 

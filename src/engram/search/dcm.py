@@ -74,6 +74,13 @@ DCM_OSAC_SP_DIR = pathlib.Path(os.environ.get(
 DCM_UTILITIES_DIR = pathlib.Path(os.environ.get(
     "DCM_UTILITIES_DIR", os.path.expanduser("~/go/src/github.com/dcm-project/utilities"),
 ))
+# osac-project/osac (upstream OSAC backend, read-only, folded into dcm --
+# see dcm-cocoindex-flows.py's DCM_OSAC_DIR comment). Points at the
+# watch-mirror worktree, not a live dev clone, since this repo is never
+# locally edited -- see watch-mirrors-config.sh.
+DCM_OSAC_DIR = pathlib.Path(os.environ.get(
+    "DCM_OSAC_DIR", os.path.expanduser("~/.hindsight/watch/osac"),
+))
 
 _GO_EXCLUDED = ["**/vendor/**", "**/*_test.go", "**/zz_generated*"]
 
@@ -89,6 +96,7 @@ _PATTERN_SEARCH_ROOTS = [
     ("dcm-three-tier-sp", DCM_THREE_TIER_SP_DIR, ["**/*.go"], _GO_EXCLUDED),
     ("dcm-osac-sp", DCM_OSAC_SP_DIR, ["**/*.go"], _GO_EXCLUDED),
     ("dcm-utilities", DCM_UTILITIES_DIR, ["**/*.go"], _GO_EXCLUDED),
+    ("dcm-osac", DCM_OSAC_DIR, ["**/*.go"], _GO_EXCLUDED),
 ]
 
 _model = None
@@ -240,7 +248,7 @@ def pattern_search_code(
     do") and gopls (type-aware find-references/diagnostics): this is purely
     syntactic "find code shaped like X", with no type resolution and no
     cross-file symbol graph (see docs/FINDINGS.md 2026-08-07). Pass repo
-    (e.g. "dcm-cli") to scope to one of DCM's 8 Go repos; omit it to search
+    (e.g. "dcm-cli") to scope to one of DCM's 9 Go repos; omit it to search
     all of them.
     """
     from cocoindex.ops.code import CodePattern, render_match
@@ -295,9 +303,9 @@ def _format_pattern_results(pattern: str, language: str, results: list[dict]) ->
 #
 # DCM differs from praxis.py in one respect worth calling out: like
 # pattern_search_code above, these accept an optional `repo` to scope the
-# build to one of DCM's 8 Go repos (default: all 8, same
+# build to one of DCM's 9 Go repos (default: all 9, same
 # build_multi_repo_call_graph_with_stats path praxis.py uses for its 7 Rust
-# repos) -- useful here since 8 repos is a larger multi-repo walk than
+# repos) -- useful here since 9 repos is a larger multi-repo walk than
 # praxis's 7, and most blast-radius/cluster questions are naturally scoped
 # to a single repo the caller already knows. Cross-repo call resolution is
 # still deliberately NOT attempted regardless of scoping (see
@@ -316,7 +324,7 @@ def call_graph_blast_radius(function: str, depth: int = 2, repo: str | None = No
     breaks if I change this." See docs/CALL_GRAPH_CLUSTERING.md for the
     accuracy ceiling (name-based resolution, no type info, and no
     cross-repo resolution -- a call can only resolve within its own repo).
-    Pass repo to scope the build to one of DCM's 8 repos."""
+    Pass repo to scope the build to one of DCM's 9 repos."""
     graph = _build_graph_with_timing(repo=repo)
     return callgraph.query_blast_radius(graph, function, depth=depth)
 
@@ -382,14 +390,14 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
     def dcm_code_pattern_search(
         pattern: str, language: str = "go", limit: int = 10, repo: str | None = None,
     ) -> str:
-        r"""Structural ("by-example") code search over DCM's 8 Go repos.
+        r"""Structural ("by-example") code search over DCM's 9 Go repos.
 
         For "find code shaped like X" -- e.g. every function matching a
         signature -- not "find code about X" (use dcm_code_search for
         that). Matches by tree-sitter AST shape, not text/regex.
 
         Pass repo (e.g. "dcm-cli", "dcm-control-plane") to scope to one
-        repo; omit it to search all 8.
+        repo; omit it to search all 9.
 
         Pattern syntax: write an example of the shape you want, using `\`
         + a name for a metavariable (matches one node) or `\(NAME*\)`
@@ -507,7 +515,7 @@ def main():
     parser.add_argument("--mode", "-m", default="hybrid", choices=["hybrid", "dense", "bm25"],
                         help="Search mode (default: hybrid)")
     parser.add_argument("--repo", default=None,
-                        help="Scope --pattern/call-graph flags to one repo tag (e.g. dcm-cli); default: all 8 repos")
+                        help="Scope --pattern/call-graph flags to one repo tag (e.g. dcm-cli); default: all 9 repos")
     parser.add_argument("--blast-radius", help="Call graph: who (transitively) calls this function")
     parser.add_argument("--depth", type=int, default=2, help="Depth for --blast-radius (default: 2)")
     parser.add_argument("--shortest-path", nargs=2, metavar=("SOURCE", "TARGET"),

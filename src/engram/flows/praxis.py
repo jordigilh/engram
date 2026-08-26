@@ -85,6 +85,7 @@ PRAXIS_REPOS: list[tuple[str, str, bool]] = [
     ("praxis-ai", "praxis-proxy/ai", True),
     ("praxis-conventions", "praxis-proxy/conventions", False),
     ("praxis-demos", "praxis-proxy/demos", True),
+    ("praxis-enhancements", "praxis-proxy/enhancements", False),
     ("praxis-experiments", "praxis-proxy/experiments", False),
     ("praxis-forge", "praxis-proxy/forge", True),
     ("praxis-grid", "praxis-proxy/grid", True),
@@ -329,8 +330,13 @@ async def process_pdf_file(
 
 # Homogeneous doc layout across every praxis-proxy repo (unlike DCM's varied
 # per-repo structure): docs/**/*.md plus a handful of root-level files.
+# proposals/**/*.md added for praxis-enhancements -- that repo's actual
+# content (KEP-style enhancement proposals) lives there, not under docs/,
+# which only has process/status pages. No-op for every other repo, none of
+# which has a proposals/ directory.
 _DOC_INCLUDE_PATTERNS = [
     "docs/**/*.md",
+    "proposals/**/*.md",
     "README.md",
     ".claude/CLAUDE.md",
     "MAINTAINERS.md",

@@ -639,7 +639,7 @@ PRAXIS_REPOS_WITH_SERENA = [
     "praxis-operator",
     "praxis-policy",
 ]
-PRAXIS_REPOS_WITHOUT_SERENA = ["praxis-conventions", "praxis-experiments", "praxis-proxy.github.io"]
+PRAXIS_REPOS_WITHOUT_SERENA = ["praxis-conventions", "praxis-enhancements", "praxis-experiments", "praxis-proxy.github.io"]
 
 
 def _hindsight(bank: str) -> dict:

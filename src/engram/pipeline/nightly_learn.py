@@ -1176,6 +1176,7 @@ PROJECT_CONFIGS = {
             "praxis-proxy/experiments",
             "praxis-proxy/grid",
             "praxis-proxy/demos",
+            "praxis-proxy/enhancements",
         ],
     },
     # rhdh-plugins: narrow-scope onboarding (2026-08-13) -- covers only

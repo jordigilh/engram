@@ -302,7 +302,7 @@ class TestBuildProjectRegistry:
     def test_covers_every_onboarded_project(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
 
-        assert len(registry) == 33
+        assert len(registry) == 34
 
     def test_kubernaut_family_is_fully_http_already(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")

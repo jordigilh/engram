@@ -466,7 +466,10 @@ class StdioSubprocessAdapter:
                 # data, surfacing as a generic "backend is currently down"
                 # (see docs/findings/2026-08.md, 2026-08-25 entry).
                 "content": [c.model_dump(exclude_none=True) if hasattr(c, "model_dump") else c for c in result.content],
-                "isError": result.isError,
+                # mcp==2.0.0 renamed CallToolResult.isError -> is_error (same
+                # 2026-08-22 dependabot bump that broke input_schema and
+                # FastMCP -- see docs/findings/2026-08.md's 2026-08-27 entry).
+                "isError": result.is_error,
             }
 
 

@@ -473,7 +473,7 @@ class TestStdioSubprocessAdapterCallToolSerialization:
 
         class _FakeResult:
             content = [TextContent(type="text", text="hello")]
-            isError = False
+            is_error = False
 
         class _FakeSession:
             async def call_tool(self, name, arguments):
@@ -486,6 +486,31 @@ class TestStdioSubprocessAdapterCallToolSerialization:
         assert result["content"] == [{"type": "text", "text": "hello"}]
         assert "annotations" not in result["content"][0]
         assert "meta" not in result["content"][0]
+
+    def test_call_tool_reads_is_error_not_camelcase_isError(self, engram_gateway):
+        """2026-08-27: mcp==2.0.0 (2026-08-22 dependabot bump) renamed
+        CallToolResult.isError -> is_error, the same rename pattern that
+        already hit Tool.inputSchema -> input_schema. Silent regression:
+        `result.isError` on the real SDK object raised AttributeError,
+        surfacing every kuadrant_code_search (and any other stdio backend)
+        call as a generic "backend failed" error instead of real results."""
+        from mcp.types import TextContent
+
+        adapter = engram_gateway.StdioSubprocessAdapter(command="cmd", args=[])
+
+        class _FakeResult:
+            content = [TextContent(type="text", text="hello")]
+            is_error = True
+
+        class _FakeSession:
+            async def call_tool(self, name, arguments):
+                return _FakeResult()
+
+        adapter._session = _FakeSession()
+
+        result = asyncio.run(adapter.call_tool("some_tool", {}))
+
+        assert result["isError"] is True
 
 
 class TestPrewarmStdioBackends:

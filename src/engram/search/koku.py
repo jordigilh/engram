@@ -308,13 +308,12 @@ def _format_cluster_result(result: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = "stdio") -> None:
-    from mcp.server import FastMCP
+    # mcp==2.0.0 (2026-08-22 dependabot bump) renamed FastMCP to MCPServer
+    # and moved host/port from the constructor to run(). See
+    # docs/findings/2026-08.md's 2026-08-27 entry.
+    from mcp.server.mcpserver import MCPServer as FastMCP
 
-    mcp = FastMCP(
-        "koku-code",
-        host=host,
-        port=port,
-    )
+    mcp = FastMCP("koku-code")
 
     @mcp.tool()
     def koku_code_search(query: str, limit: int = 10) -> str:
@@ -402,7 +401,7 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
         mcp.run(transport="stdio")
     else:
         log.info("Starting koku-code MCP server on %s:%d (sse)", host, port)
-        mcp.run(transport="sse")
+        mcp.run(transport="sse", host=host, port=port)
 
 
 # ---------------------------------------------------------------------------

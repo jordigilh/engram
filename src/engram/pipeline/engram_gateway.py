@@ -171,6 +171,16 @@ def route_call(tool_name: str, catalog: dict[str, tuple[str, str]]) -> tuple[str
 # repo well under budget without losing any tool actually exercised in
 # practice; the dropped administrative tools remain reachable via a direct
 # curl against hindsight-api / the serena daemon if ever genuinely needed.
+#
+# `create_mental_model` added back 2026-08-26: until this repo's own
+# `engram.maintenance.create_mental_models` admin script was the only way to
+# mint a new mental model, project teams (first raised by praxis, wanting a
+# "processes and policies" model none of the 3 pre-seeded praxis-docs models
+# covered) had no self-serve path at all. Re-adding it to every onboarded
+# project's docs/issues surface (not just praxis -- same gap applies
+# everywhere) costs 2 tools per project (docs + issues, where both are
+# wired); kubernaut-family, the highest today at 33, has ample headroom
+# under the ~40 ceiling.
 RELEVANT_HINDSIGHT_TOOLS = frozenset(
     {
         "retain",
@@ -179,6 +189,7 @@ RELEVANT_HINDSIGHT_TOOLS = frozenset(
         "reflect",
         "list_mental_models",
         "get_mental_model",
+        "create_mental_model",
         "refresh_mental_model",
     }
 )
@@ -471,9 +482,31 @@ class StdioSubprocessAdapter:
     async def list_tools(self) -> list[dict]:
         async with self._lock:
             await self._ensure_started()
-            result = await self._session.list_tools()
+            try:
+                result = await self._session.list_tools()
+            except Exception:
+                # Same one-retry-only self-heal as call_tool() (see
+                # _restart()'s docstring). Without this, a subprocess that
+                # dies *after* a previously-successful start leaves
+                # `self._session` set to a dead object forever --
+                # `_ensure_started()` short-circuits on a non-None session,
+                # so every future list_tools() call hits the same broken
+                # pipe and fails identically, with no self-heal (see
+                # docs/findings/2026-08.md, 2026-08-27 entry: dcm's
+                # osac-service-provider Serena process died hours into a
+                # session and silently dropped all 14 serena tools from
+                # every subsequent tools/list, indefinitely, until this fix).
+                await self._restart()
+                result = await self._session.list_tools()
             return [
-                {"name": t.name, "description": t.description or "", "inputSchema": t.inputSchema}
+                # mcp SDK's Tool pydantic model exposes this field as
+                # `input_schema` (snake_case) in the installed version, not
+                # the wire-format `inputSchema` camelCase alias it accepts on
+                # construction -- `t.inputSchema` raised AttributeError on
+                # every real stdio backend's list_tools() call (never caught
+                # by prior tests, which stubbed this dict out entirely
+                # instead of exercising a real mcp.types.Tool instance).
+                {"name": t.name, "description": t.description or "", "inputSchema": t.input_schema}
                 for t in result.tools
             ]
 
@@ -547,6 +580,61 @@ async def _prewarm_stdio_backends(projects: dict[str, dict[str, BackendAdapter]]
                 task.add_done_callback(_prewarm_tasks.discard)
 
 
+async def _prewarm_project_catalogs(projects: dict[str, dict[str, BackendAdapter]], state: dict[str, dict]) -> None:
+    """Eagerly run `aggregate_tools_list()` for every project at gateway
+    startup and populate `state[project]["catalog"]` -- without this,
+    `state[...]["catalog"]` starts as `{}` and stays empty for a given
+    project until *some* client happens to send that project's `tools/list`
+    in this process's lifetime (see `_make_endpoint`'s `tools/list` branch,
+    the only other place that assigns it).
+
+    2026-08-27 incident: kubernaut's client reported `initialize` succeeding
+    ("namespace ready") but every `tools/call` failing with "Unknown tool
+    ... backend is currently down" -- `route_call()` returns None on an
+    empty catalog, which produces exactly that message (see its call site
+    in `handle_tools_call`). Root cause: the gateway process had been
+    restarted (to pick up same-day fixes) while kubernaut's Cursor session
+    was already connected; per `_prewarm_stdio_backends`'s docstring,
+    clients cache `tools/list` per-session and don't re-fetch on their own,
+    so their session kept calling tools by name against the new process's
+    still-empty `state["kubernaut"]["catalog"]`. `_prewarm_stdio_backends`
+    above only warms each stdio subprocess's *connection* so its first real
+    `list_tools()` is fast -- it never actually calls `aggregate_tools_list()`
+    or touches `state`, so it didn't close this gap. This does, for every
+    project (stdio- and HTTP-backed alike), independently of whether any
+    client ever reconnects -- a client whose session predates the restart
+    still needs to reconnect for its *own* cached tool names to refresh,
+    but every *other* client (or that same one after reconnecting) now
+    finds a warm, populated catalog immediately instead of racing the first
+    real `tools/list`.
+
+    Awaits all projects concurrently via `asyncio.gather` rather than firing
+    independent per-project tasks like `_prewarm_stdio_backends` does above:
+    the non-blocking-at-startup property is already provided by the caller
+    wrapping this whole coroutine in its own `asyncio.create_task` (see
+    `_lifespan`), so there's no need to duplicate that here -- and a plain
+    `await` (vs. bare `create_task` calls with no corresponding await) is
+    what actually guarantees this work runs to completion rather than
+    racing `asyncio.run()`'s own shutdown/cancellation in a bare script or
+    test."""
+
+    async def _warm_one_catalog(project: str, backends: dict[str, BackendAdapter]) -> None:
+        try:
+            _tool_defs, catalog, errors = await aggregate_tools_list(backends)
+            state[project]["catalog"] = catalog
+            if errors:
+                log.warning("project %r: backends unavailable during catalog pre-warm: %s", project, errors)
+            log.info("pre-warmed catalog for project %r (%d tools)", project, len(catalog))
+        except Exception:
+            log.warning(
+                "catalog pre-warm failed for project %r -- will populate lazily on first real tools/list",
+                project,
+                exc_info=True,
+            )
+
+    await asyncio.gather(*(_warm_one_catalog(project, backends) for project, backends in projects.items()))
+
+
 def build_app(projects: dict[str, dict[str, BackendAdapter]]):
     """Build the Starlette app: one route per project, each aggregating
     that project's own set of backend adapters. `projects` maps project
@@ -558,9 +646,11 @@ def build_app(projects: dict[str, dict[str, BackendAdapter]]):
     from starlette.responses import Response
     from starlette.routing import Route
 
-    # Cache of (catalog, backends) built lazily per project on first
-    # tools/list, refreshed whenever a new tools/list comes in -- backends
-    # that flap back up are picked up on the next list without a restart.
+    # Cache of (catalog, backends) per project. Populated two ways: eagerly
+    # at startup by _prewarm_project_catalogs() (see its docstring for why
+    # that's necessary, not just nice-to-have), and refreshed on every real
+    # tools/list a client sends -- backends that flap back up are picked up
+    # on the next list without a restart either way.
     state: dict[str, dict] = {name: {"catalog": {}, "backends": backends} for name, backends in projects.items()}
 
     @asynccontextmanager
@@ -569,6 +659,11 @@ def build_app(projects: dict[str, dict[str, BackendAdapter]]):
         # so the gateway can start accepting requests for other projects
         # while these stdio backends warm up in the background.
         asyncio.create_task(_prewarm_stdio_backends(projects))
+        # Separate from the above: populates state[project]["catalog"] for
+        # every project so tools/call works immediately after a restart,
+        # even for a client whose session predates it and never re-sends
+        # tools/list on its own (see _prewarm_project_catalogs's docstring).
+        asyncio.create_task(_prewarm_project_catalogs(projects, state))
         yield
 
     def _make_endpoint(project: str):
@@ -736,7 +831,35 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     registry["kubernaut-console"] = {
         "docs": _hindsight("kubernaut-docs"),
         "issues": _hindsight("kubernaut-issues"),
-        "code": _stdio(f"{venv_bin}/python3", [f"{home}/.hindsight/cocoindex-search.py"], {"COCOINDEX_PG_URL": _PG_URL}),
+        # Shared with kubernaut/kubernaut-operator, NOT a standalone stdio
+        # process (fixed 2026-08-25): this used to spawn
+        # `~/.hindsight/cocoindex-search.py`, a flat symlink the 2026-08-12
+        # src/engram/ package restructuring had already deleted 9 days
+        # before this registry entry was even authored, so it was dead on
+        # arrival -- kubernaut-console's `code` tools silently dropped from
+        # its aggregated catalog every time (see engram_gateway.py's
+        # per-backend degradation). Even had that path still existed, it
+        # was a bare single-repo invocation (no --repo scoping args), so it
+        # could only ever have searched kubernaut-console's own code, never
+        # kubernaut/kubernaut-operator upstream. `kubernaut_http_code`
+        # (engram-search-kubernaut / src/engram/search/kubernaut.py) already
+        # indexes all three repos into one cocoindex.code_embeddings table
+        # and defaults `cocoindex_search`/`cocoindex_pattern_search` to
+        # whole-platform results -- wiring kubernaut-console to it too is
+        # what actually restores operator + kubernaut-upstream code search.
+        "code": kubernaut_http_code,
+        # Added 2026-08-25: kubernaut-console was the only kubernaut-family
+        # repo with no serena entry at all (see this function's module-level
+        # survey comment), despite `KUBERNAUT_FAMILY_PROJECTS` in
+        # serena_multiplex.py already listing "kubernaut-console" as a
+        # registered project on the shared daemon. Wiring it up like every
+        # other family member gives it both symbol-level tools scoped to its
+        # own repo AND read-only cross-repo lookups into kubernaut/
+        # kubernaut-operator via query_project/list_queryable_projects
+        # (project-agnostic tools, forwarded untouched -- see
+        # serena_multiplex.py's PROJECT_AGNOSTIC_TOOLS), with no extra
+        # registry work needed for the "all go repos" half of the ask.
+        "serena": kubernaut_serena("kubernaut-console"),
     }
     registry["kubernaut-docs"] = {
         "docs": _hindsight("kubernaut-docs"),

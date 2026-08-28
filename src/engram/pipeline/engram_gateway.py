@@ -449,9 +449,31 @@ class StdioSubprocessAdapter:
     async def list_tools(self) -> list[dict]:
         async with self._lock:
             await self._ensure_started()
-            result = await self._session.list_tools()
+            try:
+                result = await self._session.list_tools()
+            except Exception:
+                # Same one-retry-only self-heal as call_tool() (see
+                # _restart()'s docstring). Without this, a subprocess that
+                # dies *after* a previously-successful start leaves
+                # `self._session` set to a dead object forever --
+                # `_ensure_started()` short-circuits on a non-None session,
+                # so every future list_tools() call hits the same broken
+                # pipe and fails identically, with no self-heal (see
+                # docs/findings/2026-08.md, 2026-08-27 entry: dcm's
+                # osac-service-provider Serena process died hours into a
+                # session and silently dropped all 14 serena tools from
+                # every subsequent tools/list, indefinitely, until this fix).
+                await self._restart()
+                result = await self._session.list_tools()
             return [
-                {"name": t.name, "description": t.description or "", "inputSchema": t.inputSchema}
+                # mcp SDK's Tool pydantic model exposes this field as
+                # `input_schema` (snake_case) in the installed version, not
+                # the wire-format `inputSchema` camelCase alias it accepts on
+                # construction -- `t.inputSchema` raised AttributeError on
+                # every real stdio backend's list_tools() call (never caught
+                # by prior tests, which stubbed this dict out entirely
+                # instead of exercising a real mcp.types.Tool instance).
+                {"name": t.name, "description": t.description or "", "inputSchema": t.input_schema}
                 for t in result.tools
             ]
 

@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 
 class FakeAdapter:
     """Stands in for a real BackendAdapter (HttpRelayAdapter /
@@ -531,6 +533,63 @@ class TestStdioSubprocessAdapterCallToolSerialization:
         assert result["content"] == [{"type": "text", "text": "hello"}]
         assert "annotations" not in result["content"][0]
         assert "meta" not in result["content"][0]
+
+class TestStdioSubprocessAdapterListToolsSelfHeal:
+    """2026-08-27: dcm's osac-service-provider Serena subprocess died hours
+    into a live gateway session (unlike the 2026-08-25 incidents, this
+    wasn't a cold-start race -- the process had already started
+    successfully once, then exited later). `_ensure_started()` no-ops once
+    `self._session` is set, so every subsequent `list_tools()` call kept
+    hitting the same dead session and failing identically, silently
+    dropping all 14 serena tools from the aggregated catalog on every
+    `tools/list` call for hours with no self-heal -- unlike `call_tool()`,
+    which already retries once via `_restart()`."""
+
+    def test_list_tools_restarts_once_after_a_dead_session_and_succeeds(self, engram_gateway):
+        from mcp.types import Tool
+
+        adapter = engram_gateway.StdioSubprocessAdapter(command="cmd", args=[])
+
+        class _DeadSession:
+            async def list_tools(self):
+                raise RuntimeError("write to closed pipe")
+
+        class _FreshSession:
+            async def list_tools(self):
+                class _Result:
+                    tools = [Tool(name="find_symbol", description="d", inputSchema={"type": "object"})]
+
+                return _Result()
+
+        adapter._session = _DeadSession()
+
+        async def _fake_restart():
+            adapter._session = _FreshSession()
+
+        adapter._restart = _fake_restart
+
+        result = asyncio.run(adapter.list_tools())
+
+        assert [t["name"] for t in result] == ["find_symbol"]
+
+    def test_list_tools_propagates_error_if_restart_also_fails(self, engram_gateway):
+        """Must not swallow a genuinely broken backend -- one retry only,
+        same philosophy as call_tool()."""
+        adapter = engram_gateway.StdioSubprocessAdapter(command="cmd", args=[])
+
+        class _AlwaysDeadSession:
+            async def list_tools(self):
+                raise RuntimeError("still dead")
+
+        adapter._session = _AlwaysDeadSession()
+
+        async def _fake_restart():
+            adapter._session = _AlwaysDeadSession()
+
+        adapter._restart = _fake_restart
+
+        with pytest.raises(RuntimeError, match="still dead"):
+            asyncio.run(adapter.list_tools())
 
 
 class TestPrewarmStdioBackends:

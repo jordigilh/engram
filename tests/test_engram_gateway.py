@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 
 class FakeAdapter:
     """Stands in for a real BackendAdapter (HttpRelayAdapter /
@@ -139,6 +141,18 @@ class TestFilterRelevantTools:
         filtered = engram_gateway.filter_relevant_tools("docs", tools)
 
         assert {t["name"] for t in filtered} == {"recall", "retain"}
+
+    def test_hindsight_backend_keeps_create_mental_model(self, engram_gateway):
+        """2026-08-26: project teams need self-serve mental model creation
+        (previously only possible via this repo's own admin-side
+        `engram.maintenance.create_mental_models` script), so this tool was
+        added back to the relevant set alongside the pre-existing
+        get/list/refresh trio -- update/delete/clear remain filtered out."""
+        tools = [_tool("create_mental_model"), _tool("update_mental_model"), _tool("delete_mental_model")]
+
+        filtered = engram_gateway.filter_relevant_tools("docs", tools)
+
+        assert {t["name"] for t in filtered} == {"create_mental_model"}
 
     def test_issues_backend_uses_the_same_relevant_set_as_docs(self, engram_gateway):
         tools = [_tool("reflect"), _tool("list_directives")]
@@ -289,15 +303,16 @@ class TestBuildProjectRegistry:
     rollout across every onboarded repo (see docs/findings/2026-08.md,
     2026-08-21 rollout entry). Backend heterogeneity is real and must be
     preserved exactly, not normalized away: kubernaut-family already has
-    everything on shared HTTP daemons; koku-family's cocoindex-code is
-    still stdio while its docs/issues/serena are HTTP; dcm/praxis/
-    rhdh-plugins/koku-insights-onprem run cocoindex-code and serena as
-    per-family-shared / per-repo stdio respectively; a few repos are
-    missing one or more backends entirely (kubernaut-console has no
-    serena, kubernaut-docs has no cocoindex-code, engram itself has
-    neither issues nor serena) -- the registry must reflect exactly what
-    each repo already has today, never add a backend that isn't already
-    configured for it."""
+    everything on shared HTTP daemons (as of 2026-08-25, kubernaut-console
+    included -- it was the one family member missing a serena entry despite
+    already being a registered project on the shared daemon, see
+    test_kubernaut_console_has_serena_scoped_to_its_own_repo below); koku-
+    family's cocoindex-code is still stdio while its docs/issues/serena are
+    HTTP; dcm/praxis/rhdh-plugins/koku-insights-onprem run cocoindex-code and
+    serena as per-family-shared / per-repo stdio respectively; kubernaut-docs
+    has no cocoindex-code and engram itself has neither issues nor serena --
+    the registry must reflect exactly what each repo already has today, never
+    add a backend that isn't already configured for it."""
 
     def test_covers_every_onboarded_project(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
@@ -313,11 +328,43 @@ class TestBuildProjectRegistry:
         assert spec["code"] == {"kind": "http", "url": "http://127.0.0.1:8891/mcp"}
         assert spec["serena"] == {"kind": "http", "url": "http://127.0.0.1:8893/mcp/kubernaut-operator"}
 
-    def test_kubernaut_console_has_no_serena(self, engram_gateway):
+    def test_kubernaut_console_has_serena_scoped_to_its_own_repo(self, engram_gateway):
+        """Added 2026-08-25: kubernaut-console was the only kubernaut-family
+        repo with no serena entry, even though serena_multiplex.py's
+        KUBERNAUT_FAMILY_PROJECTS already lists "kubernaut-console" as a
+        registered project on the shared daemon. Its mount pins
+        activate_project to "kubernaut-console" for scoped tool calls
+        (find_symbol, replace_symbol_body, ...), while query_project/
+        list_queryable_projects stay project-agnostic (see
+        serena_multiplex.py's PROJECT_AGNOSTIC_TOOLS) and forward untouched --
+        so this same mount also gives kubernaut-console read-only lookups
+        into kubernaut/kubernaut-operator without any extra registry entry."""
         registry = engram_gateway.build_project_registry("/home/u")
 
-        assert "serena" not in registry["kubernaut-console"]
-        assert set(registry["kubernaut-console"]) == {"docs", "issues", "code"}
+        assert set(registry["kubernaut-console"]) == {"docs", "issues", "code", "serena"}
+        assert registry["kubernaut-console"]["serena"] == {
+            "kind": "http",
+            "url": "http://127.0.0.1:8893/mcp/kubernaut-console",
+        }
+
+    def test_kubernaut_console_code_backend_is_shared_kubernaut_http_daemon(self, engram_gateway):
+        """Regression guard: kubernaut-console's "code" backend previously
+        pointed at a flat `~/.hindsight/cocoindex-search.py` stdio script that
+        the 2026-08-12 package restructuring (src/engram/search/kubernaut.py +
+        console-script rename) had already deleted 9 days before this
+        registry entry was even authored -- so it was dead on arrival, and
+        (being single-repo/no-args, unlike engram-search-kubernaut) would only
+        ever have searched kubernaut-console's own code even if it had run,
+        never kubernaut/kubernaut-operator upstream. The shared
+        :8891 daemon (`engram-search-kubernaut` / src/engram/search/
+        kubernaut.py) already indexes all three repos into one
+        cocoindex.code_embeddings table and defaults `cocoindex_search` to
+        whole-platform results -- the same daemon kubernaut/kubernaut-operator
+        already use -- so pointing kubernaut-console at it too is what actually
+        gives it operator + kubernaut-upstream code search."""
+        registry = engram_gateway.build_project_registry("/home/u")
+
+        assert registry["kubernaut-console"]["code"] == {"kind": "http", "url": "http://127.0.0.1:8891/mcp"}
 
     def test_kubernaut_docs_has_no_cocoindex_code(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
@@ -487,6 +534,63 @@ class TestStdioSubprocessAdapterCallToolSerialization:
         assert "annotations" not in result["content"][0]
         assert "meta" not in result["content"][0]
 
+class TestStdioSubprocessAdapterListToolsSelfHeal:
+    """2026-08-27: dcm's osac-service-provider Serena subprocess died hours
+    into a live gateway session (unlike the 2026-08-25 incidents, this
+    wasn't a cold-start race -- the process had already started
+    successfully once, then exited later). `_ensure_started()` no-ops once
+    `self._session` is set, so every subsequent `list_tools()` call kept
+    hitting the same dead session and failing identically, silently
+    dropping all 14 serena tools from the aggregated catalog on every
+    `tools/list` call for hours with no self-heal -- unlike `call_tool()`,
+    which already retries once via `_restart()`."""
+
+    def test_list_tools_restarts_once_after_a_dead_session_and_succeeds(self, engram_gateway):
+        from mcp.types import Tool
+
+        adapter = engram_gateway.StdioSubprocessAdapter(command="cmd", args=[])
+
+        class _DeadSession:
+            async def list_tools(self):
+                raise RuntimeError("write to closed pipe")
+
+        class _FreshSession:
+            async def list_tools(self):
+                class _Result:
+                    tools = [Tool(name="find_symbol", description="d", inputSchema={"type": "object"})]
+
+                return _Result()
+
+        adapter._session = _DeadSession()
+
+        async def _fake_restart():
+            adapter._session = _FreshSession()
+
+        adapter._restart = _fake_restart
+
+        result = asyncio.run(adapter.list_tools())
+
+        assert [t["name"] for t in result] == ["find_symbol"]
+
+    def test_list_tools_propagates_error_if_restart_also_fails(self, engram_gateway):
+        """Must not swallow a genuinely broken backend -- one retry only,
+        same philosophy as call_tool()."""
+        adapter = engram_gateway.StdioSubprocessAdapter(command="cmd", args=[])
+
+        class _AlwaysDeadSession:
+            async def list_tools(self):
+                raise RuntimeError("still dead")
+
+        adapter._session = _AlwaysDeadSession()
+
+        async def _fake_restart():
+            adapter._session = _AlwaysDeadSession()
+
+        adapter._restart = _fake_restart
+
+        with pytest.raises(RuntimeError, match="still dead"):
+            asyncio.run(adapter.list_tools())
+
 
 class TestPrewarmStdioBackends:
     """2026-08-25: praxis-grid got stuck showing 16 tools after a gateway
@@ -578,3 +682,70 @@ class TestPrewarmStdioBackends:
             # And normal request handling still works while/after this runs.
             response = client.get("/mcp/proj")
             assert response.status_code == 405
+
+
+class TestPrewarmProjectCatalogs:
+    """2026-08-27: kubernaut's client saw `initialize` succeed ("namespace
+    ready") but every `tools/call` fail with "Unknown tool ... backend is
+    currently down" -- caused by `state[project]["catalog"]` starting as
+    `{}` and staying empty until *some* client sends that project's
+    `tools/list` in this process's lifetime. `_prewarm_stdio_backends`
+    (above) only warms each stdio subprocess's connection, never touches
+    `state`, so it didn't close this gap for a client whose session
+    predates a gateway restart and never re-sends `tools/list` on its own."""
+
+    def test_prewarms_catalog_for_every_project(self, engram_gateway):
+        backend_a = FakeAdapter(tools=[_tool("recall")])
+        backend_b = FakeAdapter(tools=[_tool("cocoindex_search")])
+        projects = {
+            "proj1": {"docs": backend_a},
+            "proj2": {"code": backend_b},
+        }
+        state = {name: {"catalog": {}, "backends": backends} for name, backends in projects.items()}
+
+        asyncio.run(engram_gateway._prewarm_project_catalogs(projects, state))
+
+        assert "docs_recall" in state["proj1"]["catalog"]
+        assert "cocoindex_search" in state["proj2"]["catalog"]
+
+    def test_tools_call_works_immediately_after_prewarm_with_no_prior_tools_list(self, engram_gateway):
+        """Direct regression test for the reported symptom: a tools/call for
+        a project that has never had tools/list called against it in this
+        process must still succeed once _prewarm_project_catalogs has run,
+        instead of route_call() finding an empty catalog and returning the
+        "Unknown tool ... backend is currently down" error."""
+        backend = FakeAdapter(tools=[_tool("recall")], call_results={"recall": {"content": [], "isError": False}})
+        projects = {"kubernaut": {"docs": backend}}
+        state = {name: {"catalog": {}, "backends": backends} for name, backends in projects.items()}
+
+        asyncio.run(engram_gateway._prewarm_project_catalogs(projects, state))
+
+        message = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "docs_recall", "arguments": {}}}
+        result = asyncio.run(engram_gateway.handle_tools_call(message, state["kubernaut"]["catalog"], state["kubernaut"]["backends"]))
+
+        assert result["result"]["isError"] is False
+
+    def test_prewarm_failure_for_one_project_does_not_raise_or_block_others(self, engram_gateway):
+        good = FakeAdapter(tools=[_tool("recall")])
+        broken = FakeAdapter(list_error=RuntimeError("backend down"))
+        projects = {"good_proj": {"docs": good}, "bad_proj": {"docs": broken}}
+        state = {name: {"catalog": {}, "backends": backends} for name, backends in projects.items()}
+
+        asyncio.run(engram_gateway._prewarm_project_catalogs(projects, state))
+
+        assert "docs_recall" in state["good_proj"]["catalog"]
+        assert state["bad_proj"]["catalog"] == {}
+
+    def test_build_app_schedules_catalog_prewarm_on_startup(self, engram_gateway):
+        import time
+
+        from starlette.testclient import TestClient
+
+        backend = FakeAdapter(tools=[_tool("recall")])
+        app = engram_gateway.build_app(projects={"proj": {"docs": backend}})
+
+        with TestClient(app):
+            deadline = time.monotonic() + 2.0
+            while backend.list_calls == 0 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert backend.list_calls > 0

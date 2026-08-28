@@ -140,6 +140,18 @@ class TestFilterRelevantTools:
 
         assert {t["name"] for t in filtered} == {"recall", "retain"}
 
+    def test_hindsight_backend_keeps_create_mental_model(self, engram_gateway):
+        """2026-08-26: project teams need self-serve mental model creation
+        (previously only possible via this repo's own admin-side
+        `engram.maintenance.create_mental_models` script), so this tool was
+        added back to the relevant set alongside the pre-existing
+        get/list/refresh trio -- update/delete/clear remain filtered out."""
+        tools = [_tool("create_mental_model"), _tool("update_mental_model"), _tool("delete_mental_model")]
+
+        filtered = engram_gateway.filter_relevant_tools("docs", tools)
+
+        assert {t["name"] for t in filtered} == {"create_mental_model"}
+
     def test_issues_backend_uses_the_same_relevant_set_as_docs(self, engram_gateway):
         tools = [_tool("reflect"), _tool("list_directives")]
 

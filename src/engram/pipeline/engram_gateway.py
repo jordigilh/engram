@@ -160,6 +160,16 @@ def route_call(tool_name: str, catalog: dict[str, tuple[str, str]]) -> tuple[str
 # repo well under budget without losing any tool actually exercised in
 # practice; the dropped administrative tools remain reachable via a direct
 # curl against hindsight-api / the serena daemon if ever genuinely needed.
+#
+# `create_mental_model` added back 2026-08-26: until this repo's own
+# `engram.maintenance.create_mental_models` admin script was the only way to
+# mint a new mental model, project teams (first raised by praxis, wanting a
+# "processes and policies" model none of the 3 pre-seeded praxis-docs models
+# covered) had no self-serve path at all. Re-adding it to every onboarded
+# project's docs/issues surface (not just praxis -- same gap applies
+# everywhere) costs 2 tools per project (docs + issues, where both are
+# wired); kubernaut-family, the highest today at 33, has ample headroom
+# under the ~40 ceiling.
 RELEVANT_HINDSIGHT_TOOLS = frozenset(
     {
         "retain",
@@ -168,6 +178,7 @@ RELEVANT_HINDSIGHT_TOOLS = frozenset(
         "reflect",
         "list_mental_models",
         "get_mental_model",
+        "create_mental_model",
         "refresh_mental_model",
     }
 )

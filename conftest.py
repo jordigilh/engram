@@ -143,6 +143,15 @@ def praxis_cocoindex_flows() -> ModuleType:
 
 
 @pytest.fixture(scope="session")
+def kuadrant_cocoindex_flows() -> ModuleType:
+    """kuadrant.py (Kuadrant org ingestion-only onboarding). PG_POOL is
+    "kuadrant_repo_pg_pool" for the same process-global-collision reason as
+    the other *_cocoindex_flows fixtures' PG_POOL above."""
+    from engram.flows import kuadrant as kuadrant_cocoindex_flows
+    return kuadrant_cocoindex_flows
+
+
+@pytest.fixture(scope="session")
 def ingest_docs() -> ModuleType:
     from engram.pipeline import ingest_docs
     return ingest_docs
@@ -185,6 +194,15 @@ def rhdh_plugins_search() -> ModuleType:
     docstring."""
     from engram.search import rhdh_plugins as rhdh_plugins_search
     return rhdh_plugins_search
+
+
+@pytest.fixture(scope="session")
+def kuadrant_search() -> ModuleType:
+    """kuadrant.py's code search module (engram.search.kuadrant) -- same
+    no-flow/no-ContextKey-at-import-time shape as the other *_search
+    fixtures."""
+    from engram.search import kuadrant as kuadrant_search
+    return kuadrant_search
 
 
 @pytest.fixture(scope="session")

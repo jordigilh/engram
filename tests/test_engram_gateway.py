@@ -65,6 +65,14 @@ class TestPrefixedToolName:
         assert engram_gateway.prefixed_tool_name("code", "praxis_code_search") == "praxis_code_search"
         assert engram_gateway.prefixed_tool_name("serena", "find_symbol") == "find_symbol"
 
+    def test_kuadrant_docs_and_issues_get_project_qualified_names(self, engram_gateway):
+        """kuadrant is cross-mounted as a second MCP server into every
+        praxis-* repo -- a bare docs_recall/issues_recall would collide
+        with that repo's own "engram" mount, so these get a longer,
+        project-qualified prefix instead of the usual docs_/issues_."""
+        assert engram_gateway.prefixed_tool_name("kuadrant_docs", "recall") == "kuadrant_docs_recall"
+        assert engram_gateway.prefixed_tool_name("kuadrant_issues", "recall") == "kuadrant_issues_recall"
+
 
 class TestBuildCatalog:
     def test_unprefixed_backends_use_raw_name(self, engram_gateway):
@@ -163,6 +171,24 @@ class TestFilterRelevantTools:
 
     def test_empty_tool_list_stays_empty(self, engram_gateway):
         assert engram_gateway.filter_relevant_tools("docs", []) == []
+
+    def test_kuadrant_docs_and_issues_are_recall_only(self, engram_gateway):
+        """2026-08-27: kuadrant is prior-art reference material cross-mounted
+        into every praxis-* repo -- retain/reflect/mental-model management
+        stay filtered out even though they're kept for kuadrant's own
+        "docs"/"issues" keys used elsewhere; nobody retains into Kuadrant's
+        banks from a praxis window."""
+        tools = [_tool("recall"), _tool("retain"), _tool("reflect"), _tool("create_mental_model")]
+
+        assert {t["name"] for t in engram_gateway.filter_relevant_tools("kuadrant_docs", tools)} == {"recall"}
+        assert {t["name"] for t in engram_gateway.filter_relevant_tools("kuadrant_issues", tools)} == {"recall"}
+
+    def test_kuadrant_code_keeps_only_search(self, engram_gateway):
+        tools = [_tool("kuadrant_code_search"), _tool("kuadrant_code_pattern_search"), _tool("kuadrant_call_graph_blast_radius")]
+
+        filtered = engram_gateway.filter_relevant_tools("kuadrant_code", tools)
+
+        assert {t["name"] for t in filtered} == {"kuadrant_code_search"}
 
 
 class TestAggregateToolsList:
@@ -302,7 +328,7 @@ class TestBuildProjectRegistry:
     def test_covers_every_onboarded_project(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
 
-        assert len(registry) == 34
+        assert len(registry) == 35
 
     def test_kubernaut_family_is_fully_http_already(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
@@ -385,6 +411,31 @@ class TestBuildProjectRegistry:
         registry = engram_gateway.build_project_registry("/home/u")
 
         assert registry["dcm-cli"]["code"]["env"]["HF_HUB_OFFLINE"] == "1"
+
+    def test_kuadrant_is_one_entry_not_one_per_repo(self, engram_gateway):
+        """2026-08-27: unlike every other family, Kuadrant's 8 repos are
+        ingestion-only prior-art (nobody opens them as a Cursor workspace),
+        so they collapse into a single "kuadrant" registry entry meant to
+        be cross-mounted into praxis-* repos, not 8 per-repo entries."""
+        registry = engram_gateway.build_project_registry("/home/u")
+
+        assert "kuadrant" in registry
+        for repo in ("kuadrant-operator", "limitador", "wasm-shim", "architecture", "authorino"):
+            assert repo not in registry
+
+    def test_kuadrant_has_no_serena(self, engram_gateway):
+        registry = engram_gateway.build_project_registry("/home/u")
+
+        assert set(registry["kuadrant"]) == {"kuadrant_docs", "kuadrant_issues", "kuadrant_code"}
+
+    def test_kuadrant_backends_point_at_their_own_banks_and_search_server(self, engram_gateway):
+        registry = engram_gateway.build_project_registry("/home/u")
+
+        spec = registry["kuadrant"]
+        assert spec["kuadrant_docs"] == {"kind": "http", "url": "http://localhost:8888/mcp/kuadrant-docs/"}
+        assert spec["kuadrant_issues"] == {"kind": "http", "url": "http://localhost:8888/mcp/kuadrant-issues/"}
+        assert spec["kuadrant_code"]["kind"] == "stdio"
+        assert spec["kuadrant_code"]["command"] == "/home/u/.hindsight/venv/bin/engram-search-kuadrant"
 
 
 class TestBuildBackendAdapters:

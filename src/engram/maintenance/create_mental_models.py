@@ -365,6 +365,27 @@ MENTAL_MODELS = [
         "trigger": {"mode": "full", "refresh_after_consolidation": False},
         "tags": ["praxis"],
     },
+    # kuadrant-docs/kuadrant-issues: ingestion-only prior-art reference for
+    # praxis-proxy (2026-08-27 onboarding) -- see engram.flows.kuadrant's
+    # module docstring. No cursor-memory entry: nobody develops against
+    # these 8 read-only reference checkouts, so there's no coding-
+    # conventions/workflow-preferences signal to extract a model from.
+    {
+        "bank": "kuadrant-docs",
+        "id": "kuadrant-architecture",
+        "name": "Kuadrant Architecture",
+        "source_query": "How is Kuadrant (the multi-cluster API/AI gateway policy suite) structured? Describe Authorino's external authorization model, Limitador's rate limiting, wasm-shim's Envoy WASM filter integration, DNSPolicy/TLSPolicy, and the AuthPolicy/RateLimitPolicy/DNSPolicy policy-attachment pattern via the Kubernetes Gateway API.",
+        "max_tokens": 4096,
+        "trigger": {"mode": "full", "refresh_after_consolidation": False},
+    },
+    {
+        "bank": "kuadrant-issues",
+        "id": "kuadrant-active-priorities",
+        "name": "Kuadrant Active Priorities",
+        "source_query": "What are the current open issues, design decisions, and direction across the Kuadrant org (kuadrant-operator, limitador, authorino, wasm-shim, dns-operator)?",
+        "max_tokens": 4096,
+        "trigger": {"mode": "delta", "refresh_after_consolidation": False},
+    },
 ]
 
 
@@ -412,7 +433,7 @@ def refresh_model(bank: str, model_id: str) -> bool:
 
 
 def list_models():
-    banks = ["cursor-memory", "kubernaut-docs", "kubernaut-issues", "dcm-docs", "dcm-issues", "engram-docs", "koku-docs", "koku-issues", "praxis-docs", "praxis-issues", "rhdh-plugins-docs", "rhdh-plugins-issues"]
+    banks = ["cursor-memory", "kubernaut-docs", "kubernaut-issues", "dcm-docs", "dcm-issues", "engram-docs", "koku-docs", "koku-issues", "praxis-docs", "praxis-issues", "rhdh-plugins-docs", "rhdh-plugins-issues", "kuadrant-docs", "kuadrant-issues"]
     for bank in banks:
         result = api_request("GET", f"/v1/default/banks/{bank}/mental-models")
         items = result.get("items", [])

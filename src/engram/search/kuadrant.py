@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
-r"""Koku code search MCP server.
+r"""Kuadrant code search MCP server.
 
 Provides hybrid code search (dense vectors + BM25) over the
-cocoindex.koku_code_embeddings table. Results are fused using Reciprocal Rank
-Fusion (RRF) so both semantic similarity and exact keyword matches
-contribute to ranking.
+cocoindex.kuadrant_code_embeddings table (Go + Rust source across 7 of the
+8 onboarded Kuadrant repos -- `architecture` has no source code). Results
+are fused using Reciprocal Rank Fusion (RRF) so both semantic similarity
+and exact keyword matches contribute to ranking.
+
+Only `kuadrant_code_search` is exposed through the shared, recall-only
+`kuadrant` gateway mount wired into every praxis-* repo (see
+engram_gateway.py's RELEVANT_TOOLS_BY_BACKEND["kuadrant_code"]) -- the
+pattern-search and call-graph tools below exist for direct CLI/local use
+only, same as every other onboarded org's search module, but aren't part
+of the cross-mounted surface: Kuadrant is ingested for reference recall,
+not for active refactoring-impact analysis.
 
 Usage:
-    python3 koku-cocoindex-search.py                    # Start MCP server (stdio)
-    python3 koku-cocoindex-search.py --query "how does the report processing pipeline work"
-    python3 koku-cocoindex-search.py --query "ReportChargeUpdater" --mode dense
-    python3 koku-cocoindex-search.py --query "ReportChargeUpdater" --mode bm25
-    python3 koku-cocoindex-search.py --pattern 'def \NAME(\(A*\)):' --language python
+    python3 kuadrant-cocoindex-search.py                    # Start MCP server (stdio)
+    python3 kuadrant-cocoindex-search.py --query "how does limitador rate limit requests"
+    python3 kuadrant-cocoindex-search.py --query "AuthConfig" --mode dense
+    python3 kuadrant-cocoindex-search.py --pattern 'func \NAME(\(A*\))' --language go
+    python3 kuadrant-cocoindex-search.py --blast-radius Enforce --depth 2 --language go
 """
 
 import argparse
@@ -34,7 +43,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
-log = logging.getLogger("koku-cocoindex-search")
+log = logging.getLogger("kuadrant-cocoindex-search")
 
 PG_URL = os.environ.get(
     "COCOINDEX_PG_URL",
@@ -43,20 +52,31 @@ PG_URL = os.environ.get(
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 RRF_K = 60
 
-# Same env var (and default) as koku-cocoindex-flows.py, so pattern search
-# walks the exact same checkout the ingestion flow indexes.
-KOKU_REPO_DIR = pathlib.Path(os.environ.get(
-    "KOKU_REPO_DIR", os.path.expanduser("~/go/src/github.com/project-koku/koku"),
+# Same env var (and default) as kuadrant-cocoindex-flows.py, so pattern
+# search walks the exact same checkouts the ingestion flow indexes.
+KUADRANT_ORG_DIR = pathlib.Path(os.environ.get(
+    "KUADRANT_ORG_DIR", os.path.expanduser("~/go/src/github.com/Kuadrant"),
 ))
 
-# (repo_tag, root, included_patterns, excluded_patterns) -- mirrors
-# koku-cocoindex-flows.py's localfs.walk_dir(path_matcher=
-# PatternFilePathMatcher(...)) call exactly.
+# (repo_tag, root, included_patterns, excluded_patterns, language) -- mirrors
+# kuadrant-cocoindex-flows.py's KUADRANT_REPOS/_CODE_PATTERNS exactly.
+# `architecture` (no source) is excluded, same as code_main.
+_REPO_LANGUAGES: dict[str, str] = {
+    "kuadrant-operator": "go",
+    "limitador": "rust",
+    "wasm-shim": "rust",
+    "authorino": "go",
+    "dns-operator": "go",
+    "authorino-operator": "go",
+    "limitador-operator": "go",
+}
+_LANGUAGE_PATTERNS: dict[str, tuple[list[str], list[str]]] = {
+    "go": (["**/*.go"], ["**/vendor/**", "**/*_test.go", "**/zz_generated*"]),
+    "rust": (["**/*.rs"], ["**/target/**"]),
+}
 _PATTERN_SEARCH_ROOTS = [
-    ("koku", KOKU_REPO_DIR, ["**/*.py"], [
-        "**/migrations/**", "**/tests/**", "**/test_*.py",
-        "**/node_modules/**", "**/.venv/**", "**/venv/**", "**/vendor/**",
-    ]),
+    (tag, KUADRANT_ORG_DIR / tag, *_LANGUAGE_PATTERNS[language])
+    for tag, language in _REPO_LANGUAGES.items()
 ]
 
 _model = None
@@ -118,7 +138,7 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                     """
                     SELECT id, filepath, chunk_index, code,
                            1 - (embedding <=> %s::vector) AS score
-                    FROM cocoindex.koku_code_embeddings
+                    FROM cocoindex.kuadrant_code_embeddings
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
                     """,
@@ -139,7 +159,7 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                         """
                         SELECT id, filepath, chunk_index, code,
                                ts_rank_cd(search_vector, to_tsquery('simple', %s)) AS score
-                        FROM cocoindex.koku_code_embeddings
+                        FROM cocoindex.kuadrant_code_embeddings
                         WHERE search_vector @@ to_tsquery('simple', %s)
                         ORDER BY score DESC
                         LIMIT %s
@@ -193,23 +213,17 @@ def _format_results(query: str, results: list[dict], mode: str = "hybrid") -> st
 
 def pattern_search_code(pattern: str, language: str, limit: int = 10) -> list[dict[str, Any]]:
     """Structural ("by-example") code search via CocoIndex's CodePattern --
-    tree-sitter AST matching against the live koku checkout.
-
-    Unlike search_code() above, there is no structural-pattern index to
-    query: CodePattern.match_file() parses source directly, so this walks
-    the same file set koku-cocoindex-flows.py already ingests (see
-    _PATTERN_SEARCH_ROOTS / chunking.find_code_files()) for every call.
-    Complements, not replaces, search_code() (semantic/BM25 "what does X
-    do") and Serena (type-aware find-references/diagnostics): this is
-    purely syntactic "find code shaped like X", with no type resolution and
-    no cross-file symbol graph (see docs/FINDINGS.md 2026-08-07).
-    """
+    tree-sitter AST matching against the live Kuadrant checkouts. Only
+    repos matching `language` are searched (mirrors code_main's per-repo
+    language selection)."""
     from cocoindex.ops.code import CodePattern, render_match
     from cocoindex.ops.text import detect_code_language
 
     cp = CodePattern(pattern, language)
     results: list[dict[str, Any]] = []
     for repo_tag, root, included, excluded in _PATTERN_SEARCH_ROOTS:
+        if _REPO_LANGUAGES.get(repo_tag) != language:
+            continue
         if len(results) >= limit:
             break
         for path in chunking.find_code_files(root, included, excluded):
@@ -235,7 +249,6 @@ def pattern_search_code(pattern: str, language: str, limit: int = 10) -> list[di
 
 
 def _format_pattern_results(pattern: str, language: str, results: list[dict]) -> str:
-    """Format structural pattern matches as readable text for the agent."""
     if not results:
         return f'No structural matches for language={language} pattern: {pattern}'
 
@@ -248,46 +261,41 @@ def _format_pattern_results(pattern: str, language: str, results: list[dict]) ->
 
 
 # ---------------------------------------------------------------------------
-# Call-graph queries (docs/CALL_GRAPH_CLUSTERING.md, issue #43 -- rollout
-# Phase 1: first org past the original engram-only spike, Python patterns
-# already proven there, zero new language work needed here)
+# Call graph -- CLI/local-use only (not exposed via the cross-mounted
+# kuadrant gateway surface, see module docstring). One graph per language:
+# callgraph.build_multi_repo_call_graph_with_stats() takes a single
+# `language`, so a mixed Go+Rust org resolves each language's repos
+# independently rather than merging into one graph -- consistent with the
+# existing per-org precedent (praxis.py/dcm.py are each single-language;
+# no onboarded org has needed a cross-language merge yet).
 # ---------------------------------------------------------------------------
-#
-# Thin wrappers around callgraph.py's generic multi-org query/format layer:
-# this module only supplies which root/language to build from. Reuses
-# _PATTERN_SEARCH_ROOTS's single entry so the call graph is built from
-# exactly the same file set pattern_search_code() already searches -- never
-# a second, drifting definition of "what counts as koku's source."
 
-def _build_graph_with_timing():
-    _repo_tag, root, included, excluded = _PATTERN_SEARCH_ROOTS[0]
-    return callgraph.build_call_graph_with_stats(
-        root, included=included, excluded=excluded, language="python", logger=log,
+def _roots_for_language(language: str) -> list[tuple[str, pathlib.Path, list[str], list[str]]]:
+    return [r for r in _PATTERN_SEARCH_ROOTS if _REPO_LANGUAGES.get(r[0]) == language]
+
+
+def _build_graph_with_timing(language: str):
+    return callgraph.build_multi_repo_call_graph_with_stats(
+        _roots_for_language(language), language=language, logger=log,
     )
 
 
-def call_graph_blast_radius(function: str, depth: int = 2) -> dict[str, Any]:
+def call_graph_blast_radius(function: str, depth: int = 2, language: str = "go") -> dict[str, Any]:
     """Who (transitively) calls `function`, up to `depth` hops -- "what
-    breaks if I change this." See docs/CALL_GRAPH_CLUSTERING.md for the
-    accuracy ceiling (name-based resolution, no type info)."""
-    graph = _build_graph_with_timing()
+    breaks if I change this," scoped to one language's repos at a time."""
+    graph = _build_graph_with_timing(language)
     return callgraph.query_blast_radius(graph, function, depth=depth)
 
 
-def call_graph_shortest_path(source: str, target: str) -> dict[str, Any]:
+def call_graph_shortest_path(source: str, target: str, language: str = "go") -> dict[str, Any]:
     """Does `source` ever reach `target` through a chain of calls, and how."""
-    graph = _build_graph_with_timing()
+    graph = _build_graph_with_timing(language)
     return callgraph.query_shortest_path(graph, source, target)
 
 
-def call_graph_get_cluster(function: str) -> dict[str, Any]:
-    """Which Leiden community `function` belongs to, and its other members.
-
-    Clustering quality depends entirely on the underlying graph's structure:
-    a small, centralized codebase may legitimately produce one dominant
-    cluster or many singletons -- that reflects the codebase, not a broken
-    clustering step (see docs/CALL_GRAPH_CLUSTERING.md)."""
-    graph = _build_graph_with_timing()
+def call_graph_get_cluster(function: str, language: str = "go") -> dict[str, Any]:
+    """Which Leiden community `function` belongs to, and its other members."""
+    graph = _build_graph_with_timing(language)
     return callgraph.query_get_cluster(graph, function)
 
 
@@ -313,16 +321,19 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
     # docs/findings/2026-08.md's 2026-08-27 entry.
     from mcp.server.mcpserver import MCPServer as FastMCP
 
-    mcp = FastMCP("koku-code")
+    mcp = FastMCP("kuadrant-code")
 
     @mcp.tool()
-    def koku_code_search(query: str, limit: int = 10) -> str:
-        """Hybrid code search over the Koku codebase.
+    def kuadrant_code_search(query: str, limit: int = 10) -> str:
+        """Hybrid code search over the Kuadrant Go/Rust codebases (7 repos:
+        kuadrant-operator, limitador, wasm-shim, authorino, dns-operator,
+        authorino-operator, limitador-operator -- `architecture` has no
+        source code). Prior-art reference material for praxis-proxy.
 
         Combines dense vector similarity and BM25 keyword matching via
-        Reciprocal Rank Fusion for best results.  Works equally well for:
-        - conceptual queries: "how does the report processing pipeline work?"
-        - exact identifiers: "ParseConfig"
+        Reciprocal Rank Fusion. Works equally well for:
+        - conceptual queries: "how does limitador rate limit requests?"
+        - exact identifiers: "AuthConfig"
 
         Returns ranked code snippets with file paths and relevance scores.
         Prefer this over Grep when searching by concept rather than exact text.
@@ -331,76 +342,54 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
         return _format_results(query, results)
 
     @mcp.tool()
-    def koku_code_pattern_search(pattern: str, language: str = "python", limit: int = 10) -> str:
-        r"""Structural ("by-example") code search over the Koku codebase.
+    def kuadrant_code_pattern_search(pattern: str, language: str = "go", limit: int = 10) -> str:
+        r"""Structural ("by-example") code search over the Kuadrant
+        Go/Rust codebases, scoped to one language's repos at a time.
 
         For "find code shaped like X" -- e.g. every function matching a
-        signature -- not "find code about X" (use koku_code_search for
+        signature -- not "find code about X" (use kuadrant_code_search for
         that). Matches by tree-sitter AST shape, not text/regex.
 
         Pattern syntax: write an example of the shape you want, using `\`
         + a name for a metavariable (matches one node) or `\(NAME*\)`
         (matches zero or more, e.g. an argument list). Omit a body entirely
-        to mean "don't care what's inside" -- e.g. `def \NAME(\(A*\)):`
-        matches any Python function/method regardless of body or args.
-
-        This is purely syntactic: it does NOT resolve types, can't find
-        references/callers, and has no diagnostics -- use Serena for that.
-        Complementary to, not a replacement for, Serena. Note: koku's heavy
-        Celery/Django-signal use means dynamically-dispatched functions
-        (task handlers, signal receivers) match here by shape same as any
-        other function, which Serena's static analysis can miss.
+        to mean "don't care what's inside".
         """
         results = pattern_search_code(pattern, language, limit=min(limit, 20))
         return _format_pattern_results(pattern, language, results)
 
     @mcp.tool()
-    def koku_call_graph_blast_radius(function: str, depth: int = 2) -> str:
-        """What (transitively) calls `function` in the Koku codebase, up to
-        `depth` hops -- "what breaks if I change this."
+    def kuadrant_call_graph_blast_radius(function: str, depth: int = 2, language: str = "go") -> str:
+        """What (transitively) calls `function` across one language's
+        Kuadrant repos (go or rust), up to `depth` hops.
 
-        `function` may be a bare name ("get_report") if unambiguous, or a
-        qualified name ("koku/report.py::get_report").
-
-        Call resolution is purely name-based (no type info), so common
-        method names shared across unrelated functions can produce
-        false-positive edges, and dynamic dispatch/external calls can't be
-        seen at all (see docs/CALL_GRAPH_CLUSTERING.md). Rebuilds the call
-        graph fresh on every call (no persisted index).
+        Call resolution is purely name-based (no type info) and per-repo
+        only. Rebuilds the call graph fresh on every call (no persisted
+        index). See docs/CALL_GRAPH_CLUSTERING.md.
         """
-        result = call_graph_blast_radius(function, depth=depth)
+        result = call_graph_blast_radius(function, depth=depth, language=language)
         return _format_blast_radius_result(result)
 
     @mcp.tool()
-    def koku_call_graph_shortest_path(source: str, target: str) -> str:
-        """Does `source` ever reach `target` through a chain of calls in the
-        Koku codebase, and how.
-
-        Same name-based-resolution caveat as koku_call_graph_blast_radius
-        applies (see its docstring).
-        """
-        result = call_graph_shortest_path(source, target)
+    def kuadrant_call_graph_shortest_path(source: str, target: str, language: str = "go") -> str:
+        """Does `source` ever reach `target` through a chain of calls
+        within one language's Kuadrant repos (go or rust), and how."""
+        result = call_graph_shortest_path(source, target, language=language)
         return _format_shortest_path_result(result)
 
     @mcp.tool()
-    def koku_call_graph_get_cluster(function: str) -> str:
+    def kuadrant_call_graph_get_cluster(function: str, language: str = "go") -> str:
         """Which cluster of related functions (via Leiden community
-        detection over the call graph) `function` belongs to in the Koku
-        codebase, and its other members.
-
-        Same name-based-resolution caveat as koku_call_graph_blast_radius
-        applies (see its docstring). A small, centralized module may
-        legitimately produce one dominant cluster or many singletons; that
-        reflects the codebase, not a broken tool.
-        """
-        result = call_graph_get_cluster(function)
+        detection over the call graph) `function` belongs to, within one
+        language's Kuadrant repos."""
+        result = call_graph_get_cluster(function, language=language)
         return _format_cluster_result(result)
 
     if transport == "stdio":
-        log.info("Starting koku-code MCP server (stdio)")
+        log.info("Starting kuadrant-code MCP server (stdio)")
         mcp.run(transport="stdio")
     else:
-        log.info("Starting koku-code MCP server on %s:%d (sse)", host, port)
+        log.info("Starting kuadrant-code MCP server on %s:%d (sse)", host, port)
         mcp.run(transport="sse", host=host, port=port)
 
 
@@ -418,28 +407,28 @@ def _run_cli_pattern_query(pattern: str, language: str, limit: int = 10) -> None
     print(_format_pattern_results(pattern, language, results))
 
 
-def _run_cli_blast_radius(function: str, depth: int) -> None:
-    result = call_graph_blast_radius(function, depth=depth)
+def _run_cli_blast_radius(function: str, depth: int, language: str) -> None:
+    result = call_graph_blast_radius(function, depth=depth, language=language)
     print(_format_blast_radius_result(result))
 
 
-def _run_cli_shortest_path(source: str, target: str) -> None:
-    result = call_graph_shortest_path(source, target)
+def _run_cli_shortest_path(source: str, target: str, language: str) -> None:
+    result = call_graph_shortest_path(source, target, language=language)
     print(_format_shortest_path_result(result))
 
 
-def _run_cli_cluster(function: str) -> None:
-    result = call_graph_get_cluster(function)
+def _run_cli_cluster(function: str, language: str) -> None:
+    result = call_graph_get_cluster(function, language=language)
     print(_format_cluster_result(result))
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Koku code search — MCP server + CLI"
+        description="Kuadrant code search — MCP server + CLI"
     )
     parser.add_argument("--query", "-q", help="Run a single query and exit")
     parser.add_argument("--pattern", help="Run a single structural pattern query and exit")
-    parser.add_argument("--language", default="python", help="Language for --pattern (default: python)")
+    parser.add_argument("--language", default="go", choices=["go", "rust"], help="Language scope (default: go)")
     parser.add_argument("--limit", "-n", type=int, default=10, help="Max results (default: 10)")
     parser.add_argument("--mode", "-m", default="hybrid", choices=["hybrid", "dense", "bm25"],
                         help="Search mode (default: hybrid)")
@@ -455,11 +444,11 @@ def main():
     if args.pattern:
         _run_cli_pattern_query(args.pattern, args.language, limit=args.limit)
     elif args.blast_radius:
-        _run_cli_blast_radius(args.blast_radius, depth=args.depth)
+        _run_cli_blast_radius(args.blast_radius, depth=args.depth, language=args.language)
     elif args.shortest_path:
-        _run_cli_shortest_path(*args.shortest_path)
+        _run_cli_shortest_path(*args.shortest_path, language=args.language)
     elif args.cluster:
-        _run_cli_cluster(args.cluster)
+        _run_cli_cluster(args.cluster, language=args.language)
     elif args.query:
         _run_cli_query(args.query, limit=args.limit, mode=args.mode)
     else:

@@ -6,7 +6,9 @@ this module existed.
 
 Graduated from a single-repo (`praxis-grid`) spike on 2026-08-21 to cover
 every onboarded repo across all families (kubernaut, koku, dcm, praxis,
-rhdh-plugins, engram itself) after the spike found no fundamental blocker --
+rhdh-plugins, engram itself, and -- as a single cross-mounted recall-only
+entry rather than one-mount-per-repo, see its own registry comment --
+kuadrant) after the spike found no fundamental blocker --
 see docs/findings/2026-08.md's 2026-08-21 entries for the spike results and
 the full-rollout survey/decisions. `build_project_registry()` below is the
 single source of truth for what each repo gets.
@@ -82,7 +84,16 @@ FORWARD_TIMEOUT_S = 60.0
 # therefore need disambiguating. Anything not in this set (code, serena)
 # passes through unprefixed -- verified empirically that their tool names
 # don't collide with each other or with docs/issues (see plan).
-PREFIXED_BACKENDS = frozenset({"docs", "issues"})
+#
+# kuadrant_docs/kuadrant_issues added 2026-08-27: the "kuadrant" project
+# entry is cross-mounted as a *second* MCP server into every praxis-*
+# repo's .cursor/mcp.json (see build_project_registry()'s "kuadrant" entry
+# and RELEVANT_TOOLS_BY_BACKEND below) alongside that repo's own "engram"
+# mount -- two independent MCP servers both offering a bare "recall" tool
+# would collide client-side, so these get project-qualified names
+# (kuadrant_docs_recall, kuadrant_issues_recall) instead of the usual
+# docs_recall/issues_recall.
+PREFIXED_BACKENDS = frozenset({"docs", "issues", "kuadrant_docs", "kuadrant_issues"})
 
 
 class BackendAdapter(Protocol):
@@ -183,6 +194,25 @@ RELEVANT_HINDSIGHT_TOOLS = frozenset(
     }
 )
 
+# Recall-only variant for cross-project reference mounts (2026-08-27,
+# Kuadrant onboarding): "kuadrant" is prior-art reference material ingested
+# for recall from *other* projects' workspaces, not something anyone
+# retains into, reflects on, or manages mental models for from a praxis
+# window -- that admin/curation work happens wherever the ingestion itself
+# runs. Cross-mounting the full RELEVANT_HINDSIGHT_TOOLS set (8 tools x 2
+# backends = 16) into every praxis-* repo on top of that repo's own ~33-35
+# tools would reliably blow past Cursor's ~40-tool ceiling (see
+# RELEVANT_HINDSIGHT_TOOLS's own comment above); trimming to just `recall`
+# keeps the added footprint to 1 tool per backend.
+RECALL_ONLY_HINDSIGHT_TOOLS = frozenset({"recall"})
+
+# Same rationale as RECALL_ONLY_HINDSIGHT_TOOLS, for kuadrant's code-search
+# backend: only the semantic/BM25 search tool is exposed cross-project,
+# not pattern-search or the call-graph tools (impact-analysis tooling for
+# a codebase nobody here refactors) -- see engram.search.kuadrant's module
+# docstring.
+RECALL_ONLY_CODE_TOOLS = frozenset({"kuadrant_code_search"})
+
 RELEVANT_SERENA_TOOLS = frozenset(
     {
         "replace_content",
@@ -211,6 +241,9 @@ RELEVANT_TOOLS_BY_BACKEND: dict[str, frozenset[str]] = {
     "docs": RELEVANT_HINDSIGHT_TOOLS,
     "issues": RELEVANT_HINDSIGHT_TOOLS,
     "serena": RELEVANT_SERENA_TOOLS,
+    "kuadrant_docs": RECALL_ONLY_HINDSIGHT_TOOLS,
+    "kuadrant_issues": RECALL_ONLY_HINDSIGHT_TOOLS,
+    "kuadrant_code": RECALL_ONLY_CODE_TOOLS,
 }
 
 
@@ -499,7 +532,10 @@ class StdioSubprocessAdapter:
                 # data, surfacing as a generic "backend is currently down"
                 # (see docs/findings/2026-08.md, 2026-08-25 entry).
                 "content": [c.model_dump(exclude_none=True) if hasattr(c, "model_dump") else c for c in result.content],
-                "isError": result.isError,
+                # mcp==2.0.0 renamed CallToolResult.isError -> is_error (same
+                # 2026-08-22 dependabot bump that broke input_schema and
+                # FastMCP -- see docs/findings/2026-08.md's 2026-08-27 entry).
+                "isError": result.is_error,
             }
 
 
@@ -882,6 +918,22 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     registry["engram"] = {
         "docs": _hindsight("engram-docs"),
         "code": _stdio(f"{venv_bin}/engram-search-engram", env={"COCOINDEX_PG_URL": _PG_URL}),
+    }
+
+    # kuadrant: ingestion-only prior-art reference for praxis-proxy (2026-08-27
+    # onboarding) -- no repo is ever opened as its own Cursor workspace (hence
+    # no serena, and this is the only registry entry not named after a local
+    # checkout dir), so this single entry aggregates all 8 repos' docs/issues/
+    # code and is meant to be cross-mounted as a *second* MCP server into
+    # every praxis-* repo's .cursor/mcp.json alongside its own "engram" entry.
+    # Uses "kuadrant_docs"/"kuadrant_issues"/"kuadrant_code" backend keys
+    # (not the usual "docs"/"issues"/"code") so RELEVANT_TOOLS_BY_BACKEND can
+    # apply the narrower recall-only/search-only filter without affecting any
+    # other project's own docs/issues/code backends.
+    registry["kuadrant"] = {
+        "kuadrant_docs": _hindsight("kuadrant-docs"),
+        "kuadrant_issues": _hindsight("kuadrant-issues"),
+        "kuadrant_code": _stdio(f"{venv_bin}/engram-search-kuadrant", env={"COCOINDEX_PG_URL": _PG_URL}),
     }
 
     return registry

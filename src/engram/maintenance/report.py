@@ -124,6 +124,25 @@ PROJECT_CONFIGS = {
         # No issues_repos: this scope's issue tracker is Jira (epic
         # RHIDP-15270), not GitHub -- same as engram's "zero GitHub issues" entry.
     },
+    # kuadrant: ingestion-only prior-art reference for praxis-proxy -- see
+    # nightly-learn.py's matching entry for the full scoping rationale.
+    # No cursor-memory: no Cursor workspace is ever opened against these 8
+    # read-only reference checkouts, so there's no dev-session signal.
+    "kuadrant": {
+        "banks": ["kuadrant-docs", "kuadrant-issues"],
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-Kuadrant"],
+        "log_suffix": "-kuadrant",
+        "issues_repos": [
+            "Kuadrant/kuadrant-operator",
+            "Kuadrant/limitador",
+            "Kuadrant/wasm-shim",
+            "Kuadrant/architecture",
+            "Kuadrant/authorino",
+            "Kuadrant/dns-operator",
+            "Kuadrant/authorino-operator",
+            "Kuadrant/limitador-operator",
+        ],
+    },
 }
 
 CORRECTION_PATTERNS = [

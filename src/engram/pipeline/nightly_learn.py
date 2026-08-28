@@ -1207,6 +1207,39 @@ PROJECT_CONFIGS = {
         # RHIDP-15270), not GitHub -- see report.py's identical "engram has
         # zero GitHub issues" precedent for the same .get(..., []) fallback.
     },
+    # kuadrant: ingestion-only prior-art reference for praxis-proxy
+    # (2026-08-27 onboarding, see engram_gateway.py's "kuadrant" registry
+    # entry and engram.flows.kuadrant's module docstring). No cursor-memory
+    # entry, unlike every other project above: cursor-memory tracks *this
+    # user's own* corrections/conventions/preferences while developing a
+    # project, and nobody develops against these 8 read-only reference
+    # checkouts (no Cursor workspace is ever opened here) -- there is no
+    # dev-session signal to extract windows from.
+    "kuadrant": {
+        "banks": ["kuadrant-docs", "kuadrant-issues"],
+        "mental_models": {
+            "kuadrant-docs": ("kuadrant-architecture",),
+            "kuadrant-issues": ("kuadrant-active-priorities",),
+        },
+        "probes": [
+            ("kuadrant-docs", "Kuadrant architecture: rate limiting, auth, DNS, and policy attachment model"),
+            ("kuadrant-issues", "recent Kuadrant issues and design decisions relevant to policy APIs"),
+        ],
+        "recall_banks": {"hindsight", "kuadrant-docs", "kuadrant-issues", "kuadrant-code"},
+        "code_bank": "kuadrant-code",
+        "log_suffix": "-kuadrant",
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-Kuadrant"],
+        "issues_repos": [
+            "Kuadrant/kuadrant-operator",
+            "Kuadrant/limitador",
+            "Kuadrant/wasm-shim",
+            "Kuadrant/architecture",
+            "Kuadrant/authorino",
+            "Kuadrant/dns-operator",
+            "Kuadrant/authorino-operator",
+            "Kuadrant/limitador-operator",
+        ],
+    },
 }
 
 BANKS = ["cursor-memory", "kubernaut-docs", "kubernaut-issues"]

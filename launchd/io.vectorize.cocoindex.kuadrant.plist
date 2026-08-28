@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.vectorize.cocoindex.kuadrant</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.hindsight/with-config-env.sh</string>
+        <string>__HOME__/.hindsight/venv/bin/engram-flows-kuadrant</string>
+        <string>--mode</string>
+        <string>live</string>
+        <!-- Ingestion-only onboarding (2026-08-27): docs/issues/code apps
+             plus git-sync (periodic `git pull` across all 8 read-only
+             checkouts -- see kuadrant.py's module docstring for why this
+             exists: nobody opens these repos as a Cursor workspace, so
+             nothing else keeps them in sync with upstream). No serena, no
+             transcripts app (this org has no Cursor agent sessions of its
+             own). -->
+        <string>--apps</string>
+        <string>docs</string>
+        <string>issues</string>
+        <string>code</string>
+        <string>git-sync</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>KUADRANT_ORG_DIR</key>
+        <string>__HOME__/go/src/github.com/Kuadrant</string>
+        <key>HINDSIGHT_URL</key>
+        <string>http://localhost:8888</string>
+        <key>COCOINDEX_PG_URL</key>
+        <string>postgresql://hindsight:hindsight@localhost:5432/hindsight</string>
+        <!-- code_app's pgvector pool -- right-sized down from asyncpg's own
+             min_size=10/max_size=10 default, since every onboarded project's
+             cocoindex-flows.py opens its own pool against this same shared
+             Postgres instance. See docs/FINDINGS.md 2026-08-03. -->
+        <key>COCOINDEX_PG_POOL_MIN_SIZE</key>
+        <string>2</string>
+        <key>COCOINDEX_PG_POOL_MAX_SIZE</key>
+        <string>5</string>
+        <key>PATH</key>
+        <string>__HOME__/.hindsight/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>__HOME__/.hindsight</string>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.hindsight/logs/cocoindex-kuadrant-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.hindsight/logs/cocoindex-kuadrant-stderr.log</string>
+</dict>
+</plist>

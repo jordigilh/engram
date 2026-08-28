@@ -326,3 +326,19 @@ class TestCallGraphWiring:
         assert rhdh_plugins_search._format_blast_radius_result(error_result) == rhdh_plugins_search.callgraph.format_blast_radius_result(error_result)
         assert rhdh_plugins_search._format_shortest_path_result(error_result) == rhdh_plugins_search.callgraph.format_shortest_path_result(error_result)
         assert rhdh_plugins_search._format_cluster_result(error_result) == rhdh_plugins_search.callgraph.format_cluster_result(error_result)
+
+
+class TestRunMcpServerBuildsARealServer:
+    """2026-08-27: mcp==2.0.0 (2026-08-22 dependabot bump) renamed
+    `mcp.server.FastMCP` -> `mcp.server.mcpserver.MCPServer` and moved
+    host/port from the constructor to run(). See
+    tests/test_praxis_cocoindex_search.py's identical class docstring for
+    the full incident writeup and docs/findings/2026-08.md's 2026-08-27
+    entry."""
+
+    def test_run_mcp_server_stdio_does_not_raise(self, rhdh_plugins_search, monkeypatch):
+        from mcp.server.mcpserver import MCPServer
+
+        monkeypatch.setattr(MCPServer, "run", lambda self, *a, **k: None)
+
+        rhdh_plugins_search._run_mcp_server(transport="stdio")

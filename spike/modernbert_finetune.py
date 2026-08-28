@@ -60,7 +60,7 @@ from transformers import (
 )
 
 sys.path.insert(0, os.path.dirname(__file__))
-from ground_truth import eval_examples, seed_examples  # noqa: E402
+from ground_truth import seed_examples  # noqa: E402
 from modernbert_bootstrap import get_or_create_split  # noqa: E402
 
 BASE_MODEL = os.environ.get("MODERNBERT_FINETUNE_BASE", "answerdotai/ModernBERT-base")

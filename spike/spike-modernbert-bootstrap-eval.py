@@ -98,7 +98,7 @@ def main() -> int:
     f_before_holdout = variants.run_variant_f_knn(holdout_texts, k=5, conn=conn)
     _score(f_before_holdout, holdout_refs, "Variant F (k=5 NN)")
 
-    print(f"\nOriginal 19-example eval set (reference = real hand labels, independent of Haiku):")
+    print("\nOriginal 19-example eval set (reference = real hand labels, independent of Haiku):")
     e_before_eval = variants.run_variant_e_centroid(eval_texts, conn=conn, sources=("seed",))
     _score(e_before_eval, eval_refs, "Variant E (centroid)")
     f_before_eval = variants.run_variant_f_knn(eval_texts, k=5, conn=conn)
@@ -116,7 +116,7 @@ def main() -> int:
     f_after_holdout15 = variants.run_variant_f_knn(holdout_texts, k=15, conn=conn)
     _score(f_after_holdout15, holdout_refs, "Variant F (k=15 NN)")
 
-    print(f"\nOriginal 19-example eval set (reference = real hand labels, independent of Haiku):")
+    print("\nOriginal 19-example eval set (reference = real hand labels, independent of Haiku):")
     e_after_eval = variants.run_variant_e_centroid(eval_texts, conn=conn, sources=("seed", "haiku_confirmed"))
     _score(e_after_eval, eval_refs, "Variant E (centroid)")
     f_after_eval = variants.run_variant_f_knn(eval_texts, k=5, conn=conn)

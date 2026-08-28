@@ -289,15 +289,16 @@ class TestBuildProjectRegistry:
     rollout across every onboarded repo (see docs/findings/2026-08.md,
     2026-08-21 rollout entry). Backend heterogeneity is real and must be
     preserved exactly, not normalized away: kubernaut-family already has
-    everything on shared HTTP daemons; koku-family's cocoindex-code is
-    still stdio while its docs/issues/serena are HTTP; dcm/praxis/
-    rhdh-plugins/koku-insights-onprem run cocoindex-code and serena as
-    per-family-shared / per-repo stdio respectively; a few repos are
-    missing one or more backends entirely (kubernaut-console has no
-    serena, kubernaut-docs has no cocoindex-code, engram itself has
-    neither issues nor serena) -- the registry must reflect exactly what
-    each repo already has today, never add a backend that isn't already
-    configured for it."""
+    everything on shared HTTP daemons (as of 2026-08-25, kubernaut-console
+    included -- it was the one family member missing a serena entry despite
+    already being a registered project on the shared daemon, see
+    test_kubernaut_console_has_serena_scoped_to_its_own_repo below); koku-
+    family's cocoindex-code is still stdio while its docs/issues/serena are
+    HTTP; dcm/praxis/rhdh-plugins/koku-insights-onprem run cocoindex-code and
+    serena as per-family-shared / per-repo stdio respectively; kubernaut-docs
+    has no cocoindex-code and engram itself has neither issues nor serena --
+    the registry must reflect exactly what each repo already has today, never
+    add a backend that isn't already configured for it."""
 
     def test_covers_every_onboarded_project(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
@@ -313,11 +314,43 @@ class TestBuildProjectRegistry:
         assert spec["code"] == {"kind": "http", "url": "http://127.0.0.1:8891/mcp"}
         assert spec["serena"] == {"kind": "http", "url": "http://127.0.0.1:8893/mcp/kubernaut-operator"}
 
-    def test_kubernaut_console_has_no_serena(self, engram_gateway):
+    def test_kubernaut_console_has_serena_scoped_to_its_own_repo(self, engram_gateway):
+        """Added 2026-08-25: kubernaut-console was the only kubernaut-family
+        repo with no serena entry, even though serena_multiplex.py's
+        KUBERNAUT_FAMILY_PROJECTS already lists "kubernaut-console" as a
+        registered project on the shared daemon. Its mount pins
+        activate_project to "kubernaut-console" for scoped tool calls
+        (find_symbol, replace_symbol_body, ...), while query_project/
+        list_queryable_projects stay project-agnostic (see
+        serena_multiplex.py's PROJECT_AGNOSTIC_TOOLS) and forward untouched --
+        so this same mount also gives kubernaut-console read-only lookups
+        into kubernaut/kubernaut-operator without any extra registry entry."""
         registry = engram_gateway.build_project_registry("/home/u")
 
-        assert "serena" not in registry["kubernaut-console"]
-        assert set(registry["kubernaut-console"]) == {"docs", "issues", "code"}
+        assert set(registry["kubernaut-console"]) == {"docs", "issues", "code", "serena"}
+        assert registry["kubernaut-console"]["serena"] == {
+            "kind": "http",
+            "url": "http://127.0.0.1:8893/mcp/kubernaut-console",
+        }
+
+    def test_kubernaut_console_code_backend_is_shared_kubernaut_http_daemon(self, engram_gateway):
+        """Regression guard: kubernaut-console's "code" backend previously
+        pointed at a flat `~/.hindsight/cocoindex-search.py` stdio script that
+        the 2026-08-12 package restructuring (src/engram/search/kubernaut.py +
+        console-script rename) had already deleted 9 days before this
+        registry entry was even authored -- so it was dead on arrival, and
+        (being single-repo/no-args, unlike engram-search-kubernaut) would only
+        ever have searched kubernaut-console's own code even if it had run,
+        never kubernaut/kubernaut-operator upstream. The shared
+        :8891 daemon (`engram-search-kubernaut` / src/engram/search/
+        kubernaut.py) already indexes all three repos into one
+        cocoindex.code_embeddings table and defaults `cocoindex_search` to
+        whole-platform results -- the same daemon kubernaut/kubernaut-operator
+        already use -- so pointing kubernaut-console at it too is what actually
+        gives it operator + kubernaut-upstream code search."""
+        registry = engram_gateway.build_project_registry("/home/u")
+
+        assert registry["kubernaut-console"]["code"] == {"kind": "http", "url": "http://127.0.0.1:8891/mcp"}
 
     def test_kubernaut_docs_has_no_cocoindex_code(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")

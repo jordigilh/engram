@@ -700,7 +700,35 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     registry["kubernaut-console"] = {
         "docs": _hindsight("kubernaut-docs"),
         "issues": _hindsight("kubernaut-issues"),
-        "code": _stdio(f"{venv_bin}/python3", [f"{home}/.hindsight/cocoindex-search.py"], {"COCOINDEX_PG_URL": _PG_URL}),
+        # Shared with kubernaut/kubernaut-operator, NOT a standalone stdio
+        # process (fixed 2026-08-25): this used to spawn
+        # `~/.hindsight/cocoindex-search.py`, a flat symlink the 2026-08-12
+        # src/engram/ package restructuring had already deleted 9 days
+        # before this registry entry was even authored, so it was dead on
+        # arrival -- kubernaut-console's `code` tools silently dropped from
+        # its aggregated catalog every time (see engram_gateway.py's
+        # per-backend degradation). Even had that path still existed, it
+        # was a bare single-repo invocation (no --repo scoping args), so it
+        # could only ever have searched kubernaut-console's own code, never
+        # kubernaut/kubernaut-operator upstream. `kubernaut_http_code`
+        # (engram-search-kubernaut / src/engram/search/kubernaut.py) already
+        # indexes all three repos into one cocoindex.code_embeddings table
+        # and defaults `cocoindex_search`/`cocoindex_pattern_search` to
+        # whole-platform results -- wiring kubernaut-console to it too is
+        # what actually restores operator + kubernaut-upstream code search.
+        "code": kubernaut_http_code,
+        # Added 2026-08-25: kubernaut-console was the only kubernaut-family
+        # repo with no serena entry at all (see this function's module-level
+        # survey comment), despite `KUBERNAUT_FAMILY_PROJECTS` in
+        # serena_multiplex.py already listing "kubernaut-console" as a
+        # registered project on the shared daemon. Wiring it up like every
+        # other family member gives it both symbol-level tools scoped to its
+        # own repo AND read-only cross-repo lookups into kubernaut/
+        # kubernaut-operator via query_project/list_queryable_projects
+        # (project-agnostic tools, forwarded untouched -- see
+        # serena_multiplex.py's PROJECT_AGNOSTIC_TOOLS), with no extra
+        # registry work needed for the "all go repos" half of the ask.
+        "serena": kubernaut_serena("kubernaut-console"),
     }
     registry["kubernaut-docs"] = {
         "docs": _hindsight("kubernaut-docs"),

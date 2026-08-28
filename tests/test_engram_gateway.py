@@ -682,3 +682,70 @@ class TestPrewarmStdioBackends:
             # And normal request handling still works while/after this runs.
             response = client.get("/mcp/proj")
             assert response.status_code == 405
+
+
+class TestPrewarmProjectCatalogs:
+    """2026-08-27: kubernaut's client saw `initialize` succeed ("namespace
+    ready") but every `tools/call` fail with "Unknown tool ... backend is
+    currently down" -- caused by `state[project]["catalog"]` starting as
+    `{}` and staying empty until *some* client sends that project's
+    `tools/list` in this process's lifetime. `_prewarm_stdio_backends`
+    (above) only warms each stdio subprocess's connection, never touches
+    `state`, so it didn't close this gap for a client whose session
+    predates a gateway restart and never re-sends `tools/list` on its own."""
+
+    def test_prewarms_catalog_for_every_project(self, engram_gateway):
+        backend_a = FakeAdapter(tools=[_tool("recall")])
+        backend_b = FakeAdapter(tools=[_tool("cocoindex_search")])
+        projects = {
+            "proj1": {"docs": backend_a},
+            "proj2": {"code": backend_b},
+        }
+        state = {name: {"catalog": {}, "backends": backends} for name, backends in projects.items()}
+
+        asyncio.run(engram_gateway._prewarm_project_catalogs(projects, state))
+
+        assert "docs_recall" in state["proj1"]["catalog"]
+        assert "cocoindex_search" in state["proj2"]["catalog"]
+
+    def test_tools_call_works_immediately_after_prewarm_with_no_prior_tools_list(self, engram_gateway):
+        """Direct regression test for the reported symptom: a tools/call for
+        a project that has never had tools/list called against it in this
+        process must still succeed once _prewarm_project_catalogs has run,
+        instead of route_call() finding an empty catalog and returning the
+        "Unknown tool ... backend is currently down" error."""
+        backend = FakeAdapter(tools=[_tool("recall")], call_results={"recall": {"content": [], "isError": False}})
+        projects = {"kubernaut": {"docs": backend}}
+        state = {name: {"catalog": {}, "backends": backends} for name, backends in projects.items()}
+
+        asyncio.run(engram_gateway._prewarm_project_catalogs(projects, state))
+
+        message = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "docs_recall", "arguments": {}}}
+        result = asyncio.run(engram_gateway.handle_tools_call(message, state["kubernaut"]["catalog"], state["kubernaut"]["backends"]))
+
+        assert result["result"]["isError"] is False
+
+    def test_prewarm_failure_for_one_project_does_not_raise_or_block_others(self, engram_gateway):
+        good = FakeAdapter(tools=[_tool("recall")])
+        broken = FakeAdapter(list_error=RuntimeError("backend down"))
+        projects = {"good_proj": {"docs": good}, "bad_proj": {"docs": broken}}
+        state = {name: {"catalog": {}, "backends": backends} for name, backends in projects.items()}
+
+        asyncio.run(engram_gateway._prewarm_project_catalogs(projects, state))
+
+        assert "docs_recall" in state["good_proj"]["catalog"]
+        assert state["bad_proj"]["catalog"] == {}
+
+    def test_build_app_schedules_catalog_prewarm_on_startup(self, engram_gateway):
+        import time
+
+        from starlette.testclient import TestClient
+
+        backend = FakeAdapter(tools=[_tool("recall")])
+        app = engram_gateway.build_app(projects={"proj": {"docs": backend}})
+
+        with TestClient(app):
+            deadline = time.monotonic() + 2.0
+            while backend.list_calls == 0 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert backend.list_calls > 0

@@ -544,6 +544,61 @@ async def _prewarm_stdio_backends(projects: dict[str, dict[str, BackendAdapter]]
                 task.add_done_callback(_prewarm_tasks.discard)
 
 
+async def _prewarm_project_catalogs(projects: dict[str, dict[str, BackendAdapter]], state: dict[str, dict]) -> None:
+    """Eagerly run `aggregate_tools_list()` for every project at gateway
+    startup and populate `state[project]["catalog"]` -- without this,
+    `state[...]["catalog"]` starts as `{}` and stays empty for a given
+    project until *some* client happens to send that project's `tools/list`
+    in this process's lifetime (see `_make_endpoint`'s `tools/list` branch,
+    the only other place that assigns it).
+
+    2026-08-27 incident: kubernaut's client reported `initialize` succeeding
+    ("namespace ready") but every `tools/call` failing with "Unknown tool
+    ... backend is currently down" -- `route_call()` returns None on an
+    empty catalog, which produces exactly that message (see its call site
+    in `handle_tools_call`). Root cause: the gateway process had been
+    restarted (to pick up same-day fixes) while kubernaut's Cursor session
+    was already connected; per `_prewarm_stdio_backends`'s docstring,
+    clients cache `tools/list` per-session and don't re-fetch on their own,
+    so their session kept calling tools by name against the new process's
+    still-empty `state["kubernaut"]["catalog"]`. `_prewarm_stdio_backends`
+    above only warms each stdio subprocess's *connection* so its first real
+    `list_tools()` is fast -- it never actually calls `aggregate_tools_list()`
+    or touches `state`, so it didn't close this gap. This does, for every
+    project (stdio- and HTTP-backed alike), independently of whether any
+    client ever reconnects -- a client whose session predates the restart
+    still needs to reconnect for its *own* cached tool names to refresh,
+    but every *other* client (or that same one after reconnecting) now
+    finds a warm, populated catalog immediately instead of racing the first
+    real `tools/list`.
+
+    Awaits all projects concurrently via `asyncio.gather` rather than firing
+    independent per-project tasks like `_prewarm_stdio_backends` does above:
+    the non-blocking-at-startup property is already provided by the caller
+    wrapping this whole coroutine in its own `asyncio.create_task` (see
+    `_lifespan`), so there's no need to duplicate that here -- and a plain
+    `await` (vs. bare `create_task` calls with no corresponding await) is
+    what actually guarantees this work runs to completion rather than
+    racing `asyncio.run()`'s own shutdown/cancellation in a bare script or
+    test."""
+
+    async def _warm_one_catalog(project: str, backends: dict[str, BackendAdapter]) -> None:
+        try:
+            _tool_defs, catalog, errors = await aggregate_tools_list(backends)
+            state[project]["catalog"] = catalog
+            if errors:
+                log.warning("project %r: backends unavailable during catalog pre-warm: %s", project, errors)
+            log.info("pre-warmed catalog for project %r (%d tools)", project, len(catalog))
+        except Exception:
+            log.warning(
+                "catalog pre-warm failed for project %r -- will populate lazily on first real tools/list",
+                project,
+                exc_info=True,
+            )
+
+    await asyncio.gather(*(_warm_one_catalog(project, backends) for project, backends in projects.items()))
+
+
 def build_app(projects: dict[str, dict[str, BackendAdapter]]):
     """Build the Starlette app: one route per project, each aggregating
     that project's own set of backend adapters. `projects` maps project
@@ -555,9 +610,11 @@ def build_app(projects: dict[str, dict[str, BackendAdapter]]):
     from starlette.responses import Response
     from starlette.routing import Route
 
-    # Cache of (catalog, backends) built lazily per project on first
-    # tools/list, refreshed whenever a new tools/list comes in -- backends
-    # that flap back up are picked up on the next list without a restart.
+    # Cache of (catalog, backends) per project. Populated two ways: eagerly
+    # at startup by _prewarm_project_catalogs() (see its docstring for why
+    # that's necessary, not just nice-to-have), and refreshed on every real
+    # tools/list a client sends -- backends that flap back up are picked up
+    # on the next list without a restart either way.
     state: dict[str, dict] = {name: {"catalog": {}, "backends": backends} for name, backends in projects.items()}
 
     @asynccontextmanager
@@ -566,6 +623,11 @@ def build_app(projects: dict[str, dict[str, BackendAdapter]]):
         # so the gateway can start accepting requests for other projects
         # while these stdio backends warm up in the background.
         asyncio.create_task(_prewarm_stdio_backends(projects))
+        # Separate from the above: populates state[project]["catalog"] for
+        # every project so tools/call works immediately after a restart,
+        # even for a client whose session predates it and never re-sends
+        # tools/list on its own (see _prewarm_project_catalogs's docstring).
+        asyncio.create_task(_prewarm_project_catalogs(projects, state))
         yield
 
     def _make_endpoint(project: str):

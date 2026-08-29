@@ -126,7 +126,7 @@ PROJECT_CONFIGS = {
     },
     # kuadrant: ingestion-only prior-art reference for praxis-proxy -- see
     # nightly-learn.py's matching entry for the full scoping rationale.
-    # No cursor-memory: no Cursor workspace is ever opened against these 8
+    # No cursor-memory: no Cursor workspace is ever opened against these 9
     # read-only reference checkouts, so there's no dev-session signal.
     "kuadrant": {
         "banks": ["kuadrant-docs", "kuadrant-issues"],
@@ -141,6 +141,7 @@ PROJECT_CONFIGS = {
             "Kuadrant/dns-operator",
             "Kuadrant/authorino-operator",
             "Kuadrant/limitador-operator",
+            "Kuadrant/mcp-gateway",
         ],
     },
 }

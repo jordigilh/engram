@@ -1238,6 +1238,7 @@ PROJECT_CONFIGS = {
             "Kuadrant/dns-operator",
             "Kuadrant/authorino-operator",
             "Kuadrant/limitador-operator",
+            "Kuadrant/mcp-gateway",
         ],
     },
 }

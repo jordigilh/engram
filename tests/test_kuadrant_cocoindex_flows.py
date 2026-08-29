@@ -6,7 +6,7 @@ Coverage focuses on the same doc/issue chunk-ID-cascade regression guard
 the other *_cocoindex_flows test files pin (see docs/FINDINGS.md
 2026-08-03), plus the kuadrant-specific addition: per-repo language
 selection for the mixed Go+Rust code app, and the git-sync helper that
-keeps the 8 read-only checkouts from going stale.
+keeps the 9 read-only checkouts from going stale.
 """
 from __future__ import annotations
 
@@ -41,17 +41,19 @@ class TestModuleLoads:
         by_repo = {repo: lang for repo, _upstream, lang in kuadrant_cocoindex_flows.KUADRANT_REPOS}
         assert by_repo["architecture"] is None
 
-    def test_all_eight_repos_present(self, kuadrant_cocoindex_flows):
+    def test_all_nine_repos_present(self, kuadrant_cocoindex_flows):
         repos = [repo for repo, _upstream, _lang in kuadrant_cocoindex_flows.KUADRANT_REPOS]
         assert set(repos) == {
             "kuadrant-operator", "limitador", "wasm-shim", "architecture",
             "authorino", "dns-operator", "authorino-operator", "limitador-operator",
+            "mcp-gateway",
         }
 
     def test_issues_repos_default_derives_from_kuadrant_repos(self, kuadrant_cocoindex_flows):
         assert "Kuadrant/kuadrant-operator" in kuadrant_cocoindex_flows.ISSUES_REPOS
         assert "Kuadrant/architecture" in kuadrant_cocoindex_flows.ISSUES_REPOS
-        assert len(kuadrant_cocoindex_flows.ISSUES_REPOS) == 8
+        assert "Kuadrant/mcp-gateway" in kuadrant_cocoindex_flows.ISSUES_REPOS
+        assert len(kuadrant_cocoindex_flows.ISSUES_REPOS) == 9
 
 
 class TestProcessDocFile:

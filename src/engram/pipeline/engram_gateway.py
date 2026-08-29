@@ -921,10 +921,11 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     }
 
     # kuadrant: ingestion-only prior-art reference for praxis-proxy (2026-08-27
-    # onboarding) -- no repo is ever opened as its own Cursor workspace (hence
-    # no serena, and this is the only registry entry not named after a local
-    # checkout dir), so this single entry aggregates all 8 repos' docs/issues/
-    # code and is meant to be cross-mounted as a *second* MCP server into
+    # onboarding, extended to 9 repos 2026-08-28 with mcp-gateway) -- no repo
+    # is ever opened as its own Cursor workspace (hence no serena, and this
+    # is the only registry entry not named after a local checkout dir), so
+    # this single entry aggregates all 9 repos' docs/issues/code and is
+    # meant to be cross-mounted as a *second* MCP server into
     # every praxis-* repo's .cursor/mcp.json alongside its own "engram" entry.
     # Uses "kuadrant_docs"/"kuadrant_issues"/"kuadrant_code" backend keys
     # (not the usual "docs"/"issues"/"code") so RELEVANT_TOOLS_BY_BACKEND can

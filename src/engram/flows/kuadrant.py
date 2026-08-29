@@ -5,24 +5,27 @@ ingestion into Hindsight and pgvector.
 Kuadrant is ingested as read-only prior-art reference material for
 praxis-proxy, NOT as a project you develop against here: nobody opens these
 checkouts as a Cursor workspace, so there is deliberately no Serena wiring
-and no per-repo `.cursor/mcp.json`/git-hooks setup for any of the 8 repos
+and no per-repo `.cursor/mcp.json`/git-hooks setup for any of the 9 repos
 below (contrast with src/engram/flows/praxis.py, whose repos are all active
 dev checkouts). See docs/findings/2026-08.md's 2026-08-27 "Kuadrant
 ingestion-only onboarding" entry for the full scoping rationale, including
 why the resulting content is surfaced via a single shared, recall-only
 `kuadrant` gateway mount cross-wired into every praxis-* repo's
-`.cursor/mcp.json`, instead of one gateway entry per Kuadrant repo.
+`.cursor/mcp.json`, instead of one gateway entry per Kuadrant repo. `mcp-gateway`
+was added as the 9th repo on 2026-08-28 -- omitted from the original 8-repo
+request even though it's an envoy-based MCP gateway directly relevant to
+praxis-proxy's own problem space (see that date's findings entry).
 
 Declares three apps:
-  1. kuadrant-docs:   Markdown docs/RFCs from all 8 Kuadrant repos ->
+  1. kuadrant-docs:   Markdown docs/RFCs from all 9 Kuadrant repos ->
                        Hindsight kuadrant-docs bank
-  2. kuadrant-issues: GitHub issues/PRs from all 8 Kuadrant repos ->
+  2. kuadrant-issues: GitHub issues/PRs from all 9 Kuadrant repos ->
                        Hindsight kuadrant-issues bank
-  3. kuadrant-code:   Go + Rust source (7 of 8 repos -- `architecture` has
+  3. kuadrant-code:   Go + Rust source (8 of 9 repos -- `architecture` has
                        no source) -> pgvector kuadrant_code_embeddings table
 
 Plus a non-CocoIndex background thread (`_git_sync_loop`) that periodically
-`git pull --ff-only`s all 8 checkouts. Unlike praxis's own repos (pulled
+`git pull --ff-only`s all 9 checkouts. Unlike praxis's own repos (pulled
 naturally as part of the user's daily dev workflow), nobody routinely
 touches these clones -- `localfs.walk_dir(..., live=True)` only watches the
 local filesystem for changes, it never fetches upstream itself, so without
@@ -87,6 +90,7 @@ KUADRANT_REPOS: list[tuple[str, str, str | None]] = [
     ("dns-operator", "Kuadrant/dns-operator", "go"),
     ("authorino-operator", "Kuadrant/authorino-operator", "go"),
     ("limitador-operator", "Kuadrant/limitador-operator", "go"),
+    ("mcp-gateway", "Kuadrant/mcp-gateway", "go"),
 ]
 
 ISSUES_REPOS = os.environ.get(
@@ -97,7 +101,7 @@ ISSUES_POLL_INTERVAL = int(os.environ.get("KUADRANT_ISSUES_POLL_SECONDS", "300")
 
 # How often to `git pull --ff-only` every checkout under KUADRANT_ORG_DIR --
 # see module docstring. 6h default: frequent enough that "kept up to date"
-# is true in practice, infrequent enough not to hammer GitHub across 8 repos
+# is true in practice, infrequent enough not to hammer GitHub across 9 repos
 # on every gateway restart.
 GIT_SYNC_INTERVAL_SECONDS = int(os.environ.get("KUADRANT_GIT_SYNC_SECONDS", str(6 * 3600)))
 
@@ -210,7 +214,7 @@ async def coco_lifespan(builder: coco.EnvironmentBuilder) -> AsyncIterator[None]
 # rfcs/**/*.md added specifically for `architecture` (its real content --
 # numbered RFC files like 0001-rlp-v2.md -- lives under rfcs/, not docs/;
 # confirmed via `gh api repos/Kuadrant/architecture/contents/rfcs`). No-op
-# for the other 7 repos, none of which has an rfcs/ directory.
+# for the other 8 repos, none of which has an rfcs/ directory.
 _DOC_INCLUDE_PATTERNS = [
     "docs/**/*.md",
     "rfcs/**/*.md",
@@ -532,7 +536,7 @@ code_app = coco.App("kuadrant-code", code_main, org_dir=KUADRANT_ORG_DIR)
 
 
 # ---------------------------------------------------------------------------
-# Git sync — periodic `git pull` across all 8 checkouts (not a CocoIndex
+# Git sync — periodic `git pull` across all 9 checkouts (not a CocoIndex
 # app: no source/sink, just keeps the on-disk clones that docs_main/
 # code_main watch from going permanently stale). See module docstring.
 # ---------------------------------------------------------------------------

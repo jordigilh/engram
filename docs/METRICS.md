@@ -110,6 +110,12 @@ counts only exist via the Team-plan Admin API or Enterprise OTel export,
 both at per-turn (not per-tool-call) granularity and neither queryable
 synchronously from a hook.
 
+`report.py` (the on-demand CLI report, not `nightly_learn.py`'s
+LLM-calling pipeline) rolls this up into a "GATEWAY MCP CALL TOKEN USAGE"
+section: total/average tokens, and a per-tool breakdown ranked by token
+consumption. Pure local aggregation over the JSONL file above -- no LLM
+call involved.
+
 ### Nightly: Effectiveness Analysis
 
 The nightly script (`nightly-learn.py`) produces two outputs:

@@ -460,14 +460,15 @@ class TestBuildProjectRegistry:
         assert registry["dcm-cli"]["code"]["env"]["HF_HUB_OFFLINE"] == "1"
 
     def test_kuadrant_is_one_entry_not_one_per_repo(self, engram_gateway):
-        """2026-08-27: unlike every other family, Kuadrant's 8 repos are
-        ingestion-only prior-art (nobody opens them as a Cursor workspace),
-        so they collapse into a single "kuadrant" registry entry meant to
-        be cross-mounted into praxis-* repos, not 8 per-repo entries."""
+        """2026-08-27: unlike every other family, Kuadrant's repos (9 as of
+        2026-08-28's mcp-gateway addition) are ingestion-only prior-art
+        (nobody opens them as a Cursor workspace), so they collapse into a
+        single "kuadrant" registry entry meant to be cross-mounted into
+        praxis-* repos, not one per-repo entry each."""
         registry = engram_gateway.build_project_registry("/home/u")
 
         assert "kuadrant" in registry
-        for repo in ("kuadrant-operator", "limitador", "wasm-shim", "architecture", "authorino"):
+        for repo in ("kuadrant-operator", "limitador", "wasm-shim", "architecture", "authorino", "mcp-gateway"):
             assert repo not in registry
 
     def test_kuadrant_has_no_serena(self, engram_gateway):

@@ -63,9 +63,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
 import json
 import logging
+import os
+import pathlib
 import sys
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 logging.basicConfig(
@@ -78,6 +82,82 @@ log = logging.getLogger("engram-gateway")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8896
 FORWARD_TIMEOUT_S = 60.0
+
+# Gateway-owned call log, distinct from the Cursor-hook-authored
+# ~/.hindsight/logs/mcp-calls.jsonl (cursor/hooks/log-mcp-calls.sh). That
+# hook's `result_chars` is best-effort and frequently 0 -- its own comment
+# notes Cursor's afterMCPExecution payload usually omits content text
+# despite docs claiming a "full JSON result". `handle_tools_call` below is
+# the one place that *does* see the real, un-redacted response for every
+# backend (stdio and HTTP alike), so it's the reliable place to compute and
+# log a real (well, tiktoken-estimated -- see _estimate_tokens) token count
+# per call. 2026-08-30: added after the user asked whether MCP call token
+# consumption could be calculated at all, and a cursor-guide subagent
+# confirmed no Cursor hook or CLI surface carries real per-call token
+# counts locally (Team/Enterprise usage APIs report at turn granularity,
+# not per tool call, and require a paid plan).
+GATEWAY_CALLS_LOG = pathlib.Path(os.path.expanduser("~/.hindsight/logs/gateway-calls.jsonl"))
+
+
+@functools.lru_cache(maxsize=1)
+def _tiktoken_encoding():
+    import tiktoken
+
+    return tiktoken.get_encoding("cl100k_base")
+
+
+def _estimate_tokens(text: str) -> int:
+    """Best-effort token estimate for `text` using tiktoken's cl100k_base
+    BPE encoding. This is necessarily an approximation for Claude-backed
+    Cursor sessions: Anthropic doesn't publish an open tokenizer, so
+    OpenAI's encoding is the closest widely-available stand-in, not an
+    exact match. Falls back to a chars/4 heuristic (a commonly-cited rule
+    of thumb for English text) if tiktoken itself is unavailable/fails --
+    e.g. a first-run encoding download with no network -- so a token-count
+    side channel can never break the actual tool call it's observing."""
+    if not text:
+        return 0
+    try:
+        return len(_tiktoken_encoding().encode(text))
+    except Exception:
+        log.warning("tiktoken estimation failed, falling back to chars/4 heuristic", exc_info=True)
+        return len(text) // 4
+
+
+def _extract_result_text(result: dict) -> str:
+    """Concatenate every text content item in an MCP tool result -- the
+    same shape both HttpRelayAdapter and StdioSubprocessAdapter return
+    (`{"content": [{"type": "text", "text": ...}, ...], "isError": ...}`).
+    Non-text content items (images, etc.) contribute nothing; there's no
+    well-defined token cost to estimate for those here."""
+    content = result.get("content") or []
+    return "".join(item.get("text", "") for item in content if isinstance(item, dict) and item.get("type") == "text")
+
+
+def _log_gateway_call(
+    *,
+    project: str | None,
+    backend: str,
+    tool: str,
+    is_error: bool,
+    result_chars: int,
+    est_tokens: int,
+) -> None:
+    entry = {
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+        "project": project,
+        "backend": backend,
+        "tool": tool,
+        "is_error": is_error,
+        "result_chars": result_chars,
+        "est_tokens": est_tokens,
+    }
+    try:
+        GATEWAY_CALLS_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with GATEWAY_CALLS_LOG.open("a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        log.warning("failed to write gateway call metrics for %r/%r", backend, tool, exc_info=True)
 
 # Backend keys whose tool names collide across families (both are the same
 # hindsight-api backend type, just pointed at a different bank) and
@@ -303,6 +383,7 @@ async def handle_tools_call(
     message: dict,
     catalog: dict[str, tuple[str, str]],
     backends: dict[str, BackendAdapter],
+    project: str | None = None,
 ) -> dict | None:
     """Route a `tools/call` JSON-RPC message to whichever backend owns the
     (aggregated) tool name, returning a well-formed JSON-RPC response.
@@ -313,6 +394,10 @@ async def handle_tools_call(
     both come back as a normal (isError=True) tool result instead of an
     exception, so a single dead/unknown-tool call can't take down the
     connection the way an unhandled exception in the ASGI endpoint would.
+
+    `project` is optional and only used for the call-metrics log line (see
+    _log_gateway_call) -- existing callers/tests that predate that feature
+    don't need to pass it.
     """
     if message.get("method") != "tools/call":
         return None
@@ -338,8 +423,17 @@ async def handle_tools_call(
         result = await adapter.call_tool(raw_name, arguments)
     except Exception as exc:  # noqa: BLE001 - degrade to a clean tool error, don't crash the gateway
         log.warning("backend %r failed on tools/call(%r): %s", backend_key, raw_name, exc)
+        _log_gateway_call(
+            project=project, backend=backend_key, tool=tool_name,
+            is_error=True, result_chars=0, est_tokens=0,
+        )
         return _jsonrpc_error_result(message_id, f"backend {backend_key!r} failed: {exc}")
 
+    text = _extract_result_text(result)
+    _log_gateway_call(
+        project=project, backend=backend_key, tool=tool_name,
+        is_error=bool(result.get("isError")), result_chars=len(text), est_tokens=_estimate_tokens(text),
+    )
     return _jsonrpc_success_result(message_id, result)
 
 
@@ -692,7 +786,7 @@ def build_app(projects: dict[str, dict[str, BackendAdapter]]):
                 )
 
             if method == "tools/call":
-                response = await handle_tools_call(message, state[project]["catalog"], backends)
+                response = await handle_tools_call(message, state[project]["catalog"], backends, project=project)
                 return Response(
                     content=f"event: message\ndata: {json.dumps(response)}\n\n",
                     media_type="text/event-stream",

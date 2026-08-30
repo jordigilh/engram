@@ -24,6 +24,8 @@ this automated suite.
 from __future__ import annotations
 
 import asyncio
+import json
+import pathlib
 
 import pytest
 
@@ -322,6 +324,158 @@ class TestHandleToolsCall:
         result = asyncio.run(engram_gateway.handle_tools_call(message, {}, {}))
 
         assert result is None
+
+
+class TestEstimateTokens:
+    """2026-08-30: user asked whether MCP call token consumption could be
+    calculated. Cursor's own hooks (afterMCPExecution etc.) don't carry any
+    token field -- confirmed against the hooks docs -- so the only viable
+    local source is estimating from the response text itself, done here
+    with tiktoken (already an installed transitive dep, pinned explicitly
+    now) rather than a cruder chars/4 heuristic. This is necessarily an
+    approximation: tiktoken's BPE encodings are OpenAI's, not Anthropic's
+    exact tokenizer, since Anthropic doesn't publish one."""
+
+    def test_empty_text_is_zero_tokens(self, engram_gateway):
+        assert engram_gateway._estimate_tokens("") == 0
+
+    def test_known_short_string_matches_expected_cl100k_count(self, engram_gateway):
+        # Stable, well-known tiktoken fact: "hello world" is exactly 2
+        # tokens under cl100k_base -- pins the encoding choice, not just
+        # "returns some positive number".
+        assert engram_gateway._estimate_tokens("hello world") == 2
+
+    def test_longer_text_yields_a_larger_estimate(self, engram_gateway):
+        short = engram_gateway._estimate_tokens("hello")
+        long = engram_gateway._estimate_tokens("hello " * 200)
+        assert long > short
+
+    def test_tiktoken_failure_falls_back_to_chars_over_four_heuristic(self, engram_gateway, monkeypatch):
+        def _boom():
+            raise RuntimeError("no network / encoding download failed")
+
+        monkeypatch.setattr(engram_gateway, "_tiktoken_encoding", _boom)
+
+        # 12 chars // 4 == 3, the documented fallback -- not just "doesn't crash".
+        assert engram_gateway._estimate_tokens("abcdefghijkl") == 3
+
+
+class TestExtractResultText:
+    def test_concatenates_text_from_all_content_items(self, engram_gateway):
+        result = {"content": [{"type": "text", "text": "foo"}, {"type": "text", "text": "bar"}]}
+
+        assert engram_gateway._extract_result_text(result) == "foobar"
+
+    def test_ignores_non_text_content_items(self, engram_gateway):
+        result = {"content": [{"type": "image", "data": "base64stuff"}, {"type": "text", "text": "caption"}]}
+
+        assert engram_gateway._extract_result_text(result) == "caption"
+
+    def test_missing_content_key_is_empty_string(self, engram_gateway):
+        assert engram_gateway._extract_result_text({}) == ""
+
+    def test_empty_content_list_is_empty_string(self, engram_gateway):
+        assert engram_gateway._extract_result_text({"content": []}) == ""
+
+
+class TestGatewayCallMetricsLogging:
+    """`handle_tools_call` is the single choke point every MCP call passes
+    through with the actual, un-redacted response content available (unlike
+    Cursor's afterMCPExecution hook, whose result_chars is frequently 0 --
+    see cursor/hooks/log-mcp-calls.sh's own comment) -- so this is where
+    real per-call token estimates get logged, to a gateway-owned JSONL file
+    distinct from the client-side hook's mcp-calls.jsonl."""
+
+    def test_successful_call_logs_one_jsonl_line_with_expected_fields(self, engram_gateway, tmp_path, monkeypatch):
+        log_path = tmp_path / "gateway-calls.jsonl"
+        monkeypatch.setattr(engram_gateway, "GATEWAY_CALLS_LOG", log_path)
+
+        docs = FakeAdapter(call_results={"recall": {"content": [{"type": "text", "text": "hello world"}], "isError": False}})
+        catalog = {"docs_recall": ("docs", "recall")}
+        message = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "docs_recall", "arguments": {}}}
+
+        asyncio.run(engram_gateway.handle_tools_call(message, catalog, {"docs": docs}, project="praxis-grid"))
+
+        lines = log_path.read_text().strip().splitlines()
+        assert len(lines) == 1
+        entry = json.loads(lines[0])
+        assert entry["project"] == "praxis-grid"
+        assert entry["backend"] == "docs"
+        assert entry["tool"] == "docs_recall"
+        assert entry["is_error"] is False
+        assert entry["result_chars"] == len("hello world")
+        assert entry["est_tokens"] == 2
+
+    def test_project_defaults_to_none_when_not_passed(self, engram_gateway, tmp_path, monkeypatch):
+        """Existing call sites/tests predate the `project` param -- must stay
+        backward compatible rather than requiring every caller to update."""
+        log_path = tmp_path / "gateway-calls.jsonl"
+        monkeypatch.setattr(engram_gateway, "GATEWAY_CALLS_LOG", log_path)
+
+        docs = FakeAdapter(call_results={"recall": {"content": [], "isError": False}})
+        catalog = {"docs_recall": ("docs", "recall")}
+        message = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "docs_recall", "arguments": {}}}
+
+        asyncio.run(engram_gateway.handle_tools_call(message, catalog, {"docs": docs}))
+
+        entry = json.loads(log_path.read_text().strip())
+        assert entry["project"] is None
+
+    def test_backend_exception_logs_a_zero_token_error_entry(self, engram_gateway, tmp_path, monkeypatch):
+        log_path = tmp_path / "gateway-calls.jsonl"
+        monkeypatch.setattr(engram_gateway, "GATEWAY_CALLS_LOG", log_path)
+
+        dead = FakeAdapter(call_error=RuntimeError("subprocess exited"))
+        catalog = {"praxis_code_search": ("code", "praxis_code_search")}
+        message = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "praxis_code_search", "arguments": {}}}
+
+        asyncio.run(engram_gateway.handle_tools_call(message, catalog, {"code": dead}, project="praxis-grid"))
+
+        entry = json.loads(log_path.read_text().strip())
+        assert entry["is_error"] is True
+        assert entry["result_chars"] == 0
+        assert entry["est_tokens"] == 0
+        assert entry["tool"] == "praxis_code_search"
+
+    def test_unknown_tool_does_not_write_a_log_line(self, engram_gateway, tmp_path, monkeypatch):
+        """No backend was ever actually called -- nothing to attribute
+        tokens/chars to, so this stays a pure routing error like it was
+        before this feature (see TestHandleToolsCall's own coverage of the
+        unchanged JSON-RPC error shape)."""
+        log_path = tmp_path / "gateway-calls.jsonl"
+        monkeypatch.setattr(engram_gateway, "GATEWAY_CALLS_LOG", log_path)
+        message = {"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "ghost_tool", "arguments": {}}}
+
+        asyncio.run(engram_gateway.handle_tools_call(message, {}, {}))
+
+        assert not log_path.exists()
+
+    def test_logging_failure_does_not_break_the_call(self, engram_gateway, monkeypatch):
+        """A read-only/missing log directory must degrade to a warning, not
+        take down the actual tool call it's trying to observe."""
+        monkeypatch.setattr(engram_gateway, "GATEWAY_CALLS_LOG", pathlib.Path("/nonexistent-dir/gateway-calls.jsonl"))
+
+        docs = FakeAdapter(call_results={"recall": {"content": [{"type": "text", "text": "ok"}], "isError": False}})
+        catalog = {"docs_recall": ("docs", "recall")}
+        message = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "docs_recall", "arguments": {}}}
+
+        result = asyncio.run(engram_gateway.handle_tools_call(message, catalog, {"docs": docs}))
+
+        assert result["result"]["content"][0]["text"] == "ok"
+
+    def test_call_appends_rather_than_overwrites_across_multiple_calls(self, engram_gateway, tmp_path, monkeypatch):
+        log_path = tmp_path / "gateway-calls.jsonl"
+        monkeypatch.setattr(engram_gateway, "GATEWAY_CALLS_LOG", log_path)
+
+        docs = FakeAdapter(call_results={"recall": {"content": [{"type": "text", "text": "one"}], "isError": False}})
+        catalog = {"docs_recall": ("docs", "recall")}
+        message = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "docs_recall", "arguments": {}}}
+
+        asyncio.run(engram_gateway.handle_tools_call(message, catalog, {"docs": docs}))
+        asyncio.run(engram_gateway.handle_tools_call(message, catalog, {"docs": docs}))
+
+        lines = log_path.read_text().strip().splitlines()
+        assert len(lines) == 2
 
 
 class TestBuildProjectRegistry:

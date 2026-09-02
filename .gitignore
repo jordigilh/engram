@@ -9,3 +9,11 @@ config.env
 # for whoever's local install has this repo activated) -- not shared repo
 # config, same rationale as config.env above.
 .serena/
+
+# Byproduct of running some other `uv` subcommand (uv lock/add) in this
+# directory. docs/INSTALL.md's documented flow is `uv pip install --python
+# <external venv> ...` -- uv-as-pip-replacement against a venv this repo
+# doesn't own -- which never reads or writes this file. Direct deps are
+# already exact-pinned in pyproject.toml, which is this repo's actual
+# determinism mechanism.
+uv.lock

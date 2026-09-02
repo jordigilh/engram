@@ -27,7 +27,7 @@ flowchart LR
         A -->|code search| CI_MCP[Code Index MCP]
     end
 
-    subgraph nightly["Nightly Batch"]
+    subgraph ondemand["On-Demand Learning (explicitly triggered, not scheduled)"]
         C[Transcripts] -->|scan| D[Detect corrections]
         D -->|retain| E["Haiku 4.5 (extract)"]
         E -->|reflect| F["Sonnet 4.6 (synthesize)"]
@@ -45,7 +45,16 @@ flowchart LR
 ```
 
 **Recall is local and free** — embeddings and reranking run on-device (~600ms).
-LLM calls only happen overnight for pattern extraction.
+Retain/reflect/triage's LLM calls are on-demand only, triggered explicitly
+in-chat or by hand — there is no scheduled background job spending tokens
+automatically. This was a deliberate reversal (2026-08-13): the original
+design ran these hourly/nightly, but that schedule kept paying for
+extraction and synthesis passes regardless of whether the day's transcripts
+actually contained anything worth learning, with no visibility into that
+cost until the bill showed up. On-demand keeps LLM cost visible and bounded
+until there's a well-understood, worthwhile cost/value ratio for bringing
+scheduled automation back — see [docs/findings/2026-08.md](docs/findings/2026-08.md)'s
+2026-08-13 entries for the full incident and decision record.
 
 ## What it solves
 
@@ -78,10 +87,9 @@ responsibility.
 - **Learns from corrections** — detects when you correct the agent, extracts the lesson
 - **Zero-cost recall** — local vector search, no tokens consumed during work
 - **Multi-bank architecture** — behavioral memory + project docs + GitHub issues/PRs + code index
-- **Self-cleaning** — nightly triage removes ephemeral, stale, and duplicate memories
+- **Self-cleaning** — on-demand triage removes ephemeral, stale, and duplicate memories
 - **Self-evaluating** — weekly trend metrics (corrections/session, rework %, exploration efficiency, productivity density), ingestion coverage, data freshness
 - **Recoverable** — transcripts are source of truth; `python3 -m engram.maintenance.recover_memories` rebuilds the bank
-- **Runs as macOS service** — launchd-managed, survives reboots, auto-restarts
 
 See [docs/README.md's Division of Labor](docs/README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor) for which of Hindsight, CocoIndex, or Serena is responsible for each of these.
 
@@ -130,9 +138,10 @@ graph TB
 
     subgraph launchd["launchd"]
         svc["service (KeepAlive)"]
-        nightly["nightly-learn (2 AM)"]
         coco_svc["cocoindex (KeepAlive)"]
     end
+
+    nightly["nightly-learn.py<br/>(on-demand only, no schedule)"]
 
     cursor -->|"MCP ×3 banks"| api
     cursor -->|"hybrid code search"| coco_search
@@ -141,7 +150,7 @@ graph TB
     api --> rerank
     api -->|"retain / reflect"| vertex
     launchd --> api
-    nightly --> api
+    nightly -.->|"manually triggered"| api
     coco_svc --> coco
     coco -->|"retain API"| api
 ```
@@ -171,7 +180,8 @@ for the measured numbers; this README leads with the accuracy/effectiveness
 story since that's the actual goal.
 
 > Run `python3 -m engram.maintenance.report` to see your weekly trends and session stats.
-> The [Effectiveness Dashboard](docs/DASHBOARD.md) auto-updates nightly.
+> The [Effectiveness Dashboard](docs/DASHBOARD.md) updates whenever `engram-nightly-learn`
+> is run (on-demand — see [How it works](#how-it-works) above).
 
 ## Expected benefits from CocoIndex integration
 
@@ -184,7 +194,7 @@ four source types. The expected improvements:
 | **Issues freshness** | ~24 hours (nightly batch) | < 5 minutes (polling every 300s) |
 | **Docs freshness** | Manual re-run | Instant (filesystem watching) |
 | **Code search** | Not available | Hybrid search (dense + BM25 via RRF) over pgvector + tree-sitter |
-| **Transcript learning** | Nightly only | Continuous detection + nightly extraction |
+| **Transcript learning** | Nightly batch only | Continuous detection (regex, zero LLM cost) + on-demand extraction |
 | **Exploration overhead** | Agent greps/globs for context | Recall front-loads synthesized knowledge |
 
 **How to measure whether it's working:**
@@ -218,7 +228,7 @@ the full list and what each one means):
 | [Call-Graph Design](docs/CALL_GRAPH_DESIGN.md) | How call-graph extraction, resolution, clustering, and caching actually work |
 | [Call-Graph Findings](docs/CALL_GRAPH_CLUSTERING.md) | Chronological spike + multi-org rollout findings, bugs found, precision measurements |
 | [Metrics & Monitoring](docs/METRICS.md) | Effectiveness tracking, proactive recall, triage, report interpretation |
-| [Effectiveness Dashboard](docs/DASHBOARD.md) | Daily metrics trend, auto-updated by nightly pipeline |
+| [Effectiveness Dashboard](docs/DASHBOARD.md) | Daily metrics trend, updated on-demand via `engram-nightly-learn` |
 | [Research Findings](docs/FINDINGS.md) | Empirical results, incidents, and lessons learned |
 
 ## License

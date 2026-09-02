@@ -31,6 +31,11 @@ dependencies = [
     "networkx==3.6.1",
     "python-igraph==1.0.0",
     "leidenalg==0.12.0",
+    # engram_gateway.py's per-call token estimation (2026-08-30): was already
+    # present as a transitive dep of one of the above; pinned explicitly now
+    # that engram_gateway.py imports it directly, rather than relying on an
+    # undeclared transitive version staying compatible.
+    "tiktoken==0.14.0",
 ]
 
 [project.optional-dependencies]

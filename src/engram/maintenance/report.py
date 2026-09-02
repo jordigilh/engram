@@ -31,6 +31,13 @@ from pathlib import Path
 
 LOG_DIR = Path.home() / ".hindsight" / "logs"
 MCP_CALLS_LOG = LOG_DIR / "mcp-calls.jsonl"
+# Written by engram_gateway.py's handle_tools_call(), distinct from
+# MCP_CALLS_LOG above (a client-side Cursor hook whose result_chars is
+# frequently 0 -- see cursor/hooks/log-mcp-calls.sh's own comment). This one
+# has real per-call tiktoken token estimates from the gateway's own
+# un-redacted view of every response it proxies. See docs/findings/2026-08.md,
+# 2026-08-30 entry.
+GATEWAY_CALLS_LOG = LOG_DIR / "gateway-calls.jsonl"
 EFFECTIVENESS_LOG = LOG_DIR / "effectiveness-report.jsonl"
 RECALL_SIGNALS_LOG = LOG_DIR / "recall-signals.jsonl"
 PREFILTER_SHADOW_LOG = LOG_DIR / "prefilter-shadow.jsonl"
@@ -303,6 +310,57 @@ def aggregate_mcp_calls(entries: list[dict]) -> dict:
         stats["hit_rate"] = round(stats["hits"] / total, 3) if total > 0 else 0.0
 
     return {"by_server": dict(by_server), "by_bank": dict(by_bank), "by_day": dict(by_day)}
+
+
+def aggregate_gateway_token_usage(entries: list[dict]) -> dict:
+    """Aggregate engram-gateway's per-call tiktoken estimates by tool and by
+    project. Distinct from analyze_token_consumption() below, which
+    estimates whole-*session* LLM cost from Cursor transcripts (chars-based,
+    with/without recall comparison) -- this is a real per-*MCP-call*
+    estimate computed gateway-side from the actual response text (see
+    engram_gateway.py's handle_tools_call/_estimate_tokens and
+    docs/findings/2026-08.md's 2026-08-30 entry). Pure aggregation over an
+    existing log file; does not call any LLM.
+    """
+    if not entries:
+        return {}
+
+    by_tool: dict[str, dict] = defaultdict(lambda: {"calls": 0, "errors": 0, "est_tokens": 0, "result_chars": 0})
+    by_project: dict[str, dict] = defaultdict(lambda: {"calls": 0, "est_tokens": 0})
+    total_calls = 0
+    total_tokens = 0
+
+    for entry in entries:
+        tool = entry.get("tool") or "unknown"
+        project = entry.get("project") or "unknown"
+        tokens = entry.get("est_tokens", 0) or 0
+        chars = entry.get("result_chars", 0) or 0
+
+        by_tool[tool]["calls"] += 1
+        by_tool[tool]["est_tokens"] += tokens
+        by_tool[tool]["result_chars"] += chars
+        if entry.get("is_error"):
+            by_tool[tool]["errors"] += 1
+
+        by_project[project]["calls"] += 1
+        by_project[project]["est_tokens"] += tokens
+
+        total_calls += 1
+        total_tokens += tokens
+
+    for stats in by_tool.values():
+        stats["avg_tokens_per_call"] = round(stats["est_tokens"] / stats["calls"], 1) if stats["calls"] else 0.0
+
+    top_tools = sorted(by_tool.items(), key=lambda kv: kv[1]["est_tokens"], reverse=True)
+
+    return {
+        "total_calls": total_calls,
+        "total_est_tokens": total_tokens,
+        "avg_tokens_per_call": round(total_tokens / total_calls, 1) if total_calls else 0.0,
+        "by_tool": dict(by_tool),
+        "by_project": dict(by_project),
+        "top_tools_by_tokens": [name for name, _stats in top_tools],
+    }
 
 
 def aggregate_effectiveness(entries: list[dict]) -> dict:
@@ -1033,7 +1091,8 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
                   regex_vs_haiku: dict | None = None,
                   recall_write_metrics: dict | None = None,
                   pending_contradictions: int | None = None,
-                  fallback_backlog: int | None = None) -> str:
+                  fallback_backlog: int | None = None,
+                  gateway_token_stats: dict | None = None) -> str:
     """Format a human-readable report."""
     lines = []
     lines.append("=" * 70)
@@ -1502,6 +1561,27 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
     else:
         lines.append("  No transcript data available for token analysis.")
 
+    # Gateway MCP Call Token Usage
+    lines.append("")
+    lines.append("  GATEWAY MCP CALL TOKEN USAGE (tiktoken estimate, not exact billed count)")
+    lines.append("  " + "-" * 66)
+    if gateway_token_stats:
+        lines.append(f"  Total calls: {gateway_token_stats['total_calls']:>6}   "
+                     f"Total est. tokens: {gateway_token_stats['total_est_tokens']:>10,}   "
+                     f"Avg/call: {gateway_token_stats['avg_tokens_per_call']:>7,.1f}")
+        lines.append("  " + "-" * 66)
+        lines.append(f"  {'Tool':<35} {'Calls':>7} {'Errors':>7} {'Est. Tokens':>13} {'Avg/Call':>10}")
+        lines.append("  " + "-" * 66)
+        for tool in gateway_token_stats["top_tools_by_tokens"][:15]:
+            stats = gateway_token_stats["by_tool"][tool]
+            lines.append(
+                f"  {tool:<35} {stats['calls']:>7} {stats['errors']:>7} "
+                f"{stats['est_tokens']:>13,} {stats['avg_tokens_per_call']:>10,.1f}"
+            )
+    else:
+        lines.append("  No gateway call data yet -- requires a repo routed through")
+        lines.append("  engram-gateway (src/engram/pipeline/engram_gateway.py).")
+
     # Daily trend
     by_day = mcp_stats.get("by_day", {})
     if by_day:
@@ -1518,6 +1598,7 @@ def format_report(mcp_stats: dict, effectiveness: dict, probe_stats: dict,
     lines.append("=" * 70)
     lines.append("  Log files:")
     lines.append(f"    MCP calls:     {MCP_CALLS_LOG}")
+    lines.append(f"    Gateway calls: {GATEWAY_CALLS_LOG}")
     lines.append(f"    Effectiveness: {EFFECTIVENESS_LOG}")
     lines.append(f"    Recall probes: {RECALL_SIGNALS_LOG}")
     lines.append(f"    Daily reports: {LOG_DIR}/<date>.json")
@@ -1608,11 +1689,19 @@ def build_report_data(args, project: str) -> dict:
     mcp_calls = load_jsonl(MCP_CALLS_LOG, days=args.days)
     effectiveness_entries = load_jsonl(EFFECTIVENESS_LOG, days=args.days)
     recall_signals = load_jsonl(RECALL_SIGNALS_LOG, days=args.days)
+    gateway_calls = load_jsonl(GATEWAY_CALLS_LOG, days=args.days)
 
     mcp_calls = [
         e for e in mcp_calls
         if any(e.get("project_dir", "").startswith(pfx) for pfx in workspace_prefixes)
     ]
+    # gateway-calls.jsonl tags "project" with the gateway registry key that
+    # actually served the call, not the calling Cursor workspace's dir name
+    # -- e.g. a praxis-grid session's kuadrant_* calls are logged under
+    # project="kuadrant" (its own separate /mcp/kuadrant mount), not
+    # "praxis-grid". Scoping by exact project name here matches that
+    # registry-key semantics rather than reusing workspace_prefixes.
+    gateway_calls = [e for e in gateway_calls if e.get("project") == project]
     # Entries written before the 2026-07-09 project-scoping fix have no
     # "project" key; they all predate DCM's existence as a project, so
     # treat them as kubernaut for backward compatibility (see FINDINGS.md).
@@ -1625,6 +1714,7 @@ def build_report_data(args, project: str) -> dict:
     effectiveness = aggregate_effectiveness(effectiveness_entries)
     probe_stats = aggregate_recall_probes(recall_signals)
     token_stats = analyze_token_consumption(days=args.days, workspace_prefixes=workspace_prefixes)
+    gateway_token_stats = aggregate_gateway_token_usage(gateway_calls)
     coverage = collect_ingestion_coverage(project=project)
     freshness = collect_freshness_stats()
     regex_vs_haiku = collect_regex_vs_haiku_stats(days=args.days, project=project)
@@ -1645,6 +1735,7 @@ def build_report_data(args, project: str) -> dict:
         "effectiveness": effectiveness,
         "recall_probes": probe_stats,
         "token_consumption": token_stats,
+        "gateway_token_usage": gateway_token_stats,
         "mental_models": collect_mental_model_stats(project),
         "exploration_efficiency": effectiveness.get("exploration_efficiency", {}),
         "session_distribution": effectiveness.get("session_distribution", {}),
@@ -1661,6 +1752,7 @@ def build_report_data(args, project: str) -> dict:
         "effectiveness": effectiveness,
         "probe_stats": probe_stats,
         "token_stats": token_stats,
+        "gateway_token_stats": gateway_token_stats,
         "coverage": coverage,
         "freshness": freshness,
         "regex_vs_haiku": regex_vs_haiku,
@@ -1729,7 +1821,8 @@ def main():
                             regex_vs_haiku=data["regex_vs_haiku"],
                             recall_write_metrics=data["recall_write_metrics"],
                             pending_contradictions=data["pending_contradictions"],
-                            fallback_backlog=data["fallback_backlog"]))
+                            fallback_backlog=data["fallback_backlog"],
+                            gateway_token_stats=data["gateway_token_stats"]))
 
 
 if __name__ == "__main__":

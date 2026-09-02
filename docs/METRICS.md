@@ -74,6 +74,48 @@ Each line contains:
 - `hit = true`: result contained >10 characters of content
 - `hit = false`: empty result, error, or no useful content returned
 
+### Real-time: Gateway Call Log (token estimates)
+
+`~/.hindsight/logs/mcp-calls.jsonl` above is written client-side by a Cursor
+hook, whose `afterMCPExecution` payload usually omits the actual response
+text (`result_chars` is best-effort and frequently 0 -- see
+`cursor/hooks/log-mcp-calls.sh`'s own comment). For any repo routed through
+`engram-gateway` (`src/engram/pipeline/engram_gateway.py`), a second,
+gateway-owned log fills that gap, since the gateway sees the real,
+un-redacted response for every backend it proxies:
+
+```
+~/.hindsight/logs/gateway-calls.jsonl
+```
+
+Each line contains:
+```json
+{
+  "ts": "2026-08-30T15:30:00",
+  "project": "praxis-grid",
+  "backend": "docs",
+  "tool": "docs_recall",
+  "is_error": false,
+  "result_chars": 1200,
+  "est_tokens": 287
+}
+```
+
+`est_tokens` is a **tiktoken (cl100k_base) estimate**, not an exact billed
+count: Anthropic doesn't publish an open tokenizer, so this is the closest
+widely-available stand-in for Claude-backed Cursor sessions, not an exact
+match. There is currently no local, real-time surface (Cursor hook, CLI, or
+SDK) that reports actual per-tool-call token usage -- real backend-reported
+counts only exist via the Team-plan Admin API or Enterprise OTel export,
+both at per-turn (not per-tool-call) granularity and neither queryable
+synchronously from a hook.
+
+`report.py` (the on-demand CLI report, not `nightly_learn.py`'s
+LLM-calling pipeline) rolls this up into a "GATEWAY MCP CALL TOKEN USAGE"
+section: total/average tokens, and a per-tool breakdown ranked by token
+consumption. Pure local aggregation over the JSONL file above -- no LLM
+call involved.
+
 ### Nightly: Effectiveness Analysis
 
 The nightly script (`nightly-learn.py`) produces two outputs:

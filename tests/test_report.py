@@ -115,6 +115,93 @@ class TestAggregateMcpCallsNormalization:
         assert agg["by_day"]["2026-07-14"]["hindsight-docs"] == 2
 
 
+class TestAggregateGatewayTokenUsage:
+    """2026-08-30: rolls up engram_gateway.py's per-call tiktoken estimates
+    (~/.hindsight/logs/gateway-calls.jsonl, written by handle_tools_call)
+    into the CLI report. Purely local aggregation over an existing log file
+    -- no LLM call of any kind, distinct from (and does not touch)
+    nightly-learn.py's retain/reflect pipeline, which stays on-demand-only
+    per the 2026-08-13 decision (docs/findings/2026-08.md)."""
+
+    def _call(self, project="praxis-grid", backend="docs", tool="docs_recall", tokens=100, chars=400, is_error=False):
+        return {
+            "ts": "2026-08-30T00:00:00",
+            "project": project,
+            "backend": backend,
+            "tool": tool,
+            "is_error": is_error,
+            "result_chars": chars,
+            "est_tokens": tokens,
+        }
+
+    def test_empty_entries_returns_empty_dict(self):
+        assert report.aggregate_gateway_token_usage([]) == {}
+
+    def test_totals_across_all_entries(self):
+        entries = [self._call(tokens=100), self._call(tokens=200), self._call(tokens=300)]
+
+        agg = report.aggregate_gateway_token_usage(entries)
+
+        assert agg["total_calls"] == 3
+        assert agg["total_est_tokens"] == 600
+        assert agg["avg_tokens_per_call"] == 200.0
+
+    def test_breakdown_by_tool(self):
+        entries = [
+            self._call(tool="docs_recall", tokens=100),
+            self._call(tool="docs_recall", tokens=300),
+            self._call(tool="issues_recall", tokens=50),
+        ]
+
+        agg = report.aggregate_gateway_token_usage(entries)
+
+        assert agg["by_tool"]["docs_recall"]["calls"] == 2
+        assert agg["by_tool"]["docs_recall"]["est_tokens"] == 400
+        assert agg["by_tool"]["docs_recall"]["avg_tokens_per_call"] == 200.0
+        assert agg["by_tool"]["issues_recall"]["calls"] == 1
+
+    def test_breakdown_by_project(self):
+        entries = [
+            self._call(project="praxis-grid", tokens=100),
+            self._call(project="kuadrant", tokens=500),
+        ]
+
+        agg = report.aggregate_gateway_token_usage(entries)
+
+        assert agg["by_project"]["praxis-grid"]["est_tokens"] == 100
+        assert agg["by_project"]["kuadrant"]["est_tokens"] == 500
+
+    def test_errors_are_counted_per_tool(self):
+        entries = [
+            self._call(tool="docs_recall", is_error=False),
+            self._call(tool="docs_recall", is_error=True),
+        ]
+
+        agg = report.aggregate_gateway_token_usage(entries)
+
+        assert agg["by_tool"]["docs_recall"]["errors"] == 1
+        assert agg["by_tool"]["docs_recall"]["calls"] == 2
+
+    def test_top_tools_by_tokens_ranks_highest_consumer_first(self):
+        entries = [
+            self._call(tool="cheap_tool", tokens=10),
+            self._call(tool="expensive_tool", tokens=1000),
+            self._call(tool="mid_tool", tokens=100),
+        ]
+
+        agg = report.aggregate_gateway_token_usage(entries)
+
+        assert agg["top_tools_by_tokens"][0] == "expensive_tool"
+        assert agg["top_tools_by_tokens"][-1] == "cheap_tool"
+
+    def test_missing_project_falls_back_to_unknown_bucket(self):
+        entries = [self._call(project=None, tokens=50)]
+
+        agg = report.aggregate_gateway_token_usage(entries)
+
+        assert agg["by_project"]["unknown"]["est_tokens"] == 50
+
+
 class TestProjectConfigsEngram:
     """Mirrors nightly-learn.py's PROJECT_CONFIGS additions from the
     2026-07-15 Engram onboarding -- report.py keeps its own copy, so it can

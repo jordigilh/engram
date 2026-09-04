@@ -316,6 +316,46 @@ class TestForwardScoped:
         assert calls == 2
         assert result.body == self._STALE_BODY
 
+    def test_transient_upstream_disconnect_reactivates_and_retries(self, serena_multiplex, monkeypatch):
+        tracker = serena_multiplex.ActiveProjectTracker()
+        activated: list[str] = []
+        calls = 0
+
+        async def activate(project):
+            activated.append(project)
+
+        async def forward_raw():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                import httpx
+
+                raise httpx.ConnectError("upstream restarting")
+            return self._FakeResponse(self._OK_BODY)
+
+        monkeypatch.setattr(serena_multiplex, "RETRY_DELAY_S", 0)
+        result = asyncio.run(
+            serena_multiplex._forward_scoped("kubernaut", tracker, activate, forward_raw)
+        )
+
+        assert activated == ["kubernaut", "kubernaut"]
+        assert calls == 2
+        assert result.body == self._OK_BODY
+
+    def test_non_transient_forward_error_is_not_swallowed(self, serena_multiplex):
+        tracker = serena_multiplex.ActiveProjectTracker()
+
+        async def activate(project):
+            pass
+
+        async def forward_raw():
+            raise ValueError("bad response handling")
+
+        with __import__("pytest").raises(ValueError):
+            asyncio.run(
+                serena_multiplex._forward_scoped("kubernaut", tracker, activate, forward_raw)
+            )
+
 
 class TestIsProjectAgnosticTool:
     def test_query_project_and_list_queryable_projects_are_agnostic(self, serena_multiplex):

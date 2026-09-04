@@ -68,6 +68,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8893
 DEFAULT_UPSTREAM_URL = "http://127.0.0.1:8892/mcp"
 FORWARD_TIMEOUT_S = 60.0
+RETRY_DELAY_S = 0.5
 
 # Must match the `projects:` names registered in ~/.serena/serena_config.yml
 # for the kubernaut-family daemon, not repo paths -- activate_project takes a
@@ -253,8 +254,24 @@ async def _forward_scoped(
     -- see `ActiveProjectTracker.invalidate` for why a cache hit here can
     still be stale. One retry only: if the upstream is genuinely down, a
     second identical failure is returned as-is rather than looping."""
-    async with tracker.pinned(project, activate):
-        response = await forward_raw()
+    try:
+        async with tracker.pinned(project, activate):
+            response = await forward_raw()
+    except Exception as exc:
+        # Serena is periodically restarted by the mirror sync hook. If the
+        # upstream disappears between activation and the real call, give
+        # its supervisor one brief chance to bring it back instead of
+        # turning the transport error into an opaque downstream 500.
+        import httpx
+
+        if not isinstance(exc, httpx.RequestError):
+            raise
+        await tracker.invalidate()
+        import asyncio
+
+        await asyncio.sleep(RETRY_DELAY_S)
+        async with tracker.pinned(project, activate):
+            return await forward_raw()
 
     if not _looks_like_no_active_project_error(getattr(response, "body", b"")):
         return response
@@ -327,7 +344,6 @@ def build_app(projects: list[str], upstream_url: str):
     """Build the Starlette app: one route per project, each forwarding to
     the shared upstream via one-shot POST relays with activate_project
     injected ahead of project-scoped tool calls (see module docstring)."""
-    import httpx
     from starlette.applications import Starlette
     from starlette.requests import Request
     from starlette.responses import Response
@@ -353,6 +369,8 @@ def build_app(projects: list[str], upstream_url: str):
             }
 
             async def forward_raw() -> Response:
+                import httpx
+
                 async with httpx.AsyncClient(timeout=FORWARD_TIMEOUT_S) as client:
                     upstream_resp = await client.request(
                         request.method,
@@ -396,7 +414,20 @@ def build_app(projects: list[str], upstream_url: str):
             if route == "agnostic":
                 return await forward_raw()
 
-            return await _forward_scoped(project, tracker, activate, forward_raw)
+            try:
+                return await _forward_scoped(project, tracker, activate, forward_raw)
+            except Exception as exc:
+                import httpx
+
+                if not isinstance(exc, httpx.RequestError):
+                    raise
+                log.warning("upstream Serena unavailable for project %s: %s", project, exc)
+                return Response(
+                    content=json.dumps({"detail": "Serena upstream is temporarily unavailable"}),
+                    status_code=503,
+                    headers={"Retry-After": "1"},
+                    media_type="application/json",
+                )
 
         return endpoint
 

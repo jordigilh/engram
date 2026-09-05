@@ -437,6 +437,9 @@ class TestHandleJsonRpcMessage:
         assert record == []  # neither the real activate nor forward ran
         assert result["id"] == 7  # echoes the caller's own JSON-RPC id
         assert "kubernaut-operator" in result["result"]["content"][0]["text"]
+        assert result["result"]["structuredContent"] == {
+            "result": result["result"]["content"][0]["text"]
+        }
 
     def test_scoped_tool_call_activates_before_forwarding(self, serena_multiplex):
         tracker = serena_multiplex.ActiveProjectTracker()

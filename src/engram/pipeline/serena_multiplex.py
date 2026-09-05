@@ -163,6 +163,11 @@ class ActiveProjectTracker:
 def _intercept_response(message: dict, project: str) -> dict:
     """Synthesize a well-formed JSON-RPC tool result for an agent's own
     (redundant) activate_project call, without contacting upstream at all."""
+    text = (
+        f"This mount is permanently pinned to project "
+        f"'{project}' -- activate_project is managed "
+        f"automatically and does not need to be called."
+    )
     return {
         "jsonrpc": "2.0",
         "id": message.get("id"),
@@ -170,13 +175,13 @@ def _intercept_response(message: dict, project: str) -> dict:
             "content": [
                 {
                     "type": "text",
-                    "text": (
-                        f"This mount is permanently pinned to project "
-                        f"'{project}' -- activate_project is managed "
-                        f"automatically and does not need to be called."
-                    ),
+                    "text": text,
                 }
             ],
+            # Serena's activate_project tool declares an output schema with a
+            # required `result` string, so the synthetic result must satisfy it
+            # just like the real upstream tool response does.
+            "structuredContent": {"result": text},
             "isError": False,
         },
     }

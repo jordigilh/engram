@@ -88,6 +88,8 @@ def family_signature(context: dict[str, Any]) -> str:
         "workflow_resolution_failed": summary.get("workflow_resolution_failed"),
         "manual_review_required": summary.get("manual_review_required"),
         "operator_escalation": summary.get("operator_escalation"),
+        "project": context.get("scope", {}).get("project", "kubernaut"),
+        "branch": context.get("scope", {}).get("branch", "main"),
     }
     return "family-" + hashlib.sha1(json.dumps(material, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -115,7 +117,8 @@ def promote_incident(
     """Persist a compact incident dossier and aggregate its failure family."""
     test = context.get("test", {})
     rr_id = context["rr_id"]
-    incident_id = f"incident-{rr_id}"
+    scope = context.get("scope", {})
+    incident_id = f"incident-{scope.get('project', 'kubernaut')}-{scope.get('branch', 'main')}-{rr_id}"
     family = family_signature(context)
     classification, cause = _classification(context)
     first_seen, last_seen = _time_bounds(context)

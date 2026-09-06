@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .correlate import build_clusters, correlate, rank_evidence, resolve_rr_id
+from .branch_scope import normalize_branch
 from .models import Evidence, TestFailure
 from .normalize import extract_rr_id, iter_evidence
 
@@ -128,11 +129,17 @@ def triage_test_failure(
     test_name: str,
     failure_text: str,
     rr_id: str | None = None,
+    branch: str = "main",
+    project: str = "kubernaut",
     max_tokens: int = 12000,
 ) -> dict[str, Any]:
     """Build a bounded dossier from an extracted must-gather directory."""
     failure = _failure(run_id, job_id, test_name, failure_text, rr_id)
-    return build_context(failure, iter_evidence(root), max_tokens=max_tokens)
+    context = build_context(failure, iter_evidence(root), max_tokens=max_tokens)
+    context["scope"] = {"project": project, "branch": normalize_branch(branch)}
+    context["test"]["project"] = project
+    context["test"]["branch"] = normalize_branch(branch)
+    return context
 
 
 def context_json(**kwargs: Any) -> str:

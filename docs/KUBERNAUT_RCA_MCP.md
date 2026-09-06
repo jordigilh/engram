@@ -9,8 +9,7 @@ projects or families.
 http://127.0.0.1:8897/mcp
 ```
 
-The OpenCode plugin adds the `kubernaut-rca` server only for these project
-identities:
+The Engram gateway adds the RCA backend only for these project identities:
 
 - `kubernaut`
 - `kubernaut-operator`
@@ -121,9 +120,24 @@ treated as the target line they are based on.
 
 ## OpenCode Configuration
 
-The OpenCode plugin derives the project identity from the checkout and current
-branch. It conditionally injects the RCA MCP server; no manual MCP entry is
-needed in each Kubernaut repository.
+OpenCode connects to the single frontend gateway entry:
+
+```json
+{
+  "mcp": {
+    "engram": {
+      "type": "remote",
+      "url": "http://127.0.0.1:8896/mcp/kubernaut",
+      "enabled": true
+    }
+  }
+}
+```
+
+The gateway aggregates the normal Kubernaut tools and the RCA backend behind
+this one connection. RCA is not added as a separate OpenCode MCP connection;
+this preserves the heartbeat/degradation behavior of the existing frontend
+proxy.
 
 The CI dossier job does not call MCP. It generates and uploads a compact dossier
 as an artifact. MCP is the interactive agent-facing path for re-ingestion and

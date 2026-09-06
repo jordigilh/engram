@@ -911,6 +911,7 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     registry: dict[str, dict[str, dict]] = {}
 
     kubernaut_http_code = _http("http://127.0.0.1:8891/mcp")
+    kubernaut_rca = _http("http://127.0.0.1:8897/mcp")
 
     def kubernaut_serena(project: str) -> dict:
         return _http(f"http://127.0.0.1:8893/mcp/{project}")
@@ -920,6 +921,7 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
             "docs": _hindsight("kubernaut-docs"),
             "issues": _hindsight("kubernaut-issues"),
             "code": kubernaut_http_code,
+            "rca": kubernaut_rca,
             "serena": kubernaut_serena(name),
         }
     registry["kubernaut-console"] = {

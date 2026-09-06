@@ -123,6 +123,8 @@ def backfill(
                             test_name=failure["test_name"],
                             failure_text=failure["failure_text"],
                             rr_id=failure["rr_id"],
+                            branch=run.get("target_branch", "main"),
+                            project="kubernaut",
                         )
                         destination_path = run_output / f"{failure['rr_id']}.json"
                         destination_path.parent.mkdir(parents=True, exist_ok=True)

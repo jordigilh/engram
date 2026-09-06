@@ -30,7 +30,8 @@ def promote_incident_pg(
 ) -> dict[str, Any]:
     test = context.get("test", {})
     rr_id = context["rr_id"]
-    incident_id = f"incident-{rr_id}"
+    scope = context.get("scope", {})
+    incident_id = f"incident-{scope.get('project', 'kubernaut')}-{scope.get('branch', 'main')}-{rr_id}"
     family = family_signature(context)
     classification, cause = _classification(context)
     first_seen, last_seen = _time_bounds(context)

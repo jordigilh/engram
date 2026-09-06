@@ -91,6 +91,8 @@ class GitHubActionsClient:
             "created_at": run.get("created_at"),
             "updated_at": run.get("updated_at"),
             "commit_sha": run.get("head_sha"),
+            "source_branch": run.get("head_branch"),
+            "target_branch": run.get("base_ref") or run.get("head_branch") or "main",
             "run_url": run.get("html_url"),
             "failed_jobs": failed_jobs,
             "primary_failed_jobs": primary_failed_jobs,

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from engram.incident.service import triage_test_failure as build_triage_context
 from engram.incident.remote import ingest_urls
+from engram.incident.branch_scope import normalize_branch
 from engram.incident.retention import (
     failure_history,
     family_signature,
@@ -33,10 +34,15 @@ def _run_mcp_server(
     import json
 
     mcp = FastMCP("kubernaut-rca")
-    latest_context: dict | None = None
-    active_root = root
+    contexts: dict[tuple[str, str], dict] = {}
+    roots: dict[tuple[str, str], Path] = {}
     retention_path = db_path or Path(os.environ.get("KUBERNAUT_RCA_DB", "~/.hindsight/kubernaut-rca.sqlite3")).expanduser()
-    latest_changes: list[dict] = []
+    changes_by_scope: dict[tuple[str, str], list[dict]] = {}
+
+    def scope_key(project: str, branch: str) -> tuple[str, str]:
+        if project not in {"kubernaut", "kubernaut-operator"}:
+            raise ValueError("RCA service is restricted to the Kubernaut project family")
+        return project, normalize_branch(branch)
 
     @mcp.tool()
     def ingest_test_run(
@@ -45,20 +51,22 @@ def _run_mcp_server(
         commit_sha: str | None = None,
         repository: str | None = None,
         workflow: str | None = None,
+        branch: str = "main",
+        project: str = "kubernaut",
     ) -> str:
         """Download and index one GitHub Actions job log and must-gather artifact.
 
         Only GitHub Actions job and artifact URLs are accepted. Authentication is
         read from GH_TOKEN or GITHUB_TOKEN in the service environment.
         """
-        nonlocal active_root, latest_changes
+        key = scope_key(project, branch)
         manifest = ingest_urls(test_log_url, must_gather_url)
         manifest["commit_sha"] = commit_sha
         manifest["repository"] = repository
         manifest["workflow"] = workflow
-        latest_changes = []
+        changes_by_scope[key] = []
         if commit_sha:
-            latest_changes.append(
+            changes_by_scope[key].append(
                 {
                     "commit_sha": commit_sha,
                     "change_type": "source_commit",
@@ -67,44 +75,54 @@ def _run_mcp_server(
                     "confidence": 0.5,
                 }
             )
-        active_root = Path(manifest["root"])
+        roots[key] = Path(manifest["root"])
         return json.dumps(manifest)
 
     @mcp.tool()
     def promote_incident(
+        branch: str = "main",
+        project: str = "kubernaut",
         validated_by: str | None = None,
         resolution: str | None = None,
         changes: list[dict] | None = None,
     ) -> str:
         """Persist the latest compact dossier without retaining raw logs."""
-        if not latest_context:
+        context = contexts.get(scope_key(project, branch))
+        if not context:
             return json.dumps({"error": "triage_test_failure must be called first"})
         if pg_url:
             result = promote_incident_pg(
-                latest_context, pg_url, validated_by=validated_by,
-                resolution=resolution, changes=changes or latest_changes,
+                context, pg_url, validated_by=validated_by,
+                resolution=resolution, changes=changes or changes_by_scope.get(scope_key(project, branch), []),
             )
         else:
             result = store_incident(
-                latest_context, retention_path, validated_by=validated_by,
-                resolution=resolution, changes=changes or latest_changes,
+                context, retention_path, validated_by=validated_by,
+                resolution=resolution, changes=changes or changes_by_scope.get(scope_key(project, branch), []),
             )
         return json.dumps(result)
 
     @mcp.tool()
-    def get_failure_history(failure_family: str | None = None) -> str:
+    def get_failure_history(
+        branch: str = "main", project: str = "kubernaut", failure_family: str | None = None
+    ) -> str:
         """Return promoted incidents in one recurring failure family."""
         signature = failure_family
-        if not signature and latest_context:
-            signature = family_signature(latest_context)
+        context = contexts.get(scope_key(project, branch))
+        if not signature and context:
+            signature = family_signature(context)
         if not signature:
             return json.dumps({"error": "provide failure_family or triage an incident first"})
         incidents = failure_history_pg(pg_url, signature) if pg_url else failure_history(retention_path, signature)
         return json.dumps({"family_signature": signature, "incidents": incidents}, default=str)
 
     @mcp.tool()
-    def get_incident_timeline(incident_id: str) -> str:
+    def get_incident_timeline(incident_id: str, branch: str = "main", project: str = "kubernaut") -> str:
         """Return a promoted incident and its linked changes."""
+        normalized_branch = normalize_branch(branch)
+        expected_prefix = f"incident-{project}-{normalized_branch}-"
+        if not incident_id.startswith(expected_prefix):
+            return json.dumps({"error": "incident does not belong to the requested project/branch scope"})
         timeline = incident_timeline_pg(pg_url, incident_id) if pg_url else incident_timeline(retention_path, incident_id)
         return json.dumps(timeline, default=str)
 
@@ -115,37 +133,44 @@ def _run_mcp_server(
         test_name: str,
         failure_text: str,
         rr_id: str | None = None,
+        branch: str = "main",
+        project: str = "kubernaut",
         max_tokens: int = 12000,
     ) -> str:
         """Return a bounded RCA dossier correlated by Kubernaut RR ID."""
-        nonlocal latest_context
-        latest_context = build_triage_context(
-            root=active_root,
+        key = scope_key(project, branch)
+        context = build_triage_context(
+            root=roots.get(key, root),
             run_id=run_id,
             job_id=job_id,
             test_name=test_name,
             failure_text=failure_text,
             rr_id=rr_id,
+            branch=branch,
+            project=project,
             max_tokens=min(max_tokens, 20000),
         )
-        return json.dumps(latest_context, default=str)
+        contexts[scope_key(project, branch)] = context
+        return json.dumps(context, default=str)
 
     @mcp.tool()
-    def get_evidence(evidence_id: str) -> str:
+    def get_evidence(evidence_id: str, branch: str = "main", project: str = "kubernaut") -> str:
         """Return one evidence item from the most recent triage dossier."""
-        if not latest_context:
+        context = contexts.get(scope_key(project, branch))
+        if not context:
             return json.dumps({"error": "triage_test_failure must be called first"})
-        for item in latest_context["evidence"]:
+        for item in context["evidence"]:
             if item["id"] == evidence_id:
                 return json.dumps(item, default=str)
         return json.dumps({"error": f"unknown evidence id: {evidence_id}"})
 
     @mcp.tool()
-    def get_related_events(evidence_id: str) -> str:
+    def get_related_events(evidence_id: str, branch: str = "main", project: str = "kubernaut") -> str:
         """Return timeline records related to one evidence item."""
-        if not latest_context:
+        context = contexts.get(scope_key(project, branch))
+        if not context:
             return json.dumps({"error": "triage_test_failure must be called first"})
-        related = [item for item in latest_context["timeline"] if item["evidence_id"] == evidence_id]
+        related = [item for item in context["timeline"] if item["evidence_id"] == evidence_id]
         return json.dumps({"evidence_id": evidence_id, "events": related}, default=str)
 
     if transport == "stdio":

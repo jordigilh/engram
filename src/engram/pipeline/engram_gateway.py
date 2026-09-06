@@ -324,6 +324,15 @@ RELEVANT_TOOLS_BY_BACKEND: dict[str, frozenset[str]] = {
     "kuadrant_docs": RECALL_ONLY_HINDSIGHT_TOOLS,
     "kuadrant_issues": RECALL_ONLY_HINDSIGHT_TOOLS,
     "kuadrant_code": RECALL_ONLY_CODE_TOOLS,
+    "rca": frozenset({
+        "ingest_test_run",
+        "triage_test_failure",
+        "get_evidence",
+        "get_related_events",
+        "promote_incident",
+        "get_failure_history",
+        "get_incident_timeline",
+    }),
 }
 
 

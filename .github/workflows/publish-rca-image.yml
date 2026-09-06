@@ -34,8 +34,12 @@ jobs:
 
       - name: Register binfmt handlers
         run: |
-          sudo update-binfmts --enable qemu-aarch64
-          update-binfmts --display qemu-aarch64
+          # qemu-user-static registers the handler on GitHub's Ubuntu runners;
+          # update-binfmts may report it as enabled in the kernel but absent
+          # from its package database, which is not an error for Podman.
+          sudo systemctl restart systemd-binfmt 2>/dev/null || true
+          test -e /proc/sys/fs/binfmt_misc/qemu-aarch64
+          cat /proc/sys/fs/binfmt_misc/qemu-aarch64
 
       - name: Log in to Quay
         env:

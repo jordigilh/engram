@@ -1,0 +1,58 @@
+name: Publish Kubernaut RCA Image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile.rca
+      - src/engram/incident/**
+      - src/engram/pipeline/kubernaut_corpus_inventory.py
+      - src/engram/pipeline/kubernaut_rca_backfill.py
+      - src/engram/pipeline/kubernaut_rca_service.py
+      - pyproject.toml
+      - .github/workflows/publish-rca-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      IMAGE: quay.io/jordigilh/engram
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Podman and arm64 emulation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman qemu-user-static
+          podman --version
+
+      - name: Register binfmt handlers
+        run: |
+          docker run --privileged --rm tonistiigi/binfmt:qemu-v8 --install all
+
+      - name: Log in to Quay
+        env:
+          QUAY_USERNAME: ${{ secrets.QUAY_ROBOT_USERNAME }}
+          QUAY_TOKEN: ${{ secrets.QUAY_ROBOT_TOKEN }}
+        run: echo "$QUAY_TOKEN" | podman login quay.io -u "$QUAY_USERNAME" --password-stdin
+
+      - name: Build multi-architecture manifest
+        run: |
+          MANIFEST="$IMAGE:${GITHUB_SHA}"
+          podman manifest rm "$MANIFEST" 2>/dev/null || true
+          podman manifest create "$MANIFEST"
+          podman build --pull --platform linux/amd64 --manifest "$MANIFEST" -f Dockerfile.rca .
+          podman build --pull --platform linux/arm64 --manifest "$MANIFEST" -f Dockerfile.rca .
+          podman manifest inspect "$MANIFEST"
+
+      - name: Push immutable multi-architecture image
+        run: podman manifest push --all "$IMAGE:${GITHUB_SHA}" "docker://$IMAGE:${GITHUB_SHA}"
+
+      - name: Publish latest multi-architecture manifest
+        run: podman manifest push --all "$IMAGE:${GITHUB_SHA}" "docker://$IMAGE:latest"

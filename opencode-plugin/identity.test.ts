@@ -76,4 +76,16 @@ describe("buildMcpConfig", () => {
     expect(cfg["cocoindex-code"].url).toBe("http://127.0.0.1:9001/mcp")
     expect(cfg["serena"].url).toBe("http://127.0.0.1:9003/mcp/myrepo")
   })
+
+  test("exposes RCA only for the Kubernaut RCA project allowlist", () => {
+    const kubernaut = buildMcpConfig({ project: "kubernaut-v1.5", family: "kubernaut", branchSuffix: "v1.5" })
+    const operator = buildMcpConfig({ project: "kubernaut-operator", family: "kubernaut", branchSuffix: "main" })
+    const console = buildMcpConfig({ project: "kubernaut-console", family: "kubernaut", branchSuffix: "main" })
+    const other = buildMcpConfig({ project: "koku", family: "koku", branchSuffix: "main" })
+
+    expect(kubernaut["kubernaut-rca"]?.url).toBe("http://127.0.0.1:8897/mcp")
+    expect(operator["kubernaut-rca"]).toBeDefined()
+    expect(console["kubernaut-rca"]).toBeUndefined()
+    expect(other["kubernaut-rca"]).toBeUndefined()
+  })
 })

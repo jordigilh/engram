@@ -34,7 +34,7 @@ jobs:
 
       - name: Register binfmt handlers
         run: |
-          docker run --privileged --rm tonistiigi/binfmt:qemu-v8 --install all
+          podman run --privileged --rm docker.io/tonistiigi/binfmt:latest --install all
 
       - name: Log in to Quay
         env:

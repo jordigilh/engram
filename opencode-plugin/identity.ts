@@ -62,6 +62,7 @@ export interface McpBackendUrls {
   hindsightBaseUrl?: string
   cocoindexUrl?: string
   serenaMultiplexUrl?: string
+  kubernautRcaUrl?: string
 }
 
 export interface McpServerEntry {
@@ -70,21 +71,38 @@ export interface McpServerEntry {
   enabled: true
 }
 
-export type McpConfig = Record<"hindsight-docs" | "hindsight-issues" | "cocoindex-code" | "serena", McpServerEntry>
+export type McpConfig = Record<"hindsight-docs" | "hindsight-issues" | "cocoindex-code" | "serena", McpServerEntry> & {
+  "kubernaut-rca"?: McpServerEntry
+}
 
 const DEFAULT_HINDSIGHT_BASE_URL = "http://localhost:8888"
 const DEFAULT_COCOINDEX_URL = "http://127.0.0.1:8891/mcp"
 const DEFAULT_SERENA_MULTIPLEX_URL = "http://127.0.0.1:8893"
+const DEFAULT_KUBERNAUT_RCA_URL = "http://127.0.0.1:8897/mcp"
+const KUBERNAUT_RCA_PROJECTS = new Set([
+  "kubernaut",
+  "kubernaut-operator",
+  "kubernaut-v1.5",
+  "kubernaut-v1.6",
+])
 
 export function buildMcpConfig(identity: Pick<ResolvedIdentity, "project" | "family">, urls: McpBackendUrls = {}): McpConfig {
   const hindsightBaseUrl = urls.hindsightBaseUrl || DEFAULT_HINDSIGHT_BASE_URL
   const cocoindexUrl = urls.cocoindexUrl || DEFAULT_COCOINDEX_URL
   const serenaMultiplexUrl = urls.serenaMultiplexUrl || DEFAULT_SERENA_MULTIPLEX_URL
 
-  return {
+  const config: McpConfig = {
     "hindsight-docs": { type: "remote", url: `${hindsightBaseUrl}/mcp/${identity.family}-docs/`, enabled: true },
     "hindsight-issues": { type: "remote", url: `${hindsightBaseUrl}/mcp/${identity.family}-issues/`, enabled: true },
     "cocoindex-code": { type: "remote", url: cocoindexUrl, enabled: true },
     "serena": { type: "remote", url: `${serenaMultiplexUrl}/mcp/${identity.project}`, enabled: true },
   }
+  if (identity.family === "kubernaut" && KUBERNAUT_RCA_PROJECTS.has(identity.project)) {
+    config["kubernaut-rca"] = {
+      type: "remote",
+      url: urls.kubernautRcaUrl || DEFAULT_KUBERNAUT_RCA_URL,
+      enabled: true,
+    }
+  }
+  return config
 }

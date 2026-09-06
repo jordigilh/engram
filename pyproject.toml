@@ -21,6 +21,7 @@ dependencies = [
     "sentence-transformers==6.0.0",
     "requests==2.34.2",
     "watchdog==6.0.0",
+    "PyYAML==6.0.3",
     "numpy==2.5.2",
     "torch==2.13.0",
     "asyncpg==0.31.0",
@@ -70,6 +71,9 @@ engram-ingest-issues = "engram.pipeline.ingest_issues:main"
 engram-hindsight-proxy = "engram.pipeline.hindsight_proxy:cli_main"
 engram-serena-multiplex = "engram.pipeline.serena_multiplex:main"
 engram-gateway = "engram.pipeline.engram_gateway:main"
+engram-kubernaut-rca = "engram.pipeline.kubernaut_rca_service:main"
+engram-kubernaut-corpus-inventory = "engram.pipeline.kubernaut_corpus_inventory:main"
+engram-kubernaut-rca-backfill = "engram.pipeline.kubernaut_rca_backfill:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

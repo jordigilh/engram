@@ -506,7 +506,14 @@ class TestBuildProjectRegistry:
         assert spec["docs"] == {"kind": "http", "url": "http://localhost:8888/mcp/kubernaut-docs/"}
         assert spec["issues"] == {"kind": "http", "url": "http://localhost:8888/mcp/kubernaut-issues/"}
         assert spec["code"] == {"kind": "http", "url": "http://127.0.0.1:8891/mcp"}
+        assert spec["rca"] == {"kind": "http", "url": "http://127.0.0.1:8897/mcp"}
         assert spec["serena"] == {"kind": "http", "url": "http://127.0.0.1:8893/mcp/kubernaut-operator"}
+
+    def test_rca_backend_is_kubernaut_only(self, engram_gateway):
+        registry = engram_gateway.build_project_registry("/home/u")
+
+        assert "rca" in registry["kubernaut"]
+        assert "rca" not in registry["koku"]
 
     def test_kubernaut_console_has_serena_scoped_to_its_own_repo(self, engram_gateway):
         """Added 2026-08-25: kubernaut-console was the only kubernaut-family

@@ -324,6 +324,15 @@ RELEVANT_TOOLS_BY_BACKEND: dict[str, frozenset[str]] = {
     "kuadrant_docs": RECALL_ONLY_HINDSIGHT_TOOLS,
     "kuadrant_issues": RECALL_ONLY_HINDSIGHT_TOOLS,
     "kuadrant_code": RECALL_ONLY_CODE_TOOLS,
+    "rca": frozenset({
+        "ingest_test_run",
+        "triage_test_failure",
+        "get_evidence",
+        "get_related_events",
+        "promote_incident",
+        "get_failure_history",
+        "get_incident_timeline",
+    }),
 }
 
 
@@ -911,6 +920,7 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     registry: dict[str, dict[str, dict]] = {}
 
     kubernaut_http_code = _http("http://127.0.0.1:8891/mcp")
+    kubernaut_rca = _http("http://127.0.0.1:8897/mcp")
 
     def kubernaut_serena(project: str) -> dict:
         return _http(f"http://127.0.0.1:8893/mcp/{project}")
@@ -920,6 +930,7 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
             "docs": _hindsight("kubernaut-docs"),
             "issues": _hindsight("kubernaut-issues"),
             "code": kubernaut_http_code,
+            "rca": kubernaut_rca,
             "serena": kubernaut_serena(name),
         }
     registry["kubernaut-console"] = {

@@ -1,0 +1,25 @@
+FROM registry.access.redhat.com/ubi10/ubi:latest
+
+LABEL org.opencontainers.image.title="Engram Kubernaut RCA" \
+      org.opencontainers.image.description="Deterministic Kubernaut CI failure dossier and RCA MCP tooling" \
+      org.opencontainers.image.source="https://github.com/jordigilh/engram"
+
+WORKDIR /opt/engram
+
+# The RCA runtime intentionally installs only incident-processing dependencies;
+# it does not pull Engram's full code-search/LLM dependency graph.
+RUN dnf install -y python3-pip \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf \
+    && python3 -m pip install --no-cache-dir \
+      PyYAML==6.0.3 \
+      mcp==2.1.1 \
+      psycopg2-binary==2.9.12
+
+COPY src/engram /opt/engram/src/engram
+
+ENV PYTHONPATH=/opt/engram/src \
+    PYTHONDONTWRITEBYTECODE=1
+
+USER 1001
+ENTRYPOINT ["python3"]

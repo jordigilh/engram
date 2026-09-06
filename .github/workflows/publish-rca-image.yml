@@ -1,6 +1,16 @@
 name: Publish Kubernaut RCA Image
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - Dockerfile.rca
+      - src/engram/incident/**
+      - src/engram/pipeline/kubernaut_corpus_inventory.py
+      - src/engram/pipeline/kubernaut_rca_backfill.py
+      - src/engram/pipeline/kubernaut_rca_service.py
+      - pyproject.toml
+      - .github/workflows/publish-rca-image.yml
   push:
     branches: [main]
     paths:
@@ -42,6 +52,7 @@ jobs:
           cat /proc/sys/fs/binfmt_misc/qemu-aarch64
 
       - name: Log in to Quay
+        if: github.event_name != 'pull_request'
         env:
           QUAY_USERNAME: ${{ secrets.QUAY_ROBOT_USERNAME }}
           QUAY_TOKEN: ${{ secrets.QUAY_ROBOT_TOKEN }}
@@ -57,7 +68,9 @@ jobs:
           podman manifest inspect "$MANIFEST"
 
       - name: Push immutable multi-architecture image
+        if: github.event_name != 'pull_request'
         run: podman manifest push --all "$IMAGE:${GITHUB_SHA}" "docker://$IMAGE:${GITHUB_SHA}"
 
       - name: Publish latest multi-architecture manifest
+        if: github.event_name != 'pull_request'
         run: podman manifest push --all "$IMAGE:${GITHUB_SHA}" "docker://$IMAGE:latest"

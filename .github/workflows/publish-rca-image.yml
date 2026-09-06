@@ -29,12 +29,13 @@ jobs:
       - name: Install Podman and arm64 emulation
         run: |
           sudo apt-get update
-          sudo apt-get install -y podman qemu-user-static
+          sudo apt-get install -y podman qemu-user-static binfmt-support
           podman --version
 
       - name: Register binfmt handlers
         run: |
-          podman run --privileged --rm docker.io/tonistiigi/binfmt:latest --install all
+          sudo update-binfmts --enable qemu-aarch64
+          update-binfmts --display qemu-aarch64
 
       - name: Log in to Quay
         env:

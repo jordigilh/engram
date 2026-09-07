@@ -1,6 +1,6 @@
 # Engram
 
-**Makes your Cursor agent more effective by grounding it in an accurate,
+**Makes your OpenCode/OpenChamber agent more effective by grounding it in an accurate,
 current understanding of your codebase and its history.**
 
 An agent's biggest bottleneck isn't typing speed — it's rebuilding context.
@@ -22,9 +22,10 @@ the goal (see [Value](#value-measuring-effectiveness) below).
 ```mermaid
 flowchart LR
     subgraph session["During Sessions (zero LLM cost)"]
-        A[Cursor Agent] -->|recall| B[Engram / Hindsight]
-        B -->|"mental models + facts"| A
-        A -->|code search| CI_MCP[Code Index MCP]
+        A[OpenCode / OpenChamber] -->|one Engram MCP entry| G[Engram Gateway]
+        G -->|recall + retain| B[Engram / Hindsight]
+        G -->|code search| CI_MCP[CocoIndex]
+        G -->|LSP + refactoring| S[Serena]
     end
 
     subgraph ondemand["On-Demand Learning (explicitly triggered, not scheduled)"]
@@ -56,6 +57,30 @@ until there's a well-understood, worthwhile cost/value ratio for bringing
 scheduled automation back — see [docs/findings/2026-08.md](docs/findings/2026-08.md)'s
 2026-08-13 entries for the full incident and decision record.
 
+## Three services, distinct benefits
+
+Engram combines three complementary services behind one gateway. They are not
+three interchangeable ways to search the same data:
+
+- **Hindsight remembers and synthesizes** — persistent corrections, decisions,
+  conventions, and mental models survive across sessions. Its knowledge graph
+  connects entities and facts so recall can surface related context, not just
+  exact text matches.
+- **CocoIndex finds and keeps context fresh** — live filesystem/GitHub
+  ingestion feeds Hindsight's document banks, while hybrid dense-plus-BM25
+  search handles code. Its graphify-inspired code-graph extension, built on
+  CocoIndex's `match_code()` primitive, answers cross-file questions such as
+  blast radius, shortest paths, and Leiden-detected function clusters. This is
+  an Engram extension inspired by Graphify's precision policy, not a separate
+  Graphify service or dependency.
+- **Serena knows and edits exact code** — language-server-backed symbol lookup,
+  references, diagnostics, semantic rename, and body replacement operate on
+  the current checkout with compiler-level semantics.
+
+The gateway exposes these capabilities as one project-scoped MCP server, so
+OpenCode/OpenChamber gets the combined benefit without managing three backend
+registrations.
+
 ## What it solves
 
 Three components, each closing a different gap, working together:
@@ -77,19 +102,19 @@ responsibility.
 
 ## Key features
 
-- **Call-graph extraction + clustering** — cross-file call graphs answer relational questions grep/glob can't: blast radius ("what breaks if I change this"), shortest path between two functions, and Leiden-based clustering of related functions. Rolled out across every onboarded project (Python/TypeScript/Rust/Go), with a Postgres-backed cache for the one repo large enough to need it — see [docs/CALL_GRAPH_DESIGN.md](docs/CALL_GRAPH_DESIGN.md) for how it works and [docs/CALL_GRAPH_CLUSTERING.md](docs/CALL_GRAPH_CLUSTERING.md) for the findings behind it
+- **Graphify-inspired call-graph extraction + clustering** — CocoIndex's structural matching feeds cross-file graphs that answer relational questions grep/glob can't: blast radius ("what breaks if I change this"), shortest path between two functions, and Leiden-based clustering of related functions. The implementation follows Graphify's precision-over-recall policy for ambiguous edges and uses a Postgres-backed cache for the one repo large enough to need it — see [docs/CALL_GRAPH_DESIGN.md](docs/CALL_GRAPH_DESIGN.md) and [docs/COCOINDEX.md#call-graph-queries](docs/COCOINDEX.md#call-graph-queries)
 - **LSP-backed code intelligence, language-agnostic by construction** — the same tool surface (`find_symbol`/`find_referencing_symbols`/diagnostics) works identically whether the repo is Go, Python, Rust, or TypeScript, wrapping each language's real LSP (`gopls`, `pyright`, `rust-analyzer`, `typescript-language-server`). Includes **semantic refactoring** (`rename_symbol`, `replace_symbol_body`): a rename or body replacement is resolved and applied via the compiler's own understanding of the code, not text search-replace, so every real reference updates correctly and an unrelated same-named match elsewhere is never touched — see [docs/NEW_PROJECT_SETUP.md §7](docs/NEW_PROJECT_SETUP.md#7-choose-your-code-intelligence-backend) for setup
 - **Hybrid code search** — tree-sitter AST-aware chunking keeps chunk boundaries on function/type/block nodes instead of arbitrary character offsets; dense embeddings (pgvector) handle semantic queries while BM25 (tsvector + GIN) handles exact identifiers — results fused via Reciprocal Rank Fusion
 - **Structural pattern search** — tree-sitter by-example matching answers "find code shaped like X" (e.g. every function matching a signature) as a distinct MCP tool per project — see docs/COCOINDEX.md
 - **Live sync** — docs, code, and transcripts watch for filesystem changes in real time; issues and PRs poll GitHub every 5 minutes, so nothing reflects a stale snapshot
-- **Knowledge graph** — entities link across sessions for richer retrieval
+- **Hindsight knowledge graph** — entities link across sessions for richer retrieval
 - **Mental models** — pre-synthesized documents (not scattered facts)
 - **Learns from corrections** — detects when you correct the agent, extracts the lesson
 - **Zero-cost recall** — local vector search, no tokens consumed during work
 - **Multi-bank architecture** — behavioral memory + project docs + GitHub issues/PRs + code index
 - **Self-cleaning** — on-demand triage removes ephemeral, stale, and duplicate memories
 - **Self-evaluating** — weekly trend metrics (corrections/session, rework %, exploration efficiency, productivity density), ingestion coverage, data freshness
-- **Recoverable** — transcripts are source of truth; `python3 -m engram.maintenance.recover_memories` rebuilds the bank
+- **Recoverable** — transcripts are source of truth; `python3 -m engram.maintenance.recover_memories --apply` re-extracts recoverable corrections and instructions
 
 See [docs/README.md's Division of Labor](docs/README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor) for which of Hindsight, CocoIndex, or Serena is responsible for each of these.
 
@@ -100,7 +125,8 @@ git clone https://github.com/jordigilh/engram.git
 cd engram
 ```
 
-Then follow the [Installation Guide](docs/INSTALL.md) (takes ~15 minutes).
+Then follow the [Installation Guide](docs/INSTALL.md) (takes ~15 minutes) and
+the [OpenCode/OpenChamber Integration](docs/OPENCODE.md) guide.
 On Linux/Fedora/RHEL, use [`docs/INSTALL-linux.md`](docs/INSTALL-linux.md) instead
 for the platform-specific steps (containerized Hindsight via Podman Quadlets,
 native batch scripts via systemd timers) — the rest of the guide applies
@@ -110,11 +136,11 @@ unchanged on either platform.
 
 ```mermaid
 graph TB
-    subgraph cursor["Cursor IDE"]
-        rule["Rule (.mdc)"]
-        hook["MCP Hook"]
-        serena["Serena MCP<br/>(LSP: gopls/pyright/<br/>rust-analyzer/tsserver)"]
-        code_mcp["code-index MCP"]
+    subgraph client["OpenCode / OpenChamber"]
+        plugin["Engram OpenCode plugin"]
+        gateway["Engram Gateway :8896"]
+        serena["Serena MCP"]
+        plugin --> gateway
     end
 
     subgraph engram["Engram (native macOS)"]
@@ -143,8 +169,9 @@ graph TB
 
     nightly["nightly-learn.py<br/>(on-demand only, no schedule)"]
 
-    cursor -->|"MCP ×3 banks"| api
-    cursor -->|"hybrid code search"| coco_search
+    gateway --> api
+    gateway --> coco_search
+    gateway --> serena
     api --> pg
     api --> emb
     api --> rerank
@@ -186,7 +213,8 @@ story since that's the actual goal.
 ## Expected benefits from CocoIndex integration
 
 CocoIndex replaces batch scripts with continuous, incremental ingestion across
-four source types. The expected improvements:
+up to four source types, depending on the project configuration. The expected
+improvements:
 
 | Dimension | Before (batch scripts) | After (CocoIndex live sync) |
 |-----------|----------------------|----------------------------|
@@ -221,8 +249,9 @@ the full list and what each one means):
 | Doc | Content |
 |-----|---------|
 | [Installation Guide](docs/INSTALL.md) | Full setup, prerequisites, verification (macOS-native Hindsight) |
+| [OpenCode/OpenChamber Integration](docs/OPENCODE.md) | Unified gateway plugin, project identity, and MCP setup |
 | [Linux/Fedora/RHEL Installation](docs/INSTALL-linux.md) | Platform-specific steps: containerized Hindsight (Podman Quadlet), systemd timers |
-| [Customizing the Rule](docs/INSTALL.md#customizing-the-rule) | Ready-made rules for Go, Python, Rust, TypeScript, or any stack |
+| [Legacy Cursor Installation](docs/INSTALL.md) | Existing Cursor setup and compatibility instructions |
 | [Architecture & Internals](docs/README.md) | Design decisions, knowledge graph, correction detection |
 | [CocoIndex Operations](docs/COCOINDEX.md) | Flow catalog, running modes, monitoring, troubleshooting |
 | [Call-Graph Design](docs/CALL_GRAPH_DESIGN.md) | How call-graph extraction, resolution, clustering, and caching actually work |

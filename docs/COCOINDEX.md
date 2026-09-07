@@ -215,9 +215,9 @@ the full schema under CocoIndex's control.
 
 ---
 
-## Call-Graph Queries
+## Graphify-Inspired Call-Graph Queries
 
-**Status: rolled out to all five onboarded projects (engram, koku,
+**Status: rolled out to all six onboarded projects (engram, koku,
 rhdh-plugins, praxis-proxy, dcm, kubernaut).** See
 [`docs/CALL_GRAPH_DESIGN.md`](CALL_GRAPH_DESIGN.md) for how the extraction/
 resolution/caching mechanism actually works, and
@@ -227,7 +227,9 @@ rollout numbers); this section is a short pointer plus the setup-relevant
 parts (caching, branch scoping), not a duplicate of either.
 
 Structural pattern search above answers "find code shaped like X" within one
-file at a time. Every onboarded project's `*-search.py` additionally exposes
+file at a time. Engram's graphify-inspired extension builds on that existing
+CocoIndex `match_code()` primitive; it is not a separate Graphify service or
+dependency. Every onboarded project's `*-search.py` additionally exposes
 3 MCP tools (plus matching CLI flags) that build a cross-file call graph
 from the same `CodePattern` infrastructure and answer relational questions
 about it:

@@ -696,6 +696,35 @@ class TestBuildBackendAdapters:
         assert adapters["praxis-grid"]["code"] is not adapters["dcm-cli"]["code"]
 
 
+class TestGatewayIdentityRegistry:
+    def test_identity_registry_covers_every_route_and_derives_shared_banks(self, engram_gateway):
+        registry = engram_gateway.build_project_registry("/home/u")
+
+        identities = engram_gateway.build_gateway_identity_registry(registry)
+
+        assert set(identities) == set(registry)
+        assert identities["kubernaut-operator"] == {
+            "project": "kubernaut-operator",
+            "family": "kubernaut",
+            "docs_bank": "kubernaut-docs",
+            "issues_bank": "kubernaut-issues",
+        }
+        assert identities["engram"]["docs_bank"] == "engram-docs"
+        assert identities["engram"]["issues_bank"] is None
+
+    def test_identity_registry_rejects_missing_docs_backend(self, engram_gateway):
+        registry = {"broken": {"code": {"kind": "stdio", "command": "x", "args": [], "env": None}}}
+
+        with pytest.raises(ValueError, match="no HTTP docs backend"):
+            engram_gateway.validate_gateway_identity_registry(registry)
+
+    def test_identity_registry_rejects_non_bank_docs_url(self, engram_gateway):
+        registry = {"broken": {"docs": {"kind": "http", "url": "http://localhost:8888/health"}}}
+
+        with pytest.raises(ValueError, match="no MCP bank path"):
+            engram_gateway.validate_gateway_identity_registry(registry)
+
+
 class TestBuildApp:
     def test_mounts_one_route_per_requested_project(self, engram_gateway):
         app = engram_gateway.build_app(projects={"praxis-grid": {}})

@@ -1,10 +1,8 @@
 // Engram plugin for OpenCode (https://opencode.ai).
 //
-// Gives OpenCode the same recall/retain/code-search/LSP capabilities Cursor
-// already gets from Engram's shared daemon fleet (hindsight-docs,
-// hindsight-issues, cocoindex-code, serena via serena_multiplex), through a
-// single plugin with a minimal, optionally-zero config surface -- users
-// never write MCP server blocks themselves. See
+// Gives OpenCode/OpenChamber recall/retain/code-search/LSP capabilities through
+// one Engram gateway MCP entry. The gateway owns the Hindsight, CocoIndex, and
+// Serena backend fleet, so users never register those servers individually. See
 // https://github.com/jordigilh/engram/issues/22 for the design writeup and
 // docs/findings/2026-08.md (2026-08-13, 13th-16th follow-ups) for the spikes
 // this implements.
@@ -16,11 +14,11 @@
 //   each repo's opencode.json):
 //     { "plugin": [["<path-or-package>/index.ts", { "family": "kubernaut" }]] }
 //
-// `project` auto-detects from the directory name and current git branch
-// (mirroring cocoindex_search's existing release-line convention); override
-// only if the auto-detected name is wrong for your layout.
+// `project` defaults to the directory name. Set it explicitly for a registered
+// gateway alias such as a release-line route whose name differs from the
+// checkout directory.
 import type { Plugin } from "@opencode-ai/plugin"
-import { buildMcpConfig, deriveIdentity, type EngramPluginOptions, type McpBackendUrls } from "./identity"
+import { buildMcpConfig, deriveIdentity, type EngramPluginOptions } from "./identity"
 
 async function detectBranch(directory: string, $: any): Promise<string | undefined> {
   try {
@@ -33,7 +31,7 @@ async function detectBranch(directory: string, $: any): Promise<string | undefin
 }
 
 export const EngramPlugin: Plugin = async (ctx, rawOptions) => {
-  const options = (rawOptions || {}) as EngramPluginOptions & McpBackendUrls
+  const options = (rawOptions || {}) as EngramPluginOptions
   const directoryBasename = (ctx.directory || "").split("/").filter(Boolean).pop() || "unknown-project"
   const branch = await detectBranch(ctx.directory, ctx.$)
 

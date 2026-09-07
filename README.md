@@ -57,6 +57,30 @@ until there's a well-understood, worthwhile cost/value ratio for bringing
 scheduled automation back — see [docs/findings/2026-08.md](docs/findings/2026-08.md)'s
 2026-08-13 entries for the full incident and decision record.
 
+## Three services, distinct benefits
+
+Engram combines three complementary services behind one gateway. They are not
+three interchangeable ways to search the same data:
+
+- **Hindsight remembers and synthesizes** — persistent corrections, decisions,
+  conventions, and mental models survive across sessions. Its knowledge graph
+  connects entities and facts so recall can surface related context, not just
+  exact text matches.
+- **CocoIndex finds and keeps context fresh** — live filesystem/GitHub
+  ingestion feeds Hindsight's document banks, while hybrid dense-plus-BM25
+  search handles code. Its graphify-inspired code-graph extension, built on
+  CocoIndex's `match_code()` primitive, answers cross-file questions such as
+  blast radius, shortest paths, and Leiden-detected function clusters. This is
+  an Engram extension inspired by Graphify's precision policy, not a separate
+  Graphify service or dependency.
+- **Serena knows and edits exact code** — language-server-backed symbol lookup,
+  references, diagnostics, semantic rename, and body replacement operate on
+  the current checkout with compiler-level semantics.
+
+The gateway exposes these capabilities as one project-scoped MCP server, so
+OpenCode/OpenChamber gets the combined benefit without managing three backend
+registrations.
+
 ## What it solves
 
 Three components, each closing a different gap, working together:
@@ -78,12 +102,12 @@ responsibility.
 
 ## Key features
 
-- **Call-graph extraction + clustering** — cross-file call graphs answer relational questions grep/glob can't: blast radius ("what breaks if I change this"), shortest path between two functions, and Leiden-based clustering of related functions. Rolled out across every onboarded project (Python/TypeScript/Rust/Go), with a Postgres-backed cache for the one repo large enough to need it — see [docs/CALL_GRAPH_DESIGN.md](docs/CALL_GRAPH_DESIGN.md) for how it works and [docs/CALL_GRAPH_CLUSTERING.md](docs/CALL_GRAPH_CLUSTERING.md) for the findings behind it
+- **Graphify-inspired call-graph extraction + clustering** — CocoIndex's structural matching feeds cross-file graphs that answer relational questions grep/glob can't: blast radius ("what breaks if I change this"), shortest path between two functions, and Leiden-based clustering of related functions. The implementation follows Graphify's precision-over-recall policy for ambiguous edges and uses a Postgres-backed cache for the one repo large enough to need it — see [docs/CALL_GRAPH_DESIGN.md](docs/CALL_GRAPH_DESIGN.md) and [docs/COCOINDEX.md#call-graph-queries](docs/COCOINDEX.md#call-graph-queries)
 - **LSP-backed code intelligence, language-agnostic by construction** — the same tool surface (`find_symbol`/`find_referencing_symbols`/diagnostics) works identically whether the repo is Go, Python, Rust, or TypeScript, wrapping each language's real LSP (`gopls`, `pyright`, `rust-analyzer`, `typescript-language-server`). Includes **semantic refactoring** (`rename_symbol`, `replace_symbol_body`): a rename or body replacement is resolved and applied via the compiler's own understanding of the code, not text search-replace, so every real reference updates correctly and an unrelated same-named match elsewhere is never touched — see [docs/NEW_PROJECT_SETUP.md §7](docs/NEW_PROJECT_SETUP.md#7-choose-your-code-intelligence-backend) for setup
 - **Hybrid code search** — tree-sitter AST-aware chunking keeps chunk boundaries on function/type/block nodes instead of arbitrary character offsets; dense embeddings (pgvector) handle semantic queries while BM25 (tsvector + GIN) handles exact identifiers — results fused via Reciprocal Rank Fusion
 - **Structural pattern search** — tree-sitter by-example matching answers "find code shaped like X" (e.g. every function matching a signature) as a distinct MCP tool per project — see docs/COCOINDEX.md
 - **Live sync** — docs, code, and transcripts watch for filesystem changes in real time; issues and PRs poll GitHub every 5 minutes, so nothing reflects a stale snapshot
-- **Knowledge graph** — entities link across sessions for richer retrieval
+- **Hindsight knowledge graph** — entities link across sessions for richer retrieval
 - **Mental models** — pre-synthesized documents (not scattered facts)
 - **Learns from corrections** — detects when you correct the agent, extracts the lesson
 - **Zero-cost recall** — local vector search, no tokens consumed during work

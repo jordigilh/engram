@@ -1,6 +1,6 @@
 # Engram
 
-**Makes your Cursor agent more effective by grounding it in an accurate,
+**Makes your OpenCode/OpenChamber agent more effective by grounding it in an accurate,
 current understanding of your codebase and its history.**
 
 An agent's biggest bottleneck isn't typing speed — it's rebuilding context.
@@ -22,9 +22,10 @@ the goal (see [Value](#value-measuring-effectiveness) below).
 ```mermaid
 flowchart LR
     subgraph session["During Sessions (zero LLM cost)"]
-        A[Cursor Agent] -->|recall| B[Engram / Hindsight]
-        B -->|"mental models + facts"| A
-        A -->|code search| CI_MCP[Code Index MCP]
+        A[OpenCode / OpenChamber] -->|one Engram MCP entry| G[Engram Gateway]
+        G -->|recall + retain| B[Engram / Hindsight]
+        G -->|code search| CI_MCP[CocoIndex]
+        G -->|LSP + refactoring| S[Serena]
     end
 
     subgraph ondemand["On-Demand Learning (explicitly triggered, not scheduled)"]
@@ -89,7 +90,7 @@ responsibility.
 - **Multi-bank architecture** — behavioral memory + project docs + GitHub issues/PRs + code index
 - **Self-cleaning** — on-demand triage removes ephemeral, stale, and duplicate memories
 - **Self-evaluating** — weekly trend metrics (corrections/session, rework %, exploration efficiency, productivity density), ingestion coverage, data freshness
-- **Recoverable** — transcripts are source of truth; `python3 -m engram.maintenance.recover_memories` rebuilds the bank
+- **Recoverable** — transcripts are source of truth; `python3 -m engram.maintenance.recover_memories --apply` re-extracts recoverable corrections and instructions
 
 See [docs/README.md's Division of Labor](docs/README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor) for which of Hindsight, CocoIndex, or Serena is responsible for each of these.
 
@@ -100,7 +101,8 @@ git clone https://github.com/jordigilh/engram.git
 cd engram
 ```
 
-Then follow the [Installation Guide](docs/INSTALL.md) (takes ~15 minutes).
+Then follow the [Installation Guide](docs/INSTALL.md) (takes ~15 minutes) and
+the [OpenCode/OpenChamber Integration](docs/OPENCODE.md) guide.
 On Linux/Fedora/RHEL, use [`docs/INSTALL-linux.md`](docs/INSTALL-linux.md) instead
 for the platform-specific steps (containerized Hindsight via Podman Quadlets,
 native batch scripts via systemd timers) — the rest of the guide applies
@@ -110,11 +112,11 @@ unchanged on either platform.
 
 ```mermaid
 graph TB
-    subgraph cursor["Cursor IDE"]
-        rule["Rule (.mdc)"]
-        hook["MCP Hook"]
-        serena["Serena MCP<br/>(LSP: gopls/pyright/<br/>rust-analyzer/tsserver)"]
-        code_mcp["code-index MCP"]
+    subgraph client["OpenCode / OpenChamber"]
+        plugin["Engram OpenCode plugin"]
+        gateway["Engram Gateway :8896"]
+        serena["Serena MCP"]
+        plugin --> gateway
     end
 
     subgraph engram["Engram (native macOS)"]
@@ -143,8 +145,9 @@ graph TB
 
     nightly["nightly-learn.py<br/>(on-demand only, no schedule)"]
 
-    cursor -->|"MCP ×3 banks"| api
-    cursor -->|"hybrid code search"| coco_search
+    gateway --> api
+    gateway --> coco_search
+    gateway --> serena
     api --> pg
     api --> emb
     api --> rerank
@@ -186,7 +189,8 @@ story since that's the actual goal.
 ## Expected benefits from CocoIndex integration
 
 CocoIndex replaces batch scripts with continuous, incremental ingestion across
-four source types. The expected improvements:
+up to four source types, depending on the project configuration. The expected
+improvements:
 
 | Dimension | Before (batch scripts) | After (CocoIndex live sync) |
 |-----------|----------------------|----------------------------|
@@ -221,8 +225,9 @@ the full list and what each one means):
 | Doc | Content |
 |-----|---------|
 | [Installation Guide](docs/INSTALL.md) | Full setup, prerequisites, verification (macOS-native Hindsight) |
+| [OpenCode/OpenChamber Integration](docs/OPENCODE.md) | Unified gateway plugin, project identity, and MCP setup |
 | [Linux/Fedora/RHEL Installation](docs/INSTALL-linux.md) | Platform-specific steps: containerized Hindsight (Podman Quadlet), systemd timers |
-| [Customizing the Rule](docs/INSTALL.md#customizing-the-rule) | Ready-made rules for Go, Python, Rust, TypeScript, or any stack |
+| [Legacy Cursor Installation](docs/INSTALL.md) | Existing Cursor setup and compatibility instructions |
 | [Architecture & Internals](docs/README.md) | Design decisions, knowledge graph, correction detection |
 | [CocoIndex Operations](docs/COCOINDEX.md) | Flow catalog, running modes, monitoring, troubleshooting |
 | [Call-Graph Design](docs/CALL_GRAPH_DESIGN.md) | How call-graph extraction, resolution, clustering, and caching actually work |

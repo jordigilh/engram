@@ -34,7 +34,7 @@ jobs:
     env:
       IMAGE: quay.io/jordigilh/engram
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Podman and arm64 emulation
         run: |

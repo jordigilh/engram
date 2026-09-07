@@ -3,11 +3,10 @@
 // unit-testable; index.ts wires this to real `ctx` (directory, git branch).
 //
 // Two independent identities, both optional in user-facing config:
-//   - `project`: per-repo/per-branch. Drives serena's per-codebase isolation.
-//   - `family` : shared bank identity. Drives hindsight-docs/issues naming.
-//     Defaults to the repo's base name (never branch-suffixed) so a single
-//     repo needs zero config, while an org with multiple repos sets `family`
-//     once, identically, across sibling repos' opencode.json to share a bank.
+//   - `project`: exact Engram gateway route. Set this for a registered release
+//     alias or a repository whose route differs from its directory name.
+//   - `family` : shared bank identity metadata. The gateway owns the actual
+//     docs/issues backend mapping.
 //
 // See docs/findings/2026-08.md (2026-08-13, thirteenth-sixteenth follow-ups)
 // and https://github.com/jordigilh/engram/issues/22 for the design spikes
@@ -16,6 +15,7 @@
 export interface EngramPluginOptions {
   project?: string
   family?: string
+  gatewayUrl?: string
 }
 
 export interface DeriveIdentityInput {
@@ -51,17 +51,13 @@ export function deriveIdentity(input: DeriveIdentityInput): ResolvedIdentity {
   const options = input.options || {}
   const branchSuffix = detectBranchSuffix(input.directoryBasename, input.branch)
 
-  const baseName = (options.project || input.directoryBasename).replace(RELEASE_DIR_SUFFIX, "")
-  const project = branchSuffix === "main" ? baseName : `${baseName}-${branchSuffix}`
+  const baseName = input.directoryBasename.replace(RELEASE_DIR_SUFFIX, "")
+  // Gateway routes are explicit registry keys. Never invent a branch-suffixed
+  // route that the gateway may not expose; use `project` for registered aliases.
+  const project = options.project || input.directoryBasename
   const family = options.family || baseName
 
   return { project, family, branchSuffix }
-}
-
-export interface McpBackendUrls {
-  hindsightBaseUrl?: string
-  cocoindexUrl?: string
-  serenaMultiplexUrl?: string
 }
 
 export interface McpServerEntry {
@@ -70,21 +66,16 @@ export interface McpServerEntry {
   enabled: true
 }
 
-export type McpConfig = Record<"hindsight-docs" | "hindsight-issues" | "cocoindex-code" | "serena", McpServerEntry>
+export type McpConfig = Record<"engram", McpServerEntry>
 
-const DEFAULT_HINDSIGHT_BASE_URL = "http://localhost:8888"
-const DEFAULT_COCOINDEX_URL = "http://127.0.0.1:8891/mcp"
-const DEFAULT_SERENA_MULTIPLEX_URL = "http://127.0.0.1:8893"
+const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8896"
 
-export function buildMcpConfig(identity: Pick<ResolvedIdentity, "project" | "family">, urls: McpBackendUrls = {}): McpConfig {
-  const hindsightBaseUrl = urls.hindsightBaseUrl || DEFAULT_HINDSIGHT_BASE_URL
-  const cocoindexUrl = urls.cocoindexUrl || DEFAULT_COCOINDEX_URL
-  const serenaMultiplexUrl = urls.serenaMultiplexUrl || DEFAULT_SERENA_MULTIPLEX_URL
-
+export function buildMcpConfig(
+  identity: Pick<ResolvedIdentity, "project">,
+  options: Pick<EngramPluginOptions, "gatewayUrl"> = {},
+): McpConfig {
+  const gatewayUrl = (options.gatewayUrl || DEFAULT_GATEWAY_URL).replace(/\/$/, "")
   return {
-    "hindsight-docs": { type: "remote", url: `${hindsightBaseUrl}/mcp/${identity.family}-docs/`, enabled: true },
-    "hindsight-issues": { type: "remote", url: `${hindsightBaseUrl}/mcp/${identity.family}-issues/`, enabled: true },
-    "cocoindex-code": { type: "remote", url: cocoindexUrl, enabled: true },
-    "serena": { type: "remote", url: `${serenaMultiplexUrl}/mcp/${identity.project}`, enabled: true },
+    engram: { type: "remote", url: `${gatewayUrl}/mcp/${identity.project}`, enabled: true },
   }
 }

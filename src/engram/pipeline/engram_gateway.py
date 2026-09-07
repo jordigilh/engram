@@ -1045,6 +1045,62 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     return registry
 
 
+def _bank_name_from_spec(spec: dict, suffix: str) -> str:
+    """Extract a Hindsight bank name from one of the registry's HTTP specs."""
+    url = spec.get("url", "")
+    marker = "/mcp/"
+    if marker not in url:
+        raise ValueError(f"Hindsight backend URL has no MCP bank path: {url!r}")
+    bank = url.split(marker, 1)[1].rstrip("/")
+    if not bank.endswith(suffix):
+        raise ValueError(f"Expected Hindsight bank suffix {suffix!r}, got {bank!r}")
+    return bank
+
+
+def build_gateway_identity_registry(
+    registry: dict[str, dict[str, dict]],
+) -> dict[str, dict[str, str | None]]:
+    """Build the public project/family identity view from backend bindings.
+
+    The gateway route is the project key. Backend specs remain authoritative for
+    actual routing, while this derived view makes the family/bank relationship
+    explicit for validation, diagnostics, and future config endpoints.
+    """
+    identities: dict[str, dict[str, str | None]] = {}
+    for project, backends in registry.items():
+        if not project or "/" in project:
+            raise ValueError(f"Invalid gateway project route: {project!r}")
+        docs_key = "docs" if "docs" in backends else "kuadrant_docs"
+        docs_spec = backends.get(docs_key)
+        if not docs_spec or docs_spec.get("kind") != "http":
+            raise ValueError(f"Gateway project {project!r} has no HTTP docs backend")
+
+        docs_bank = _bank_name_from_spec(docs_spec, "-docs")
+        issues_key = "issues" if "issues" in backends else "kuadrant_issues"
+        issues_spec = backends.get(issues_key)
+        issues_bank = (
+            _bank_name_from_spec(issues_spec, "-issues")
+            if issues_spec
+            else None
+        )
+        identities[project] = {
+            "project": project,
+            "family": docs_bank.removesuffix("-docs"),
+            "docs_bank": docs_bank,
+            "issues_bank": issues_bank,
+        }
+    return identities
+
+
+def validate_gateway_identity_registry(
+    registry: dict[str, dict[str, dict]],
+) -> None:
+    """Fail startup early when a gateway route has an invalid identity binding."""
+    identities = build_gateway_identity_registry(registry)
+    if set(identities) != set(registry):
+        raise ValueError("Gateway identity registry does not cover every project route")
+
+
 def build_backend_adapters(registry: dict[str, dict[str, dict]]) -> dict[str, dict[str, BackendAdapter]]:
     """Instantiate real adapters from registry specs (still no I/O -- both
     adapter types connect lazily on first use). Stdio specs carrying the
@@ -1084,6 +1140,7 @@ def main() -> None:
 
     home = os.path.expanduser("~")
     registry = build_project_registry(home)
+    validate_gateway_identity_registry(registry)
     projects = build_backend_adapters(registry)
     log.info("starting on %s:%d, %d projects: %s", args.host, args.port, len(projects), sorted(projects))
     app = build_app(projects)

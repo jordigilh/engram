@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from engram.incident.service import triage_test_failure as build_triage_context
+from engram.incident.ondemand import generate_rca as build_rca_ondemand
 from engram.incident.remote import ingest_urls
 from engram.incident.branch_scope import normalize_branch
 from engram.incident.retention import (
@@ -158,10 +159,14 @@ def _run_mcp_server(
         """Return one evidence item from the most recent triage dossier."""
         context = contexts.get(scope_key(project, branch))
         if not context:
-            return json.dumps({"error": "triage_test_failure must be called first"})
+            return json.dumps({"error": "triage_test_failure or generate_rca must be called first"})
         for item in context["evidence"]:
             if item["id"] == evidence_id:
                 return json.dumps(item, default=str)
+        for dossier in dossiers_by_scope.get(scope_key(project, branch), []):
+            for item in dossier.get("evidence", []):
+                if item["id"] == evidence_id:
+                    return json.dumps(item, default=str)
         return json.dumps({"error": f"unknown evidence id: {evidence_id}"})
 
     @mcp.tool()
@@ -169,9 +174,79 @@ def _run_mcp_server(
         """Return timeline records related to one evidence item."""
         context = contexts.get(scope_key(project, branch))
         if not context:
-            return json.dumps({"error": "triage_test_failure must be called first"})
+            return json.dumps({"error": "triage_test_failure or generate_rca must be called first"})
         related = [item for item in context["timeline"] if item["evidence_id"] == evidence_id]
+        if not related:
+            for dossier in dossiers_by_scope.get(scope_key(project, branch), []):
+                related = [item for item in dossier.get("timeline", []) if item["evidence_id"] == evidence_id]
+                if related:
+                    break
         return json.dumps({"evidence_id": evidence_id, "events": related}, default=str)
+
+    @mcp.tool()
+    def generate_rca(
+        run_id: str | None = None,
+        job_id: str | None = None,
+        repository: str = "jordigilh/kubernaut",
+        branch: str = "main",
+        project: str = "kubernaut",
+        test_log_url: str | None = None,
+        must_gather_url: str | None = None,
+        artifact_hint: str | None = None,
+        commit_sha: str | None = None,
+        workflow: str | None = None,
+        max_tokens: int = 12000,
+        max_dossiers: int = 3,
+    ) -> str:
+        """Build RCA dossiers on demand for one CI run, without a CI dossier artifact.
+
+        Use this when the rca-dossier CI job did not produce one -- e.g. a
+        timed-out or cancelled job with no [FAILED] block. Pass run_id and
+        optionally job_id (or paste the run/job page URL as test_log_url,
+        query parameters such as ?pr=2379 are tolerated) and the tool
+        discovers the job log and must-gather artifact via the GitHub API,
+        then extracts failures and builds bounded dossiers in one call.
+        Explicit test_log_url/must_gather_url pin either side and skip
+        discovery for that side. A missing or expired must-gather artifact
+        degrades to a log-only RCA instead of failing. Authentication uses
+        GH_TOKEN or GITHUB_TOKEN in the service environment.
+        """
+        key = scope_key(project, branch)
+        try:
+            result = build_rca_ondemand(
+                run_id=run_id,
+                job_id=job_id,
+                repository=repository,
+                branch=branch,
+                project=project,
+                test_log_url=test_log_url,
+                must_gather_url=must_gather_url,
+                artifact_hint=artifact_hint,
+                commit_sha=commit_sha,
+                workflow=workflow,
+                max_tokens=min(max_tokens, 20000),
+                max_dossiers=max(1, min(max_dossiers, 5)),
+            )
+        except (ValueError, RuntimeError, OSError) as exc:
+            return json.dumps({"error": str(exc)})
+        roots[key] = Path(result["root"])
+        dossiers = result.get("dossiers") or []
+        dossiers_by_scope[key] = dossiers
+        if dossiers:
+            contexts[key] = dossiers[0]
+        changes_by_scope.setdefault(key, [])
+        if result.get("commit_sha"):
+            changes_by_scope[key].append(
+                {
+                    "commit_sha": result["commit_sha"],
+                    "change_type": "ci_run_commit",
+                    "component": result.get("repository"),
+                    "relation": "incident_commit",
+                    "confidence": 0.5,
+                }
+            )
+        result.pop("root", None)
+        return json.dumps(result, default=str)
 
     if transport == "stdio":
         mcp_compat.run_server(mcp, transport="stdio")

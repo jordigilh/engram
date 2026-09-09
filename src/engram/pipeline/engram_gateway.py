@@ -329,6 +329,7 @@ RELEVANT_TOOLS_BY_BACKEND: dict[str, frozenset[str]] = {
     "rca": frozenset({
         "ingest_test_run",
         "triage_test_failure",
+        "generate_rca",
         "get_evidence",
         "get_related_events",
         "promote_incident",

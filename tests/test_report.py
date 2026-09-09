@@ -117,7 +117,7 @@ class TestAggregateMcpCallsNormalization:
 
 class TestAggregateGatewayTokenUsage:
     """2026-08-30: rolls up engram_gateway.py's per-call tiktoken estimates
-    (~/.hindsight/logs/gateway-calls.jsonl, written by handle_tools_call)
+    (~/.engram/logs/gateway-calls.jsonl, written by handle_tools_call)
     into the CLI report. Purely local aggregation over an existing log file
     -- no LLM call of any kind, distinct from (and does not touch)
     nightly-learn.py's retain/reflect pipeline, which stays on-demand-only

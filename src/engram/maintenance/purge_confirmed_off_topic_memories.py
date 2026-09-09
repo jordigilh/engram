@@ -22,12 +22,12 @@ already-tagged documents are never touched -- if it was resolvable to one of
 our onboarded projects, it isn't off-topic by definition).
 
 Usage:
-    ~/.hindsight/with-config-env.sh python3 purge-confirmed-off-topic-memories.py                        # dry run (default)
-    ~/.hindsight/with-config-env.sh python3 purge-confirmed-off-topic-memories.py --execute               # actually deletes
-    ~/.hindsight/with-config-env.sh python3 purge-confirmed-off-topic-memories.py --min-confidence 0.9
+    ~/.engram/with-config-env.sh python3 purge-confirmed-off-topic-memories.py                        # dry run (default)
+    ~/.engram/with-config-env.sh python3 purge-confirmed-off-topic-memories.py --execute               # actually deletes
+    ~/.engram/with-config-env.sh python3 purge-confirmed-off-topic-memories.py --min-confidence 0.9
 
 Every classification (flagged or not) is logged to
-~/.hindsight/logs/off-topic-purge-audit.jsonl.
+~/.engram/logs/off-topic-purge-audit.jsonl.
 """
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ from engram.contradiction_resolution import delete_document  # noqa: E402
 from engram.maintenance import backfill_memory_tags as bmt  # noqa: E402
 
 HINDSIGHT_URL = "http://localhost:8888"
-AUDIT_LOG = Path(os.path.expanduser("~/.hindsight/logs/off-topic-purge-audit.jsonl"))
+AUDIT_LOG = Path(os.path.expanduser("~/.engram/logs/off-topic-purge-audit.jsonl"))
 DEFAULT_MIN_CONFIDENCE = 0.85  # higher bar than tagging (0.75) -- deletion is irreversible
 
 

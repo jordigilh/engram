@@ -7,7 +7,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_FILE="${HOME}/.hindsight/logs/watch-mirrors-sync.log"
+LOG_FILE="${HOME}/.engram/logs/watch-mirrors-sync.log"
 mkdir -p "$(dirname "$LOG_FILE")"
 
 log() {

@@ -6,8 +6,8 @@
     <string>io.vectorize.cocoindex.service</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.hindsight/with-config-env.sh</string>
-        <string>__HOME__/.hindsight/venv/bin/engram-flows-kubernaut</string>
+        <string>__HOME__/.engram/with-config-env.sh</string>
+        <string>__HOME__/.engram/venv/bin/engram-flows-kubernaut</string>
         <string>--mode</string>
         <string>live</string>
         <!-- transcripts deliberately excluded: it retains raw chat transcript
@@ -37,17 +37,17 @@
              real content delta, triggering a full hindsight_retain() +
              Sonnet consolidation pass per touched file. -->
         <key>ENGRAM_DOCS_DIR</key>
-        <string>__HOME__/.hindsight/watch/kubernaut-docs/docs</string>
+        <string>__HOME__/.engram/watch/kubernaut-docs/docs</string>
         <key>ENGRAM_CODE_DIR</key>
-        <string>__HOME__/.hindsight/watch/kubernaut</string>
+        <string>__HOME__/.engram/watch/kubernaut</string>
         <key>ENGRAM_TRANSCRIPTS_DIR</key>
         <string>__HOME__/.cursor/projects</string>
         <key>ENGRAM_OPERATOR_DIR</key>
-        <string>__HOME__/.hindsight/watch/kubernaut-operator</string>
+        <string>__HOME__/.engram/watch/kubernaut-operator</string>
         <key>ENGRAM_CONSOLE_DIR</key>
-        <string>__HOME__/.hindsight/watch/kubernaut-console</string>
+        <string>__HOME__/.engram/watch/kubernaut-console</string>
         <key>ENGRAM_SCENARIOS_DIR</key>
-        <string>__HOME__/.hindsight/watch/kubernaut-demo-scenarios</string>
+        <string>__HOME__/.engram/watch/kubernaut-demo-scenarios</string>
         <key>ENGRAM_ISSUES_REPOS</key>
         <string>jordigilh/kubernaut,jordigilh/kubernaut-operator,jordigilh/kubernaut-console,jordigilh/kubernaut-demo-scenarios,jordigilh/kubernaut-docs</string>
         <!-- Kept in sync by hand with watch-mirrors-config.sh's RELEASE_LINES
@@ -69,12 +69,12 @@
         <key>COCOINDEX_PG_POOL_MAX_SIZE</key>
         <string>5</string>
         <key>PATH</key>
-        <string>__HOME__/.hindsight/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>__HOME__/.engram/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>__HOME__</string>
     </dict>
     <key>WorkingDirectory</key>
-    <string>__HOME__/.hindsight</string>
+    <string>__HOME__/.engram</string>
     <key>KeepAlive</key>
     <true/>
     <key>RunAtLoad</key>
@@ -82,8 +82,8 @@
     <key>ThrottleInterval</key>
     <integer>10</integer>
     <key>StandardOutPath</key>
-    <string>__HOME__/.hindsight/logs/cocoindex-stdout.log</string>
+    <string>__HOME__/.engram/logs/cocoindex-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.hindsight/logs/cocoindex-stderr.log</string>
+    <string>__HOME__/.engram/logs/cocoindex-stderr.log</string>
 </dict>
 </plist>

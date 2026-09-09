@@ -29,14 +29,14 @@ def _run_mcp_server(
     db_path: Path | None = None,
     pg_url: str | None = None,
 ) -> None:
-    from mcp.server.mcpserver import MCPServer as FastMCP
+    from engram import mcp_compat  # 1.x/2.x compat (mcp<2.0 pinned)
 
     import json
 
-    mcp = FastMCP("kubernaut-rca")
+    mcp = mcp_compat.make_server("kubernaut-rca", host=host, port=port)
     contexts: dict[tuple[str, str], dict] = {}
     roots: dict[tuple[str, str], Path] = {}
-    retention_path = db_path or Path(os.environ.get("KUBERNAUT_RCA_DB", "~/.hindsight/kubernaut-rca.sqlite3")).expanduser()
+    retention_path = db_path or Path(os.environ.get("KUBERNAUT_RCA_DB", "~/.engram/kubernaut-rca.sqlite3")).expanduser()
     changes_by_scope: dict[tuple[str, str], list[dict]] = {}
 
     def scope_key(project: str, branch: str) -> tuple[str, str]:
@@ -174,9 +174,9 @@ def _run_mcp_server(
         return json.dumps({"evidence_id": evidence_id, "events": related}, default=str)
 
     if transport == "stdio":
-        mcp.run(transport="stdio")
+        mcp_compat.run_server(mcp, transport="stdio")
     else:
-        mcp.run(transport=transport, host=host, port=port)
+        mcp_compat.run_server(mcp, transport=transport, host=host, port=port)
 
 
 def main() -> None:

@@ -33,7 +33,7 @@ Each project gets:
 - Engram repository cloned at `~/go/src/github.com/jordigilh/engram`
 - Hindsight API running on `localhost:8888`
 - PostgreSQL with pgvector running on `localhost:5432`
-- CocoIndex Python environment at `~/.hindsight/venv/`
+- CocoIndex Python environment at `~/.engram/venv/`
 - `gh` CLI authenticated with access to the target organization
 
 ## Variants
@@ -170,6 +170,47 @@ curl -X PUT http://localhost:8888/v1/default/banks/<project>-issues \
   -d '{"description": "GitHub issues and PRs from all active <project> repositories"}'
 ```
 
+> **Ingestion cost policy — LLM-free by default.** Banks are created with
+> `retain_extraction_mode=chunks` (raw text slices + local ONNX embeddings,
+> zero LLM calls), `enable_observations=false`, and
+> `enable_auto_consolidation=false`, and the server defaults in
+> `~/.engram/config.env` enforce the same for every bank, including future
+> ones (`HINDSIGHT_API_RETAIN_EXTRACTION_MODE=chunks`,
+> `HINDSIGHT_API_ENABLE_OBSERVATIONS=false`,
+> `HINDSIGHT_API_ENABLE_AUTO_CONSOLIDATION=false`). Fact extraction
+> (`concise`/`verbose`), observations, and consolidation are **manual-only**,
+> enabled per bank with an explicit `PATCH /v1/default/banks/<id>/config`
+> after a deliberate cost decision — never as a side effect of ingestion.
+>
+> Measured cost of fact-mode (2026-09-09, single-doc calibration on a 9.7 KB
+> doc: ~2,400 content tokens → 20,653 input / 4,573 output): budget roughly
+> **8–9× content tokens of input** (per-retain prompt overhead dominates) and
+> **~2× content tokens of output** — extraction output runs *longer* than the
+> source text. At kubernaut scale (~1,700 docs + ~3,650 issues/PRs) that is
+> on the order of **130M input / 27M output tokens one-time**, ex-comments
+> and ex-consolidation passes. At GPT-5.6 Luna standard pricing on that date
+> ($0.20/$1.20 per MTok in/out) ≈ **$60 one-time**; other models price
+> differently, and Batch API / prompt caching change the math — re-price
+> from current rate cards before opting in.
+>
+> Determinism note: chunks are byte-faithful (same content → same stored
+> chunks, so rebuilds are identical). LLM-extracted facts vary run to run
+> (model output is nondeterministic and drifts across versions), so fact-mode
+> banks are not exactly reproducible — another reason extraction stays manual.
+>
+> Improvement — deterministic synthesis metadata (2026-09-09). To recover
+> some of what fact extraction provides (a synthetic expression of each
+> document for recall to key on) without any LLM, `engram.synthesis`
+> computes per file, at ingest time: extractive key sentences (TextRank over
+> a TF-IDF cosine graph, sentence budget scaled by document length) plus
+> TF-IDF keywords. Same bytes always yield the same synthesis (verified by
+> test + double-run diff), it runs in milliseconds per document, and it is
+> stored as chunk retain metadata (`key_sentences`, `keywords` — plain
+> strings, since `MemoryItem.metadata` is `dict[str, str]`). Wire it into a
+> flow's `process_doc_file` (see `engram.flows.kubernaut`'s `synth_meta`)
+> when onboarding a docs bank. This is compression by statistics, not
+> comprehension — abstraction and judgment remain manual LLM operations.
+
 ### 3. Create Mental Models
 
 Use the Hindsight API or MCP to create mental models for each bank:
@@ -190,12 +231,12 @@ Create `src/engram/flows/<project>.py` adapted from `src/engram/flows/kubernaut.
 - Three apps: docs, issues, code
 - Banks: `<project>-docs`, `<project>-issues`
 - pgvector table: `cocoindex.<project>_code_embeddings` (isolated from other projects)
-- Separate CocoIndex state DB: `~/.hindsight/<project>-cocoindex.db`
+- Separate CocoIndex state DB: `~/.engram/<project>-cocoindex.db`
 - Environment variables prefixed with `<PROJECT>_*`
 
 Add an `engram-flows-<project> = "engram.flows.<project>:main"` entry under
 `[project.scripts]` in `pyproject.toml`, then re-run
-`uv pip install --python ~/.hindsight/venv/bin/python -e .` to generate the
+`uv pip install --python ~/.engram/venv/bin/python -e .` to generate the
 console script.
 
 > **Gotcha**: give the Postgres pool `coco.ContextKey(...)` a name unique
@@ -228,9 +269,9 @@ re-run the same `pip install -e .` (it's idempotent to run twice).
 Create `launchd/io.vectorize.cocoindex.<project>.plist`:
 
 - Runs the `engram-flows-<project>` console script (from step 4) directly in
-  live mode via `~/.hindsight/with-config-env.sh` (the shared wrapper that
-  sources `~/.hindsight/config.env` for secrets/URLs at runtime instead of
-  hardcoding them in the plist) — **not** a `~/.hindsight/<project>-
+  live mode via `~/.engram/with-config-env.sh` (the shared wrapper that
+  sources `~/.engram/config.env` for secrets/URLs at runtime instead of
+  hardcoding them in the plist) — **not** a `~/.engram/<project>-
   cocoindex-flows.py` symlink. Pre-Phase-8 (before 2026-08-12) every
   project's plist went through such a symlink because there was no
   installed package to point `ProgramArguments` at yet; that phase is done
@@ -239,13 +280,13 @@ Create `launchd/io.vectorize.cocoindex.<project>.plist`:
   plist (e.g. `launchd/io.vectorize.cocoindex.rhdh-plugins.plist`) as the
   template, not an older one predating Phase 8.
 - Environment variables for all repo paths
-- Separate log files: `~/.hindsight/logs/cocoindex-<project>-{stdout,stderr}.log`
+- Separate log files: `~/.engram/logs/cocoindex-<project>-{stdout,stderr}.log`
   (project name last, not first — matches every existing plist's actual
   `StandardOutPath`/`StandardErrorPath`, e.g. `cocoindex-koku-stderr.log`)
 - KeepAlive: true
 
 Install and start (no flow/search symlinking needed — the console scripts
-from steps 4/5 are already on `PATH` inside `~/.hindsight/venv/bin/`):
+from steps 4/5 are already on `PATH` inside `~/.engram/venv/bin/`):
 
 ```bash
 # Replace __HOME__ with actual home directory
@@ -260,6 +301,23 @@ scale-down, or still validating the flow file with a manual `--mode backfill`
 run first), it's fine to create the plist in `launchd/` and commit it without
 this `load` step — `engram`'s own plist shipped this way initially. Nothing
 else in this guide depends on the service actually being loaded.
+
+> **Cold start: backfill first, live-watch second (2026-09-09).** A fresh
+> project (empty pg tables + empty tracking DB) must be populated with a
+> one-shot `--mode backfill --apps code` (+ docs/issues as needed) run
+> *before* relying on the live service. Live-watch reliably tracks warm
+> incremental deltas (add → row appears, delete → row removed, verified),
+> but a cold full-scan in live mode fingerprints files without ever flushing
+> rows to pg — observed across every flow, still undiagnosed in cocoindex
+> (present in 1.0.20, unchanged in 1.0.21). Backfill is the supported
+> cold-start path, not a workaround.
+>
+> Gotcha: if the tracking DB (`~/.engram/<project>-cocoindex.db`) is wiped
+> while pg tables still exist, the next run dies with
+> `DuplicateTableError: relation ... already exists` (fresh state re-issues
+> `CREATE TABLE`). Always drop the project's pg tables (plus their FTS
+> trigger/function/index — see each flow's `teardown_sql`) before
+> re-backfilling, never wipe tracking state alone.
 
 ### 7. Choose Your Code-Intelligence Backend
 
@@ -363,7 +421,7 @@ Create `.cursor/mcp.json` in each project repository:
       "url": "http://localhost:8888/mcp/<project>-issues/"
     },
     "cocoindex-code": {
-      "command": "/Users/jgil/.hindsight/venv/bin/engram-search-<project>",
+      "command": "/Users/jgil/.engram/venv/bin/engram-search-<project>",
       "type": "stdio",
       "env": {
         "COCOINDEX_PG_URL": "postgresql://hindsight:hindsight@localhost:5432/hindsight"
@@ -383,7 +441,7 @@ The workspace-level config uses the same server **names** as kubernaut (`hindsig
 > it via a blanket `.cursor/*` in `.gitignore` (with `!.cursor/rules/` /
 > `!.cursor/skills/` carved back out, but no exception for `mcp.json`) —
 > because the file embeds this machine's absolute paths
-> (`/Users/jgil/.hindsight/venv/bin/python3`, `/Users/jgil/.local/bin/uvx`),
+> (`/Users/jgil/.engram/venv/bin/python3`, `/Users/jgil/.local/bin/uvx`),
 > which would be wrong on every other contributor's machine if committed.
 > An untracked, gitignored `.cursor/mcp.json` still survives ordinary
 > `git checkout`/`git switch` between branches in the same working directory
@@ -399,7 +457,7 @@ The workspace-level config uses the same server **names** as kubernaut (`hindsig
 > related repos (e.g. `kubernaut`/`kubernaut-v1.5`/`kubernaut-v1.6`/
 > `kubernaut-operator`) can have every repo's `.cursor/mcp.json` be a
 > filesystem symlink to one shared file under
-> `~/.hindsight/cursor-mcp-templates/<family>.json`, so a config change (like
+> `~/.engram/cursor-mcp-templates/<family>.json`, so a config change (like
 > adding step 7's `serena` entry) is one edit that cascades to every repo in
 > the family instead of N separate edits. This is easy to miss when
 > retrofitting an existing family — check with `readlink` before assuming a
@@ -490,7 +548,7 @@ edited at a time (step 8's plain shared daemon is simpler and sufficient).
    ```xml
    <key>ProgramArguments</key>
    <array>
-       <string>__HOME__/.hindsight/venv/bin/engram-serena-multiplex</string>
+       <string>__HOME__/.engram/venv/bin/engram-serena-multiplex</string>
        <string>--host</string><string>127.0.0.1</string>
        <string>--port</string><string>8893</string>
        <string>--upstream-url</string><string>http://127.0.0.1:8892/mcp</string>
@@ -665,7 +723,7 @@ To scope correctly:
    filters on that field. This field is only present on log lines written *after* the
    hook was updated to record it; older lines are silently excluded from scoped views.
 4. Verify by comparing the `effectiveness` block across two projects' daily JSON
-   reports (`~/.hindsight/logs/<date>.json` vs `<date>-dcm.json`) — they should differ,
+   reports (`~/.engram/logs/<date>.json` vs `<date>-dcm.json`) — they should differ,
    not match byte-for-byte.
 
 ### 12. Verify End-to-End
@@ -678,7 +736,7 @@ curl -s http://localhost:8888/v1/default/banks | python3 -m json.tool
 launchctl list | grep cocoindex
 
 # Check CocoIndex logs
-tail -20 ~/.hindsight/logs/cocoindex-<project>-stderr.log
+tail -20 ~/.engram/logs/cocoindex-<project>-stderr.log
 
 # Check code embeddings
 psql -h localhost -U hindsight -d hindsight \
@@ -728,7 +786,7 @@ Three hooks, sharing one per-session marker:
   stale convention looks identical to one that violates a still-valid one).
 - `hooks/post-plan-checklist-reminder.py` (`postToolUse`, same matcher) —
   fires right after the enforcer, on the same tool call. If
-  `~/.hindsight/review-checklists/<repo>.md` exists for the marker's repo,
+  `~/.engram/review-checklists/<repo>.md` exists for the marker's repo,
   injects it via `additional_context` as a one-time reminder (e.g. a
   project's Pre-PR review checklist that reviewers keep having to repeat).
   No-ops (and is not even registered in `hooks.json`, see below) for repos
@@ -744,11 +802,11 @@ bash hooks/install.sh /path/to/target-repo
 
 This is idempotent (safe to re-run) and merges into any existing
 `.cursor/hooks.json` rather than overwriting it. It also symlinks the hook
-scripts into `~/.hindsight/hooks/` and the whole `hooks/review-checklists/`
-directory into `~/.hindsight/review-checklists/` — the single stable
+scripts into `~/.engram/hooks/` and the whole `hooks/review-checklists/`
+directory into `~/.engram/review-checklists/` — the single stable
 locations every onboarded repo's `hooks.json` points at, so the hooks keep
 working even if engram's own checkout path ever changes (same rationale as
-`chunking.py`'s symlink into `~/.hindsight/`, see step 4 above and
+`chunking.py`'s symlink into `~/.engram/`, see step 4 above and
 docs/INSTALL.md).
 
 `install.sh` auto-detects kubernaut paths (any path containing
@@ -760,7 +818,7 @@ commit it — no script changes needed, the enforcer and reminder both key off
 file existence, not a hardcoded project list.
 
 > **Gotcha**: the enforcer's/reminder's `command` in `hooks.json` must
-> invoke `~/.hindsight/venv/bin/python3`, never a bare `python3`/`python` —
+> invoke `~/.engram/venv/bin/python3`, never a bare `python3`/`python` —
 > the real `resolve()` call needs `litellm`/`vertexai`, which only exist in
 > Hindsight's venv. `hooks/install.sh` gets this right automatically; if
 > you ever hand-edit `hooks.json`, don't "simplify" the interpreter path.
@@ -774,7 +832,7 @@ file existence, not a hardcoded project list.
 > inside engram's own repo, not committed to the target repo (e.g.
 > `osac-service-provider`'s own contributors, most of whom don't use
 > Engram, never see this file) and not stored as a bare untracked file
-> under `~/.hindsight/` either — `git diff`/`git log` on
+> under `~/.engram/` either — `git diff`/`git log` on
 > `hooks/review-checklists/*.md` is the real integrity control against
 > tampering. `post-plan-checklist-reminder.py`'s
 > `is_safe_checklist_content()` is a cheap secondary sanity check (max
@@ -797,7 +855,7 @@ Separate from step 13's correction-enforcement hooks, `git-hooks/` in this
 repo holds **templates and ready-to-use scripts** for a family of plain git
 hooks (`post-checkout`, `post-merge`, `reference-transaction`) — see
 `git-hooks/README.md` for the full reference; this step is a summary.
-`~/.hindsight/git-hooks/` is where you *install* (symlink or generate) them
+`~/.engram/git-hooks/` is where you *install* (symlink or generate) them
 per-machine — it does not come pre-populated; that directory is created by
 this step, not shipped with engram. These hooks keep two things from
 silently going stale as a repo's working tree changes underneath a running
@@ -893,7 +951,7 @@ generic variant deliberately omits.
 | `hooks/review-checklists/<repo>.md` | Per-repo PR review checklist content, injected by the checklist-reminder hook when present |
 | `git-hooks/generic/*.sh` | Self-healing plain git hooks, single-repo variant: restart stale gopls/serena processes on checkout/merge/rebase/reset (recommended, step 14) |
 | `git-hooks/family/*.sh.tmpl` + `git-hooks/generate-hooks.sh` + `git-hooks/families/*.vars` | Templated variant for repos sharing a long-lived HTTP MCP daemon: same restart behavior + re-provisions a shared `.cursor/mcp.json` template (optional, steps 8/8a/14) |
-| `~/.hindsight/git-hooks/*.sh` | Per-machine install target: symlinks (generic) or `generate-hooks.sh` output (family) land here (step 14) |
+| `~/.engram/git-hooks/*.sh` | Per-machine install target: symlinks (generic) or `generate-hooks.sh` output (family) land here (step 14) |
 | Each opted-in repo's `.git/hooks/{post-checkout,post-merge,reference-transaction}` | Symlinks into the installed git-hooks scripts above (step 14) |
 
 ## Isolation Guarantees

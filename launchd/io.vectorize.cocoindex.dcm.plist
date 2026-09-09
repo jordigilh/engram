@@ -6,8 +6,8 @@
     <string>io.vectorize.cocoindex.dcm</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.hindsight/with-config-env.sh</string>
-        <string>__HOME__/.hindsight/dcm-nightly-ingest.sh</string>
+        <string>__HOME__/.engram/with-config-env.sh</string>
+        <string>__HOME__/.engram/dcm-nightly-ingest.sh</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>
@@ -19,15 +19,15 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>__HOME__/.hindsight/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>__HOME__/.engram/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>__HOME__</string>
     </dict>
     <key>WorkingDirectory</key>
-    <string>__HOME__/.hindsight</string>
+    <string>__HOME__/.engram</string>
     <key>StandardOutPath</key>
-    <string>__HOME__/.hindsight/logs/dcm-cocoindex-stdout.log</string>
+    <string>__HOME__/.engram/logs/dcm-cocoindex-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.hindsight/logs/dcm-cocoindex-stderr.log</string>
+    <string>__HOME__/.engram/logs/dcm-cocoindex-stderr.log</string>
 </dict>
 </plist>

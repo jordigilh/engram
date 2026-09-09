@@ -79,12 +79,14 @@ logging.basicConfig(
 )
 log = logging.getLogger("engram-gateway")
 
+from engram import mcp_compat  # noqa: E402  (mcp 1.x/2.x Tool compat)
+
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8896
 FORWARD_TIMEOUT_S = 60.0
 
 # Gateway-owned call log, distinct from the Cursor-hook-authored
-# ~/.hindsight/logs/mcp-calls.jsonl (cursor/hooks/log-mcp-calls.sh). That
+# ~/.engram/logs/mcp-calls.jsonl (cursor/hooks/log-mcp-calls.sh). That
 # hook's `result_chars` is best-effort and frequently 0 -- its own comment
 # notes Cursor's afterMCPExecution payload usually omits content text
 # despite docs claiming a "full JSON result". `handle_tools_call` below is
@@ -96,7 +98,7 @@ FORWARD_TIMEOUT_S = 60.0
 # confirmed no Cursor hook or CLI surface carries real per-call token
 # counts locally (Team/Enterprise usage APIs report at turn granularity,
 # not per tool call, and require a paid plan).
-GATEWAY_CALLS_LOG = pathlib.Path(os.path.expanduser("~/.hindsight/logs/gateway-calls.jsonl"))
+GATEWAY_CALLS_LOG = pathlib.Path(os.path.expanduser("~/.engram/logs/gateway-calls.jsonl"))
 
 
 @functools.lru_cache(maxsize=1)
@@ -602,14 +604,15 @@ class StdioSubprocessAdapter:
                 await self._restart()
                 result = await self._session.list_tools()
             return [
-                # mcp SDK's Tool pydantic model exposes this field as
-                # `input_schema` (snake_case) in the installed version, not
-                # the wire-format `inputSchema` camelCase alias it accepts on
-                # construction -- `t.inputSchema` raised AttributeError on
-                # every real stdio backend's list_tools() call (never caught
-                # by prior tests, which stubbed this dict out entirely
-                # instead of exercising a real mcp.types.Tool instance).
-                {"name": t.name, "description": t.description or "", "inputSchema": t.input_schema}
+                # Tool input schema attribute renamed across mcp SDK
+                # versions (inputSchema 1.x <-> input_schema 2.x); read it
+                # version-tolerantly (see engram.mcp_compat) instead of
+                # pinning one spelling that breaks on every mcp bump --
+                # see the 2026-08-27 incident this comment originally
+                # described, repeated in reverse by the 2026-09-09
+                # mcp<2.0 pin.
+                {"name": t.name, "description": t.description or "",
+                 "inputSchema": mcp_compat.tool_input_schema(t)}
                 for t in result.tools
             ]
 
@@ -916,7 +919,7 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     the 2026-08-21 survey of every onboarded repo's actual .cursor/mcp.json.
     `home` is injected (rather than read from `os.path.expanduser` here) so
     this stays a pure, easily-testable function."""
-    venv_bin = f"{home}/.hindsight/venv/bin"
+    venv_bin = f"{home}/.engram/venv/bin"
     registry: dict[str, dict[str, dict]] = {}
 
     kubernaut_http_code = _http("http://127.0.0.1:8891/mcp")
@@ -938,7 +941,7 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
         "issues": _hindsight("kubernaut-issues"),
         # Shared with kubernaut/kubernaut-operator, NOT a standalone stdio
         # process (fixed 2026-08-25): this used to spawn
-        # `~/.hindsight/cocoindex-search.py`, a flat symlink the 2026-08-12
+        # `~/.engram/cocoindex-search.py`, a flat symlink the 2026-08-12
         # src/engram/ package restructuring had already deleted 9 days
         # before this registry entry was even authored, so it was dead on
         # arrival -- kubernaut-console's `code` tools silently dropped from
@@ -1013,12 +1016,13 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
             "code": praxis_code_stdio,
         }
 
-    registry["rhdh-plugins"] = {
-        "docs": _hindsight("rhdh-plugins-docs"),
-        "issues": _hindsight("rhdh-plugins-issues"),
-        "code": _stdio(f"{venv_bin}/engram-search-rhdh-plugins", env={"COCOINDEX_PG_URL": _PG_URL}),
-        "serena": _serena_stdio(home, f"{home}/go/src/github.com/redhat-developer/rhdh-plugins"),
-    }
+    # rhdh-plugins: DISABLED -- no longer contributing to this project
+    # (2026-09-09). Registry entry removed so the gateway no longer spawns
+    # engram-search-rhdh-plugins / serena subprocesses for it, and the
+    # launchd job io.vectorize.cocoindex.rhdh-plugins has been booted out
+    # with its installed plist removed. Source modules
+    # (flows/search rhdh_plugins) and launchd/io.vectorize.cocoindex.rhdh-plugins.plist
+    # remain in the repo for reference only.
 
     registry["engram"] = {
         "docs": _hindsight("engram-docs"),

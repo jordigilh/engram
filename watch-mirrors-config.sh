@@ -24,13 +24,13 @@
 # a new repo (e.g. dcm, koku) -- no script changes needed. Keep names
 # lowercase-hyphenated, matching the live clone's directory name.
 WATCH_MIRRORS=(
-    "kubernaut|${HOME}/go/src/github.com/jordigilh/kubernaut|main|${HOME}/.hindsight/watch/kubernaut"
-    "kubernaut-operator|${HOME}/go/src/github.com/jordigilh/kubernaut-operator|main|${HOME}/.hindsight/watch/kubernaut-operator"
-    "kubernaut-console|${HOME}/go/src/github.com/jordigilh/kubernaut-console|main|${HOME}/.hindsight/watch/kubernaut-console"
-    "kubernaut-demo-scenarios|${HOME}/go/src/github.com/jordigilh/kubernaut-demo-scenarios|main|${HOME}/.hindsight/watch/kubernaut-demo-scenarios"
-    "kubernaut-docs|${HOME}/go/src/github.com/jordigilh/kubernaut-docs|main|${HOME}/.hindsight/watch/kubernaut-docs"
-    "engram|${HOME}/go/src/github.com/jordigilh/engram|main|${HOME}/.hindsight/watch/engram"
-    "osac|${HOME}/go/src/github.com/osac-project/osac|main|${HOME}/.hindsight/watch/osac"
+    "kubernaut|${HOME}/go/src/github.com/jordigilh/kubernaut|main|${HOME}/.engram/watch/kubernaut"
+    "kubernaut-operator|${HOME}/go/src/github.com/jordigilh/kubernaut-operator|main|${HOME}/.engram/watch/kubernaut-operator"
+    "kubernaut-console|${HOME}/go/src/github.com/jordigilh/kubernaut-console|main|${HOME}/.engram/watch/kubernaut-console"
+    "kubernaut-demo-scenarios|${HOME}/go/src/github.com/jordigilh/kubernaut-demo-scenarios|main|${HOME}/.engram/watch/kubernaut-demo-scenarios"
+    "kubernaut-docs|${HOME}/go/src/github.com/jordigilh/kubernaut-docs|main|${HOME}/.engram/watch/kubernaut-docs"
+    "engram|${HOME}/go/src/github.com/jordigilh/engram|main|${HOME}/.engram/watch/engram"
+    "osac|${HOME}/go/src/github.com/osac-project/osac|main|${HOME}/.engram/watch/osac"
 )
 
 # Manually-curated release lines for the kubernaut family's *code* index only
@@ -50,10 +50,10 @@ RELEASE_LINES=("v1.5" "v1.6")
 # these with repo_tag="{repo}@release-{line}"; docs_main/issues_app never
 # read from them.
 RELEASE_WATCH_MIRRORS=(
-    "kubernaut-release-v1.5|${HOME}/go/src/github.com/jordigilh/kubernaut|release/v1.5|${HOME}/.hindsight/watch/kubernaut-release-v1.5"
-    "kubernaut-release-v1.6|${HOME}/go/src/github.com/jordigilh/kubernaut|release/v1.6|${HOME}/.hindsight/watch/kubernaut-release-v1.6"
-    "kubernaut-operator-release-v1.5|${HOME}/go/src/github.com/jordigilh/kubernaut-operator|release/v1.5|${HOME}/.hindsight/watch/kubernaut-operator-release-v1.5"
-    "kubernaut-operator-release-v1.6|${HOME}/go/src/github.com/jordigilh/kubernaut-operator|release/v1.6|${HOME}/.hindsight/watch/kubernaut-operator-release-v1.6"
-    "kubernaut-console-release-v1.5|${HOME}/go/src/github.com/jordigilh/kubernaut-console|release/v1.5|${HOME}/.hindsight/watch/kubernaut-console-release-v1.5"
-    "kubernaut-console-release-v1.6|${HOME}/go/src/github.com/jordigilh/kubernaut-console|release/v1.6|${HOME}/.hindsight/watch/kubernaut-console-release-v1.6"
+    "kubernaut-release-v1.5|${HOME}/go/src/github.com/jordigilh/kubernaut|release/v1.5|${HOME}/.engram/watch/kubernaut-release-v1.5"
+    "kubernaut-release-v1.6|${HOME}/go/src/github.com/jordigilh/kubernaut|release/v1.6|${HOME}/.engram/watch/kubernaut-release-v1.6"
+    "kubernaut-operator-release-v1.5|${HOME}/go/src/github.com/jordigilh/kubernaut-operator|release/v1.5|${HOME}/.engram/watch/kubernaut-operator-release-v1.5"
+    "kubernaut-operator-release-v1.6|${HOME}/go/src/github.com/jordigilh/kubernaut-operator|release/v1.6|${HOME}/.engram/watch/kubernaut-operator-release-v1.6"
+    "kubernaut-console-release-v1.5|${HOME}/go/src/github.com/jordigilh/kubernaut-console|release/v1.5|${HOME}/.engram/watch/kubernaut-console-release-v1.5"
+    "kubernaut-console-release-v1.6|${HOME}/go/src/github.com/jordigilh/kubernaut-console|release/v1.6|${HOME}/.engram/watch/kubernaut-console-release-v1.6"
 )

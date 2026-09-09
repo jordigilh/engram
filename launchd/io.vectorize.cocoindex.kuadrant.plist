@@ -6,8 +6,8 @@
     <string>io.vectorize.cocoindex.kuadrant</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.hindsight/with-config-env.sh</string>
-        <string>__HOME__/.hindsight/venv/bin/engram-flows-kuadrant</string>
+        <string>__HOME__/.engram/with-config-env.sh</string>
+        <string>__HOME__/.engram/venv/bin/engram-flows-kuadrant</string>
         <string>--mode</string>
         <string>live</string>
         <!-- Ingestion-only onboarding (2026-08-27, extended to 9 repos
@@ -41,12 +41,12 @@
         <key>COCOINDEX_PG_POOL_MAX_SIZE</key>
         <string>5</string>
         <key>PATH</key>
-        <string>__HOME__/.hindsight/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>__HOME__/.engram/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>__HOME__</string>
     </dict>
     <key>WorkingDirectory</key>
-    <string>__HOME__/.hindsight</string>
+    <string>__HOME__/.engram</string>
     <key>KeepAlive</key>
     <true/>
     <key>RunAtLoad</key>
@@ -54,8 +54,8 @@
     <key>ThrottleInterval</key>
     <integer>10</integer>
     <key>StandardOutPath</key>
-    <string>__HOME__/.hindsight/logs/cocoindex-kuadrant-stdout.log</string>
+    <string>__HOME__/.engram/logs/cocoindex-kuadrant-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.hindsight/logs/cocoindex-kuadrant-stderr.log</string>
+    <string>__HOME__/.engram/logs/cocoindex-kuadrant-stderr.log</string>
 </dict>
 </plist>

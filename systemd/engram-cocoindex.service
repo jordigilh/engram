@@ -4,7 +4,7 @@
 #
 # Runs natively via the same `uv`-managed venv as the hourly/nightly units --
 # see engram-hindsight-hourly.service for rationale. ENGRAM_DOCS_DIR,
-# ENGRAM_CODE_DIR, etc. are read from ~/.hindsight/config.env
+# ENGRAM_CODE_DIR, etc. are read from ~/.engram/config.env
 # (EnvironmentFile= below), same as docs/INSTALL.md step 16 documents for
 # macOS -- keep values there, not hardcoded here, so nothing
 # project-specific is baked into this (public repo) file.
@@ -20,14 +20,14 @@ After=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/.hindsight
-EnvironmentFile=%h/.hindsight/config.env
+WorkingDirectory=%h/.engram
+EnvironmentFile=%h/.engram/config.env
 Environment=GOOGLE_APPLICATION_CREDENTIALS=%h/.config/gcloud/application_default_credentials.json
-ExecStart=%h/.hindsight/venv/bin/python3 %h/.hindsight/cocoindex-flows.py --mode live
+ExecStart=%h/.engram/venv/bin/python3 %h/.engram/cocoindex-flows.py --mode live
 Restart=on-failure
 RestartSec=10
-StandardOutput=append:%h/.hindsight/logs/cocoindex-stdout.log
-StandardError=append:%h/.hindsight/logs/cocoindex-stderr.log
+StandardOutput=append:%h/.engram/logs/cocoindex-stdout.log
+StandardError=append:%h/.engram/logs/cocoindex-stderr.log
 
 [Install]
 WantedBy=default.target

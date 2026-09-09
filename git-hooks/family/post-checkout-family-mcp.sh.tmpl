@@ -38,7 +38,7 @@ if [ -f "$HOOKS_SRC_DIR/_restart-{{FAMILY_NAME}}-daemons.sh" ]; then
     "$HOOKS_SRC_DIR/_restart-{{FAMILY_NAME}}-daemons.sh" 2>/dev/null || true
 fi
 
-TEMPLATE_DIR="$HOME/.hindsight/cursor-mcp-templates"
+TEMPLATE_DIR="$HOME/.engram/cursor-mcp-templates"
 TARGET="$TOPLEVEL/.cursor/mcp.json"
 
 if [ -e "$TARGET" ] && [ ! -L "$TARGET" ]; then

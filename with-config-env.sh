@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared launchd wrapper: sources ~/.hindsight/config.env at process startup
+# Shared launchd wrapper: sources ~/.engram/config.env at process startup
 # and then exec's the real command.
 #
 # Why this exists: values like VERTEXAI_PROJECT/GOOGLE_CLOUD_PROJECT must be
@@ -14,14 +14,14 @@
 # launchd/ that runs a script needing Vertex AI config (nightly-learn.py,
 # cocoindex-flows.py, dcm-nightly-ingest.sh, hindsight-api itself):
 #   ProgramArguments = [
-#     "__HOME__/.hindsight/with-config-env.sh",
-#     "__HOME__/.hindsight/venv/bin/python3",
-#     "__HOME__/.hindsight/nightly-learn.py",
+#     "__HOME__/.engram/with-config-env.sh",
+#     "__HOME__/.engram/venv/bin/python3",
+#     "__HOME__/.engram/nightly-learn.py",
 #     "--mode", "nightly"
 #   ]
 set -euo pipefail
 
-CONFIG="${HOME}/.hindsight/config.env"
+CONFIG="${HOME}/.engram/config.env"
 
 if [ -f "$CONFIG" ]; then
   set -a

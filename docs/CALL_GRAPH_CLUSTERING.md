@@ -23,7 +23,7 @@ against Serena/gopls ground truth before drawing conclusions.
 
 ### Measured numbers
 
-| Metric | `~/.hindsight/watch/engram` (production `ENGRAM_REPO_DIR` default) |
+| Metric | `~/.engram/watch/engram` (production `ENGRAM_REPO_DIR` default) |
 |---|---|
 | Build+extract time (fresh, no cache) | **0.92s** |
 | Nodes (functions/methods found) | 1,423 |
@@ -595,8 +595,8 @@ selects from `_CALL_GRAPH_ROOTS` and builds a `repo`-aware cache key
 `--shortest-path`/`--cluster` CLI flags mirror dcm.py's Phase 4 `repo=`-scoped
 shape exactly, substituting the cached builder for the plain one.
 
-**End-to-end against the live checkouts** (`~/.hindsight/watch/kubernaut` +
-`~/.hindsight/watch/kubernaut-operator`, cache table dropped and rebuilt
+**End-to-end against the live checkouts** (`~/.engram/watch/kubernaut` +
+`~/.engram/watch/kubernaut-operator`, cache table dropped and rebuilt
 fresh for this run): cold build (both repos, cache MISS) **56.70s**, 9,391
 nodes / 10,339 edges, 38,765/66,225 calls unresolved, 15,087 ambiguous
 (Go's stdlib + the platform's own large cross-controller call surface, same

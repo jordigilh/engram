@@ -14,7 +14,7 @@
 # "live" mode) -- NOT one-shot/on-demand jobs like dcm's OnDemand backfill.
 set -uo pipefail
 
-HINDSIGHT_DIR="${HOME}/.hindsight"
+HINDSIGHT_DIR="${HOME}/.engram"
 LOG_FILE="${HINDSIGHT_DIR}/logs/cocoindex-watchdog.log"
 UID_NUM="$(id -u)"
 

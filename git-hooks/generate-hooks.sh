@@ -40,7 +40,7 @@ if [ $# -lt 1 ]; then
 fi
 
 CONFIG="$1"
-OUTPUT_DIR="${2:-$HOME/.hindsight/git-hooks}"
+OUTPUT_DIR="${2:-$HOME/.engram/git-hooks}"
 
 if [ ! -f "$CONFIG" ]; then
     if [ -f "$SCRIPT_DIR/families/$CONFIG" ]; then

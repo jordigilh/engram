@@ -9,7 +9,7 @@ For every new top-level (non-subagent) user message since the last run:
   2. Evaluate two candidate prefilters against the same message (free,
      pure Python, no added API cost): loose_regex_prefilter and
      trivial_message_exclusion_filter.
-  3. Log all three verdicts to ~/.hindsight/logs/prefilter-shadow.jsonl.
+  3. Log all three verdicts to ~/.engram/logs/prefilter-shadow.jsonl.
 
 Nothing is gated, retained, or changed by this script. It only observes.
 
@@ -48,7 +48,7 @@ from prefilters import loose_regex_prefilter, trivial_message_exclusion_filter  
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from engram.classify import classify_correction  # noqa: E402
 
-STATE_DIR = Path.home() / ".hindsight"
+STATE_DIR = Path.home() / ".engram"
 WATERMARKS_PATH = STATE_DIR / "logs" / "prefilter-shadow-watermarks.json"
 SHADOW_LOG_PATH = STATE_DIR / "logs" / "prefilter-shadow.jsonl"
 LOCK_PATH = STATE_DIR / "logs" / "prefilter-shadow-trial.lock"

@@ -6,7 +6,7 @@
     <string>io.vectorize.cocoindex.watch-sync</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.hindsight/refresh-watch-mirrors.sh</string>
+        <string>__HOME__/.engram/refresh-watch-mirrors.sh</string>
     </array>
     <key>StartInterval</key>
     <integer>600</integer>
@@ -15,15 +15,15 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>__HOME__/.hindsight/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>__HOME__/.engram/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>__HOME__</string>
     </dict>
     <key>WorkingDirectory</key>
-    <string>__HOME__/.hindsight</string>
+    <string>__HOME__/.engram</string>
     <key>StandardOutPath</key>
-    <string>__HOME__/.hindsight/logs/watch-mirrors-sync-stdout.log</string>
+    <string>__HOME__/.engram/logs/watch-mirrors-sync-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.hindsight/logs/watch-mirrors-sync-stderr.log</string>
+    <string>__HOME__/.engram/logs/watch-mirrors-sync-stderr.log</string>
 </dict>
 </plist>

@@ -35,11 +35,11 @@ from typing import Pattern
 # for why this stays a plain sys.path insert of our own directory rather
 # than a dotted `from engram.classify import ...` -- it keeps working
 # whether this file is reached as `engram.correction_gate` or via a flat
-# `~/.hindsight/` symlink with no `engram` package context.
+# `~/.engram/` symlink with no `engram` package context.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from classify import classify_correction  # noqa: E402
 
-CACHE_PATH = Path(os.path.expanduser("~/.hindsight/logs/correction-cache.json"))
+CACHE_PATH = Path(os.path.expanduser("~/.engram/logs/correction-cache.json"))
 
 # See prefilter-shadow-trial.py's identical filter -- kept in sync with it.
 _BOILERPLATE_PREFIXES = (

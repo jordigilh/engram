@@ -23,7 +23,7 @@ re-running the validation script after any classifier tweak reuses this same
 fixed sample and its already-spent Haiku calls, so results are directly
 comparable across iterations without re-paying for classification.
 
-Output is cached under ~/.hindsight/ (deliberately NOT under the repo, and
+Output is cached under ~/.engram/ (deliberately NOT under the repo, and
 NOT /tmp so it survives reboots) since real transcript content shouldn't be
 persisted into a tracked file, but should stick around for reuse.
 """
@@ -42,7 +42,7 @@ from ground_truth import DATASET  # noqa: E402
 
 _USER_QUERY_RE = re.compile(r"<user_query>\s*(.*?)\s*</user_query>", re.DOTALL)
 
-CACHE_DIR = os.path.expanduser("~/.hindsight/modernbert-spike-cache")
+CACHE_DIR = os.path.expanduser("~/.engram/modernbert-spike-cache")
 CACHE_PATH = os.path.join(CACHE_DIR, "fresh_sample.json")
 
 _KNOWN_TEXTS = {ex.text for ex in DATASET}

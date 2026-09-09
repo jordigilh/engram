@@ -79,7 +79,7 @@ DCM_UTILITIES_DIR = pathlib.Path(os.environ.get(
 # watch-mirror worktree, not a live dev clone, since this repo is never
 # locally edited -- see watch-mirrors-config.sh.
 DCM_OSAC_DIR = pathlib.Path(os.environ.get(
-    "DCM_OSAC_DIR", os.path.expanduser("~/.hindsight/watch/osac"),
+    "DCM_OSAC_DIR", os.path.expanduser("~/.engram/watch/osac"),
 ))
 
 _GO_EXCLUDED = ["**/vendor/**", "**/*_test.go", "**/zz_generated*"]
@@ -366,9 +366,9 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
     # mcp==2.0.0 (2026-08-22 dependabot bump) renamed FastMCP to MCPServer
     # and moved host/port from the constructor to run(). See
     # docs/findings/2026-08.md's 2026-08-27 entry.
-    from mcp.server.mcpserver import MCPServer as FastMCP
+    from engram import mcp_compat  # 1.x/2.x compat (mcp<2.0 pinned)
 
-    mcp = FastMCP("dcm-code")
+    mcp = mcp_compat.make_server("dcm-code", host=host, port=port)
 
     @mcp.tool()
     def dcm_code_search(query: str, limit: int = 10) -> str:
@@ -468,10 +468,10 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
 
     if transport == "stdio":
         log.info("Starting dcm-code MCP server (stdio)")
-        mcp.run(transport="stdio")
+        mcp_compat.run_server(mcp, transport="stdio")
     else:
         log.info("Starting dcm-code MCP server on %s:%d (sse)", host, port)
-        mcp.run(transport="sse", host=host, port=port)
+        mcp_compat.run_server(mcp, transport="sse", host=host, port=port)
 
 
 # ---------------------------------------------------------------------------

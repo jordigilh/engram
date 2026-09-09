@@ -6,8 +6,8 @@
     <string>io.vectorize.hindsight.nightly</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.hindsight/with-config-env.sh</string>
-        <string>__HOME__/.hindsight/venv/bin/engram-nightly-learn</string>
+        <string>__HOME__/.engram/with-config-env.sh</string>
+        <string>__HOME__/.engram/venv/bin/engram-nightly-learn</string>
         <string>--mode</string>
         <string>nightly</string>
     </array>
@@ -19,13 +19,13 @@
         <integer>0</integer>
     </dict>
     <key>StandardOutPath</key>
-    <string>__HOME__/.hindsight/logs/launchd-stdout.log</string>
+    <string>__HOME__/.engram/logs/launchd-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.hindsight/logs/launchd-stderr.log</string>
+    <string>__HOME__/.engram/logs/launchd-stderr.log</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>__HOME__/.hindsight/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>__HOME__/.engram/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>__HOME__</string>
     </dict>

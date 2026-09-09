@@ -28,9 +28,9 @@
         <string>__HOME__</string>
     </dict>
     <key>StandardOutPath</key>
-    <string>__HOME__/.hindsight/logs/serena-project-server-stdout.log</string>
+    <string>__HOME__/.engram/logs/serena-project-server-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.hindsight/logs/serena-project-server-stderr.log</string>
+    <string>__HOME__/.engram/logs/serena-project-server-stderr.log</string>
     <key>KeepAlive</key>
     <dict>
         <key>SuccessfulExit</key>

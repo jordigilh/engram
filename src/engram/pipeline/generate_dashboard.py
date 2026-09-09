@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate docs/DASHBOARD.md from daily nightly report JSON files.
 
-Reads all ~/.hindsight/logs/YYYY-MM-DD.json files and produces a
+Reads all ~/.engram/logs/YYYY-MM-DD.json files and produces a
 markdown dashboard with daily metrics tables and trend indicators.
 
 Called by the nightly pipeline after the daily report is written.
@@ -40,7 +40,7 @@ def _find_repo_root() -> Path:
 
 
 REPO_ROOT = _find_repo_root()
-LOG_DIR = Path(os.path.expanduser("~/.hindsight/logs"))
+LOG_DIR = Path(os.path.expanduser("~/.engram/logs"))
 DASHBOARD_PATH = REPO_ROOT / "docs" / "DASHBOARD.md"
 PENDING_CONTRADICTIONS_LOG = LOG_DIR / "contradictions-pending.jsonl"
 AUTO_RESOLVED_LOG = LOG_DIR / "contradictions-auto-resolved.jsonl"

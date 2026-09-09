@@ -6,7 +6,7 @@
     <string>io.vectorize.cocoindex.search</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.hindsight/venv/bin/engram-search-kubernaut</string>
+        <string>__HOME__/.engram/venv/bin/engram-search-kubernaut</string>
         <string>--port</string>
         <string>8889</string>
     </array>
@@ -15,12 +15,12 @@
         <key>COCOINDEX_PG_URL</key>
         <string>postgresql://hindsight:hindsight@localhost:5432/hindsight</string>
         <key>PATH</key>
-        <string>__HOME__/.hindsight/venv/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+        <string>__HOME__/.engram/venv/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
         <key>HOME</key>
         <string>__HOME__</string>
     </dict>
     <key>WorkingDirectory</key>
-    <string>__HOME__/.hindsight</string>
+    <string>__HOME__/.engram</string>
     <key>KeepAlive</key>
     <true/>
     <key>RunAtLoad</key>
@@ -28,8 +28,8 @@
     <key>ThrottleInterval</key>
     <integer>10</integer>
     <key>StandardOutPath</key>
-    <string>__HOME__/.hindsight/logs/cocoindex-search-stdout.log</string>
+    <string>__HOME__/.engram/logs/cocoindex-search-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.hindsight/logs/cocoindex-search-stderr.log</string>
+    <string>__HOME__/.engram/logs/cocoindex-search-stderr.log</string>
 </dict>
 </plist>

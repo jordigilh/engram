@@ -497,7 +497,8 @@ class TestBuildProjectRegistry:
     def test_covers_every_onboarded_project(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
 
-        assert len(registry) == 35
+        assert len(registry) == 34
+        assert "rhdh-plugins" not in registry  # decommissioned 2026-09-09
 
     def test_kubernaut_family_is_fully_http_already(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
@@ -536,7 +537,7 @@ class TestBuildProjectRegistry:
 
     def test_kubernaut_console_code_backend_is_shared_kubernaut_http_daemon(self, engram_gateway):
         """Regression guard: kubernaut-console's "code" backend previously
-        pointed at a flat `~/.hindsight/cocoindex-search.py` stdio script that
+        pointed at a flat `~/.engram/cocoindex-search.py` stdio script that
         the 2026-08-12 package restructuring (src/engram/search/kubernaut.py +
         console-script rename) had already deleted 9 days before this
         registry entry was even authored -- so it was dead on arrival, and
@@ -606,14 +607,13 @@ class TestBuildProjectRegistry:
         assert "serena" in registry["praxis-grid"]
 
     def test_rhdh_plugins_registry_only_covers_the_four_engram_backends(self, engram_gateway):
-        """rhdh-plugins' real .cursor/mcp.json has other, unrelated MCP
-        servers (jira/argocd/gitea/kubernetes/orchestrator, several with
-        live credentials) alongside the four engram-owned ones -- the
-        registry must describe only what this gateway itself is
-        responsible for aggregating, never those unrelated entries."""
+        """rhdh-plugins decommissioned 2026-09-09: the registry must no
+        longer contain it at all (previously asserted the entry covered
+        only the four engram-owned backends, excluding the repo's own
+        jira/argocd/gitea/kubernetes entries)."""
         registry = engram_gateway.build_project_registry("/home/u")
 
-        assert set(registry["rhdh-plugins"]) == {"docs", "issues", "code", "serena"}
+        assert "rhdh-plugins" not in registry
 
     def test_dcm_code_backend_sets_hf_hub_offline(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
@@ -644,7 +644,7 @@ class TestBuildProjectRegistry:
         assert spec["kuadrant_docs"] == {"kind": "http", "url": "http://localhost:8888/mcp/kuadrant-docs/"}
         assert spec["kuadrant_issues"] == {"kind": "http", "url": "http://localhost:8888/mcp/kuadrant-issues/"}
         assert spec["kuadrant_code"]["kind"] == "stdio"
-        assert spec["kuadrant_code"]["command"] == "/home/u/.hindsight/venv/bin/engram-search-kuadrant"
+        assert spec["kuadrant_code"]["command"] == "/home/u/.engram/venv/bin/engram-search-kuadrant"
 
 
 class TestBuildBackendAdapters:

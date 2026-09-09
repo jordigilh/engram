@@ -67,7 +67,7 @@ repo without a re-run.
 2. Generate:
 
    ```bash
-   ./generate-hooks.sh families/my-family.vars ~/.hindsight/git-hooks
+   ./generate-hooks.sh families/my-family.vars ~/.engram/git-hooks
    ```
 
 3. Symlink the generated scripts into each family repo the same way as the

@@ -14,9 +14,9 @@
 # platform.
 #
 # Requires engram's own package installed editable into the venv
-# (`uv pip install --python ~/.hindsight/venv/bin/python -e .` -- see
+# (`uv pip install --python ~/.engram/venv/bin/python -e .` -- see
 # INSTALL-linux.md step 7) so the `engram-serena-multiplex` console script
-# exists in ~/.hindsight/venv/bin/.
+# exists in ~/.engram/venv/bin/.
 #
 # Install (user-level, mirrors launchd's per-user LaunchAgents):
 #   cp systemd/engram-serena-multiplex-kubernaut-family.service ~/.config/systemd/user/
@@ -30,11 +30,11 @@ Wants=engram-serena-kubernaut-family.service
 
 [Service]
 Type=simple
-ExecStart=%h/.hindsight/venv/bin/engram-serena-multiplex --host 127.0.0.1 --port 8893 --upstream-url http://127.0.0.1:8892/mcp --project kubernaut --project kubernaut-operator --project kubernaut-console --project kubernaut-demo-scenarios --project kubernaut-v1.5 --project kubernaut-v1.6
+ExecStart=%h/.engram/venv/bin/engram-serena-multiplex --host 127.0.0.1 --port 8893 --upstream-url http://127.0.0.1:8892/mcp --project kubernaut --project kubernaut-operator --project kubernaut-console --project kubernaut-demo-scenarios --project kubernaut-v1.5 --project kubernaut-v1.6
 Restart=on-failure
 RestartSec=10
-StandardOutput=append:%h/.hindsight/logs/serena-multiplex-kubernaut-family-stdout.log
-StandardError=append:%h/.hindsight/logs/serena-multiplex-kubernaut-family-stderr.log
+StandardOutput=append:%h/.engram/logs/serena-multiplex-kubernaut-family-stdout.log
+StandardError=append:%h/.engram/logs/serena-multiplex-kubernaut-family-stderr.log
 
 [Install]
 WantedBy=default.target

@@ -11,7 +11,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 
-QUEUE_PATH = os.path.expanduser("~/.hindsight/logs/contradictions-pending.jsonl")
+QUEUE_PATH = os.path.expanduser("~/.engram/logs/contradictions-pending.jsonl")
 
 
 def append_pending(

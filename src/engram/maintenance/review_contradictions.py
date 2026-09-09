@@ -2,7 +2,7 @@
 """Interactive review of contradictions flagged by the Semantic Correction
 Detection Spike's contradiction check.
 
-Lists each entry in ~/.hindsight/logs/contradictions-pending.jsonl (new
+Lists each entry in ~/.engram/logs/contradictions-pending.jsonl (new
 statement vs. the existing memory it appears to conflict with, plus the
 model's explanation) and lets you:
 

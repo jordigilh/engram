@@ -21,9 +21,9 @@ from pathlib import Path
 
 
 def load_config_env() -> None:
-    """Source ~/.hindsight/config.env's KEY=VALUE lines into os.environ
+    """Source ~/.engram/config.env's KEY=VALUE lines into os.environ
     without overwriting anything the hook's own environment already set."""
-    config_path = Path.home() / ".hindsight" / "config.env"
+    config_path = Path.home() / ".engram" / "config.env"
     if not config_path.exists():
         return
     for line in config_path.read_text(errors="replace").splitlines():
@@ -60,10 +60,10 @@ def main() -> int:
 
         load_config_env()
         fix_credentials_path()
-        # ~/.hindsight/contradiction_resolution.py is a symlink to engram's
+        # ~/.engram/contradiction_resolution.py is a symlink to engram's
         # real module (see docs/INSTALL.md step 9/16); this makes the
         # import work from any repo's working directory, not just engram's.
-        sys.path.insert(0, os.path.expanduser("~/.hindsight"))
+        sys.path.insert(0, os.path.expanduser("~/.engram"))
         from contradiction_resolution import resolve  # noqa: E402
 
         res = resolve("cursor-memory", overview, project=project)

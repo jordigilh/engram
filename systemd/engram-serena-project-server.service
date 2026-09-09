@@ -22,8 +22,8 @@ Environment=GOPATH=%h/go
 ExecStart=%h/.local/bin/uvx --from git+https://github.com/oraios/serena serena start-project-server
 Restart=on-failure
 RestartSec=10
-StandardOutput=append:%h/.hindsight/logs/serena-project-server-stdout.log
-StandardError=append:%h/.hindsight/logs/serena-project-server-stderr.log
+StandardOutput=append:%h/.engram/logs/serena-project-server-stdout.log
+StandardError=append:%h/.engram/logs/serena-project-server-stderr.log
 
 [Install]
 WantedBy=default.target

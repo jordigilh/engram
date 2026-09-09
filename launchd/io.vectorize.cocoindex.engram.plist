@@ -6,8 +6,8 @@
     <string>io.vectorize.cocoindex.engram</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.hindsight/with-config-env.sh</string>
-        <string>__HOME__/.hindsight/venv/bin/engram-flows-engram</string>
+        <string>__HOME__/.engram/with-config-env.sh</string>
+        <string>__HOME__/.engram/venv/bin/engram-flows-engram</string>
         <string>--mode</string>
         <string>live</string>
         <!-- docs is back in live mode as of 2026-08-14: its bank
@@ -31,7 +31,7 @@
              churn today), but the mirror mechanism is generic/config-driven
              so this is a one-line entry rather than a special case. -->
         <key>ENGRAM_REPO_DIR</key>
-        <string>__HOME__/.hindsight/watch/engram</string>
+        <string>__HOME__/.engram/watch/engram</string>
         <key>HINDSIGHT_URL</key>
         <string>http://localhost:8888</string>
         <key>COCOINDEX_PG_URL</key>
@@ -45,12 +45,12 @@
         <key>COCOINDEX_PG_POOL_MAX_SIZE</key>
         <string>5</string>
         <key>PATH</key>
-        <string>__HOME__/.hindsight/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>__HOME__/.engram/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>__HOME__</string>
     </dict>
     <key>WorkingDirectory</key>
-    <string>__HOME__/.hindsight</string>
+    <string>__HOME__/.engram</string>
     <key>KeepAlive</key>
     <true/>
     <key>RunAtLoad</key>
@@ -58,8 +58,8 @@
     <key>ThrottleInterval</key>
     <integer>10</integer>
     <key>StandardOutPath</key>
-    <string>__HOME__/.hindsight/logs/cocoindex-engram-stdout.log</string>
+    <string>__HOME__/.engram/logs/cocoindex-engram-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.hindsight/logs/cocoindex-engram-stderr.log</string>
+    <string>__HOME__/.engram/logs/cocoindex-engram-stderr.log</string>
 </dict>
 </plist>

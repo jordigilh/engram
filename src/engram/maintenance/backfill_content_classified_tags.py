@@ -33,7 +33,7 @@ Usage:
 Must run with Vertex AI env vars populated (VERTEXAI_PROJECT/LOCATION,
 GOOGLE_APPLICATION_CREDENTIALS) -- e.g. via with-config-env.sh, same as every
 other LLM-calling script in this repo:
-    ~/.hindsight/with-config-env.sh python3 backfill-content-classified-tags.py
+    ~/.engram/with-config-env.sh python3 backfill-content-classified-tags.py
 """
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ from engram import classify  # noqa: E402
 from engram.maintenance import backfill_memory_tags as bmt  # noqa: E402
 
 HINDSIGHT_URL = "http://localhost:8888"
-AUDIT_LOG = Path(os.path.expanduser("~/.hindsight/logs/content-classification-audit.jsonl"))
+AUDIT_LOG = Path(os.path.expanduser("~/.engram/logs/content-classification-audit.jsonl"))
 
 
 def plan_content_targets(documents: list[dict], resolvable_ids: set[str]) -> list[dict]:

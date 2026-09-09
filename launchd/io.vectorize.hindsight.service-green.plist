@@ -6,8 +6,8 @@
     <string>io.vectorize.hindsight.service-green</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.hindsight/with-config-env.sh</string>
-        <string>__HOME__/.hindsight/venv/bin/hindsight-api</string>
+        <string>__HOME__/.engram/with-config-env.sh</string>
+        <string>__HOME__/.engram/venv/bin/hindsight-api</string>
         <string>--port</string>
         <string>18889</string>
     </array>
@@ -17,12 +17,12 @@
              is never duplicated here, and why --port (not an env var) is
              what pins this instance to the "green" port. -->
         <key>PATH</key>
-        <string>__HOME__/.hindsight/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>__HOME__/.engram/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>__HOME__</string>
     </dict>
     <key>WorkingDirectory</key>
-    <string>__HOME__/.hindsight</string>
+    <string>__HOME__/.engram</string>
     <key>KeepAlive</key>
     <true/>
     <key>RunAtLoad</key>
@@ -30,8 +30,8 @@
     <key>ThrottleInterval</key>
     <integer>5</integer>
     <key>StandardOutPath</key>
-    <string>__HOME__/.hindsight/logs/hindsight-stdout-green.log</string>
+    <string>__HOME__/.engram/logs/hindsight-stdout-green.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.hindsight/logs/hindsight-stderr-green.log</string>
+    <string>__HOME__/.engram/logs/hindsight-stderr-green.log</string>
 </dict>
 </plist>

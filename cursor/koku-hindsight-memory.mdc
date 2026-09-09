@@ -164,7 +164,7 @@ Serena resolving to the wrong repo** (no `go.mod` when you expected Go, or
 vice versa), that's the daemon/multiplex misbehaving, not something fixable
 from within this repo -- flag it rather than working around it, and check
 `launchctl list | grep koku-family` / the logs under
-`~/.hindsight/logs/serena*koku-family*.log` for a stuck or crashed daemon.
+`~/.engram/logs/serena*koku-family*.log` for a stuck or crashed daemon.
 
 Historical footnote: `insights-onprem/koku` (an unrelated downstream fork,
 not part of this koku-family daemon) used to collide on the same Serena

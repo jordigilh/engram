@@ -13,7 +13,7 @@
          query params; no per-repo instance needed. -->
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.hindsight/venv/bin/engram-search-kubernaut</string>
+        <string>__HOME__/.engram/venv/bin/engram-search-kubernaut</string>
         <string>--transport</string>
         <string>streamable-http</string>
         <string>--host</string>
@@ -26,7 +26,7 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>__HOME__/.hindsight/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>__HOME__/.engram/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>COCOINDEX_PG_URL</key>
         <string>postgresql://hindsight:hindsight@localhost:5432/hindsight</string>
         <key>KUBERNAUT_LIVE_CLONE_DIR</key>
@@ -37,9 +37,9 @@
         <string>__HOME__</string>
     </dict>
     <key>StandardOutPath</key>
-    <string>__HOME__/.hindsight/logs/cocoindex-code-kubernaut-family-stdout.log</string>
+    <string>__HOME__/.engram/logs/cocoindex-code-kubernaut-family-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.hindsight/logs/cocoindex-code-kubernaut-family-stderr.log</string>
+    <string>__HOME__/.engram/logs/cocoindex-code-kubernaut-family-stderr.log</string>
     <key>KeepAlive</key>
     <dict>
         <key>SuccessfulExit</key>

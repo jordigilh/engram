@@ -84,7 +84,7 @@ DEFAULT_PORT = 8896
 FORWARD_TIMEOUT_S = 60.0
 
 # Gateway-owned call log, distinct from the Cursor-hook-authored
-# ~/.hindsight/logs/mcp-calls.jsonl (cursor/hooks/log-mcp-calls.sh). That
+# ~/.engram/logs/mcp-calls.jsonl (cursor/hooks/log-mcp-calls.sh). That
 # hook's `result_chars` is best-effort and frequently 0 -- its own comment
 # notes Cursor's afterMCPExecution payload usually omits content text
 # despite docs claiming a "full JSON result". `handle_tools_call` below is
@@ -96,7 +96,7 @@ FORWARD_TIMEOUT_S = 60.0
 # confirmed no Cursor hook or CLI surface carries real per-call token
 # counts locally (Team/Enterprise usage APIs report at turn granularity,
 # not per tool call, and require a paid plan).
-GATEWAY_CALLS_LOG = pathlib.Path(os.path.expanduser("~/.hindsight/logs/gateway-calls.jsonl"))
+GATEWAY_CALLS_LOG = pathlib.Path(os.path.expanduser("~/.engram/logs/gateway-calls.jsonl"))
 
 
 @functools.lru_cache(maxsize=1)
@@ -916,7 +916,7 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     the 2026-08-21 survey of every onboarded repo's actual .cursor/mcp.json.
     `home` is injected (rather than read from `os.path.expanduser` here) so
     this stays a pure, easily-testable function."""
-    venv_bin = f"{home}/.hindsight/venv/bin"
+    venv_bin = f"{home}/.engram/venv/bin"
     registry: dict[str, dict[str, dict]] = {}
 
     kubernaut_http_code = _http("http://127.0.0.1:8891/mcp")
@@ -938,7 +938,7 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
         "issues": _hindsight("kubernaut-issues"),
         # Shared with kubernaut/kubernaut-operator, NOT a standalone stdio
         # process (fixed 2026-08-25): this used to spawn
-        # `~/.hindsight/cocoindex-search.py`, a flat symlink the 2026-08-12
+        # `~/.engram/cocoindex-search.py`, a flat symlink the 2026-08-12
         # src/engram/ package restructuring had already deleted 9 days
         # before this registry entry was even authored, so it was dead on
         # arrival -- kubernaut-console's `code` tools silently dropped from

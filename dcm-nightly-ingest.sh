@@ -7,7 +7,7 @@ set -euo pipefail
 
 CLONE_ROOT="/tmp/dcm-repos"
 ORG="dcm-project"
-FLOWS_CMD="${HOME}/.hindsight/venv/bin/engram-flows-dcm"
+FLOWS_CMD="${HOME}/.engram/venv/bin/engram-flows-dcm"
 LOG_PREFIX="[dcm-nightly-ingest]"
 
 # Every active DCM repo and its corresponding env var for engram.flows.dcm.
@@ -60,7 +60,7 @@ fi
 
 export HINDSIGHT_URL="${HINDSIGHT_URL:-http://localhost:8888}"
 export COCOINDEX_PG_URL="${COCOINDEX_PG_URL:-postgresql://hindsight:hindsight@localhost:5432/hindsight}"
-export COCOINDEX_DB="${COCOINDEX_DB:-${HOME}/.hindsight/dcm-cocoindex.db}"
+export COCOINDEX_DB="${COCOINDEX_DB:-${HOME}/.engram/dcm-cocoindex.db}"
 
 # docs/issues are back in the nightly backfill as of 2026-08-14: their banks
 # (dcm-docs, dcm-issues) are now configured with retain_extraction_mode=chunks

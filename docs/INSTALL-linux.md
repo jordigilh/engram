@@ -43,7 +43,7 @@ all deployed and tested end-to-end via real systemd on RHEL 9).
 
 ## 1–3. Clone, authenticate, configure
 
-Identical to `INSTALL.md` steps 1–3 — `~/.hindsight/config.env` is the same
+Identical to `INSTALL.md` steps 1–3 — `~/.engram/config.env` is the same
 single source of truth on every platform.
 
 ## 4. Build and run Hindsight (containerized)
@@ -70,8 +70,8 @@ root-owned, `600` credentials file was unreadable in-container until
 relaxed):
 
 ```bash
-mkdir -p ~/.hindsight-linux/pg0-data
-chown "$(id -u):$(id -g)" ~/.hindsight-linux/pg0-data
+mkdir -p ~/.engram-linux/pg0-data
+chown "$(id -u):$(id -g)" ~/.engram-linux/pg0-data
 chmod 644 ~/.config/gcloud/application_default_credentials.json
 ```
 
@@ -122,7 +122,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now hindsight.service
 ```
 
-`hindsight.container` reads `~/.hindsight/config.env` for all LLM/project
+`hindsight.container` reads `~/.engram/config.env` for all LLM/project
 config (same as `with-config-env.sh` does for the macOS native install) —
 nothing project-specific is baked into the unit file itself. See the
 comments at the top of [`quadlet/hindsight.container`](../quadlet/hindsight.container)
@@ -156,16 +156,16 @@ directory detected" startup log line and by querying the bank after restart.
 ## 7. Install the batch scripts (native, same as macOS)
 
 ```bash
-uv venv ~/.hindsight/venv --python 3.14
-uv pip install --python ~/.hindsight/venv/bin/python \
+uv venv ~/.engram/venv --python 3.14
+uv pip install --python ~/.engram/venv/bin/python \
   'hindsight-api[all]' 'google-cloud-aiplatform>=1.38'
-uv pip install --python ~/.hindsight/venv/bin/python -e ".[dev]"
-uv pip install --python ~/.hindsight/venv/bin/python cocoindex
+uv pip install --python ~/.engram/venv/bin/python -e ".[dev]"
+uv pip install --python ~/.engram/venv/bin/python cocoindex
 
-ln -sf "$(pwd)/src/engram/pipeline/nightly_learn.py" ~/.hindsight/nightly-learn.py
-ln -sf "$(pwd)/src/engram/pipeline/ingest_issues.py" ~/.hindsight/ingest-issues.py
-ln -sf "$(pwd)/src/engram/flows/kubernaut.py" ~/.hindsight/cocoindex-flows.py
-ln -sf "$(pwd)/src/engram/search/kubernaut.py" ~/.hindsight/cocoindex-search.py
+ln -sf "$(pwd)/src/engram/pipeline/nightly_learn.py" ~/.engram/nightly-learn.py
+ln -sf "$(pwd)/src/engram/pipeline/ingest_issues.py" ~/.engram/ingest-issues.py
+ln -sf "$(pwd)/src/engram/flows/kubernaut.py" ~/.engram/cocoindex-flows.py
+ln -sf "$(pwd)/src/engram/search/kubernaut.py" ~/.engram/cocoindex-search.py
 ```
 
 `uv pip install -e ".[dev]"` is the one-shot editable install of the whole
@@ -173,7 +173,7 @@ ln -sf "$(pwd)/src/engram/search/kubernaut.py" ~/.hindsight/cocoindex-search.py
 `correction_gate.py`, `contradiction_resolution.py`, `project_scope.py` etc.
 importable as `engram.*` and generates the `engram-flows-kubernaut` /
 `engram-search-kubernaut` / `engram-nightly-learn` / `engram-ingest-issues`
-console scripts in `~/.hindsight/venv/bin/`, so no per-shared-module symlinks
+console scripts in `~/.engram/venv/bin/`, so no per-shared-module symlinks
 or `spike/` path hack are needed here either. The two remaining symlinks
 above are only for the systemd-invoked entry points below (a planned
 follow-up will point those units at the console scripts directly instead
@@ -208,7 +208,7 @@ systemctl --user list-timers 'engram-*'
 journalctl --user -u engram-cocoindex.service -f
 ```
 
-> **Add `ENGRAM_DOCS_DIR`, `ENGRAM_CODE_DIR`, etc. to `~/.hindsight/config.env`**
+> **Add `ENGRAM_DOCS_DIR`, `ENGRAM_CODE_DIR`, etc. to `~/.engram/config.env`**
 > before starting `engram-cocoindex.service` — same as `INSTALL.md` step 16.
 > The systemd unit reads them from there, not from the unit file itself.
 
@@ -289,7 +289,7 @@ journalctl --user -u engram-serena-multiplex-kubernaut-family.service -f
 ```
 
 > **Personal git-hook restart scripts are not part of this repo**: on
-> macOS, `~/.hindsight/git-hooks/_restart-kubernaut-family-daemons.sh`
+> macOS, `~/.engram/git-hooks/_restart-kubernaut-family-daemons.sh`
 > (a personal, uncommitted script — see `NEW_PROJECT_SETUP.md` step 14) uses
 > `launchctl kickstart -k` to restart these 4 daemons after a `git checkout`/
 > `pull`/`rebase` changes files on disk underneath them. If you build the
@@ -327,7 +327,7 @@ still fixed at container UID 1000 — no `chown` value on the host directory
 can fix this, since the container never sees your UID as 1000 in the first
 place. Fix: use `UserNS=keep-id:uid=1000,gid=1000` in the Quadlet, and
 `chown "$(id -u):$(id -g)"` (not a hardcoded `1000:1000`) on
-`~/.hindsight-linux/pg0-data`. Confirmed live 2026-08-13 on a host where
+`~/.engram-linux/pg0-data`. Confirmed live 2026-08-13 on a host where
 the deploying user was UID 1005 — this exact error, this exact fix.
 
 ### Connection timeouts / DNS failures only inside the container
@@ -338,5 +338,5 @@ is the documented, validated fallback.
 
 ### Recall returns empty results
 Same as macOS: the bank needs at least one retained item. Run
-`~/.hindsight/venv/bin/python3 ~/.hindsight/nightly-learn.py` manually or
+`~/.engram/venv/bin/python3 ~/.engram/nightly-learn.py` manually or
 retain a test memory.

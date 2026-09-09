@@ -79,7 +79,7 @@ DCM_UTILITIES_DIR = pathlib.Path(os.environ.get(
 # watch-mirror worktree, not a live dev clone, since this repo is never
 # locally edited -- see watch-mirrors-config.sh.
 DCM_OSAC_DIR = pathlib.Path(os.environ.get(
-    "DCM_OSAC_DIR", os.path.expanduser("~/.hindsight/watch/osac"),
+    "DCM_OSAC_DIR", os.path.expanduser("~/.engram/watch/osac"),
 ))
 
 _GO_EXCLUDED = ["**/vendor/**", "**/*_test.go", "**/zz_generated*"]

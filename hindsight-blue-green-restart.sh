@@ -22,7 +22,7 @@
 # the old pkill. Safe to also run manually to force an out-of-schedule swap.
 set -euo pipefail
 
-HINDSIGHT_DIR="${HOME}/.hindsight"
+HINDSIGHT_DIR="${HOME}/.engram"
 STATE_DIR="${HINDSIGHT_DIR}/state"
 STATE_FILE="${STATE_DIR}/active-backend.port"
 LOG_FILE="${HINDSIGHT_DIR}/logs/blue-green-restart.log"

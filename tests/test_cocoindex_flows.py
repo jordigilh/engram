@@ -18,7 +18,7 @@ from engram import contradiction_resolution as cr
 @pytest.fixture(autouse=True)
 def _isolate_transcript_watermarks(cocoindex_flows, tmp_path, monkeypatch):
     """Every test gets its own watermark file, never the real
-    ~/.hindsight/logs/cocoindex-transcript-watermarks.json -- the
+    ~/.engram/logs/cocoindex-transcript-watermarks.json -- the
     cocoindex_flows module fixture is session-scoped, so without this,
     watermark state would both leak into the real state file and bleed
     across unrelated tests within the session. See docs/FINDINGS.md
@@ -666,14 +666,14 @@ class TestReleaseLineWiring:
 
     def test_release_line_dir_matches_watch_mirrors_config_convention(self, cocoindex_flows):
         """Must match watch-mirrors-config.sh's RELEASE_WATCH_MIRRORS
-        mirror_path convention exactly (`~/.hindsight/watch/<repo>-release-<line>`)
+        mirror_path convention exactly (`~/.engram/watch/<repo>-release-<line>`)
         -- this script never creates the mirrors itself, it only reads
         wherever watch-mirrors-lib.sh already put them."""
         path = cocoindex_flows._release_line_dir("kubernaut", "v1.5")
-        assert str(path).endswith("/.hindsight/watch/kubernaut-release-v1.5")
+        assert str(path).endswith("/.engram/watch/kubernaut-release-v1.5")
 
         path = cocoindex_flows._release_line_dir("kubernaut-operator", "v1.6")
-        assert str(path).endswith("/.hindsight/watch/kubernaut-operator-release-v1.6")
+        assert str(path).endswith("/.engram/watch/kubernaut-operator-release-v1.6")
 
     def test_release_line_dir_expands_user_home(self, cocoindex_flows):
         import os

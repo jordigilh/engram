@@ -536,7 +536,7 @@ class TestBuildProjectRegistry:
 
     def test_kubernaut_console_code_backend_is_shared_kubernaut_http_daemon(self, engram_gateway):
         """Regression guard: kubernaut-console's "code" backend previously
-        pointed at a flat `~/.hindsight/cocoindex-search.py` stdio script that
+        pointed at a flat `~/.engram/cocoindex-search.py` stdio script that
         the 2026-08-12 package restructuring (src/engram/search/kubernaut.py +
         console-script rename) had already deleted 9 days before this
         registry entry was even authored -- so it was dead on arrival, and
@@ -644,7 +644,7 @@ class TestBuildProjectRegistry:
         assert spec["kuadrant_docs"] == {"kind": "http", "url": "http://localhost:8888/mcp/kuadrant-docs/"}
         assert spec["kuadrant_issues"] == {"kind": "http", "url": "http://localhost:8888/mcp/kuadrant-issues/"}
         assert spec["kuadrant_code"]["kind"] == "stdio"
-        assert spec["kuadrant_code"]["command"] == "/home/u/.hindsight/venv/bin/engram-search-kuadrant"
+        assert spec["kuadrant_code"]["command"] == "/home/u/.engram/venv/bin/engram-search-kuadrant"
 
 
 class TestBuildBackendAdapters:

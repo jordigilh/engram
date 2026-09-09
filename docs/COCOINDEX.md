@@ -128,13 +128,13 @@ The MCP tool `cocoindex_search` accepts a `mode` parameter:
 
 ```bash
 # Hybrid (default)
-~/.hindsight/venv/bin/engram-search-kubernaut --query "how does the reconciler handle errors"
+~/.engram/venv/bin/engram-search-kubernaut --query "how does the reconciler handle errors"
 
 # Dense only
-~/.hindsight/venv/bin/engram-search-kubernaut --query "error handling in reconciler" --mode dense
+~/.engram/venv/bin/engram-search-kubernaut --query "error handling in reconciler" --mode dense
 
 # BM25 only — great for exact identifiers
-~/.hindsight/venv/bin/engram-search-kubernaut --query "ParseConfig" --mode bm25
+~/.engram/venv/bin/engram-search-kubernaut --query "ParseConfig" --mode bm25
 ```
 
 ## Structural Pattern Search
@@ -173,13 +173,13 @@ Omitting a body/block entirely means "don't care what's inside":
 ```bash
 # Any Go function returning exactly (bool, error), regardless of name,
 # params, or body:
-~/.hindsight/venv/bin/engram-search-kubernaut --pattern 'func \NAME(\(A*\)) (bool, error)' --language go
+~/.engram/venv/bin/engram-search-kubernaut --pattern 'func \NAME(\(A*\)) (bool, error)' --language go
 
 # Any Python function/method, regardless of body:
-~/.hindsight/venv/bin/engram-search-koku --pattern 'def \NAME(\(A*\)):' --language python
+~/.engram/venv/bin/engram-search-koku --pattern 'def \NAME(\(A*\)):' --language python
 
 # Scope to one of DCM's 8 repos:
-~/.hindsight/venv/bin/engram-search-dcm --pattern 'func \NAME(\(A*\)) error' --language go --repo dcm-cli
+~/.engram/venv/bin/engram-search-dcm --pattern 'func \NAME(\(A*\)) error' --language go --repo dcm-cli
 ```
 
 ### What this is NOT: complementary to Serena, not a replacement
@@ -236,13 +236,13 @@ about it:
 
 ```bash
 # Who (transitively) calls this function -- "what breaks if I change this":
-~/.hindsight/venv/bin/engram-search-engram --blast-radius 'pattern_search_code' --depth 2
+~/.engram/venv/bin/engram-search-engram --blast-radius 'pattern_search_code' --depth 2
 
 # Does A ever reach B through a chain of calls, and how:
-~/.hindsight/venv/bin/engram-search-engram --shortest-path 'main' 'find_code_files'
+~/.engram/venv/bin/engram-search-engram --shortest-path 'main' 'find_code_files'
 
 # Which Leiden-detected cluster of related functions does X belong to:
-~/.hindsight/venv/bin/engram-search-engram --cluster 'find_code_files'
+~/.engram/venv/bin/engram-search-engram --cluster 'find_code_files'
 ```
 
 Same accuracy ceiling as structural pattern search, plus one more: call
@@ -316,7 +316,7 @@ mirroring its existing multi-branch `_PATTERN_SEARCH_ROOTS` setup.
 ### Live mode (default)
 
 ```bash
-~/.hindsight/venv/bin/engram-flows-kubernaut --mode live
+~/.engram/venv/bin/engram-flows-kubernaut --mode live
 ```
 
 Runs all four flows concurrently using threads:
@@ -326,7 +326,7 @@ Runs all four flows concurrently using threads:
   `ENGRAM_ISSUES_POLL_SECONDS` (default: 300s / 5 min).
 
 This is the mode used by the launchd plist (currently via the
-`~/.hindsight/cocoindex-flows.py` symlink rather than this console script
+`~/.engram/cocoindex-flows.py` symlink rather than this console script
 directly — see [INSTALL.md](INSTALL.md) step 16). The `report_to_stdout` flag
 is disabled in concurrent mode (CocoIndex only allows one progress reporter),
 so all output goes to `cocoindex-stderr.log`.
@@ -334,7 +334,7 @@ so all output goes to `cocoindex-stderr.log`.
 ### Backfill mode
 
 ```bash
-~/.hindsight/venv/bin/engram-flows-kubernaut --mode backfill
+~/.engram/venv/bin/engram-flows-kubernaut --mode backfill
 ```
 
 Processes all existing sources from scratch, then exits. Use for:
@@ -353,8 +353,8 @@ Backfill is idempotent — running it multiple times produces the same result.
 
 | File | Content |
 |------|---------|
-| `~/.hindsight/logs/cocoindex-stderr.log` | All flow output: startup, poll cycles, errors, warnings |
-| `~/.hindsight/logs/cocoindex-stdout.log` | Empty in live mode (progress reporting disabled for concurrency) |
+| `~/.engram/logs/cocoindex-stderr.log` | All flow output: startup, poll cycles, errors, warnings |
+| `~/.engram/logs/cocoindex-stdout.log` | Empty in live mode (progress reporting disabled for concurrency) |
 
 ### Checking flow health
 
@@ -363,10 +363,10 @@ Backfill is idempotent — running it multiple times produces the same result.
 launchctl list | grep cocoindex
 
 # Recent activity (all output goes to stderr in live mode)
-tail -30 ~/.hindsight/logs/cocoindex-stderr.log
+tail -30 ~/.engram/logs/cocoindex-stderr.log
 
 # Check issues poll cycle
-grep "Issues poll:" ~/.hindsight/logs/cocoindex-stderr.log | tail -5
+grep "Issues poll:" ~/.engram/logs/cocoindex-stderr.log | tail -5
 
 # Code index table size
 psql -h localhost -p 5432 -U hindsight -d hindsight -c "SELECT count(*) FROM code_embeddings;"
@@ -403,7 +403,7 @@ curl -s http://localhost:8888/health
 
 # Restart if needed (force a health-checked blue/green swap, not a raw kill --
 # see docs/FINDINGS.md 2026-08-02 for why this matters)
-~/.hindsight/hindsight-blue-green-restart.sh
+~/.engram/hindsight-blue-green-restart.sh
 ```
 
 ### Embedding model mismatch
@@ -414,7 +414,7 @@ embeddings (stored separately in pgvector) will use a different vector space.
 **Fix:** Run a full backfill to re-embed all code chunks:
 
 ```bash
-~/.hindsight/venv/bin/engram-flows-kubernaut --mode backfill
+~/.engram/venv/bin/engram-flows-kubernaut --mode backfill
 ```
 
 ### `gh` CLI not authenticated
@@ -434,7 +434,7 @@ gh auth login
 launchctl list | grep cocoindex
 
 # View launch errors
-tail -50 ~/.hindsight/logs/cocoindex-stderr.log
+tail -50 ~/.engram/logs/cocoindex-stderr.log
 
 # Reload
 launchctl unload ~/Library/LaunchAgents/io.vectorize.cocoindex.service.plist
@@ -448,7 +448,7 @@ total issues + PRs:
 
 ```bash
 # Check how many the flow is fetching
-grep "Fetched.*from" ~/.hindsight/logs/cocoindex-stderr.log | tail -5
+grep "Fetched.*from" ~/.engram/logs/cocoindex-stderr.log | tail -5
 ```
 
 The flow uses `--limit 10000` for both `gh issue list` and `gh pr list`. If you
@@ -461,7 +461,7 @@ file changes (e.g., files modified outside the watched directory).
 
 ```bash
 # Force reprocessing
-~/.hindsight/venv/bin/engram-flows-kubernaut --mode backfill
+~/.engram/venv/bin/engram-flows-kubernaut --mode backfill
 ```
 
 ---
@@ -475,7 +475,7 @@ To declare a new CocoIndex flow:
 2. Add transform steps (chunking, embedding, metadata extraction)
 3. Configure the sink (Hindsight retain API for memory banks, or pgvector for
    direct search)
-4. Test with backfill mode: `~/.hindsight/venv/bin/engram-flows-kubernaut --mode backfill`
+4. Test with backfill mode: `~/.engram/venv/bin/engram-flows-kubernaut --mode backfill`
 5. Verify the data appears in recall or search results
 
 CocoIndex handles lineage tracking automatically — when a source document is

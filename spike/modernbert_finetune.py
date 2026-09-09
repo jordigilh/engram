@@ -42,7 +42,7 @@ through a local 149M-param model.
 
 Run with the hindsight venv (needs torch + transformers, both already
 present for the embedding variants):
-    ~/.hindsight/venv/bin/python3 spike/modernbert_finetune.py
+    ~/.engram/venv/bin/python3 spike/modernbert_finetune.py
 """
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ from modernbert_bootstrap import get_or_create_split  # noqa: E402
 
 BASE_MODEL = os.environ.get("MODERNBERT_FINETUNE_BASE", "answerdotai/ModernBERT-base")
 MODEL_DIR = os.path.expanduser(
-    "~/.hindsight/modernbert-spike-cache/finetuned-classifier"
+    "~/.engram/modernbert-spike-cache/finetuned-classifier"
     + ("-large" if "large" in BASE_MODEL.lower() else "")
 )
 

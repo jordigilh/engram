@@ -28,7 +28,7 @@ directly comparable baseline.
 
 Run with the hindsight venv (has litellm/vertexai/sentence-transformers/
 psycopg2/transformers installed):
-    ~/.hindsight/venv/bin/python3 spike/spike-modernbert-correction-detection.py
+    ~/.engram/venv/bin/python3 spike/spike-modernbert-correction-detection.py
 
 Nothing here is wired into production -- same ground rules as the original
 spike.

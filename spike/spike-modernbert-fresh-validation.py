@@ -15,13 +15,13 @@ non-zero error rate, and the whole point of this exercise is not to fool
 ourselves into false confidence via a new circularity.
 
 Run with the hindsight venv:
-    ~/.hindsight/venv/bin/python3 spike/spike-modernbert-fresh-validation.py
+    ~/.engram/venv/bin/python3 spike/spike-modernbert-fresh-validation.py
 
 Requires spike/mine_fresh_messages.py to have already produced
-~/.hindsight/modernbert-spike-cache/fresh_sample.json.
+~/.engram/modernbert-spike-cache/fresh_sample.json.
 
 Haiku's labels on this sample are cached to
-~/.hindsight/modernbert-spike-cache/fresh_haiku_labels.json (keyed by exact
+~/.engram/modernbert-spike-cache/fresh_haiku_labels.json (keyed by exact
 message text) so re-running this script after a Variant E tweak doesn't
 re-spend 300 Haiku calls -- only messages not already in the cache get
 classified. Together with mine_fresh_messages.py's fixed sample, this is a

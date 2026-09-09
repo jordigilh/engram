@@ -8,9 +8,9 @@ import json
 
 import _merge_hooks_json as m
 
-DETECTOR = "/Users/jgil/.hindsight/hooks/detect-plan-kickoff.sh"
-ENFORCER = "/Users/jgil/.hindsight/venv/bin/python3 /Users/jgil/.hindsight/hooks/post-plan-hindsight-check.py"
-REMINDER = "/Users/jgil/.hindsight/venv/bin/python3 /Users/jgil/.hindsight/hooks/post-plan-checklist-reminder.py"
+DETECTOR = "/Users/jgil/.engram/hooks/detect-plan-kickoff.sh"
+ENFORCER = "/Users/jgil/.engram/venv/bin/python3 /Users/jgil/.engram/hooks/post-plan-hindsight-check.py"
+REMINDER = "/Users/jgil/.engram/venv/bin/python3 /Users/jgil/.engram/hooks/post-plan-checklist-reminder.py"
 
 
 class TestMerge:

@@ -31,7 +31,7 @@ itself hints this exact failure mode is a known possibility on macOS, which
 is the machine this spike (and the real service) runs on.
 
 Run (needs the hindsight venv for the cocoindex package):
-    ~/.hindsight/venv/bin/python3 spike/cocoindex_watch_latency_spike.py
+    ~/.engram/venv/bin/python3 spike/cocoindex_watch_latency_spike.py
 """
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-# Throwaway state db, fully isolated from the real ~/.hindsight/cocoindex.db --
+# Throwaway state db, fully isolated from the real ~/.engram/cocoindex.db --
 # must be set before cocoindex touches its default Environment.
 _STATE_DIR = pathlib.Path(tempfile.mkdtemp(prefix="cocoindex-watch-spike-state-"))
 os.environ.setdefault("COCOINDEX_DB", str(_STATE_DIR / "spike.db"))

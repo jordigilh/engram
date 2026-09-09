@@ -128,13 +128,13 @@ graph TB
 | Component | Location | Purpose |
 |-----------|----------|---------|
 | Project source | `<your-clone>/engram/` | Code pushed to GitHub |
-| LLM config | `~/.hindsight/config.env` | Real project IDs, model names (never committed) |
-| Hindsight process | `~/.hindsight/venv/bin/hindsight-api` | Native macOS service (launchd managed) |
+| LLM config | `~/.engram/config.env` | Real project IDs, model names (never committed) |
+| Hindsight process | `~/.engram/venv/bin/hindsight-api` | Native macOS service (launchd managed) |
 | MCP config | `~/.cursor/mcp.json` (or a per-repo `.cursor/mcp.json`) | Connects Cursor to Hindsight (memory + docs + issues), CocoIndex code search, and Serena |
 | Serena | [oraios/serena](https://github.com/oraios/serena) (LSP-wrapping MCP server) | Type-aware code intelligence — `find_symbol`/`find_referencing_symbols`/`get_symbols_overview`/diagnostics, backed by the real per-language LSP (`gopls`/`pyright`/`rust-analyzer`/`typescript-language-server`) — see [Division of Labor](#hindsight-vs-cocoindex-vs-serena-division-of-labor) below |
 | Cursor rule | `~/.cursor/rules/hindsight-memory.mdc` | Instructs agent to recall from all three banks |
 | Example rules | `cursor/examples/*.mdc` | Ready-made rules for Go, Python, Rust, TypeScript, minimal |
-| Nightly script | `nightly-learn.py` (symlinked to `~/.hindsight/`) | Processes transcripts, extracts patterns |
+| Nightly script | `nightly-learn.py` (symlinked to `~/.engram/`) | Processes transcripts, extracts patterns |
 | Doc ingestion | `ingest-docs.py` | One-time doc ingestion (deprecated — use CocoIndex) |
 | Issue ingestion | `ingest-issues.py` | Manual issues ingestion (deprecated — use CocoIndex) |
 | Mental models | `create-mental-models.py` | Create/refresh mental models across all banks |
@@ -143,15 +143,15 @@ graph TB
 | Effectiveness report | `report.py` | Metrics aggregation, token analysis, mental model stats |
 | Dashboard generator | `generate-dashboard.py` | Auto-updates `docs/DASHBOARD.md` from daily reports |
 | MCP hook | `cursor/hooks.json` + `hooks/log-mcp-calls.sh` | Real-time MCP call logging with hit/miss |
-| CocoIndex flows | `flows/cocoindex-flows.py` (symlinked to `~/.hindsight/`) | Incremental ingestion for docs, issues, code, transcripts |
+| CocoIndex flows | `flows/cocoindex-flows.py` (symlinked to `~/.engram/`) | Incremental ingestion for docs, issues, code, transcripts |
 | Code search | `search/cocoindex-search.py` | MCP hybrid code search (dense + BM25 via RRF fusion) |
-| Proxy | `hindsight-proxy.py` (symlinked to `~/.hindsight/`) | Sole owner of port 8888; never restarts, so Cursor's MCP connection never drops |
+| Proxy | `hindsight-proxy.py` (symlinked to `~/.engram/`) | Sole owner of port 8888; never restarts, so Cursor's MCP connection never drops |
 | Service plists | `~/Library/LaunchAgents/io.vectorize.hindsight.service-{blue,green}.plist` | KeepAlive + RunAtLoad; exactly one active at a time, bound to an internal port (18888/18889) |
 | Restart plist | `~/Library/LaunchAgents/io.vectorize.hindsight.restart.plist` | 1 AM: runs `hindsight-blue-green-restart.sh` — health-checked blue/green swap, not a raw `pkill` |
 | Nightly plist | `~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist` | Midnight execution |
 | CocoIndex plist | `~/Library/LaunchAgents/io.vectorize.cocoindex.service.plist` | KeepAlive continuous sync |
 | Persistent storage | `~/.pg0/instances/hindsight/data/` | PostgreSQL data (survives reboots) |
-| Logs | `~/.hindsight/logs/` | Daily JSON reports + recall-signals.jsonl |
+| Logs | `~/.engram/logs/` | Daily JSON reports + recall-signals.jsonl |
 
 ### Memory Banks
 
@@ -304,7 +304,7 @@ flowchart LR
         hook[".githooks/pre-commit"]
     end
 
-    subgraph local["Local only (~/.hindsight/, ~/.pg0/)"]
+    subgraph local["Local only (~/.engram/, ~/.pg0/)"]
         config["config.env (project IDs)"]
         pgdata["PostgreSQL data"]
         logs["logs/ (daily reports)"]
@@ -428,7 +428,7 @@ All persistent data lives in `~/.pg0/instances/hindsight/data/` (PostgreSQL).
 tar czf ~/engram-backup-$(date +%F).tar.gz ~/.pg0/instances/hindsight/data/
 
 # Restore (unload whichever color is currently active -- see
-# ~/.hindsight/state/active-backend.port, 18888=blue/18889=green)
+# ~/.engram/state/active-backend.port, 18888=blue/18889=green)
 launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.service-blue.plist
 launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.service-green.plist
 rm -rf ~/.pg0/instances/hindsight/data/

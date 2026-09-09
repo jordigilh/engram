@@ -235,7 +235,7 @@ python3 -m engram.maintenance.report
 python3 -m engram.maintenance.report --snapshot
 
 # Compare against a previous baseline
-python3 -m engram.maintenance.report --compare ~/.hindsight/logs/baseline-2026-06-22.json
+python3 -m engram.maintenance.report --compare ~/.engram/logs/baseline-2026-06-22.json
 ```
 
 Key metrics to watch (see [Value](#value-measuring-effectiveness) above for

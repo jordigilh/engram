@@ -1,9 +1,9 @@
 #!/bin/bash
 # Log all MCP tool calls with hit/miss classification.
 # Triggered by afterMCPExecution hook event.
-# Writes to ~/.hindsight/logs/mcp-calls.jsonl
+# Writes to ~/.engram/logs/mcp-calls.jsonl
 
-LOG_DIR="$HOME/.hindsight/logs"
+LOG_DIR="$HOME/.engram/logs"
 LOG_FILE="$LOG_DIR/mcp-calls.jsonl"
 mkdir -p "$LOG_DIR"
 

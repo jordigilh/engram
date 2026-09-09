@@ -16,7 +16,7 @@ This module provides:
     src/extract.ts in spirit, adapted to engineering corrections rather than
     general personal-assistant facts. Never calls an LLM, never raises.
   - record_fallback(...): appends a tagged entry to a local recovery buffer
-    (~/.hindsight/logs/fallback-retained.jsonl) instead of losing the window
+    (~/.engram/logs/fallback-retained.jsonl) instead of losing the window
     outright, so it can be replayed once Vertex AI recovers (see
     nightly-learn.py's reprocess_fallback_backlog(), `--mode
     reprocess-fallback`).
@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-LOG_DIR = Path.home() / ".hindsight" / "logs"
+LOG_DIR = Path.home() / ".engram" / "logs"
 FALLBACK_LOG_PATH = LOG_DIR / "fallback-retained.jsonl"
 
 # Entity candidates: CamelCase/PascalCase words (e.g. "CocoIndex"),

@@ -46,7 +46,7 @@ RRF_K = 60  # RRF constant — standard value from the original paper
 # Same env var (and default) as engram-cocoindex-flows.py, so pattern search
 # walks the exact same checkout the ingestion flow indexes.
 ENGRAM_REPO_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_REPO_DIR", os.path.expanduser("~/.hindsight/watch/engram"),
+    "ENGRAM_REPO_DIR", os.path.expanduser("~/.engram/watch/engram"),
 ))
 
 _EXCLUDED_PY_PATTERNS = [

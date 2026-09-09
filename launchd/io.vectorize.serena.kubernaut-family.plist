@@ -67,9 +67,9 @@
         <string>__HOME__</string>
     </dict>
     <key>StandardOutPath</key>
-    <string>__HOME__/.hindsight/logs/serena-kubernaut-family-stdout.log</string>
+    <string>__HOME__/.engram/logs/serena-kubernaut-family-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.hindsight/logs/serena-kubernaut-family-stderr.log</string>
+    <string>__HOME__/.engram/logs/serena-kubernaut-family-stderr.log</string>
     <key>KeepAlive</key>
     <dict>
         <key>SuccessfulExit</key>

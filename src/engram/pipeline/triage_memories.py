@@ -36,7 +36,7 @@ from urllib.error import HTTPError, URLError
 
 HINDSIGHT_URL = "http://localhost:8888"
 DEFAULT_BANK = "cursor-memory"
-LOG_DIR = Path.home() / ".hindsight" / "logs"
+LOG_DIR = Path.home() / ".engram" / "logs"
 REARRANGE_BATCH_SIZE = 5
 
 logging.basicConfig(

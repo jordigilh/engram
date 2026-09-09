@@ -106,7 +106,7 @@ PG_POOL_MIN_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MIN_SIZE", "2"))
 PG_POOL_MAX_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MAX_SIZE", "5"))
 COCOINDEX_DB = pathlib.Path(os.environ.get(
     "COCOINDEX_DB",
-    os.path.expanduser("~/.hindsight/koku-cocoindex.db"),
+    os.path.expanduser("~/.engram/koku-cocoindex.db"),
 ))
 
 # Unique per-file ContextKey name -- NEW_PROJECT_SETUP.md's "Gotcha" (see

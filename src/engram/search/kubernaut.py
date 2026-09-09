@@ -53,13 +53,13 @@ RRF_K = 60  # RRF constant — standard value from the original paper
 # .env that already configures the ingestion flow's source directories also
 # configures pattern search's live file walk with no extra setup.
 KUBERNAUT_CODE_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_CODE_DIR", os.path.expanduser("~/.hindsight/watch/kubernaut"),
+    "ENGRAM_CODE_DIR", os.path.expanduser("~/.engram/watch/kubernaut"),
 ))
 KUBERNAUT_OPERATOR_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_OPERATOR_DIR", os.path.expanduser("~/.hindsight/watch/kubernaut-operator"),
+    "ENGRAM_OPERATOR_DIR", os.path.expanduser("~/.engram/watch/kubernaut-operator"),
 ))
 KUBERNAUT_CONSOLE_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_CONSOLE_DIR", os.path.expanduser("~/.hindsight/watch/kubernaut-console"),
+    "ENGRAM_CONSOLE_DIR", os.path.expanduser("~/.engram/watch/kubernaut-console"),
 ))
 
 # (repo_tag, root, included_patterns, excluded_patterns) -- mirrors the
@@ -128,7 +128,7 @@ def _release_line_dir(repo_name: str, line: str) -> pathlib.Path:
     cocoindex-flows.py's `_release_line_dir` (and, transitively,
     watch-mirrors-config.sh's RELEASE_WATCH_MIRRORS mirror_path convention)
     exactly, or pattern search will silently walk nothing."""
-    return pathlib.Path(os.path.expanduser(f"~/.hindsight/watch/{repo_name}-release-{line}"))
+    return pathlib.Path(os.path.expanduser(f"~/.engram/watch/{repo_name}-release-{line}"))
 
 
 for _repo_name, _root, _included, _excluded in [

@@ -6,7 +6,7 @@
     <string>io.vectorize.hindsight.proxy</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.hindsight/venv/bin/engram-hindsight-proxy</string>
+        <string>__HOME__/.engram/venv/bin/engram-hindsight-proxy</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
@@ -17,7 +17,7 @@
              the hindsight-api service plists this does not source
              config.env via with-config-env.sh. -->
         <key>PATH</key>
-        <string>__HOME__/.hindsight/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>__HOME__/.engram/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>__HOME__</string>
     </dict>
@@ -28,8 +28,8 @@
     <key>ThrottleInterval</key>
     <integer>5</integer>
     <key>StandardOutPath</key>
-    <string>__HOME__/.hindsight/logs/hindsight-proxy-stdout.log</string>
+    <string>__HOME__/.engram/logs/hindsight-proxy-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.hindsight/logs/hindsight-proxy-stderr.log</string>
+    <string>__HOME__/.engram/logs/hindsight-proxy-stderr.log</string>
 </dict>
 </plist>

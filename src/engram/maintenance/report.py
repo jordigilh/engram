@@ -29,7 +29,7 @@ from datetime import date, datetime, timedelta
 from glob import glob
 from pathlib import Path
 
-LOG_DIR = Path.home() / ".hindsight" / "logs"
+LOG_DIR = Path.home() / ".engram" / "logs"
 MCP_CALLS_LOG = LOG_DIR / "mcp-calls.jsonl"
 # Written by engram_gateway.py's handle_tools_call(), distinct from
 # MCP_CALLS_LOG above (a client-side Cursor hook whose result_chars is
@@ -838,7 +838,7 @@ def collect_freshness_stats() -> dict:
     verdict. See docs/FINDINGS.md 2026-07-07.
     """
     freshness = {}
-    stderr_log = Path.home() / ".hindsight" / "logs" / "cocoindex-stderr.log"
+    stderr_log = Path.home() / ".engram" / "logs" / "cocoindex-stderr.log"
 
     if not stderr_log.exists():
         return freshness

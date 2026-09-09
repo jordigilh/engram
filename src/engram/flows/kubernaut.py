@@ -64,24 +64,24 @@ HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
 # `python3 cocoindex-flows.py` invocation without env vars is also safe.
 ENGRAM_DOCS_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_DOCS_DIR",
-    os.path.expanduser("~/.hindsight/watch/kubernaut-docs/docs"),
+    os.path.expanduser("~/.engram/watch/kubernaut-docs/docs"),
 ))
 ENGRAM_CODE_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_CODE_DIR",
-    os.path.expanduser("~/.hindsight/watch/kubernaut"),
+    os.path.expanduser("~/.engram/watch/kubernaut"),
 ))
 ENGRAM_CODE_DOCS_DIR = ENGRAM_CODE_DIR / "docs"
 ENGRAM_OPERATOR_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_OPERATOR_DIR",
-    os.path.expanduser("~/.hindsight/watch/kubernaut-operator"),
+    os.path.expanduser("~/.engram/watch/kubernaut-operator"),
 ))
 ENGRAM_CONSOLE_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_CONSOLE_DIR",
-    os.path.expanduser("~/.hindsight/watch/kubernaut-console"),
+    os.path.expanduser("~/.engram/watch/kubernaut-console"),
 ))
 ENGRAM_SCENARIOS_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_SCENARIOS_DIR",
-    os.path.expanduser("~/.hindsight/watch/kubernaut-demo-scenarios"),
+    os.path.expanduser("~/.engram/watch/kubernaut-demo-scenarios"),
 ))
 ENGRAM_TRANSCRIPTS_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_TRANSCRIPTS_DIR",
@@ -111,9 +111,9 @@ KUBERNAUT_RELEASE_LINES = [
 
 def _release_line_dir(repo_name: str, line: str) -> pathlib.Path:
     """Mirror path for one (repo, release line) pair, matching the
-    `~/.hindsight/watch/<repo>-release-<line>` convention created by
+    `~/.engram/watch/<repo>-release-<line>` convention created by
     watch-mirrors-config.sh's RELEASE_WATCH_MIRRORS."""
-    return pathlib.Path(os.path.expanduser(f"~/.hindsight/watch/{repo_name}-release-{line}"))
+    return pathlib.Path(os.path.expanduser(f"~/.engram/watch/{repo_name}-release-{line}"))
 
 PG_DSN = os.environ.get(
     "COCOINDEX_PG_URL",
@@ -132,7 +132,7 @@ PG_POOL_MIN_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MIN_SIZE", "2"))
 PG_POOL_MAX_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MAX_SIZE", "5"))
 COCOINDEX_DB = pathlib.Path(os.environ.get(
     "COCOINDEX_DB",
-    os.path.expanduser("~/.hindsight/cocoindex.db"),
+    os.path.expanduser("~/.engram/cocoindex.db"),
 ))
 
 # Per-transcript watermark (message_count already scanned) for the live
@@ -151,7 +151,7 @@ COCOINDEX_DB = pathlib.Path(os.environ.get(
 # is a separate catch-all, not the same consumer), so sharing one file would
 # let either one silently skip content the other never actually processed.
 TRANSCRIPT_WATERMARKS_PATH = pathlib.Path(os.path.expanduser(
-    "~/.hindsight/logs/cocoindex-transcript-watermarks.json"
+    "~/.engram/logs/cocoindex-transcript-watermarks.json"
 ))
 _transcript_watermarks_lock = asyncio.Lock()
 

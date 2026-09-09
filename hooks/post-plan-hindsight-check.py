@@ -15,7 +15,7 @@ confirmed broken on Cursor 3.14.7) only on a genuine contradiction.
 
 The marker is deleted immediately, before the check runs, UNLESS a companion
 `hooks/post-plan-checklist-reminder.py` (postToolUse) needs it -- i.e. unless
-`~/.hindsight/review-checklists/<repo>.md` exists for this marker's `repo`.
+`~/.engram/review-checklists/<repo>.md` exists for this marker's `repo`.
 This keeps the marker-lifecycle change inert for every repo without a
 checklist file (all of kubernaut, and any dcm-project repo that hasn't been
 given one): their behavior is byte-identical to before this hook pair grew a
@@ -61,8 +61,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 MARKER_DIR = Path.home() / ".cache" / "engram-hooks"
-LOG_PATH = Path.home() / ".hindsight" / "logs" / "post-plan-hindsight-check.jsonl"
-REVIEW_CHECKLISTS_DIR = Path.home() / ".hindsight" / "review-checklists"
+LOG_PATH = Path.home() / ".engram" / "logs" / "post-plan-hindsight-check.jsonl"
+REVIEW_CHECKLISTS_DIR = Path.home() / ".engram" / "review-checklists"
 # Measured empirically at 13-17s wall-clock for a *successful* real recall()
 # + check_contradiction() round trip (venv Python startup + one network hop
 # to hindsight-api + one Vertex AI call) -- see docs/findings/2026-08.md.

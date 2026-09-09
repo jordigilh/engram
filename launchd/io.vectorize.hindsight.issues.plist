@@ -12,7 +12,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/python3</string>
-        <string>__HOME__/.hindsight/ingest-issues.py</string>
+        <string>__HOME__/.engram/ingest-issues.py</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>
@@ -22,9 +22,9 @@
         <integer>0</integer>
     </dict>
     <key>StandardOutPath</key>
-    <string>__HOME__/.hindsight/logs/issues-ingest-stdout.log</string>
+    <string>__HOME__/.engram/logs/issues-ingest-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.hindsight/logs/issues-ingest-stderr.log</string>
+    <string>__HOME__/.engram/logs/issues-ingest-stderr.log</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>

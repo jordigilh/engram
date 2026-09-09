@@ -38,25 +38,25 @@ gcloud auth application-default login
 ## 3. Create the runtime directory and config
 
 ```bash
-mkdir -p ~/.hindsight/logs
-cp config.env.example ~/.hindsight/config.env
+mkdir -p ~/.engram/logs
+cp config.env.example ~/.engram/config.env
 ```
 
-Edit `~/.hindsight/config.env` and fill in your GCP project ID:
+Edit `~/.engram/config.env` and fill in your GCP project ID:
 
 ```bash
-$EDITOR ~/.hindsight/config.env
+$EDITOR ~/.engram/config.env
 ```
 
-> **Important**: `~/.hindsight/config.env` contains your real project IDs and stays
+> **Important**: `~/.engram/config.env` contains your real project IDs and stays
 > local. It is never committed to this repo. The pre-commit hook will block any
 > attempt to commit actual project IDs.
 
 ## 4. Install Hindsight (native)
 
 ```bash
-uv venv ~/.hindsight/venv --python 3.14
-uv pip install --python ~/.hindsight/venv/bin/python \
+uv venv ~/.engram/venv --python 3.14
+uv pip install --python ~/.engram/venv/bin/python \
   'hindsight-api[all]' 'google-cloud-aiplatform>=1.38'
 ```
 
@@ -93,7 +93,7 @@ sed "s|__HOME__|$HOME|g" launchd/io.vectorize.hindsight.postgres.plist \
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.vectorize.hindsight.postgres.plist
 ```
 
-Then add this to `~/.hindsight/config.env` so `hindsight-api` connects to it
+Then add this to `~/.engram/config.env` so `hindsight-api` connects to it
 directly instead of trying to manage `pg0` itself (see the comment above this
 var in `config.env.example` for the full rationale):
 
@@ -111,7 +111,7 @@ self-managed behavior.
 ./start.sh
 ```
 
-This sources `~/.hindsight/config.env` and runs the native `hindsight-api` binary.
+This sources `~/.engram/config.env` and runs the native `hindsight-api` binary.
 
 > **Important**: Use `./start.sh` for development OR launchd for production.
 > Do not run both simultaneously — they bind the same port (8888).
@@ -124,11 +124,11 @@ instead of having `VERTEXAI_PROJECT`/`GOOGLE_CLOUD_PROJECT`/model names baked in
 the plist:
 
 ```bash
-cp with-config-env.sh ~/.hindsight/with-config-env.sh
-chmod +x ~/.hindsight/with-config-env.sh
+cp with-config-env.sh ~/.engram/with-config-env.sh
+chmod +x ~/.engram/with-config-env.sh
 ```
 
-> **Why not hardcode it into the plist?** `~/.hindsight/config.env` is the only
+> **Why not hardcode it into the plist?** `~/.engram/config.env` is the only
 > place these values should ever live — plists under `launchd/` are committed to
 > this (public) repo, so nothing project/LLM-specific gets baked in at generation
 > time. `with-config-env.sh` sources `config.env` fresh into the process
@@ -145,9 +145,9 @@ not as a single service — this is what lets the nightly heap-reclaim restart
 and swap script, then install all three plists (proxy + both colors):
 
 ```bash
-ln -sf "$(pwd)/src/engram/pipeline/hindsight_proxy.py" ~/.hindsight/hindsight-proxy.py
-ln -sf "$(pwd)/hindsight-blue-green-restart.sh" ~/.hindsight/hindsight-blue-green-restart.sh
-mkdir -p ~/.hindsight/state
+ln -sf "$(pwd)/src/engram/pipeline/hindsight_proxy.py" ~/.engram/hindsight-proxy.py
+ln -sf "$(pwd)/hindsight-blue-green-restart.sh" ~/.engram/hindsight-blue-green-restart.sh
+mkdir -p ~/.engram/state
 
 for name in proxy service-blue service-green; do
   sed "s|__HOME__|$HOME|g" \
@@ -156,7 +156,7 @@ for name in proxy service-blue service-green; do
 done
 
 # "blue" (internal port 18888) is the initial active color.
-echo 18888 > ~/.hindsight/state/active-backend.port
+echo 18888 > ~/.engram/state/active-backend.port
 
 launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.service-blue.plist
 launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.proxy.plist
@@ -251,10 +251,10 @@ individually; they're just importable as `engram.*` from anywhere once
 installed):
 
 ```bash
-uv pip install --python ~/.hindsight/venv/bin/python -e .
+uv pip install --python ~/.engram/venv/bin/python -e .
 ```
 
-This also generates 13 console scripts in `~/.hindsight/venv/bin/` for the
+This also generates 13 console scripts in `~/.engram/venv/bin/` for the
 launchd-invoked entry points: `engram-flows-*` (one per onboarded project),
 `engram-search-*`, `engram-nightly-learn`, `engram-ingest-issues`, and
 `engram-hindsight-proxy`. Manual/on-demand tools (`ingest-docs`, `report`,
@@ -263,14 +263,14 @@ console scripts — invoke those as `python3 -m engram.<subpackage>.<module>`,
 e.g. `python3 -m engram.maintenance.report` (step 18/[METRICS.md](METRICS.md)).
 
 The launchd plists installed in the next step still invoke the older
-`~/.hindsight/nightly-learn.py` / `ingest-issues.py` symlink paths rather
+`~/.engram/nightly-learn.py` / `ingest-issues.py` symlink paths rather
 than these new console scripts directly (a planned follow-up will switch
 them over and retire the symlinks — not yet done), so keep those two
 symlinks pointed at the package's new location:
 
 ```bash
-ln -sf "$(pwd)/src/engram/pipeline/nightly_learn.py" ~/.hindsight/nightly-learn.py
-ln -sf "$(pwd)/src/engram/pipeline/ingest_issues.py" ~/.hindsight/ingest-issues.py
+ln -sf "$(pwd)/src/engram/pipeline/nightly_learn.py" ~/.engram/nightly-learn.py
+ln -sf "$(pwd)/src/engram/pipeline/ingest_issues.py" ~/.engram/ingest-issues.py
 ```
 
 > **Customize for your projects**: `engram.project_scope`'s
@@ -302,9 +302,9 @@ sed "s|__HOME__|$HOME|g" launchd/io.vectorize.hindsight.hourly.plist \
 launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.hourly.plist
 ```
 
-> **Note:** both the hourly and nightly plists run `~/.hindsight/nightly-learn.py`
+> **Note:** both the hourly and nightly plists run `~/.engram/nightly-learn.py`
 > (a symlink into `src/engram/pipeline/nightly_learn.py` -- see step 9) under
-> `~/.hindsight/venv/bin/python3`, not the macOS system Python. This is
+> `~/.engram/venv/bin/python3`, not the macOS system Python. This is
 > required because `engram.correction_gate` (via `engram.classify`) calls
 > `litellm`, which is only installed in the Hindsight venv. If you ever
 > revert to `ENGRAM_CORRECTION_DETECTOR=regex` full-time, the venv requirement
@@ -331,7 +331,7 @@ This creates a `kubernaut-issues` knowledge bank and ingests open issues plus
 recently closed issues from the kubernaut repository:
 
 ```bash
-~/.hindsight/venv/bin/engram-ingest-issues
+~/.engram/venv/bin/engram-ingest-issues
 ```
 
 Options:
@@ -404,31 +404,31 @@ with continuous, incremental sync for docs, issues, code, and transcripts.
 ### Install CocoIndex into the Hindsight venv
 
 ```bash
-uv pip install --python ~/.hindsight/venv/bin/python cocoindex
+uv pip install --python ~/.engram/venv/bin/python cocoindex
 ```
 
 `pdfplumber` (PDF text extraction) rides along as a transitive dependency of
 `cocoindex` at this point, but any flow that ingests manually-curated PDFs
 (e.g. `engram.flows.praxis`'s `process_pdf_file`, for supplementary
-project-overview PDFs dropped in `~/.hindsight/manual-docs/<project>/`) does
+project-overview PDFs dropped in `~/.engram/manual-docs/<project>/`) does
 `import pdfplumber` directly, so pin it explicitly rather than relying on an
 undeclared transitive dependency:
 
 ```bash
-uv pip install --python ~/.hindsight/venv/bin/python pdfplumber
+uv pip install --python ~/.engram/venv/bin/python pdfplumber
 ```
 
 ### Symlink flow and search scripts (for launchd)
 
 ```bash
-ln -sf "$(pwd)/src/engram/flows/kubernaut.py" ~/.hindsight/cocoindex-flows.py
-ln -sf "$(pwd)/src/engram/search/kubernaut.py" ~/.hindsight/cocoindex-search.py
+ln -sf "$(pwd)/src/engram/flows/kubernaut.py" ~/.engram/cocoindex-flows.py
+ln -sf "$(pwd)/src/engram/search/kubernaut.py" ~/.engram/cocoindex-search.py
 ```
 
-The launchd plist installed further down invokes these by their `~/.hindsight/`
+The launchd plist installed further down invokes these by their `~/.engram/`
 symlink path, not the `engram-flows-kubernaut`/`engram-search-kubernaut`
 console scripts step 9's install already generated in
-`~/.hindsight/venv/bin/` -- use those console scripts directly for any manual
+`~/.engram/venv/bin/` -- use those console scripts directly for any manual
 runs (e.g. the backfill command below), and keep this symlink pair current
 for the launchd-managed continuous-sync job. (A planned follow-up will
 switch the plist itself to invoke the console script directly and retire
@@ -444,7 +444,7 @@ of a `ModuleNotFoundError` from a forgotten shared-module symlink.
 
 ### Configure source directories
 
-Add the following to `~/.hindsight/config.env`:
+Add the following to `~/.engram/config.env`:
 
 ```bash
 ENGRAM_DOCS_DIR=~/go/src/github.com/jordigilh/kubernaut-docs/docs
@@ -456,7 +456,7 @@ ENGRAM_CODE_DIR=~/go/src/github.com/jordigilh/kubernaut
 ### Run initial backfill
 
 ```bash
-~/.hindsight/venv/bin/engram-flows-kubernaut --mode backfill
+~/.engram/venv/bin/engram-flows-kubernaut --mode backfill
 ```
 
 This processes all existing docs, issues, code, and transcripts. Subsequent runs
@@ -475,10 +475,10 @@ launchctl load ~/Library/LaunchAgents/io.vectorize.cocoindex.service.plist
 
 ```bash
 # Check all four flows started
-grep "Starting\|Fetched\|poll:" ~/.hindsight/logs/cocoindex-stderr.log | tail -10
+grep "Starting\|Fetched\|poll:" ~/.engram/logs/cocoindex-stderr.log | tail -10
 
 # Check issues + PRs are fully indexed
-grep "Fetched.*from" ~/.hindsight/logs/cocoindex-stderr.log | tail -5
+grep "Fetched.*from" ~/.engram/logs/cocoindex-stderr.log | tail -5
 ```
 
 You should see all four apps starting (docs, code, transcripts, issues) and
@@ -503,7 +503,7 @@ issue poll cycles completing with the full count of issues + PRs. See
 > pair (see `src/engram/flows/engram.py` / `src/engram/search/engram.py` for
 > a real example), a matching `engram-flows-<project>` /
 > `engram-search-<project>` console-script entry in `pyproject.toml`, a
-> `~/.hindsight/<project>-cocoindex-flows.py` / `-search.py` symlink pair
+> `~/.engram/<project>-cocoindex-flows.py` / `-search.py` symlink pair
 > (same reasoning as the kubernaut symlinks above -- launchd needs these
 > until the plist cutover), and its own `launchd` plist. See
 > [NEW_PROJECT_SETUP.md](NEW_PROJECT_SETUP.md) for the full walkthrough,
@@ -540,13 +540,13 @@ before responding.
 To manually test the nightly pipeline:
 
 ```bash
-~/.hindsight/venv/bin/engram-nightly-learn
+~/.engram/venv/bin/engram-nightly-learn
 ```
 
 Check results:
 
 ```bash
-cat ~/.hindsight/logs/$(date +%Y-%m-%d).json | python3 -m json.tool
+cat ~/.engram/logs/$(date +%Y-%m-%d).json | python3 -m json.tool
 ```
 
 Generate an effectiveness report:
@@ -577,19 +577,19 @@ Install the `dev` extra into the same venv the production scripts run under
 (this is the same `pip install -e .` from step 9, plus `pytest`/`ruff`):
 
 ```bash
-uv pip install --python ~/.hindsight/venv/bin/python -e ".[dev]"
+uv pip install --python ~/.engram/venv/bin/python -e ".[dev]"
 ```
 
 Run the suite:
 
 ```bash
-~/.hindsight/venv/bin/python3 -m pytest tests/ -m "not integration" -v
+~/.engram/venv/bin/python3 -m pytest tests/ -m "not integration" -v
 ```
 
 The suite is fully offline — every LLM call (Haiku classification, Sonnet
 contradiction check), Hindsight API call, and CocoIndex file-watch is mocked
 via `pytest`'s `monkeypatch` fixture, so it runs in well under a second and
-never touches your live `~/.hindsight/` data or costs any tokens. `conftest.py`
+never touches your live `~/.engram/` data or costs any tokens. `conftest.py`
 provides fixtures (`nightly_learn`, `cocoindex_flows`, `review_contradictions`,
 `purge_script`, etc.) that import the corresponding `engram.*` package modules
 directly — no `sys.path` hacks needed since `engram` is a real installed
@@ -613,21 +613,21 @@ against a service container. Never point it at the shared dev Postgres on
 ### Service won't start
 ```bash
 launchctl list | grep hindsight
-tail -50 ~/.hindsight/logs/hindsight-stderr.log
+tail -50 ~/.engram/logs/hindsight-stderr.log
 ```
 
 ### Recall returns empty results
 The memory bank needs at least one retained item. Run the nightly script manually or retain a test memory.
 
 ### Retain fails with "Could not resolve project_id"
-Ensure `VERTEXAI_PROJECT` and `GOOGLE_CLOUD_PROJECT` are set in `~/.hindsight/config.env`.
+Ensure `VERTEXAI_PROJECT` and `GOOGLE_CLOUD_PROJECT` are set in `~/.engram/config.env`.
 
 ### Reflect returns 404
 Sonnet 4.6 on the global endpoint requires the model name WITHOUT a version suffix. Use `vertex_ai/claude-sonnet-4-6`, not `vertex_ai/claude-sonnet-4-6@20250929`.
 
 ### Which color is currently active?
 ```bash
-cat ~/.hindsight/state/active-backend.port   # 18888 = blue, 18889 = green
+cat ~/.engram/state/active-backend.port   # 18888 = blue, 18889 = green
 launchctl list | grep hindsight.service-      # the loaded one is active
 ```
 
@@ -640,8 +640,8 @@ launchctl kickstart -k gui/$(id -u)/io.vectorize.hindsight.service-blue
 
 ### Manually force a blue/green swap
 ```bash
-~/.hindsight/hindsight-blue-green-restart.sh
-tail -20 ~/.hindsight/logs/blue-green-restart.log
+~/.engram/hindsight-blue-green-restart.sh
+tail -20 ~/.engram/logs/blue-green-restart.log
 ```
 
 ---
@@ -649,8 +649,8 @@ tail -20 ~/.hindsight/logs/blue-green-restart.log
 ## Upgrading
 
 ```bash
-uv pip install --python ~/.hindsight/venv/bin/python -U 'hindsight-api[all]'
-~/.hindsight/hindsight-blue-green-restart.sh
+uv pip install --python ~/.engram/venv/bin/python -U 'hindsight-api[all]'
+~/.engram/hindsight-blue-green-restart.sh
 ```
 
 The blue/green swap above starts the new package version on the standby
@@ -759,7 +759,7 @@ rm ~/Library/LaunchAgents/io.vectorize.hindsight.*.plist
 rm ~/Library/LaunchAgents/io.vectorize.cocoindex.*.plist
 
 # Remove data and runtime
-rm -rf ~/.hindsight ~/.pg0
+rm -rf ~/.engram ~/.pg0
 
 # Remove Cursor integration
 rm ~/.cursor/rules/hindsight-memory.mdc

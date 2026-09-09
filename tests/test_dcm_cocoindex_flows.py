@@ -42,7 +42,7 @@ class TestModuleLoads:
         DCM_OSAC_DIR's comment. Must show up in issues polling and default
         to the watch-mirror worktree, not a live dev clone."""
         assert dcm_cocoindex_flows.DCM_OSAC_DIR is not None
-        assert str(dcm_cocoindex_flows.DCM_OSAC_DIR).endswith(".hindsight/watch/osac")
+        assert str(dcm_cocoindex_flows.DCM_OSAC_DIR).endswith(".engram/watch/osac")
         assert "osac-project/osac" in dcm_cocoindex_flows.ISSUES_REPOS
 
 

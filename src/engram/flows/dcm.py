@@ -100,10 +100,10 @@ DCM_SHARED_WORKFLOWS_DIR = pathlib.Path(os.environ.get(
 # live dev clone -- this repo is never locally edited, so its only source
 # of freshness is the existing 10-minute fetch+reset-hard refresh cycle
 # (refresh-watch-mirrors.sh), same convention as kubernaut.py/engram.py's
-# ~/.hindsight/watch/<repo> dirs.
+# ~/.engram/watch/<repo> dirs.
 DCM_OSAC_DIR = pathlib.Path(os.environ.get(
     "DCM_OSAC_DIR",
-    os.path.expanduser("~/.hindsight/watch/osac"),
+    os.path.expanduser("~/.engram/watch/osac"),
 ))
 
 ISSUES_REPOS = os.environ.get(
@@ -131,7 +131,7 @@ PG_POOL_MIN_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MIN_SIZE", "2"))
 PG_POOL_MAX_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MAX_SIZE", "5"))
 COCOINDEX_DB = pathlib.Path(os.environ.get(
     "COCOINDEX_DB",
-    os.path.expanduser("~/.hindsight/dcm-cocoindex.db"),
+    os.path.expanduser("~/.engram/dcm-cocoindex.db"),
 ))
 
 

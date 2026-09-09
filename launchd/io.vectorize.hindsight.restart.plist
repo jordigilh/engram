@@ -7,7 +7,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>__HOME__/.hindsight/hindsight-blue-green-restart.sh</string>
+        <string>__HOME__/.engram/hindsight-blue-green-restart.sh</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>
@@ -19,13 +19,13 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>__HOME__/.hindsight/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>__HOME__/.engram/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>__HOME__</string>
     </dict>
     <key>StandardOutPath</key>
-    <string>__HOME__/.hindsight/logs/restart-stdout.log</string>
+    <string>__HOME__/.engram/logs/restart-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.hindsight/logs/restart-stderr.log</string>
+    <string>__HOME__/.engram/logs/restart-stderr.log</string>
 </dict>
 </plist>

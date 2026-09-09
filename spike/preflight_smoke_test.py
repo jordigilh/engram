@@ -9,7 +9,7 @@ hindsight-api's own process. This is step 0 of the spike plan: resolve the
 auth-scoping unknown before investing in the rest of the pipeline.
 
 Run with the hindsight venv (has litellm/vertexai installed):
-    ~/.hindsight/venv/bin/python3 spike/preflight_smoke_test.py
+    ~/.engram/venv/bin/python3 spike/preflight_smoke_test.py
 
 Exits non-zero with a clear message on failure.
 """

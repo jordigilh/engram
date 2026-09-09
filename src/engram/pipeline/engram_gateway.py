@@ -1013,12 +1013,13 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
             "code": praxis_code_stdio,
         }
 
-    registry["rhdh-plugins"] = {
-        "docs": _hindsight("rhdh-plugins-docs"),
-        "issues": _hindsight("rhdh-plugins-issues"),
-        "code": _stdio(f"{venv_bin}/engram-search-rhdh-plugins", env={"COCOINDEX_PG_URL": _PG_URL}),
-        "serena": _serena_stdio(home, f"{home}/go/src/github.com/redhat-developer/rhdh-plugins"),
-    }
+    # rhdh-plugins: DISABLED -- no longer contributing to this project
+    # (2026-09-09). Registry entry removed so the gateway no longer spawns
+    # engram-search-rhdh-plugins / serena subprocesses for it, and the
+    # launchd job io.vectorize.cocoindex.rhdh-plugins has been booted out
+    # with its installed plist removed. Source modules
+    # (flows/search rhdh_plugins) and launchd/io.vectorize.cocoindex.rhdh-plugins.plist
+    # remain in the repo for reference only.
 
     registry["engram"] = {
         "docs": _hindsight("engram-docs"),

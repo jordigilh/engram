@@ -122,15 +122,9 @@ PROJECT_CONFIGS = {
             "praxis-proxy/enhancements",
         ],
     },
-    # rhdh-plugins: narrow-scope onboarding (2026-08-13) -- see
-    # nightly-learn.py's matching entry for the full scoping rationale.
-    "rhdh-plugins": {
-        "banks": ["cursor-memory", "rhdh-plugins-docs", "rhdh-plugins-issues"],
-        "workspace_prefixes": ["Users-jgil-go-src-github-com-redhat-developer-rhdh-plugins"],
-        "log_suffix": "-rhdh-plugins",
-        # No issues_repos: this scope's issue tracker is Jira (epic
-        # RHIDP-15270), not GitHub -- same as engram's "zero GitHub issues" entry.
-    },
+    # rhdh-plugins: REMOVED -- no longer contributing to this project
+    # (2026-09-09). Services disabled, databases dropped, gateway entry
+    # removed. Entry kept as a comment so history is clear.
     # kuadrant: ingestion-only prior-art reference for praxis-proxy -- see
     # nightly-learn.py's matching entry for the full scoping rationale.
     # No cursor-memory: no Cursor workspace is ever opened against these 9

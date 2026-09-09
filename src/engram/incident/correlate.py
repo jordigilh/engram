@@ -18,7 +18,11 @@ def resolve_rr_id(failure: TestFailure) -> str:
 
 def correlate(failure: TestFailure, evidence: Iterable[Evidence]) -> list[Evidence]:
     rr_id = resolve_rr_id(failure)
-    related = [item for item in evidence if item.rr_id == rr_id or rr_id in item.content]
+    related = [
+        item
+        for item in evidence
+        if item.rr_id == rr_id or rr_id in item.content or rr_id in item.metadata.get("rr_ids", ())
+    ]
     # A resource name alone is not a safe join: the fixture contains many
     # independent memory-eater incidents in different namespaces.
     unique = {item.id: item for item in related}

@@ -30,6 +30,8 @@ class Evidence:
     service: str | None = None
     severity: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    source_line: int | None = None
+    identifiers: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

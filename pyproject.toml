@@ -25,6 +25,11 @@ dependencies = [
     "numpy==2.5.2",
     "torch==2.13.0",
     "asyncpg==0.31.0",
+    # engram.synthesis (deterministic TextRank key sentences + TF-IDF
+    # keywords, stored as retain metadata): needs TF-IDF/cosine (sklearn)
+    # and pagerank (networkx, already declared below). Pinned to the
+    # version in the live venv.
+    "scikit-learn==1.9.0",
     # Call-graph extraction spike (docs/CALL_GRAPH_CLUSTERING.md, issue #43):
     # networkx holds the directed call graph and answers blast-radius/
     # shortest-path queries; igraph+leidenalg (not the heavier graspologic

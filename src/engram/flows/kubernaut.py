@@ -46,6 +46,7 @@ from engram import chunking  # noqa: E402
 from engram import correction_gate  # noqa: E402
 from engram import contradiction_resolution  # noqa: E402
 from engram import project_scope  # noqa: E402
+from engram import synthesis  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -333,6 +334,13 @@ async def process_doc_file(
     section = parts[0] if len(parts) > 1 else "root"
 
     base_doc_id = f"{source_tag}--{rel_path.replace('/', '--').replace('.md', '')}"
+    # Deterministic synthetic layer (zero LLM -- see engram.synthesis):
+    # key sentences + keywords computed once per file, attached to every
+    # chunk's metadata so recall can boost/filter on them. Metadata values
+    # must be plain strings (MemoryItem.metadata is dict[str, str]).
+    synth = synthesis.synthesize_document(base_doc_id, content)
+    synth_meta = {"key_sentences": "\n".join(synth["key_sentences"]),
+                  "keywords": ", ".join(synth["keywords"])}
     sections = chunking.split_markdown_sections(content, chunk_size=800, chunk_overlap=200)
     for key, chunk in sections:
         if source_tag == "kubernaut-repo":
@@ -344,7 +352,7 @@ async def process_doc_file(
             content=chunk,
             document_id=doc_id,
             timestamp=timestamp,
-            metadata={"source": "cocoindex", "repo": source_tag},
+            metadata={"source": "cocoindex", "repo": source_tag, **synth_meta},
             tags=[section, source_tag],
         )
 

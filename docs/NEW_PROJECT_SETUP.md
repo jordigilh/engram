@@ -170,6 +170,47 @@ curl -X PUT http://localhost:8888/v1/default/banks/<project>-issues \
   -d '{"description": "GitHub issues and PRs from all active <project> repositories"}'
 ```
 
+> **Ingestion cost policy — LLM-free by default.** Banks are created with
+> `retain_extraction_mode=chunks` (raw text slices + local ONNX embeddings,
+> zero LLM calls), `enable_observations=false`, and
+> `enable_auto_consolidation=false`, and the server defaults in
+> `~/.engram/config.env` enforce the same for every bank, including future
+> ones (`HINDSIGHT_API_RETAIN_EXTRACTION_MODE=chunks`,
+> `HINDSIGHT_API_ENABLE_OBSERVATIONS=false`,
+> `HINDSIGHT_API_ENABLE_AUTO_CONSOLIDATION=false`). Fact extraction
+> (`concise`/`verbose`), observations, and consolidation are **manual-only**,
+> enabled per bank with an explicit `PATCH /v1/default/banks/<id>/config`
+> after a deliberate cost decision — never as a side effect of ingestion.
+>
+> Measured cost of fact-mode (2026-09-09, single-doc calibration on a 9.7 KB
+> doc: ~2,400 content tokens → 20,653 input / 4,573 output): budget roughly
+> **8–9× content tokens of input** (per-retain prompt overhead dominates) and
+> **~2× content tokens of output** — extraction output runs *longer* than the
+> source text. At kubernaut scale (~1,700 docs + ~3,650 issues/PRs) that is
+> on the order of **130M input / 27M output tokens one-time**, ex-comments
+> and ex-consolidation passes. At GPT-5.6 Luna standard pricing on that date
+> ($0.20/$1.20 per MTok in/out) ≈ **$60 one-time**; other models price
+> differently, and Batch API / prompt caching change the math — re-price
+> from current rate cards before opting in.
+>
+> Determinism note: chunks are byte-faithful (same content → same stored
+> chunks, so rebuilds are identical). LLM-extracted facts vary run to run
+> (model output is nondeterministic and drifts across versions), so fact-mode
+> banks are not exactly reproducible — another reason extraction stays manual.
+>
+> Improvement — deterministic synthesis metadata (2026-09-09). To recover
+> some of what fact extraction provides (a synthetic expression of each
+> document for recall to key on) without any LLM, `engram.synthesis`
+> computes per file, at ingest time: extractive key sentences (TextRank over
+> a TF-IDF cosine graph, sentence budget scaled by document length) plus
+> TF-IDF keywords. Same bytes always yield the same synthesis (verified by
+> test + double-run diff), it runs in milliseconds per document, and it is
+> stored as chunk retain metadata (`key_sentences`, `keywords` — plain
+> strings, since `MemoryItem.metadata` is `dict[str, str]`). Wire it into a
+> flow's `process_doc_file` (see `engram.flows.kubernaut`'s `synth_meta`)
+> when onboarding a docs bank. This is compression by statistics, not
+> comprehension — abstraction and judgment remain manual LLM operations.
+
 ### 3. Create Mental Models
 
 Use the Hindsight API or MCP to create mental models for each bank:
@@ -260,6 +301,23 @@ scale-down, or still validating the flow file with a manual `--mode backfill`
 run first), it's fine to create the plist in `launchd/` and commit it without
 this `load` step — `engram`'s own plist shipped this way initially. Nothing
 else in this guide depends on the service actually being loaded.
+
+> **Cold start: backfill first, live-watch second (2026-09-09).** A fresh
+> project (empty pg tables + empty tracking DB) must be populated with a
+> one-shot `--mode backfill --apps code` (+ docs/issues as needed) run
+> *before* relying on the live service. Live-watch reliably tracks warm
+> incremental deltas (add → row appears, delete → row removed, verified),
+> but a cold full-scan in live mode fingerprints files without ever flushing
+> rows to pg — observed across every flow, still undiagnosed in cocoindex
+> (present in 1.0.20, unchanged in 1.0.21). Backfill is the supported
+> cold-start path, not a workaround.
+>
+> Gotcha: if the tracking DB (`~/.engram/<project>-cocoindex.db`) is wiped
+> while pg tables still exist, the next run dies with
+> `DuplicateTableError: relation ... already exists` (fresh state re-issues
+> `CREATE TABLE`). Always drop the project's pg tables (plus their FTS
+> trigger/function/index — see each flow's `teardown_sql`) before
+> re-backfilling, never wipe tracking state alone.
 
 ### 7. Choose Your Code-Intelligence Backend
 

@@ -497,7 +497,8 @@ class TestBuildProjectRegistry:
     def test_covers_every_onboarded_project(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
 
-        assert len(registry) == 35
+        assert len(registry) == 34
+        assert "rhdh-plugins" not in registry  # decommissioned 2026-09-09
 
     def test_kubernaut_family_is_fully_http_already(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
@@ -606,14 +607,13 @@ class TestBuildProjectRegistry:
         assert "serena" in registry["praxis-grid"]
 
     def test_rhdh_plugins_registry_only_covers_the_four_engram_backends(self, engram_gateway):
-        """rhdh-plugins' real .cursor/mcp.json has other, unrelated MCP
-        servers (jira/argocd/gitea/kubernetes/orchestrator, several with
-        live credentials) alongside the four engram-owned ones -- the
-        registry must describe only what this gateway itself is
-        responsible for aggregating, never those unrelated entries."""
+        """rhdh-plugins decommissioned 2026-09-09: the registry must no
+        longer contain it at all (previously asserted the entry covered
+        only the four engram-owned backends, excluding the repo's own
+        jira/argocd/gitea/kubernetes entries)."""
         registry = engram_gateway.build_project_registry("/home/u")
 
-        assert set(registry["rhdh-plugins"]) == {"docs", "issues", "code", "serena"}
+        assert "rhdh-plugins" not in registry
 
     def test_dcm_code_backend_sets_hf_hub_offline(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")

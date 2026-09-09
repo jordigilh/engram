@@ -9,6 +9,7 @@ from typing import Any, Iterable
 from .correlate import build_clusters, correlate, rank_evidence, resolve_rr_id
 from .branch_scope import normalize_branch
 from .models import Evidence, TestFailure
+from .lifecycle import analyze_interactive_lifecycle
 from .normalize import extract_rr_id, iter_evidence
 
 
@@ -34,6 +35,7 @@ def _failure_timestamp(text: str) -> datetime | None:
 
 def _summary(rr_id: str, evidence: list[Evidence]) -> dict[str, Any]:
     text = "\n".join(item.content for item in evidence).lower()
+    lifecycle = analyze_interactive_lifecycle(rr_id, evidence)
     result = {
         "rr_id": rr_id,
         "evidence_count": len(evidence),
@@ -46,6 +48,7 @@ def _summary(rr_id: str, evidence: list[Evidence]) -> dict[str, Any]:
             for item in evidence
         ),
         "affected_namespaces": sorted({item.namespace for item in evidence if item.namespace}),
+        "interactive_lifecycle": lifecycle,
     }
     return result
 
@@ -76,7 +79,9 @@ def build_context(failure: TestFailure, evidence: Iterable[Evidence], max_tokens
             "timestamp": item.timestamp.isoformat() if item.timestamp else None,
             "type": item.evidence_type,
             "source_file": item.source_file,
+            "source_line": item.source_line,
             "evidence_id": item.id,
+            "identifiers": item.identifiers,
             "content": item.content[:1000],
         }
         for item in sorted(
@@ -103,6 +108,8 @@ def build_context(failure: TestFailure, evidence: Iterable[Evidence], max_tokens
                 "type": item.evidence_type,
                 "timestamp": item.timestamp.isoformat() if item.timestamp else None,
                 "source_file": item.source_file,
+                "source_line": item.source_line,
+                "identifiers": item.identifiers,
                 "content": item.content[:2000],
             }
             for item in selected

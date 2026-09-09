@@ -36,7 +36,6 @@ def _run_mcp_server(
     mcp = FastMCP("kubernaut-rca")
     contexts: dict[tuple[str, str], dict] = {}
     roots: dict[tuple[str, str], Path] = {}
-    dossiers_by_scope: dict[tuple[str, str], list[dict]] = {}
     retention_path = db_path or Path(os.environ.get("KUBERNAUT_RCA_DB", "~/.engram/kubernaut-rca.sqlite3")).expanduser()
     changes_by_scope: dict[tuple[str, str], list[dict]] = {}
 

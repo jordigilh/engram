@@ -79,6 +79,8 @@ logging.basicConfig(
 )
 log = logging.getLogger("engram-gateway")
 
+from engram import mcp_compat  # noqa: E402  (mcp 1.x/2.x Tool compat)
+
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8896
 FORWARD_TIMEOUT_S = 60.0
@@ -602,14 +604,15 @@ class StdioSubprocessAdapter:
                 await self._restart()
                 result = await self._session.list_tools()
             return [
-                # mcp SDK's Tool pydantic model exposes this field as
-                # `input_schema` (snake_case) in the installed version, not
-                # the wire-format `inputSchema` camelCase alias it accepts on
-                # construction -- `t.inputSchema` raised AttributeError on
-                # every real stdio backend's list_tools() call (never caught
-                # by prior tests, which stubbed this dict out entirely
-                # instead of exercising a real mcp.types.Tool instance).
-                {"name": t.name, "description": t.description or "", "inputSchema": t.input_schema}
+                # Tool input schema attribute renamed across mcp SDK
+                # versions (inputSchema 1.x <-> input_schema 2.x); read it
+                # version-tolerantly (see engram.mcp_compat) instead of
+                # pinning one spelling that breaks on every mcp bump --
+                # see the 2026-08-27 incident this comment originally
+                # described, repeated in reverse by the 2026-09-09
+                # mcp<2.0 pin.
+                {"name": t.name, "description": t.description or "",
+                 "inputSchema": mcp_compat.tool_input_schema(t)}
                 for t in result.tools
             ]
 

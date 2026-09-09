@@ -310,8 +310,6 @@ class TestRunMcpServerBuildsARealServer:
     entry."""
 
     def test_run_mcp_server_stdio_does_not_raise(self, kubernaut_search, monkeypatch):
-        from mcp.server.mcpserver import MCPServer
-
-        monkeypatch.setattr(MCPServer, "run", lambda self, *a, **k: None)
+        monkeypatch.setattr("engram.mcp_compat.run_server", lambda *a, **k: None)
 
         kubernaut_search._run_mcp_server(transport="stdio")

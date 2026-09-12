@@ -94,18 +94,18 @@ class TestDetectCurrentReleaseLine:
         report a branch (e.g. detached HEAD, git missing, not a repo)."""
         monkeypatch.setattr(
             cocoindex_search, "KUBERNAUT_LIVE_CLONE_DIR",
-            "/Users/jgil/go/src/github.com/jordigilh/kubernaut-operator-v1.6",
+            "/Users/jgil/go/src/github.com/jordigilh/kubernaut-operator-v1.5",
         )
 
         def fake_run(cmd, **kwargs):
             return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="fatal: not a git repository")
 
         monkeypatch.setattr(cocoindex_search.subprocess, "run", fake_run)
-        assert cocoindex_search._detect_current_release_line() == "v1.6"
+        assert cocoindex_search._detect_current_release_line() == "v1.5"
 
     def test_dirname_without_version_suffix_returns_none(self, cocoindex_search, monkeypatch):
-        """The plain "kubernaut" (main) clone has no -vX.Y suffix -- must
-        not accidentally match anything."""
+        """The plain "kubernaut" (current main/v1.6) clone has no -vX.Y
+        suffix -- it must not accidentally match a separate release mirror."""
         monkeypatch.setattr(
             cocoindex_search, "KUBERNAUT_LIVE_CLONE_DIR",
             "/Users/jgil/go/src/github.com/jordigilh/kubernaut",
@@ -130,18 +130,18 @@ class TestDetectCurrentReleaseLine:
         assert cocoindex_search._detect_current_release_line() is None
 
     def test_literal_release_branch_wins_over_dirname_fallback(self, cocoindex_search, monkeypatch):
-        """If someone actually is on release/v1.6 inside a v1.5-named
-        directory (edge case), the literal branch check takes priority."""
+        """A supported release branch takes priority over a stale directory
+        suffix (edge case)."""
         monkeypatch.setattr(
             cocoindex_search, "KUBERNAUT_LIVE_CLONE_DIR",
-            "/Users/jgil/go/src/github.com/jordigilh/kubernaut-v1.5",
+            "/Users/jgil/go/src/github.com/jordigilh/kubernaut-v1.6",
         )
 
         def fake_run(cmd, **kwargs):
-            return subprocess.CompletedProcess(cmd, 0, stdout="release/v1.6\n", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout="release/v1.5\n", stderr="")
 
         monkeypatch.setattr(cocoindex_search.subprocess, "run", fake_run)
-        assert cocoindex_search._detect_current_release_line() == "v1.6"
+        assert cocoindex_search._detect_current_release_line() == "v1.5"
 
 
 class TestResolveReleaseLine:
@@ -202,8 +202,8 @@ class TestSelectPatternRoots:
         }
 
     def test_repo_and_release_line_returns_single_exact_tag(self, cocoindex_search):
-        roots = cocoindex_search._select_pattern_roots("kubernaut-operator", "v1.6")
-        assert [r[0] for r in roots] == ["kubernaut-operator@release-v1.6"]
+        roots = cocoindex_search._select_pattern_roots("kubernaut-operator", "v1.5")
+        assert [r[0] for r in roots] == ["kubernaut-operator@release-v1.5"]
 
     def test_repo_without_release_line_returns_single_main_tag(self, cocoindex_search):
         roots = cocoindex_search._select_pattern_roots("kubernaut-console", None)

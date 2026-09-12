@@ -1,0 +1,57 @@
+#!/bin/sh
+# Launch Codex with the Engram route for the current checkout/branch.
+# Codex configuration has no Git-branch interpolation, so override only the
+# MCP URL for this invocation and leave the user's normal config untouched.
+set -eu
+
+if ! command -v codex >/dev/null 2>&1; then
+  printf '%s\n' "engram-codex: codex is not on PATH" >&2
+  exit 127
+fi
+
+gateway=${ENGRAM_GATEWAY_URL:-http://127.0.0.1:8896}
+case "$gateway" in
+  *[!A-Za-z0-9:/._-]*)
+    printf '%s\n' "engram-codex: ENGRAM_GATEWAY_URL contains unsupported characters" >&2
+    exit 2
+    ;;
+esac
+
+root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+directory=$(basename "$root")
+route=${ENGRAM_CODEX_PROJECT:-$directory}
+
+if [ -z "${ENGRAM_CODEX_PROJECT:-}" ]; then
+  case "$directory" in
+    kubernaut-v1.6)
+      printf '%s\n' "engram-codex: kubernaut-v1.6 has no separate MCP route; use the kubernaut checkout for current v1.6" >&2
+      exit 2
+      ;;
+    kubernaut-v1.5|*-v[0-9]*.[0-9]*)
+      # A supported dedicated release checkout already carries its route.
+      ;;
+    kubernaut)
+      branch=$(git -C "$root" branch --show-current 2>/dev/null || true)
+      case "$branch" in
+        release/v1.5)
+          route="kubernaut-v1.5"
+          ;;
+        release/v1.6)
+          # v1.6 is the current main route, not a second public mount.
+          route="kubernaut"
+          ;;
+      esac
+      ;;
+  esac
+fi
+
+case "$route" in
+  ""|*[!A-Za-z0-9._-]*)
+    printf '%s\n' "engram-codex: derived project route is invalid" >&2
+    exit 2
+    ;;
+esac
+
+override="mcp_servers.engram.url=\"$gateway/mcp/$route\""
+printf '%s\n' "[engram-codex] project=$route directory=$directory gateway=$gateway" >&2
+exec codex -c "$override" "$@"

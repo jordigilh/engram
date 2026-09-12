@@ -260,8 +260,8 @@ class TestRunMcpServerBuildsARealServer:
     entry."""
 
     def test_run_mcp_server_stdio_does_not_raise(self, kuadrant_search, monkeypatch):
-        from mcp.server import FastMCP
+        from mcp.server.mcpserver import MCPServer
 
-        monkeypatch.setattr(FastMCP, "run", lambda self, *a, **k: None)
+        monkeypatch.setattr(MCPServer, "run", lambda self, *a, **k: None)
 
         kuadrant_search._run_mcp_server(transport="stdio")

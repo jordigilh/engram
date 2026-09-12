@@ -29,11 +29,14 @@ def _run_mcp_server(
     db_path: Path | None = None,
     pg_url: str | None = None,
 ) -> None:
-    from mcp.server import FastMCP
+    # mcp==2.0.0 (2026-08-22 dependabot bump) renamed FastMCP to MCPServer
+    # and moved host/port from the constructor to run(). See
+    # docs/findings/2026-08.md's 2026-08-27 entry.
+    from mcp.server.mcpserver import MCPServer as FastMCP
 
     import json
 
-    mcp = FastMCP("kubernaut-rca", host=host, port=port)
+    mcp = FastMCP("kubernaut-rca")
     contexts: dict[tuple[str, str], dict] = {}
     roots: dict[tuple[str, str], Path] = {}
     retention_path = db_path or Path(os.environ.get("KUBERNAUT_RCA_DB", "~/.hindsight/kubernaut-rca.sqlite3")).expanduser()
@@ -176,7 +179,7 @@ def _run_mcp_server(
     if transport == "stdio":
         mcp.run(transport="stdio")
     else:
-        mcp.run(transport=transport)
+        mcp.run(transport=transport, host=host, port=port)
 
 
 def main() -> None:

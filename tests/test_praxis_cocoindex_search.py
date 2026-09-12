@@ -319,8 +319,8 @@ class TestRunMcpServerBuildsARealServer:
     production. See docs/findings/2026-08.md's 2026-08-27 entry."""
 
     def test_run_mcp_server_stdio_does_not_raise(self, praxis_search, monkeypatch):
-        from mcp.server import FastMCP
+        from mcp.server.mcpserver import MCPServer
 
-        monkeypatch.setattr(FastMCP, "run", lambda self, *a, **k: None)
+        monkeypatch.setattr(MCPServer, "run", lambda self, *a, **k: None)
 
         praxis_search._run_mcp_server(transport="stdio")

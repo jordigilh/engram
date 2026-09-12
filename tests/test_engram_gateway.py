@@ -497,7 +497,7 @@ class TestBuildProjectRegistry:
     def test_covers_every_onboarded_project(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
 
-        assert len(registry) == 34
+        assert len(registry) == 35  # +1 for praxis-benchmarks (2026-09-11)
         assert "rhdh-plugins" not in registry  # decommissioned 2026-09-09
 
     def test_kubernaut_family_is_fully_http_already(self, engram_gateway):
@@ -598,6 +598,7 @@ class TestBuildProjectRegistry:
 
         assert registry["praxis-grid"]["code"]["shared_key"] == "praxis-code"
         assert registry["praxis-ai"]["code"]["shared_key"] == "praxis-code"
+        assert registry["praxis-benchmarks"]["code"]["shared_key"] == "praxis-code"
 
     def test_praxis_repos_without_serena_omit_it(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
@@ -605,6 +606,10 @@ class TestBuildProjectRegistry:
         assert "serena" not in registry["praxis-conventions"]
         assert "serena" not in registry["praxis-proxy-github-io"]
         assert "serena" in registry["praxis-grid"]
+        # praxis-experiments is Rust (experimental upstream) and
+        # praxis-benchmarks is Rust -- both get serena (2026-09-11).
+        assert "serena" in registry["praxis-experiments"]
+        assert "serena" in registry["praxis-benchmarks"]
 
     def test_rhdh_plugins_registry_only_covers_the_four_engram_backends(self, engram_gateway):
         """rhdh-plugins decommissioned 2026-09-09: the registry must no
@@ -741,6 +746,58 @@ class TestBuildApp:
         response = client.get("/mcp/praxis-grid")
 
         assert response.status_code == 405
+
+
+class TestLoadInstanceRegistry:
+    def test_loads_http_host_adapter_instances(self, engram_gateway, tmp_path):
+        config = tmp_path / "instances.toml"
+        config.write_text(
+            """
+[instances.kubernaut]
+endpoint = "http://host.containers.internal:9001/mcp/kubernaut"
+
+[instances.engram]
+endpoint = "http://host.containers.internal:9001/mcp/engram"
+"""
+        )
+
+        registry = engram_gateway.load_instance_registry(config)
+
+        assert registry == {
+            "kubernaut": {
+                "host": {"kind": "http", "url": "http://host.containers.internal:9001/mcp/kubernaut"}
+            },
+            "engram": {"host": {"kind": "http", "url": "http://host.containers.internal:9001/mcp/engram"}},
+        }
+
+    @pytest.mark.parametrize(
+        ("contents", "message"),
+        [
+            ("", "non-empty .*instances.* table"),
+            ("[instances.demo]\nendpoint = \"not-a-url\"\n", "HTTP.*URL"),
+            (
+                "[instances.demo]\nendpoint = \"http://user:secret@example/mcp\"\n",
+                "must not contain credentials",
+            ),
+        ],
+    )
+    def test_rejects_invalid_instance_config(self, engram_gateway, tmp_path, contents, message):
+        config = tmp_path / "instances.toml"
+        config.write_text(contents)
+
+        with pytest.raises(ValueError, match=message):
+            engram_gateway.load_instance_registry(config)
+
+    def test_dynamic_registry_builds_one_route_per_instance(self, engram_gateway, tmp_path):
+        config = tmp_path / "instances.toml"
+        config.write_text('[instances.demo]\nendpoint = "http://host.containers.internal:9001/mcp/demo"\n')
+
+        registry = engram_gateway.load_instance_registry(config)
+        adapters = engram_gateway.build_backend_adapters(registry)
+        app = engram_gateway.build_app(adapters)
+
+        assert {route.path for route in app.routes} == {"/mcp/demo"}
+        assert adapters["demo"]["host"].url == "http://host.containers.internal:9001/mcp/demo"
 
 
 class TestStdioSubprocessAdapterCallToolSerialization:

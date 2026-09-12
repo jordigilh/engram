@@ -104,7 +104,7 @@ ISSUES_POLL_INTERVAL = int(os.environ.get("ENGRAM_ISSUES_POLL_SECONDS", "300"))
 # multi-branch and docs/issues are not).
 KUBERNAUT_RELEASE_LINES = [
     line.strip()
-    for line in os.environ.get("KUBERNAUT_RELEASE_LINES", "v1.5,v1.6").split(",")
+    for line in os.environ.get("KUBERNAUT_RELEASE_LINES", "v1.5").split(",")
     if line.strip()
 ]
 
@@ -772,9 +772,8 @@ async def code_main(
 
     # Release-line mirrors (main is the 3 blocks above) -- see
     # watch-mirrors-config.sh's RELEASE_WATCH_MIRRORS and KUBERNAUT_RELEASE_LINES
-    # above. A line with no mirror dir yet (e.g. release/v1.6 before it's cut
-    # upstream) is skipped gracefully; watch-mirrors-lib.sh logs its own INFO
-    # when that happens, so no duplicate warning is needed here.
+    # above. Only v1.5 is a separate supported release line for now; future
+    # lines can be enabled explicitly through KUBERNAUT_RELEASE_LINES.
     release_repos = [
         ("kubernaut", code_dir, ["**/*.go"], ["**/vendor/**", "**/*_test.go", "**/zz_generated*"]),
         ("kubernaut-operator", operator_dir, ["**/*.go"], ["**/vendor/**", "**/*_test.go", "**/zz_generated*"]),

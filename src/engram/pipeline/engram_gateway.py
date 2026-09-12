@@ -473,13 +473,18 @@ class HttpRelayAdapter:
     matching serena_multiplex.py's "POST-only, never GET/SSE" design to
     avoid the upstream mcp/fastmcp SSE-reconnect bug documented there."""
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, headers: dict[str, str] | None = None) -> None:
         self.url = url
+        self.headers = dict(headers or {})
 
     async def _roundtrip(self, method: str, params: dict | None = None) -> dict:
         import httpx
 
+        # Some local MCP adapters route by the HTTP Host header and reject the
+        # container bridge hostname. Keep this configurable in the runtime
+        # image instead of embedding host-specific behavior in the adapter.
         headers = {
+            **self.headers,
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
@@ -881,8 +886,11 @@ def _hindsight(bank: str) -> dict:
     return {"kind": "http", "url": f"{_HINDSIGHT_BASE}/mcp/{bank}/"}
 
 
-def _http(url: str) -> dict:
-    return {"kind": "http", "url": url}
+def _http(url: str, headers: dict[str, str] | None = None) -> dict:
+    spec = {"kind": "http", "url": url}
+    if headers:
+        spec["headers"] = headers
+    return spec
 
 
 def _stdio(command: str, args: list[str] | None = None, env: dict | None = None, shared_key: str | None = None) -> dict:
@@ -926,7 +934,9 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     def kubernaut_serena(project: str) -> dict:
         return _http(f"http://127.0.0.1:8893/mcp/{project}")
 
-    for name in ("kubernaut", "kubernaut-operator", "kubernaut-v1.5", "kubernaut-v1.6"):
+    # `kubernaut` is the current main/v1.6 line. Keep only the v1.5 release
+    # route until v1.6 is GA; do not create a redundant kubernaut-v1.6 mount.
+    for name in ("kubernaut", "kubernaut-operator", "kubernaut-v1.5"):
         registry[name] = {
             "docs": _hindsight("kubernaut-docs"),
             "issues": _hindsight("kubernaut-issues"),
@@ -1046,8 +1056,81 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     return registry
 
 
+def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
+    """Validate and normalize one backend from the container registry."""
+    if not isinstance(settings, dict):
+        raise ValueError(f"Backend {instance!r}/{backend!r} must be a TOML table")
+
+    kind = settings.get("kind")
+    if kind not in {"http", "stdio"}:
+        raise ValueError(f"Backend {instance!r}/{backend!r} kind must be 'http' or 'stdio'")
+
+    if kind == "http":
+        endpoint = settings.get("url")
+        if not isinstance(endpoint, str) or not endpoint:
+            raise ValueError(f"Backend {instance!r}/{backend!r} requires a non-empty url")
+        parsed = urlparse(endpoint)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError(f"Backend {instance!r}/{backend!r} url must be an HTTP(S) URL: {endpoint!r}")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError(f"Backend {instance!r}/{backend!r} url must not contain credentials")
+
+        headers = settings.get("headers")
+        if headers is not None:
+            if not isinstance(headers, dict) or any(
+                not isinstance(key, str) or not isinstance(value, str)
+                for key, value in headers.items()
+            ):
+                raise ValueError(f"Backend {instance!r}/{backend!r} headers must be a string-to-string table")
+
+        spec = {"kind": "http", "url": endpoint}
+        if headers:
+            spec["headers"] = dict(headers)
+        return spec
+
+    command = settings.get("command")
+    if not isinstance(command, str) or not command:
+        raise ValueError(f"Backend {instance!r}/{backend!r} requires a non-empty command")
+
+    args = settings.get("args", [])
+    if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
+        raise ValueError(f"Backend {instance!r}/{backend!r} args must be a string array")
+
+    env = settings.get("env")
+    if env is not None:
+        if not isinstance(env, dict) or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in env.items()
+        ):
+            raise ValueError(f"Backend {instance!r}/{backend!r} env must be a string-to-string table")
+
+    shared_key = settings.get("shared_key")
+    if shared_key is not None and (not isinstance(shared_key, str) or not shared_key):
+        raise ValueError(f"Backend {instance!r}/{backend!r} shared_key must be a non-empty string")
+
+    spec = {"kind": "stdio", "command": command, "args": list(args), "env": dict(env) if env else None}
+    if shared_key is not None:
+        spec["shared_key"] = shared_key
+    return spec
+
+
 def load_instance_registry(path: str | pathlib.Path) -> dict[str, dict[str, dict]]:
-    """Load container instances that delegate backend work to host adapters."""
+    """Load the container runtime registry from a TOML file.
+
+    The original ``endpoint`` form remains valid as a compatibility shim for
+    a host adapter. New configs use ``backends`` to aggregate multiple HTTP or
+    stdio MCP servers directly inside this gateway process.
+
+    Example::
+
+        [instances.kubernaut.backends.docs]
+        kind = "http"
+        url = "http://host.containers.internal:8888/mcp/kubernaut-docs/"
+
+        [instances.kubernaut.backends.serena]
+        kind = "http"
+        url = "http://host.containers.internal:8893/mcp/kubernaut"
+    """
     import tomllib
 
     config_path = pathlib.Path(path)
@@ -1071,15 +1154,23 @@ def load_instance_registry(path: str | pathlib.Path) -> dict[str, dict[str, dict
             raise ValueError(f"Instance {name!r} must be a TOML table")
 
         endpoint = settings.get("endpoint")
-        if not isinstance(endpoint, str) or not endpoint:
-            raise ValueError(f"Instance {name!r} requires a non-empty endpoint")
-        parsed = urlparse(endpoint)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError(f"Instance {name!r} endpoint must be an HTTP(S) URL: {endpoint!r}")
-        if parsed.username is not None or parsed.password is not None:
-            raise ValueError(f"Instance {name!r} endpoint must not contain credentials")
+        backend_settings = settings.get("backends")
+        if endpoint is not None and backend_settings is not None:
+            raise ValueError(f"Instance {name!r} cannot define both endpoint and backends")
 
-        registry[name] = {"host": {"kind": "http", "url": endpoint}}
+        if endpoint is not None:
+            registry[name] = {"host": _parse_runtime_backend(name, "host", {"kind": "http", "url": endpoint})}
+            continue
+
+        if not isinstance(backend_settings, dict) or not backend_settings:
+            raise ValueError(f"Instance {name!r} requires a non-empty backends table")
+
+        registry[name] = {}
+        for backend, backend_config in backend_settings.items():
+            if not isinstance(backend, str) or not backend or "/" in backend:
+                raise ValueError(f"Invalid backend key for instance {name!r}: {backend!r}")
+            registry[name][backend] = _parse_runtime_backend(name, backend, backend_config)
+
     return registry
 
 
@@ -1154,7 +1245,7 @@ def build_backend_adapters(registry: dict[str, dict[str, dict]]) -> dict[str, di
         adapters[project] = {}
         for backend_key, spec in specs.items():
             if spec["kind"] == "http":
-                adapters[project][backend_key] = HttpRelayAdapter(spec["url"])
+                adapters[project][backend_key] = HttpRelayAdapter(spec["url"], spec.get("headers"))
                 continue
 
             shared_key = spec.get("shared_key")

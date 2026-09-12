@@ -56,9 +56,32 @@ backend.
 `family` identifies the shared docs/issues family. The gateway owns the actual
 bank mapping; it is not used to construct direct backend URLs in the plugin.
 
-Release-line routes must be explicitly registered. For example, use
-`kubernaut-v1.5` when that route is available rather than relying on the plugin
-to invent a branch-suffixed URL.
+Release-line routes must be explicitly registered. Configure exact branch
+routes when one checkout switches between release lines:
+
+```json
+{
+  "plugin": [[
+    "/path/to/engram/opencode-plugin/index.ts",
+    {
+      "family": "kubernaut",
+      "branchRoutes": {
+        "main": "kubernaut",
+        "release/v1.5": "kubernaut-v1.5"
+      }
+    }
+  ]]
+}
+```
+
+For the current Kubernaut release policy, `kubernaut` is the main/current-v1.6
+route and `kubernaut-v1.5` is the only separate release route until v1.6 is GA.
+DCM and Praxis only require their main route; do not add a `*-v1.6` route.
+
+Without `branchRoutes`, the plugin deliberately keeps the exact directory-name
+route and never invents a route the gateway may not expose. Codex users can use
+`scripts/engram-codex`, which applies the equivalent route as a per-invocation
+`-c` override; see [Runtime Image](RUNTIME_IMAGE.md#branch-aware-codex).
 
 ## Gateway
 

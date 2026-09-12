@@ -43,6 +43,33 @@ describe("deriveIdentity", () => {
     expect(id.family).toBe("kubernaut")
   })
 
+  test("configured branch route selects the release gateway mount", () => {
+    const id = deriveIdentity({
+      directoryBasename: "kubernaut",
+      branch: "release/v1.5",
+      options: {
+        family: "kubernaut",
+        branchRoutes: { main: "kubernaut", "release/v1.5": "kubernaut-v1.5" },
+      },
+    })
+
+    expect(id.project).toBe("kubernaut-v1.5")
+    expect(id.family).toBe("kubernaut")
+  })
+
+  test("explicit project takes precedence over configured branch route", () => {
+    const id = deriveIdentity({
+      directoryBasename: "kubernaut",
+      branch: "release/v1.5",
+      options: {
+        project: "custom-route",
+        branchRoutes: { "release/v1.5": "kubernaut-v1.5" },
+      },
+    })
+
+    expect(id.project).toBe("custom-route")
+  })
+
   test("git branch detection failing (e.g. not a git repo) falls back to main, not an error", () => {
     const id = deriveIdentity({ directoryBasename: "engram", branch: undefined, options: {} })
     expect(id.branchSuffix).toBe("main")

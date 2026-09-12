@@ -608,14 +608,9 @@ class StdioSubprocessAdapter:
                 await self._restart()
                 result = await self._session.list_tools()
             return [
-                # mcp SDK's Tool pydantic model exposes this field as
-                # `input_schema` (snake_case) in the installed version, not
-                # the wire-format `inputSchema` camelCase alias it accepts on
-                # construction -- `t.inputSchema` raised AttributeError on
-                # every real stdio backend's list_tools() call (never caught
-                # by prior tests, which stubbed this dict out entirely
-                # instead of exercising a real mcp.types.Tool instance).
-                {"name": t.name, "description": t.description or "", "inputSchema": t.input_schema}
+                # MCP SDK versions expose the wire-format schema under either
+                # spelling; normalize it at the gateway boundary.
+                {"name": t.name, "description": t.description or "", "inputSchema": getattr(t, "input_schema", None) or getattr(t, "inputSchema", {})}
                 for t in result.tools
             ]
 
@@ -641,10 +636,7 @@ class StdioSubprocessAdapter:
                 # data, surfacing as a generic "backend is currently down"
                 # (see docs/findings/2026-08.md, 2026-08-25 entry).
                 "content": [c.model_dump(exclude_none=True) if hasattr(c, "model_dump") else c for c in result.content],
-                # mcp==2.0.0 renamed CallToolResult.isError -> is_error (same
-                # 2026-08-22 dependabot bump that broke input_schema and
-                # FastMCP -- see docs/findings/2026-08.md's 2026-08-27 entry).
-                "isError": result.is_error,
+                "isError": getattr(result, "is_error", getattr(result, "isError", False)),
             }
 
 

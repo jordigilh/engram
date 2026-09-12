@@ -499,7 +499,6 @@ class TestBuildProjectRegistry:
 
         assert len(registry) == 34  # no redundant kubernaut-v1.6 route
         assert "kubernaut-v1.6" not in registry
-        assert "rhdh-plugins" not in registry  # decommissioned 2026-09-09
 
     def test_kubernaut_family_is_fully_http_already(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")

@@ -310,12 +310,9 @@ def _format_lookup_error(result: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _run_mcp_server(host: str = "127.0.0.1", port: int = 8890, transport: str = "stdio") -> None:
-    # mcp==2.0.0 (2026-08-22 dependabot bump) renamed FastMCP to MCPServer
-    # and moved host/port from the constructor to run(). See
-    # docs/findings/2026-08.md's 2026-08-27 entry.
-    from mcp.server.mcpserver import MCPServer as FastMCP
+    from mcp.server import FastMCP
 
-    mcp = FastMCP("engram-code")
+    mcp = FastMCP("engram-code", host=host, port=port)
 
     @mcp.tool()
     def engram_code_search(query: str, limit: int = 10) -> str:
@@ -399,7 +396,7 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8890, transport: str = 
         mcp.run(transport="stdio")
     else:
         log.info("Starting engram-code MCP server on %s:%d (sse)", host, port)
-        mcp.run(transport="sse", host=host, port=port)
+        mcp.run(transport="sse")
 
 
 # ---------------------------------------------------------------------------

@@ -29,11 +29,11 @@ def _run_mcp_server(
     db_path: Path | None = None,
     pg_url: str | None = None,
 ) -> None:
-    from mcp.server.mcpserver import MCPServer as FastMCP
+    from mcp.server import FastMCP
 
     import json
 
-    mcp = FastMCP("kubernaut-rca")
+    mcp = FastMCP("kubernaut-rca", host=host, port=port)
     contexts: dict[tuple[str, str], dict] = {}
     roots: dict[tuple[str, str], Path] = {}
     retention_path = db_path or Path(os.environ.get("KUBERNAUT_RCA_DB", "~/.hindsight/kubernaut-rca.sqlite3")).expanduser()
@@ -176,7 +176,7 @@ def _run_mcp_server(
     if transport == "stdio":
         mcp.run(transport="stdio")
     else:
-        mcp.run(transport=transport, host=host, port=port)
+        mcp.run(transport=transport)
 
 
 def main() -> None:

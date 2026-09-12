@@ -36,14 +36,16 @@ with Serena's own StreamableHTTPSessionManager, crashing the shared upstream
 daemon during the spike (matches known, still-open upstream bugs: mcp SDK's
 GET handler doesn't send a priming event before blocking, and cancelling a
 mid-flight SSE task on client disconnect violates the ASGI response
-lifecycle -- see PrefectHQ/fastmcp#532, #3025, #671). Plain one-shot
-POST-only HTTP calls (proven safe in this same spike via curl, which never
-opens a GET at all) don't hit this bug. This module therefore does NOT use
-fastmcp's Client/create_proxy for the upstream connection -- it hand-rolls a
-minimal one-shot httpx POST relay instead, and returns 405 for any GET
-against its own downstream-facing endpoint (spec-compliant per the MCP
-Streamable HTTP transport spec: a server that never pushes unsolicited
-messages may decline the SSE listen stream with 405 rather than opening one).
+lifecycle -- see PrefectHQ/fastmcp#532, #3025, #671). Plain POST-only HTTP
+calls (proven safe in this same spike via curl, which never opens a GET at
+all) don't hit this bug. This module therefore does NOT use fastmcp's
+Client/create_proxy for the upstream connection. It hand-rolls a minimal POST
+relay, keeps a wrapper-owned downstream session mapped to an upstream session,
+and returns 405 for any GET against its own downstream-facing endpoint
+(spec-compliant per the MCP Streamable HTTP transport spec: a server that
+never pushes unsolicited messages may decline the SSE listen stream with 405
+rather than opening one). The upstream session is recreated once if Serena
+reports that it was lost, while the downstream session remains stable.
 
 Not tied to "kubernaut-family" specifically -- `projects` and `upstream_url`
 are both parameters, so any other Serena daemon shared across a repo family
@@ -54,8 +56,11 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import secrets
 import sys
+import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 logging.basicConfig(
     level=logging.INFO,
@@ -69,6 +74,7 @@ DEFAULT_PORT = 8893
 DEFAULT_UPSTREAM_URL = "http://127.0.0.1:8892/mcp"
 FORWARD_TIMEOUT_S = 60.0
 RETRY_DELAY_S = 0.5
+SESSION_IDLE_TIMEOUT_S = 30 * 60
 
 # Must match the `projects:` names registered in ~/.serena/serena_config.yml
 # for the kubernaut-family daemon, not repo paths -- activate_project takes a
@@ -160,6 +166,89 @@ class ActiveProjectTracker:
             self.active = None
 
 
+@dataclass
+class DownstreamSession:
+    """The wrapper-owned identity and upstream session for one MCP client."""
+
+    project: str
+    upstream_session_id: str
+    last_used: float
+
+
+class SessionProjectMismatch(Exception):
+    """Raised when a session is presented on a different project mount."""
+
+
+class DownstreamSessionRegistry:
+    """Maps opaque downstream MCP IDs to upstream Serena sessions.
+
+    The registry is deliberately process-local. A multiplex restart invalidates
+    all downstream sessions rather than persisting transport state that Serena
+    can no longer honor.
+    """
+
+    def __init__(
+        self,
+        *,
+        idle_timeout_s: float = SESSION_IDLE_TIMEOUT_S,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        import asyncio
+
+        self.idle_timeout_s = idle_timeout_s
+        self._clock = clock
+        self._sessions: dict[str, DownstreamSession] = {}
+        self._lock = asyncio.Lock()
+
+    async def create(self, project: str, upstream_session_id: str) -> tuple[str, DownstreamSession]:
+        session_id = secrets.token_urlsafe(24)
+        entry = DownstreamSession(project, upstream_session_id, self._clock())
+        async with self._lock:
+            self._sessions[session_id] = entry
+        return session_id, entry
+
+    async def get(self, session_id: str, project: str) -> DownstreamSession | None:
+        async with self._lock:
+            entry = self._sessions.get(session_id)
+            if entry is None:
+                return None
+            if entry.project != project:
+                raise SessionProjectMismatch
+            if self._clock() - entry.last_used >= self.idle_timeout_s:
+                return None
+            entry.last_used = self._clock()
+            return entry
+
+    async def replace_upstream(self, session_id: str, entry: DownstreamSession, upstream_session_id: str) -> None:
+        async with self._lock:
+            if self._sessions.get(session_id) is entry:
+                entry.upstream_session_id = upstream_session_id
+                entry.last_used = self._clock()
+
+    async def remove(self, session_id: str, project: str) -> DownstreamSession | None:
+        async with self._lock:
+            entry = self._sessions.get(session_id)
+            if entry is None:
+                return None
+            if entry.project != project:
+                raise SessionProjectMismatch
+            return self._sessions.pop(session_id)
+
+    async def expire(self) -> list[DownstreamSession]:
+        now = self._clock()
+        async with self._lock:
+            expired_ids = [
+                session_id
+                for session_id, entry in self._sessions.items()
+                if now - entry.last_used >= self.idle_timeout_s
+            ]
+            return [self._sessions.pop(session_id) for session_id in expired_ids]
+
+    async def __len__(self) -> int:
+        async with self._lock:
+            return len(self._sessions)
+
+
 def _intercept_response(message: dict, project: str) -> dict:
     """Synthesize a well-formed JSON-RPC tool result for an agent's own
     (redundant) activate_project call, without contacting upstream at all."""
@@ -248,6 +337,17 @@ def _looks_like_no_active_project_error(body: bytes) -> bool:
     return "No active project" in text
 
 
+def _looks_like_upstream_session_loss(status_code: int, body: bytes) -> bool:
+    """Recognize the upstream responses that mean its session disappeared."""
+    if status_code == 404:
+        return True
+    text = body.decode("utf-8", errors="replace").lower()
+    return status_code == 400 and any(
+        marker in text
+        for marker in ("missing session id", "session not found", "invalid session")
+    )
+
+
 async def _forward_scoped(
     project: str,
     tracker: ActiveProjectTracker,
@@ -286,7 +386,9 @@ async def _forward_scoped(
         return await forward_raw()
 
 
-def _make_activate(upstream_url: str) -> Callable[[str], Awaitable[None]]:
+def _make_activate(
+    upstream_url: str, upstream_host_header: str | None = None
+) -> Callable[[str], Awaitable[None]]:
     """Build the `activate` callable for ActiveProjectTracker.pinned(): a
     short-lived, one-shot (POST-only, never GET) control session against the
     upstream daemon -- see module docstring for why GET/persistent-SSE
@@ -299,6 +401,8 @@ def _make_activate(upstream_url: str) -> Callable[[str], Awaitable[None]]:
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
+        if upstream_host_header:
+            headers["Host"] = upstream_host_header
         async with httpx.AsyncClient(timeout=FORWARD_TIMEOUT_S) as client:
             init_resp = await client.post(
                 upstream_url,
@@ -345,22 +449,92 @@ def _make_activate(upstream_url: str) -> Callable[[str], Awaitable[None]]:
     return activate
 
 
-def build_app(projects: list[str], upstream_url: str):
-    """Build the Starlette app: one route per project, each forwarding to
-    the shared upstream via one-shot POST relays with activate_project
-    injected ahead of project-scoped tool calls (see module docstring)."""
+def build_app(projects: list[str], upstream_url: str, upstream_host_header: str | None = None):
+    """Build one POST-only, project-pinned route per configured project."""
     from starlette.applications import Starlette
     from starlette.requests import Request
     from starlette.responses import Response
     from starlette.routing import Route
 
     tracker = ActiveProjectTracker()
-    activate = _make_activate(upstream_url)
+    sessions = DownstreamSessionRegistry()
+    activate = _make_activate(upstream_url, upstream_host_header)
 
     # Headers that are connection/host-specific and must not be blindly
     # relayed between the two hops of this proxy.
     _DROP_REQUEST_HEADERS = {"host", "content-length", "connection"}
     _DROP_RESPONSE_HEADERS = {"content-length", "connection", "transfer-encoding"}
+
+    async def _upstream_request(method: str, body: bytes, headers: dict[str, str]) -> Response:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=FORWARD_TIMEOUT_S) as client:
+            upstream_resp = await client.request(method, upstream_url, content=body, headers=headers)
+        resp_headers = {
+            k: v
+            for k, v in upstream_resp.headers.items()
+            if k.lower() not in _DROP_RESPONSE_HEADERS
+        }
+        return Response(content=upstream_resp.content, status_code=upstream_resp.status_code, headers=resp_headers)
+
+    def _upstream_headers(headers: dict[str, str]) -> dict[str, str]:
+        if upstream_host_header:
+            headers = {**headers, "Host": upstream_host_header}
+        return headers
+
+    async def _open_upstream_session() -> tuple[str, Response]:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        init_body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "serena-multiplex", "version": "0.0.1"},
+                },
+            }
+        ).encode()
+        init_response = await _upstream_request("POST", init_body, _upstream_headers(headers))
+        if init_response.status_code >= 400:
+            raise RuntimeError(f"Serena initialize failed with HTTP {init_response.status_code}")
+        upstream_session_id = next(
+            (
+                value
+                for key, value in init_response.headers.items()
+                if key.lower() == "mcp-session-id"
+            ),
+            None,
+        )
+        if not upstream_session_id:
+            raise RuntimeError("Serena upstream did not return mcp-session-id")
+
+        session_headers = {**headers, "mcp-session-id": upstream_session_id}
+        initialized_body = b'{"jsonrpc":"2.0","method":"notifications/initialized"}'
+        initialized_response = await _upstream_request(
+            "POST", initialized_body, _upstream_headers(session_headers)
+        )
+        if initialized_response.status_code >= 400:
+            raise RuntimeError(f"Serena initialized notification failed with HTTP {initialized_response.status_code}")
+        return upstream_session_id, init_response
+
+    async def _close_upstream_session(upstream_session_id: str) -> None:
+        try:
+            await _upstream_request(
+                "DELETE",
+                b"",
+                _upstream_headers({"mcp-session-id": upstream_session_id}),
+            )
+        except Exception as exc:
+            log.info("could not close upstream Serena session: %s", exc)
+
+    def _with_downstream_session(response: Response, session_id: str) -> Response:
+        response.headers["mcp-session-id"] = session_id
+        return response
 
     def _make_endpoint(project: str):
         async def endpoint(request: Request) -> Response:
@@ -369,58 +543,93 @@ def build_app(projects: list[str], upstream_url: str):
                 # module docstring for why this proxy never opens one.
                 return Response(status_code=405)
 
-            fwd_headers = {
-                k: v for k, v in request.headers.items() if k.lower() not in _DROP_REQUEST_HEADERS
-            }
+            if request.method not in {"POST", "DELETE"}:
+                return Response(status_code=405)
 
-            async def forward_raw() -> Response:
-                import httpx
+            expired = await sessions.expire()
+            for entry in expired:
+                await _close_upstream_session(entry.upstream_session_id)
 
-                async with httpx.AsyncClient(timeout=FORWARD_TIMEOUT_S) as client:
-                    upstream_resp = await client.request(
-                        request.method,
-                        upstream_url,
-                        content=await request.body(),
-                        headers=fwd_headers,
-                    )
-                resp_headers = {
-                    k: v
-                    for k, v in upstream_resp.headers.items()
-                    if k.lower() not in _DROP_RESPONSE_HEADERS
-                }
-                return Response(
-                    content=upstream_resp.content,
-                    status_code=upstream_resp.status_code,
-                    headers=resp_headers,
-                )
-
-            if request.method != "POST":
-                return await forward_raw()
+            downstream_session_id = request.headers.get("mcp-session-id")
+            if request.method == "DELETE":
+                if not downstream_session_id:
+                    return Response(status_code=400, content=b"Missing mcp-session-id")
+                try:
+                    entry = await sessions.remove(downstream_session_id, project)
+                except SessionProjectMismatch:
+                    return Response(status_code=404)
+                if entry is None:
+                    return Response(status_code=404)
+                await _close_upstream_session(entry.upstream_session_id)
+                return Response(status_code=200)
 
             body = await request.body()
             try:
                 message = json.loads(body)
             except (ValueError, UnicodeDecodeError):
-                return await forward_raw()
+                return Response(status_code=400, content=b"Invalid JSON")
 
-            if message.get("method") != "tools/call":
-                return await forward_raw()
+            if message.get("method") == "initialize":
+                try:
+                    upstream_session_id, response = await _open_upstream_session()
+                    downstream_session_id, _ = await sessions.create(project, upstream_session_id)
+                except Exception as exc:
+                    log.warning("could not initialize Serena session for %s: %s", project, exc)
+                    return Response(
+                        content=json.dumps({"detail": "Serena upstream is temporarily unavailable"}),
+                        status_code=503,
+                        headers={"Retry-After": "1"},
+                        media_type="application/json",
+                    )
+                return _with_downstream_session(response, downstream_session_id)
 
-            tool_name = (message.get("params") or {}).get("name", "")
-            route = route_tool_call(tool_name)
+            if not downstream_session_id:
+                return Response(status_code=400, content=b"Missing mcp-session-id")
+            try:
+                entry = await sessions.get(downstream_session_id, project)
+            except SessionProjectMismatch:
+                return Response(status_code=404)
+            if entry is None:
+                return Response(status_code=404, content=b"Unknown or expired mcp-session-id")
 
-            if route == "intercept":
-                result = _intercept_response(message, project)
-                return Response(
-                    content=f"event: message\ndata: {json.dumps(result)}\n\n",
-                    media_type="text/event-stream",
-                )
+            async def forward_raw() -> Response:
+                headers = {
+                    k: v
+                    for k, v in request.headers.items()
+                    if k.lower() not in _DROP_REQUEST_HEADERS and k.lower() != "mcp-session-id"
+                }
+                headers["mcp-session-id"] = entry.upstream_session_id
+                return await _upstream_request("POST", body, _upstream_headers(headers))
 
-            if route == "agnostic":
+            async def refresh_session() -> None:
+                upstream_session_id, _ = await _open_upstream_session()
+                await sessions.replace_upstream(downstream_session_id, entry, upstream_session_id)
+
+            async def forward_with_recovery() -> Response:
+                tool_name = (message.get("params") or {}).get("name", "")
+                route = route_tool_call(tool_name) if message.get("method") == "tools/call" else "agnostic"
+
+                if route == "intercept":
+                    result = _intercept_response(message, project)
+                    return Response(
+                        content=f"event: message\ndata: {json.dumps(result)}\n\n",
+                        media_type="text/event-stream",
+                    )
+                if route == "scoped":
+                    response = await _forward_scoped(project, tracker, activate, forward_raw)
+                else:
+                    response = await forward_raw()
+                if not _looks_like_upstream_session_loss(response.status_code, response.body):
+                    return response
+
+                await refresh_session()
+                await tracker.invalidate()
+                if route == "scoped":
+                    return await _forward_scoped(project, tracker, activate, forward_raw)
                 return await forward_raw()
 
             try:
-                return await _forward_scoped(project, tracker, activate, forward_raw)
+                return _with_downstream_session(await forward_with_recovery(), downstream_session_id)
             except Exception as exc:
                 import httpx
 
@@ -446,6 +655,10 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--upstream-url", default=DEFAULT_UPSTREAM_URL)
     parser.add_argument(
+        "--upstream-host-header",
+        help="Optional Host header for an upstream reached through a mapped address",
+    )
+    parser.add_argument(
         "--project",
         dest="projects",
         action="append",
@@ -461,7 +674,7 @@ def main() -> None:
         args.upstream_url,
         projects,
     )
-    app = build_app(projects, args.upstream_url)
+    app = build_app(projects, args.upstream_url, args.upstream_host_header)
 
     import uvicorn
 

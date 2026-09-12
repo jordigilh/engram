@@ -27,6 +27,13 @@ recall-quality benchmark is built against.
 
 ## Index
 
+### September 2026 (4 entries)
+
+- [2026-09-12: OpenCode Hooks Spike — Methodology Survives Compaction, Probe-Once Code-Search Nudge, Code-Backend Compat Fix; % Auto-Compact Parked Upstream](findings/2026-09.md#2026-09-12-opencode-hooks-spike--methodology-survives-compaction-probe-once-code-search-nudge-code-backend-compat-fix--auto-compact-parked-upstream)
+- [2026-09-11 (same day, fifth follow-up): Ingested `kubernaut-demo-scenarios` Operational Source Into the Live Kubernaut Code Index](findings/2026-09.md#2026-09-11-same-day-fifth-follow-up-ingested-kubernaut-demo-scenarios-operational-source-into-the-live-kubernaut-code-index)
+- [2026-09-11 (same day, follow-up): Executed the Rebuild — Orphans Deleted via SQL Cascade, Jira-Tickets PDF Found as Live Re-Pollution Source; Remaining Buckets Adjudicated Keep](findings/2026-09.md#2026-09-11-same-day-follow-up-executed-the-rebuild--orphans-deleted-via-sql-cascade-jira-tickets-pdf-found-as-live-re-pollution-source-remaining-buckets-adjudicated-keep)
+- [2026-09-11: Praxis Memory-Bank Clean-Slate Triage — 2,407 Exact-Duplicate Boilerplate Records Invalidated, Zero LLM Cost; Orphan Observations Found Server-Immortal](findings/2026-09.md#2026-09-11-praxis-memory-bank-clean-slate-triage--2407-exact-duplicate-boilerplate-records-invalidated-zero-llm-cost-orphan-observations-found-server-immortal)
+
 ### August 2026 (58 entries)
 
 - [2026-08-16: Root-Caused and Fixed the kubernaut-family Daemon Restart Storm (CocoIndex/Serena Intermittently Failing on kubernaut-v1.5)](findings/2026-08.md#2026-08-16-root-caused-and-fixed-the-kubernaut-family-daemon-restart-storm-cocoindexserena-intermittently-failing-on-kubernaut-v1.5)

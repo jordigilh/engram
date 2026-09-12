@@ -8,6 +8,6 @@
     "test": "bun test ./"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "1.18.25"
+    "@opencode-ai/plugin": "1.18.27"
   }
 }

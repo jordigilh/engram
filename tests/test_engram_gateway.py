@@ -743,6 +743,45 @@ class TestBuildApp:
         assert response.status_code == 405
 
 
+class TestLoadInstanceRegistry:
+    def test_loads_http_host_adapter_instances(self, engram_gateway, tmp_path):
+        config = tmp_path / "instances.toml"
+        config.write_text(
+            '[instances.kubernaut]\nendpoint = "http://host.containers.internal:9001/mcp/kubernaut"\n'
+        )
+
+        assert engram_gateway.load_instance_registry(config) == {
+            "kubernaut": {
+                "host": {"kind": "http", "url": "http://host.containers.internal:9001/mcp/kubernaut"}
+            }
+        }
+
+    @pytest.mark.parametrize(
+        "contents",
+        [
+            "",
+            '[instances.demo]\nendpoint = "not-a-url"\n',
+            '[instances.demo]\nendpoint = "http://user:secret@example/mcp"\n',
+        ],
+    )
+    def test_rejects_invalid_instance_config(self, engram_gateway, tmp_path, contents):
+        config = tmp_path / "instances.toml"
+        config.write_text(contents)
+
+        with pytest.raises(ValueError):
+            engram_gateway.load_instance_registry(config)
+
+    def test_dynamic_registry_builds_one_route_per_instance(self, engram_gateway, tmp_path):
+        config = tmp_path / "instances.toml"
+        config.write_text('[instances.demo]\nendpoint = "http://host.containers.internal:9001/mcp/demo"\n')
+
+        registry = engram_gateway.load_instance_registry(config)
+        adapters = engram_gateway.build_backend_adapters(registry)
+        app = engram_gateway.build_app(adapters)
+
+        assert {route.path for route in app.routes} == {"/mcp/demo"}
+
+
 class TestStdioSubprocessAdapterCallToolSerialization:
     """2026-08-25: koku team hit a consistent (not transient) failure where
     every call_tool through this adapter -- koku_code_search, find_symbol,

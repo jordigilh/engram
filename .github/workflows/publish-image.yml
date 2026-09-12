@@ -1,0 +1,65 @@
+name: Publish Engram Image
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - Dockerfile.engram
+      - src/engram/**
+      - .github/workflows/publish-image.yml
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile.engram
+      - src/engram/**
+      - .github/workflows/publish-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      IMAGE: quay.io/jordigilh/engram
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Podman and arm64 emulation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman qemu-user-static binfmt-support
+          podman --version
+
+      - name: Register binfmt handlers
+        run: |
+          sudo systemctl restart systemd-binfmt 2>/dev/null || true
+          test -e /proc/sys/fs/binfmt_misc/qemu-aarch64
+          cat /proc/sys/fs/binfmt_misc/qemu-aarch64
+
+      - name: Log in to Quay
+        if: github.event_name != 'pull_request'
+        env:
+          QUAY_USERNAME: ${{ secrets.QUAY_ROBOT_USERNAME }}
+          QUAY_TOKEN: ${{ secrets.QUAY_ROBOT_TOKEN }}
+        run: echo "$QUAY_TOKEN" | podman login quay.io -u "$QUAY_USERNAME" --password-stdin
+
+      - name: Build multi-architecture manifest
+        run: |
+          MANIFEST="$IMAGE:runtime-${GITHUB_SHA}"
+          podman manifest rm "$MANIFEST" 2>/dev/null || true
+          podman manifest create "$MANIFEST"
+          podman build --pull --platform linux/amd64 --manifest "$MANIFEST" -f Dockerfile.engram .
+          podman build --pull --platform linux/arm64 --manifest "$MANIFEST" -f Dockerfile.engram .
+          podman manifest inspect "$MANIFEST"
+
+      - name: Push immutable multi-architecture image
+        if: github.event_name != 'pull_request'
+        run: podman manifest push --all "$IMAGE:runtime-${GITHUB_SHA}" "docker://$IMAGE:runtime-${GITHUB_SHA}"
+
+      - name: Publish latest multi-architecture manifest
+        if: github.event_name != 'pull_request'
+        run: podman manifest push --all "$IMAGE:runtime-${GITHUB_SHA}" "docker://$IMAGE:runtime-latest"

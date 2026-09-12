@@ -71,6 +71,7 @@ import pathlib
 import sys
 from datetime import datetime, timezone
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1045,6 +1046,43 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     return registry
 
 
+def load_instance_registry(path: str | pathlib.Path) -> dict[str, dict[str, dict]]:
+    """Load container instances that delegate backend work to host adapters."""
+    import tomllib
+
+    config_path = pathlib.Path(path)
+    try:
+        with config_path.open("rb") as config_file:
+            document = tomllib.load(config_file)
+    except OSError as exc:
+        raise ValueError(f"Cannot read instance config {config_path}: {exc}") from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"Invalid instance config {config_path}: {exc}") from exc
+
+    instances = document.get("instances")
+    if not isinstance(instances, dict) or not instances:
+        raise ValueError("Instance config must contain a non-empty [instances] table")
+
+    registry: dict[str, dict[str, dict]] = {}
+    for name, settings in instances.items():
+        if not isinstance(name, str) or not name or "/" in name or name in {".", ".."}:
+            raise ValueError(f"Invalid instance route: {name!r}")
+        if not isinstance(settings, dict):
+            raise ValueError(f"Instance {name!r} must be a TOML table")
+
+        endpoint = settings.get("endpoint")
+        if not isinstance(endpoint, str) or not endpoint:
+            raise ValueError(f"Instance {name!r} requires a non-empty endpoint")
+        parsed = urlparse(endpoint)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError(f"Instance {name!r} endpoint must be an HTTP(S) URL: {endpoint!r}")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError(f"Instance {name!r} endpoint must not contain credentials")
+
+        registry[name] = {"host": {"kind": "http", "url": endpoint}}
+    return registry
+
+
 def _bank_name_from_spec(spec: dict, suffix: str) -> str:
     """Extract a Hindsight bank name from one of the registry's HTTP specs."""
     url = spec.get("url", "")
@@ -1134,13 +1172,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument(
+        "--config",
+        type=pathlib.Path,
+        help="TOML instance config for container mode; without it, use the legacy static registry",
+    )
     args = parser.parse_args()
 
-    import os
-
-    home = os.path.expanduser("~")
-    registry = build_project_registry(home)
-    validate_gateway_identity_registry(registry)
+    if args.config is None:
+        home = os.path.expanduser("~")
+        registry = build_project_registry(home)
+        validate_gateway_identity_registry(registry)
+    else:
+        registry = load_instance_registry(args.config)
     projects = build_backend_adapters(registry)
     log.info("starting on %s:%d, %d projects: %s", args.host, args.port, len(projects), sorted(projects))
     app = build_app(projects)

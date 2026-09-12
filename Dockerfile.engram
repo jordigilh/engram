@@ -1,0 +1,30 @@
+FROM python:3.13-slim
+
+LABEL org.opencontainers.image.title="Engram" \
+      org.opencontainers.image.description="Project-scoped Engram MCP gateway runtime" \
+      org.opencontainers.image.source="https://github.com/jordigilh/engram"
+
+WORKDIR /opt/engram
+
+# Container mode keeps the gateway generic: host adapters own source trees,
+# subprocesses, credentials, and mutable indexes outside this image.
+RUN pip install --no-cache-dir \
+      httpx==0.28.1 \
+      mcp==1.30.0 \
+      starlette==1.6.0 \
+      uvicorn==0.52.4 \
+    && useradd --create-home --uid 1001 engram
+
+COPY src/engram /opt/engram/src/engram
+
+ENV PYTHONPATH=/opt/engram/src \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN mkdir -p /etc/engram && chown -R engram:engram /opt/engram /etc/engram
+
+USER 1001
+EXPOSE 8896
+
+ENTRYPOINT ["python", "-m", "engram.pipeline.engram_gateway"]
+CMD ["--config", "/etc/engram/instances.toml"]

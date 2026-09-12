@@ -110,17 +110,20 @@ class TestBuildCatalog:
         assert catalog == {}
         assert tool_defs == []
 
-    def test_duplicate_unprefixed_name_across_backends_keeps_first_and_does_not_raise(self, engram_gateway):
+    def test_duplicate_unprefixed_name_across_backends_is_qualified(self, engram_gateway):
         """code and serena are both unprefixed -- if they ever define the
         same tool name (shouldn't happen today, verified empirically in the
         plan, but must fail safe rather than silently overwrite/crash), the
-        first backend processed wins and the collision is only logged."""
+        second backend gets a qualified name."""
         catalog, tool_defs = engram_gateway.build_catalog(
             {"code": [_tool("shared_name")], "serena": [_tool("shared_name")]}
         )
 
-        assert catalog == {"shared_name": ("code", "shared_name")}
-        assert len(tool_defs) == 1
+        assert catalog == {
+            "shared_name": ("code", "shared_name"),
+            "serena_shared_name": ("serena", "shared_name"),
+        }
+        assert {tool["name"] for tool in tool_defs} == {"shared_name", "serena_shared_name"}
 
 
 class TestRouteCall:

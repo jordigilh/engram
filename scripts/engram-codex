@@ -22,27 +22,41 @@ directory=$(basename "$root")
 route=${ENGRAM_CODEX_PROJECT:-$directory}
 
 if [ -z "${ENGRAM_CODEX_PROJECT:-}" ]; then
+  branch=$(git -C "$root" branch --show-current 2>/dev/null || true)
+  suffix=main
   case "$directory" in
-    kubernaut-v1.6)
-      printf '%s\n' "engram-codex: kubernaut-v1.6 has no separate MCP route; use the kubernaut checkout for current v1.6" >&2
-      exit 2
-      ;;
-    kubernaut-v1.5|*-v[0-9]*.[0-9]*)
-      # A supported dedicated release checkout already carries its route.
-      ;;
-    kubernaut)
-      branch=$(git -C "$root" branch --show-current 2>/dev/null || true)
-      case "$branch" in
-        release/v1.5)
-          route="kubernaut-v1.5"
-          ;;
-        release/v1.6)
-          # v1.6 is the current main route, not a second public mount.
-          route="kubernaut"
-          ;;
-      esac
-      ;;
+    *-v[0-9]*.[0-9]*) suffix=${directory##*-} ;;
   esac
+  case "$branch" in
+    release/v[0-9]*.[0-9]*) suffix=${branch#release/} ;;
+  esac
+
+  # Optional comma-separated mappings keep branch-aware routing generic:
+  #   ENGRAM_CODEX_BRANCH_ROUTES='main=project,release/v1.5=project-v1.5'
+  # Try the exact branch first, then the normalized release suffix, matching
+  # the OpenCode plugin's branchRoutes behavior.
+  mappings=${ENGRAM_CODEX_BRANCH_ROUTES:-}
+  old_ifs=$IFS
+  matched=0
+  selected=
+  for key in "$branch" "$suffix" "release/$suffix"; do
+    [ -n "$key" ] || continue
+    IFS=,
+    for mapping in $mappings; do
+      mapping_key=${mapping%%=*}
+      mapping_value=${mapping#*=}
+      if [ "$mapping_key" = "$key" ]; then
+        selected=$mapping_value
+        matched=1
+        break
+      fi
+    done
+    IFS=$old_ifs
+    [ "$matched" -eq 1 ] && break
+  done
+  if [ "$matched" -eq 1 ]; then
+    route=$selected
+  fi
 fi
 
 case "$route" in

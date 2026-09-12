@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
-"""Aggregates hindsight-docs, hindsight-issues, cocoindex-code, and serena
-behind ONE Cursor-facing MCP HTTP mount per repo, instead of the 3-4
-separate `.cursor/mcp.json` server entries every onboarded repo had before
-this module existed.
+"""Generic MCP gateway with optional project-specific legacy configuration.
+
+The config-driven runtime aggregates any configured HTTP or stdio MCP backends
+behind one client-facing HTTP mount per project. The no-config native mode
+retains the historical static registry for this installation's onboarded
+projects; that registry is compatibility configuration, not gateway behavior.
+
+The original use case aggregated hindsight-docs, hindsight-issues,
+cocoindex-code, and serena behind ONE Cursor-facing MCP HTTP mount per repo,
+instead of the 3-4 separate `.cursor/mcp.json` server entries every onboarded
+repo had before this module existed.
 
 Graduated from a single-repo (`praxis-grid`) spike on 2026-08-21 to cover
 every onboarded repo across all families (kubernaut, koku, dcm, praxis,
@@ -206,9 +213,8 @@ def build_catalog(per_backend_tools: dict[str, list[dict]]) -> tuple[dict[str, t
 
     Fails safe on an unexpected unprefixed-name collision across backends
     (shouldn't happen today -- verified empirically, see module docstring
-    -- but a future backend addition could introduce one): the first
-    backend processed (dict iteration order) wins, the collision is only
-    logged, never raised.
+    -- but a future backend addition could introduce one): the colliding
+    tool is qualified with its backend key instead of being silently dropped.
     """
     catalog: dict[str, tuple[str, str]] = {}
     tool_defs: list[dict] = []
@@ -217,13 +223,21 @@ def build_catalog(per_backend_tools: dict[str, list[dict]]) -> tuple[dict[str, t
             raw_name = tool["name"]
             final_name = prefixed_tool_name(backend_key, raw_name)
             if final_name in catalog:
+                base_name = f"{backend_key}_{raw_name}"
+                final_name = base_name
+                duplicate = 2
+                while final_name in catalog:
+                    final_name = f"{base_name}_{duplicate}"
+                    duplicate += 1
                 log.warning(
-                    "tool name collision: %r from backend %r ignored, already owned by backend %r",
-                    final_name,
+                    "tool name collision: %r from backend %r qualified as %r; already owned by backend %r",
+                    raw_name,
                     backend_key,
-                    catalog[final_name][0],
+                    final_name,
+                    catalog[prefixed_tool_name(backend_key, raw_name)][0]
+                    if prefixed_tool_name(backend_key, raw_name) in catalog
+                    else "another backend",
                 )
-                continue
             catalog[final_name] = (backend_key, raw_name)
             tool_defs.append({**tool, "name": final_name})
     return catalog, tool_defs
@@ -325,15 +339,6 @@ RELEVANT_TOOLS_BY_BACKEND: dict[str, frozenset[str]] = {
     "kuadrant_docs": RECALL_ONLY_HINDSIGHT_TOOLS,
     "kuadrant_issues": RECALL_ONLY_HINDSIGHT_TOOLS,
     "kuadrant_code": RECALL_ONLY_CODE_TOOLS,
-    "rca": frozenset({
-        "ingest_test_run",
-        "triage_test_failure",
-        "get_evidence",
-        "get_related_events",
-        "promote_incident",
-        "get_failure_history",
-        "get_incident_timeline",
-    }),
 }
 
 
@@ -827,8 +832,10 @@ def build_app(projects: dict[str, dict[str, BackendAdapter]]):
 
 
 # ---------------------------------------------------------------------------
-# Full rollout registry (2026-08-21): every onboarded repo, config only (no
+# Legacy native registry (2026-08-21): every onboarded repo, config only (no
 # I/O, no adapter instantiation -- see `build_backend_adapters` for that).
+# The portable runtime path uses `load_instance_registry()` instead and does
+# not depend on this installation-specific project list.
 # Deliberately preserves each repo's *existing* backend set exactly rather
 # than normalizing towards a uniform 4-backend shape: several repos are
 # missing one or more backends today (kubernaut-console has no serena,
@@ -1181,11 +1188,12 @@ def _bank_name_from_spec(spec: dict, suffix: str) -> str:
 def build_gateway_identity_registry(
     registry: dict[str, dict[str, dict]],
 ) -> dict[str, dict[str, str | None]]:
-    """Build the public project/family identity view from backend bindings.
+    """Build the legacy Hindsight project/family identity view.
 
     The gateway route is the project key. Backend specs remain authoritative for
-    actual routing, while this derived view makes the family/bank relationship
-    explicit for validation, diagnostics, and future config endpoints.
+    actual routing, while this derived view validates the historical native
+    registry's Hindsight bank relationship. Config-driven runtime registries
+    are intentionally not required to use Hindsight or these bank suffixes.
     """
     identities: dict[str, dict[str, str | None]] = {}
     for project, backends in registry.items():

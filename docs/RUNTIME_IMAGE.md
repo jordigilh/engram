@@ -9,27 +9,24 @@ multiple MCP backends directly in the image.
 Use the `backends` table when the image should own aggregation:
 
 ```toml
-[instances.kubernaut.backends.docs]
+[instances."<project>".backends.docs]
 kind = "http"
-url = "http://host.containers.internal:8888/mcp/kubernaut-docs/"
+url = "http://host.containers.internal:<docs-port>/mcp/<project>-docs/"
 
-[instances.kubernaut.backends.issues]
+[instances."<project>".backends.issues]
 kind = "http"
-url = "http://host.containers.internal:8888/mcp/kubernaut-issues/"
+url = "http://host.containers.internal:<issues-port>/mcp/<project>-issues/"
 
-[instances.kubernaut.backends.code]
+[instances."<project>".backends.code]
 kind = "http"
-url = "http://host.containers.internal:8891/mcp"
-headers = { Host = "localhost:8891" }
+url = "http://host.containers.internal:<code-port>/mcp"
 
-[instances.kubernaut.backends.serena]
+[instances."<project>".backends.serena]
 kind = "http"
-url = "http://host.containers.internal:8893/mcp/kubernaut"
+url = "http://host.containers.internal:<serena-port>/mcp/<project>"
 
-[instances.kubernaut.backends.rca]
-kind = "http"
-url = "http://host.containers.internal:8897/mcp"
-headers = { Host = "localhost:8897" }
+# Optional Kubernaut RCA is not part of the generic runtime shape. Add it only
+# in a project-specific configuration when that backend is intentionally used.
 ```
 
 Each configured backend is queried concurrently for `tools/list`; the gateway
@@ -39,22 +36,27 @@ useful for host adapters that reject the container bridge hostname. `stdio`
 backends are also supported when their command and required workspace are
 available inside the container.
 
-The complete Kubernaut example, including the `kubernaut-v1.5` route, is in
-`docs/runtime-kubernaut.toml.example`.
+The complete Kubernaut example, including its optional RCA backend and the
+`kubernaut-v1.5` route, is in `docs/runtime-kubernaut.toml.example`. It is an
+exception-specific example, not the generic template.
 
-For the current release policy, `kubernaut` is the main/current-v1.6 route and
-`kubernaut-v1.5` is the only separate Kubernaut release route until v1.6 is GA.
-DCM and Praxis only need their main routes.
+Projects without separate release-line backends need only one `[instances]`
+entry. Projects with release-specific backends should add an explicit route
+for each release line.
 
 Run it with:
 
 ```bash
 podman run --rm \
   --add-host host.containers.internal:host-gateway \
-  -v "$PWD/docs/runtime-kubernaut.toml.example:/etc/engram/instances.toml:ro" \
+  -v "$PWD/instances.toml:/etc/engram/instances.toml:ro" \
   -p 127.0.0.1:8896:8896 \
   quay.io/jordigilh/engram:runtime-latest
 ```
+
+Use a project-specific registry such as
+`docs/runtime-kubernaut.toml.example` only when those backends are actually
+part of the deployment.
 
 The existing GitHub Actions workflow publishes a new multi-architecture
 `runtime-<commit>` image and updates `runtime-latest` whenever
@@ -71,20 +73,30 @@ checkout that changes branches:
 ```
 
 It applies a per-invocation `-c mcp_servers.engram.url=...` override and does
-not edit `~/.codex/config.toml`. A `kubernaut` checkout on `release/v1.5`
-selects `/mcp/kubernaut-v1.5`; current `kubernaut`/v1.6 and all DCM/Praxis
-checkouts use their main route. `ENGRAM_CODEX_PROJECT` overrides the derived
-route.
+not edit `~/.codex/config.toml`. By default, the checkout directory name
+is the route. `ENGRAM_CODEX_PROJECT` overrides it for a single invocation, and
+`ENGRAM_CODEX_BRANCH_ROUTES` supports generic branch mappings:
+
+```bash
+export ENGRAM_CODEX_BRANCH_ROUTES='main=my-project,release/v1.5=my-project-v1.5'
+```
+
+The launcher tries the exact branch name, the normalized release suffix, and
+`release/<suffix>` in that order. Leave the variable unset when all branches
+share one route.
 
 OpenCode can do the same without a wrapper by configuring exact branch routes
 in the Engram plugin:
 
 ```json
 {
-  "family": "kubernaut",
+  "family": "my-family",
   "branchRoutes": {
-    "main": "kubernaut",
-    "release/v1.5": "kubernaut-v1.5"
+    "main": "my-project",
+    "release/v1.5": "my-project-v1.5"
   }
 }
 ```
+
+Kubernaut's RCA backend and release-line aliases are an optional project
+configuration, not part of the generic launcher or gateway runtime.

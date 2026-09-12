@@ -642,7 +642,10 @@ class StdioSubprocessAdapter:
                 # mcp==2.0.0 renamed CallToolResult.isError -> is_error (same
                 # 2026-08-22 dependabot bump that broke input_schema and
                 # FastMCP -- see docs/findings/2026-08.md's 2026-08-27 entry).
-                "isError": result.is_error,
+                # Live venv pins mcp<2.0 so only isError exists; read it via
+                # mcp_compat like inputSchema above (code backend was failing
+                # every tools/call with "no attribute 'is_error'").
+                "isError": mcp_compat.call_tool_is_error(result),
             }
 
 

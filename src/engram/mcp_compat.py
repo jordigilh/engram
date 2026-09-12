@@ -44,3 +44,15 @@ def tool_input_schema(tool) -> dict:
     if schema is None:
         schema = getattr(tool, "inputSchema", {})
     return schema or {}
+
+
+def call_tool_is_error(result) -> bool:
+    """CallToolResult error flag, tolerant of the 1.x/2.x rename.
+
+    mcp 2.0 renamed ``CallToolResult.isError`` to ``is_error``; the live
+    venv pins mcp<2.0 so the result only has ``isError``. The stdio adapter
+    in engram_gateway reads this per call, so it must not pin one spelling.
+    """
+    if hasattr(result, "is_error"):
+        return bool(result.is_error)
+    return bool(getattr(result, "isError", False))

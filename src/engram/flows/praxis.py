@@ -83,10 +83,11 @@ PRAXIS_MANUAL_DOCS_DIR = pathlib.Path(os.environ.get(
 PRAXIS_REPOS: list[tuple[str, str, bool]] = [
     ("praxis", "praxis-proxy/praxis", True),
     ("praxis-ai", "praxis-proxy/ai", True),
+    ("praxis-benchmarks", "praxis-proxy/benchmarks", True),
     ("praxis-conventions", "praxis-proxy/conventions", False),
     ("praxis-demos", "praxis-proxy/demos", True),
     ("praxis-enhancements", "praxis-proxy/enhancements", False),
-    ("praxis-experiments", "praxis-proxy/experiments", False),
+    ("praxis-experiments", "praxis-proxy/experimental", True),
     ("praxis-forge", "praxis-proxy/forge", True),
     ("praxis-grid", "praxis-proxy/grid", True),
     ("praxis-operator", "praxis-proxy/operator", True),
@@ -99,6 +100,18 @@ ISSUES_REPOS = os.environ.get(
     ",".join(upstream for _, upstream, _ in PRAXIS_REPOS),
 ).split(",")
 ISSUES_POLL_INTERVAL = int(os.environ.get("PRAXIS_ISSUES_POLL_SECONDS", "300"))
+
+# docs_main and code_main walk the SAME repo roots (every PRAXIS_REPOS dir,
+# recursively). Running both with live=True registers two macOS FSEvents
+# watches on identical paths and watchdog's per-process registry rejects the
+# second ("Cannot add watch ... already scheduled" --
+# docs/findings/2026-08.md 2026-08-12): docs_main's watch wins, code_main's
+# silently loses, so live .rs freshness was stale until the next manual
+# backfill. code_app therefore runs as a periodic fingerprint scan instead of
+# a second live watcher -- cocoindex skips unchanged files (~12s per cycle),
+# and freshness stays within CODE_POLL_INTERVAL (default 300s, meeting the
+# <5min code target in docs/README.md). docs_app keeps the one live watcher.
+CODE_POLL_INTERVAL = int(os.environ.get("PRAXIS_CODE_POLL_SECONDS", "300"))
 
 # Known org Project (v2) board numbers, refreshed at startup via
 # _fetch_org_projects() -- this default list is just a fallback if that
@@ -930,12 +943,29 @@ code_app = coco.App("praxis-code", code_main, org_dir=PRAXIS_ORG_DIR)
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def _live_apps() -> list[tuple[str, object]]:
+    """Apps run as live file-watchers. code_app is deliberately absent --
+    see CODE_POLL_INTERVAL's comment for why it polls instead."""
+    return [("docs", docs_app)]
+
+
+def _poll_schedule() -> list[tuple[str, object, int]]:
+    """(name, app, interval-seconds) apps run as periodic update_blocking()
+    scans. code_app is here, not in _live_apps (see CODE_POLL_INTERVAL)."""
+    return [
+        ("issues", issues_app, ISSUES_POLL_INTERVAL),
+        ("discussions", discussions_app, ISSUES_POLL_INTERVAL),
+        ("roadmap", roadmap_app, ISSUES_POLL_INTERVAL),
+        ("code", code_app, CODE_POLL_INTERVAL),
+    ]
+
+
 def _run_live(selected: set[str]) -> None:
     import threading
 
     threads: list[threading.Thread] = []
 
-    for name, app in [("docs", docs_app), ("code", code_app)]:
+    for name, app in _live_apps():
         if name not in selected:
             continue
         def _run_app(n=name, a=app):
@@ -948,17 +978,13 @@ def _run_live(selected: set[str]) -> None:
         t.start()
         threads.append(t)
 
-    for name, app, interval in [
-        ("issues", issues_app, ISSUES_POLL_INTERVAL),
-        ("discussions", discussions_app, ISSUES_POLL_INTERVAL),
-        ("roadmap", roadmap_app, ISSUES_POLL_INTERVAL),
-    ]:
+    for name, app, interval in _poll_schedule():
         if name not in selected:
             continue
         def _poll_loop(n=name, a=app, i=interval):
             while True:
                 try:
-                    log.info("%s poll: syncing from GitHub...", n)
+                    log.info("%s poll: syncing...", n)
                     a.update_blocking()
                     log.info("%s poll: complete, next in %ds", n, i)
                 except Exception as e:

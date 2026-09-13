@@ -698,3 +698,19 @@ class TestReleaseLineWiring:
         assert '@release-{line}"' in source
         for repo_name in ("kubernaut", "kubernaut-operator", "kubernaut-console"):
             assert f'"{repo_name}"' in source, f"code_main's release-line loop is missing {repo_name}"
+
+    def test_code_main_wires_demo_scenarios_live(self, cocoindex_flows):
+        import inspect
+
+        source = inspect.getsource(cocoindex_flows.code_main)
+        assert "scenarios_dir" in source
+        assert "SCENARIOS_CODE_INCLUDE_PATTERNS" in source
+        assert 'coco.component_subpath("kubernaut-demo-scenarios-code")' in source
+        assert "live=True" in source
+
+    def test_scenario_docs_do_not_duplicate_code_watch(self, cocoindex_flows):
+        import inspect
+
+        source = inspect.getsource(cocoindex_flows.docs_main)
+        assert "scenarios_docs" in source
+        assert "live=False" in source

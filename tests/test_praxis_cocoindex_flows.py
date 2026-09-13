@@ -70,6 +70,45 @@ class TestModuleLoads:
         assert "praxis-proxy/pingora" not in upstreams
         assert "praxis-proxy/grid" in upstreams
         assert "praxis-proxy/ai" in upstreams
+        # 2026-09-11: benchmarks onboarded; experimental is the canonical
+        # upstream name (GitHub redirect makes the old plural alias resolve,
+        # but the config must use the real name).
+        assert "praxis-proxy/benchmarks" in upstreams
+        assert "praxis-proxy/experimental" in upstreams
+        assert "praxis-proxy/experiments" not in upstreams
+
+    def test_rust_flags_cover_all_rust_repos(self, praxis_cocoindex_flows):
+        by_dir = {local: (upstream, has_rust) for local, upstream, has_rust in praxis_cocoindex_flows.PRAXIS_REPOS}
+        assert by_dir["praxis-experiments"][1] is True
+        assert by_dir["praxis-benchmarks"][1] is True
+        assert by_dir["praxis-conventions"][1] is False
+
+
+class TestLiveModeWatchSchedule:
+    """Regression for docs/findings/2026-08.md's 2026-08-12 file-watch bug:
+    docs_main and code_main walk the same repo roots, so running both with
+    live=True registers duplicate FSEvents watches and watchdog rejects the
+    second ("already scheduled") -- code_main's watch silently loses and live
+    .rs freshness goes stale until manual backfill. code_app must poll,
+    never live-watch."""
+
+    def test_code_app_is_polled_not_live_watched(self, praxis_cocoindex_flows):
+        live_names = [name for name, _ in praxis_cocoindex_flows._live_apps()]
+        poll_names = [name for name, _, _ in praxis_cocoindex_flows._poll_schedule()]
+
+        assert "docs" in live_names
+        assert "code" not in live_names
+        assert "code" in poll_names
+
+    def test_all_live_and_poll_apps_cover_every_cli_app(self, praxis_cocoindex_flows):
+        names = {name for name, _ in praxis_cocoindex_flows._live_apps()}
+        names |= {name for name, _, _ in praxis_cocoindex_flows._poll_schedule()}
+
+        assert names == {"docs", "issues", "discussions", "roadmap", "code"}
+
+    def test_poll_intervals_are_positive(self, praxis_cocoindex_flows):
+        for _name, _app, interval in praxis_cocoindex_flows._poll_schedule():
+            assert interval > 0
 
 
 class TestProcessDocFile:

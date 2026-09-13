@@ -108,6 +108,23 @@ KUBERNAUT_RELEASE_LINES = [
     if line.strip()
 ]
 
+# demo-scenarios is an operational test/deployment repository rather than a
+# single-language application. Keep its executable/configuration source in
+# the same live code index as the Go and TypeScript repos, while excluding
+# generated runs, transcripts, media, and dependency/build output.
+SCENARIOS_CODE_INCLUDE_PATTERNS = [
+    "**/*.yaml", "**/*.yml", "**/*.json", "**/*.sh", "**/*.tape",
+    "**/*.rego", "**/*.go", "**/*.py", "**/*.conf", "**/*.mod",
+    "**/*.sum", "**/Dockerfile", "**/*.tpl",
+]
+SCENARIOS_CODE_EXCLUDE_PATTERNS = [
+    "**/node_modules/**", "**/dist/**", "**/target/**", "**/vendor/**",
+    "**/golden-transcripts/**", "**/overnight-logs-*/**",
+    "**/parallel-results-*/**", "**/rerun-*/**", "**/redeploy-*/**",
+    "**/sequential-*/**", "**/*.log", "**/*.jsonl", "**/*.mp4",
+    "**/*.gif", "**/*.tape.option-b-backup",
+]
+
 
 def _release_line_dir(repo_name: str, line: str) -> pathlib.Path:
     """Mirror path for one (repo, release line) pair, matching the
@@ -441,7 +458,10 @@ async def docs_main(
                 "golden-transcripts/**",
             ],
         ),
-        live=True,
+        # code_main owns the one live watcher for this tree so scenario code
+        # stays fresh without watchdog rejecting a duplicate root watch.
+        # Docs are still ingested on every app startup/backfill.
+        live=False,
     )
     await coco.mount_each(
         coco.component_subpath("scenarios-docs"),
@@ -665,6 +685,7 @@ async def code_main(
     code_dir: pathlib.Path,
     operator_dir: pathlib.Path,
     console_dir: pathlib.Path,
+    scenarios_dir: pathlib.Path,
 ) -> None:
     """Walk source files from kubernaut repos, embed, and store in pgvector."""
     from cocoindex.connectors import postgres
@@ -770,7 +791,25 @@ async def code_main(
         table, console_dir, "kubernaut-console",
     )
 
-    # Release-line mirrors (main is the 3 blocks above) -- see
+    scenarios_files = localfs.walk_dir(
+        scenarios_dir,
+        recursive=True,
+        path_matcher=PatternFilePathMatcher(
+            included_patterns=SCENARIOS_CODE_INCLUDE_PATTERNS,
+            excluded_patterns=SCENARIOS_CODE_EXCLUDE_PATTERNS,
+        ),
+        live=True,
+    )
+    await coco.mount_each(
+        # Versioned once after the initial mount exposed stale per-file state
+        # for duplicate-basename scenario configs; this forces a clean mount
+        # reconciliation without rebuilding the other repositories.
+        coco.component_subpath("kubernaut-demo-scenarios-code"),
+        process_code_file, scenarios_files.items(),
+        table, scenarios_dir, "kubernaut-demo-scenarios",
+    )
+
+    # Release-line mirrors (main/current v1.6 is the 3 blocks above) -- see
     # watch-mirrors-config.sh's RELEASE_WATCH_MIRRORS and KUBERNAUT_RELEASE_LINES
     # above. Only v1.5 is a separate supported release line for now; future
     # lines can be enabled explicitly through KUBERNAUT_RELEASE_LINES.
@@ -811,6 +850,7 @@ code_app = coco.App(
     code_dir=ENGRAM_CODE_DIR,
     operator_dir=ENGRAM_OPERATOR_DIR,
     console_dir=ENGRAM_CONSOLE_DIR,
+    scenarios_dir=ENGRAM_SCENARIOS_DIR,
 )
 
 

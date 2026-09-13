@@ -15,7 +15,7 @@ Add the plugin to `opencode.json`, `opencode.jsonc`, or
   "plugin": [
     [
       "/path/to/engram/opencode-plugin/index.ts",
-      { "project": "kubernaut-operator", "family": "kubernaut" }
+      { "project": "<project-route>", "family": "<shared-family>" }
     ]
   ]
 }
@@ -37,7 +37,7 @@ The plugin injects one MCP server:
   "mcp": {
     "engram": {
       "type": "remote",
-      "url": "http://127.0.0.1:8896/mcp/kubernaut-operator",
+      "url": "http://127.0.0.1:8896/mcp/<project-route>",
       "enabled": true
     }
   }
@@ -50,15 +50,40 @@ Users do not register Hindsight, CocoIndex, or Serena separately.
 
 `project` is the exact gateway route and must match a registered project. The
 gateway registry intentionally preserves different backend sets per project.
-For example, `engram` has docs and code backends but no issues or Serena
-backend.
+For example, one project may have docs and code backends while another also
+has issues or Serena; the route's configured backend set is authoritative.
 
 `family` identifies the shared docs/issues family. The gateway owns the actual
 bank mapping; it is not used to construct direct backend URLs in the plugin.
 
-Release-line routes must be explicitly registered. For example, use
-`kubernaut-v1.5` when that route is available rather than relying on the plugin
-to invent a branch-suffixed URL.
+Release-line routes must be explicitly registered. Configure exact branch
+routes when one checkout switches between release lines:
+
+```json
+{
+  "plugin": [[
+      "/path/to/engram/opencode-plugin/index.ts",
+      {
+        "family": "<shared-family>",
+        "branchRoutes": {
+          "main": "<project-route>",
+          "release/vX.Y": "<project-route>-vX.Y"
+        }
+      }
+  ]]
+}
+```
+
+For a project with no separate release route, omit `branchRoutes`; the exact
+directory-name route is used for every branch. Projects that publish separate
+release routes should list those routes explicitly. The Kubernaut RCA release
+policy is documented separately in [Kubernaut RCA MCP](KUBERNAUT_RCA_MCP.md).
+
+Without `branchRoutes`, the plugin deliberately keeps the exact directory-name
+route and never invents a route the gateway may not expose. Codex users can use
+`scripts/engram-codex`, which applies the equivalent route as a per-invocation
+`-c` override. Set `ENGRAM_CODEX_BRANCH_ROUTES` to a comma-separated mapping
+such as `main=project,release/vX.Y=project-vX.Y`; see [Runtime Image](RUNTIME_IMAGE.md#branch-aware-codex).
 
 ## Gateway
 

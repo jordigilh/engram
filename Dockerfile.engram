@@ -1,13 +1,13 @@
 FROM python:3.13-slim
 
 LABEL org.opencontainers.image.title="Engram" \
-      org.opencontainers.image.description="Project-scoped Engram MCP gateway runtime" \
+      org.opencontainers.image.description="Configuration-driven multi-backend Engram MCP gateway runtime" \
       org.opencontainers.image.source="https://github.com/jordigilh/engram"
 
 WORKDIR /opt/engram
 
-# Host adapters own source trees, subprocesses, credentials, and mutable
-# indexes; this image contains only the generic gateway runtime.
+# Container mode keeps the gateway generic: configured backends own source
+# trees, credentials, and mutable indexes outside this image.
 RUN pip install --no-cache-dir \
       httpx==0.28.1 \
       mcp==2.1.1 \
@@ -27,4 +27,4 @@ USER 1001
 EXPOSE 8896
 
 ENTRYPOINT ["python", "-m", "engram.pipeline.engram_gateway"]
-CMD ["--config", "/etc/engram/instances.toml"]
+CMD ["--config", "/etc/engram/instances.toml", "--host", "0.0.0.0"]

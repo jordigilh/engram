@@ -12,7 +12,7 @@
 //     { "plugin": ["<path-or-package>/index.ts"] }
 //   Org sharing one memory bank across sibling repos (set identically in
 //   each repo's opencode.json):
-//     { "plugin": [["<path-or-package>/index.ts", { "family": "kubernaut" }]] }
+//     { "plugin": [["<path-or-package>/index.ts", { "family": "<family>" }]] }
 //
 // `project` defaults to the directory name. Set it explicitly for a registered
 // gateway alias such as a release-line route whose name differs from the

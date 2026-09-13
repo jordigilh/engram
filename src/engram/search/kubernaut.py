@@ -61,6 +61,22 @@ KUBERNAUT_OPERATOR_DIR = pathlib.Path(os.environ.get(
 KUBERNAUT_CONSOLE_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_CONSOLE_DIR", os.path.expanduser("~/.hindsight/watch/kubernaut-console"),
 ))
+KUBERNAUT_SCENARIOS_DIR = pathlib.Path(os.environ.get(
+    "ENGRAM_SCENARIOS_DIR", os.path.expanduser("~/.engram/watch/kubernaut-demo-scenarios"),
+))
+
+SCENARIOS_CODE_INCLUDE_PATTERNS = [
+    "**/*.yaml", "**/*.yml", "**/*.json", "**/*.sh", "**/*.tape",
+    "**/*.rego", "**/*.go", "**/*.py", "**/*.conf", "**/*.mod",
+    "**/*.sum", "**/Dockerfile", "**/*.tpl",
+]
+SCENARIOS_CODE_EXCLUDE_PATTERNS = [
+    "**/node_modules/**", "**/dist/**", "**/target/**", "**/vendor/**",
+    "**/golden-transcripts/**", "**/overnight-logs-*/**",
+    "**/parallel-results-*/**", "**/rerun-*/**", "**/redeploy-*/**",
+    "**/sequential-*/**", "**/*.log", "**/*.jsonl", "**/*.mp4",
+    "**/*.gif", "**/*.tape.option-b-backup",
+]
 
 # (repo_tag, root, included_patterns, excluded_patterns) -- mirrors the
 # localfs.walk_dir(path_matcher=PatternFilePathMatcher(...)) calls in
@@ -76,6 +92,8 @@ _PATTERN_SEARCH_ROOTS = [
     ("kubernaut-console", KUBERNAUT_CONSOLE_DIR,
      ["**/*.ts", "**/*.tsx"],
      ["**/node_modules/**", "**/dist/**", "**/storybook-static/**", "**/*.d.ts"]),
+    ("kubernaut-demo-scenarios", KUBERNAUT_SCENARIOS_DIR,
+     SCENARIOS_CODE_INCLUDE_PATTERNS, SCENARIOS_CODE_EXCLUDE_PATTERNS),
 ]
 
 # Call-graph scope (docs/CALL_GRAPH_CLUSTERING.md, 2026-08-24 Phase 5):

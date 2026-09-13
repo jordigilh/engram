@@ -8,6 +8,7 @@ import re
 import shutil
 import tarfile
 import tempfile
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
@@ -45,7 +46,20 @@ def _download(url: str) -> bytes:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, headers=headers)
     opener = urllib.request.build_opener(_NoRedirectHandler())
-    response = opener.open(request, timeout=60)
+    try:
+        response = opener.open(request, timeout=60)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403, 404):
+            hint = (
+                "GitHub denied access to a private job log/artifact. "
+                "The kubernaut-rca service needs GH_TOKEN or GITHUB_TOKEN "
+                "(repo scope) in its environment; without it private "
+                "repos fail with 403."
+            )
+            raise urllib.error.HTTPError(
+                exc.url, exc.code, f"{exc.reason} ({hint})", exc.headers, exc.fp
+            ) from exc
+        raise
     if 300 <= response.status < 400:
         redirect_url = response.headers.get("Location")
         if not redirect_url:

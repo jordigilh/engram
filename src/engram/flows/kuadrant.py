@@ -99,6 +99,18 @@ ISSUES_REPOS = os.environ.get(
 ).split(",")
 ISSUES_POLL_INTERVAL = int(os.environ.get("KUADRANT_ISSUES_POLL_SECONDS", "300"))
 
+# docs_main and code_main walk the SAME repo roots (every KUADRANT_REPOS dir,
+# recursively). Running both with live=True registers two macOS FSEvents
+# watches on identical paths and watchdog's per-process registry rejects the
+# second ("Cannot add watch ... already scheduled" -- same shape as
+# docs/findings/2026-08.md's 2026-08-12 praxis entry, 147 occurrences in this
+# service's own log): docs_main's watch wins, code_main's silently loses, so
+# live code freshness was stale until the next manual backfill. code_app
+# therefore runs as a periodic fingerprint scan instead of a second live
+# watcher -- cocoindex skips unchanged files, and freshness stays within
+# CODE_POLL_INTERVAL. docs_app keeps the one live watcher.
+CODE_POLL_INTERVAL = int(os.environ.get("KUADRANT_CODE_POLL_SECONDS", "300"))
+
 # How often to `git pull --ff-only` every checkout under KUADRANT_ORG_DIR --
 # see module docstring. 6h default: frequent enough that "kept up to date"
 # is true in practice, infrequent enough not to hammer GitHub across 9 repos
@@ -569,6 +581,21 @@ def _git_sync_loop(org_dir: pathlib.Path, interval: int) -> None:
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def _live_apps() -> list[tuple[str, object]]:
+    """Apps run as live file-watchers. code_app is deliberately absent --
+    see CODE_POLL_INTERVAL's comment for why it polls instead."""
+    return [("docs", docs_app)]
+
+
+def _poll_schedule() -> list[tuple[str, object, int]]:
+    """(name, app, interval-seconds) apps run as periodic update_blocking()
+    scans. code_app is here, not in _live_apps (see CODE_POLL_INTERVAL)."""
+    return [
+        ("issues", issues_app, ISSUES_POLL_INTERVAL),
+        ("code", code_app, CODE_POLL_INTERVAL),
+    ]
+
+
 def _run_live(selected: set[str]) -> None:
     import threading
 
@@ -583,7 +610,7 @@ def _run_live(selected: set[str]) -> None:
         threads.append(t)
         log.info("Started git-sync thread (every %ds)", GIT_SYNC_INTERVAL_SECONDS)
 
-    for name, app in [("docs", docs_app), ("code", code_app)]:
+    for name, app in _live_apps():
         if name not in selected:
             continue
         def _run_app(n=name, a=app):
@@ -596,19 +623,21 @@ def _run_live(selected: set[str]) -> None:
         t.start()
         threads.append(t)
 
-    if "issues" in selected:
-        def _issues_poll_loop():
+    for name, app, interval in _poll_schedule():
+        if name not in selected:
+            continue
+        def _poll_loop(n=name, a=app, i=interval):
             while True:
                 try:
-                    log.info("issues poll: syncing from GitHub...")
-                    issues_app.update_blocking()
-                    log.info("issues poll: complete, next in %ds", ISSUES_POLL_INTERVAL)
+                    log.info("%s poll: syncing...", n)
+                    a.update_blocking()
+                    log.info("%s poll: complete, next in %ds", n, i)
                 except Exception as e:
-                    log.error("issues poll error: %s", e)
-                time.sleep(ISSUES_POLL_INTERVAL)
+                    log.error("%s poll error: %s", n, e)
+                time.sleep(i)
 
-        log.info("Starting issues app (polling every %ds)...", ISSUES_POLL_INTERVAL)
-        t = threading.Thread(target=_issues_poll_loop, name="kuadrant-issues", daemon=True)
+        log.info("Starting %s app (polling every %ds)...", name, interval)
+        t = threading.Thread(target=_poll_loop, name=f"kuadrant-{name}", daemon=True)
         t.start()
         threads.append(t)
 

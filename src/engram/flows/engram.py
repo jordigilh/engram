@@ -56,7 +56,7 @@ HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
 # launchd plist's explicit env var so a manual invocation is also safe.
 ENGRAM_REPO_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_REPO_DIR",
-    os.path.expanduser("~/.hindsight/watch/engram"),
+    os.path.expanduser("~/.engram/watch/engram"),
 ))
 
 PG_DSN = os.environ.get(
@@ -72,7 +72,7 @@ PG_POOL_MIN_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MIN_SIZE", "2"))
 PG_POOL_MAX_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MAX_SIZE", "5"))
 COCOINDEX_DB = pathlib.Path(os.environ.get(
     "COCOINDEX_DB",
-    os.path.expanduser("~/.hindsight/engram-cocoindex.db"),
+    os.path.expanduser("~/.engram/engram-cocoindex.db"),
 ))
 
 # Named distinctly from cocoindex-flows.py's own ContextKey("pg_pool") -- both

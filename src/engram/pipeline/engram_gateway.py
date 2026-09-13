@@ -87,12 +87,14 @@ logging.basicConfig(
 )
 log = logging.getLogger("engram-gateway")
 
+from engram import mcp_compat  # noqa: E402  (mcp 1.x/2.x Tool compat)
+
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8896
 FORWARD_TIMEOUT_S = 60.0
 
 # Gateway-owned call log, distinct from the Cursor-hook-authored
-# ~/.hindsight/logs/mcp-calls.jsonl (cursor/hooks/log-mcp-calls.sh). That
+# ~/.engram/logs/mcp-calls.jsonl (cursor/hooks/log-mcp-calls.sh). That
 # hook's `result_chars` is best-effort and frequently 0 -- its own comment
 # notes Cursor's afterMCPExecution payload usually omits content text
 # despite docs claiming a "full JSON result". `handle_tools_call` below is
@@ -104,7 +106,7 @@ FORWARD_TIMEOUT_S = 60.0
 # confirmed no Cursor hook or CLI surface carries real per-call token
 # counts locally (Team/Enterprise usage APIs report at turn granularity,
 # not per tool call, and require a paid plan).
-GATEWAY_CALLS_LOG = pathlib.Path(os.path.expanduser("~/.hindsight/logs/gateway-calls.jsonl"))
+GATEWAY_CALLS_LOG = pathlib.Path(os.path.expanduser("~/.engram/logs/gateway-calls.jsonl"))
 
 
 @functools.lru_cache(maxsize=1)
@@ -339,6 +341,16 @@ RELEVANT_TOOLS_BY_BACKEND: dict[str, frozenset[str]] = {
     "kuadrant_docs": RECALL_ONLY_HINDSIGHT_TOOLS,
     "kuadrant_issues": RECALL_ONLY_HINDSIGHT_TOOLS,
     "kuadrant_code": RECALL_ONLY_CODE_TOOLS,
+    "rca": frozenset({
+        "ingest_test_run",
+        "triage_test_failure",
+        "generate_rca",
+        "get_evidence",
+        "get_related_events",
+        "promote_incident",
+        "get_failure_history",
+        "get_incident_timeline",
+    }),
 }
 
 
@@ -613,9 +625,15 @@ class StdioSubprocessAdapter:
                 await self._restart()
                 result = await self._session.list_tools()
             return [
-                # MCP SDK versions expose the wire-format schema under either
-                # spelling; normalize it at the gateway boundary.
-                {"name": t.name, "description": t.description or "", "inputSchema": getattr(t, "input_schema", None) or getattr(t, "inputSchema", {})}
+                # Tool input schema attribute renamed across mcp SDK
+                # versions (inputSchema 1.x <-> input_schema 2.x); read it
+                # version-tolerantly (see engram.mcp_compat) instead of
+                # pinning one spelling that breaks on every mcp bump --
+                # see the 2026-08-27 incident this comment originally
+                # described, repeated in reverse by the 2026-09-09
+                # mcp<2.0 pin.
+                {"name": t.name, "description": t.description or "",
+                 "inputSchema": mcp_compat.tool_input_schema(t)}
                 for t in result.tools
             ]
 
@@ -641,7 +659,13 @@ class StdioSubprocessAdapter:
                 # data, surfacing as a generic "backend is currently down"
                 # (see docs/findings/2026-08.md, 2026-08-25 entry).
                 "content": [c.model_dump(exclude_none=True) if hasattr(c, "model_dump") else c for c in result.content],
-                "isError": getattr(result, "is_error", getattr(result, "isError", False)),
+                # mcp==2.0.0 renamed CallToolResult.isError -> is_error (same
+                # 2026-08-22 dependabot bump that broke input_schema and
+                # FastMCP -- see docs/findings/2026-08.md's 2026-08-27 entry).
+                # Live venv pins mcp<2.0 so only isError exists; read it via
+                # mcp_compat like inputSchema above (code backend was failing
+                # every tools/call with "no attribute 'is_error'").
+                "isError": mcp_compat.call_tool_is_error(result),
             }
 
 
@@ -872,13 +896,15 @@ DCM_REPOS = [
 PRAXIS_REPOS_WITH_SERENA = [
     "praxis",
     "praxis-ai",
+    "praxis-benchmarks",
     "praxis-demos",
+    "praxis-experiments",
     "praxis-forge",
     "praxis-grid",
     "praxis-operator",
     "praxis-policy",
 ]
-PRAXIS_REPOS_WITHOUT_SERENA = ["praxis-conventions", "praxis-enhancements", "praxis-experiments", "praxis-proxy.github.io"]
+PRAXIS_REPOS_WITHOUT_SERENA = ["praxis-conventions", "praxis-enhancements", "praxis-proxy.github.io"]
 
 
 def _hindsight(bank: str) -> dict:
@@ -924,7 +950,7 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     the 2026-08-21 survey of every onboarded repo's actual .cursor/mcp.json.
     `home` is injected (rather than read from `os.path.expanduser` here) so
     this stays a pure, easily-testable function."""
-    venv_bin = f"{home}/.hindsight/venv/bin"
+    venv_bin = f"{home}/.engram/venv/bin"
     registry: dict[str, dict[str, dict]] = {}
 
     kubernaut_http_code = _http("http://127.0.0.1:8891/mcp")
@@ -948,7 +974,7 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
         "issues": _hindsight("kubernaut-issues"),
         # Shared with kubernaut/kubernaut-operator, NOT a standalone stdio
         # process (fixed 2026-08-25): this used to spawn
-        # `~/.hindsight/cocoindex-search.py`, a flat symlink the 2026-08-12
+        # `~/.engram/cocoindex-search.py`, a flat symlink the 2026-08-12
         # src/engram/ package restructuring had already deleted 9 days
         # before this registry entry was even authored, so it was dead on
         # arrival -- kubernaut-console's `code` tools silently dropped from
@@ -1023,12 +1049,13 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
             "code": praxis_code_stdio,
         }
 
-    registry["rhdh-plugins"] = {
-        "docs": _hindsight("rhdh-plugins-docs"),
-        "issues": _hindsight("rhdh-plugins-issues"),
-        "code": _stdio(f"{venv_bin}/engram-search-rhdh-plugins", env={"COCOINDEX_PG_URL": _PG_URL}),
-        "serena": _serena_stdio(home, f"{home}/go/src/github.com/redhat-developer/rhdh-plugins"),
-    }
+    # rhdh-plugins: DISABLED -- no longer contributing to this project
+    # (2026-09-09). Registry entry removed so the gateway no longer spawns
+    # engram-search-rhdh-plugins / serena subprocesses for it, and the
+    # launchd job io.vectorize.cocoindex.rhdh-plugins has been booted out
+    # with its installed plist removed. Source modules
+    # (flows/search rhdh_plugins) and launchd/io.vectorize.cocoindex.rhdh-plugins.plist
+    # remain in the repo for reference only.
 
     registry["engram"] = {
         "docs": _hindsight("engram-docs"),

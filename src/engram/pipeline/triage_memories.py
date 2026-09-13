@@ -28,7 +28,7 @@ import re
 import sys
 import uuid
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -36,8 +36,41 @@ from urllib.error import HTTPError, URLError
 
 HINDSIGHT_URL = "http://localhost:8888"
 DEFAULT_BANK = "cursor-memory"
-LOG_DIR = Path.home() / ".hindsight" / "logs"
+LOG_DIR = Path.home() / ".engram" / "logs"
 REARRANGE_BATCH_SIZE = 5
+
+# Banks whose chunk/document IDs follow the CocoIndex flows convention
+# (document_id set on every chunk, stable `--`/`-` suffixed chunk keys) rather
+# than cursor-memory's `cursor-memory_<uuid>_<n>` chunk_id convention. For
+# these banks, triage must group by `document_id` directly; the legacy
+# cursor-memory regex below would otherwise match nothing and silently report
+# zero documents.
+PRAXIS_BANKS = {"praxis-docs", "praxis-issues"}
+
+# Provenance for human-directed, LLM-free replacements. Neutral by default so
+# no personal identity is stored; override via ENGRAM_MANUAL_TRIAGE_REVIEWER
+# only with an explicit role label (never a personal name without consent).
+MANUAL_TRIAGE_REVIEWER = os.environ.get("ENGRAM_MANUAL_TRIAGE_REVIEWER", "manual-triage")
+MANUAL_TRIAGE_TAG = "manual-triage"
+MANUAL_TRIAGE_REPLACEMENT_TAG = "manual-replacement"
+
+# Format-level noise produced by upstream exports rather than by authors.
+# These patterns mark records for source-fix-or-prune review; they never
+# alone prove the underlying claim is false.
+NOISE_PATTERNS = [
+    re.compile(r"(?:\x1b)?\[0;\d+m"),  # terminal color escapes from CLI exports
+    re.compile(r"file:///var/folders/"),  # local temp file paths baked into text
+    re.compile(r"/tmp\.[A-Za-z0-9]+/"),
+    re.compile(r"praxis-jira-tickets\.html \d+/\d+"),  # paginated export chrome
+]
+
+# Trailing chunk splits scoped to one logical unit (`-part2`, `-chunk3`, and
+# docs' `--<16hex>` section keys with optional part suffixes). Stripping them
+# yields the family key used to bound near-duplicate comparisons and to spot
+# split artifacts without assuming they are duplicates.
+_FAMILY_SUFFIX_RE = re.compile(
+    r"(?:--[0-9a-f]{16}|-(?:part\d+|chunk\d+|comment\d+(?:-part\d+)?))$"
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -149,6 +182,114 @@ def api_delete(path: str) -> bool:
         return False
 
 
+def api_patch(path: str, payload: dict) -> bool:
+    """PATCH helper for non-destructive curation (invalidate/revalidate)."""
+    url = f"{HINDSIGHT_URL}{path}"
+    data = json.dumps(payload).encode()
+    req = Request(url, data=data, method="PATCH", headers={"Content-Type": "application/json"})
+    try:
+        urlopen(req, timeout=10)
+        return True
+    except Exception as e:
+        log.warning("PATCH %s failed: %s", url, e)
+        return False
+
+
+def document_key(memory: dict, bank_id: str) -> str:
+    """Grouping key for triage documents.
+
+    cursor-memory keeps the legacy chunk_id regex. Praxis banks use the stored
+    document_id directly; legacy LLM observations without one become singleton
+    orphan groups so they are reviewed individually instead of vanishing from
+    the document accounting.
+    """
+    if bank_id == DEFAULT_BANK:
+        chunk_id = memory.get("chunk_id", "")
+        match = re.match(r"cursor-memory_([a-f0-9-]+)_", chunk_id)
+        if match:
+            return match.group(1)
+        return ""
+    doc_id = memory.get("document_id")
+    if doc_id:
+        return str(doc_id)
+    return f"orphan:{memory.get('id')}"
+
+
+def family_key(document_id: str) -> str:
+    """Strip one trailing chunk split to get the logical-unit family."""
+    if not document_id:
+        return document_id
+    return _FAMILY_SUFFIX_RE.sub("", document_id)
+
+
+def find_exact_duplicates(memories: list[dict]) -> dict[str, list[str]]:
+    """Group memory IDs by normalized full-text hash (exact matches only)."""
+    groups: dict[str, list[str]] = defaultdict(list)
+    for m in memories:
+        text = (m.get("text") or "").strip()
+        if not text or not m.get("id"):
+            continue
+        normalized = re.sub(r"\s+", " ", text.lower())
+        digest = re.sub(r"\s+", "", normalized)
+        groups[f"exact:{hash(digest) & 0xFFFFFFFFFFFFFFFF:016x}"].append(m["id"])
+    return {k: v for k, v in groups.items() if len(v) >= 2}
+
+
+def build_manual_replacement(
+    memory: dict,
+    bank_id: str,
+    reviewer: str = MANUAL_TRIAGE_REVIEWER,
+    reviewed_at: str | None = None,
+) -> dict:
+    """Build an LLM-free replacement payload for one reviewed memory.
+
+    The text is preserved verbatim; only provenance changes. The replacement
+    lives under a `manual-triage--` document so future passes can tell
+    human-approved records apart from bulk-ingested chunks.
+    """
+    memory_id = memory.get("id")
+    text = (memory.get("text") or "").strip()
+    if not memory_id or not text:
+        raise ValueError("manual replacement requires a memory id and non-empty text")
+    reviewed_at = reviewed_at or datetime.now(timezone.utc).isoformat()
+    tags = [MANUAL_TRIAGE_TAG, MANUAL_TRIAGE_REPLACEMENT_TAG]
+    for tag in memory.get("tags") or []:
+        if tag and tag not in tags and len(tags) < 8:
+            tags.append(tag)
+    # Hindsight rejects null metadata values (HTTP 422), so drop them --
+    # orphan observations legitimately have no original document_id.
+    metadata = {
+        key: value
+        for key, value in {
+            "source": "manual-triage",
+            "reviewed_by": reviewer,
+            "reviewed_at": reviewed_at,
+            "supersedes_memory_id": memory_id,
+            "original_fact_type": memory.get("fact_type"),
+            "original_document_id": memory.get("document_id"),
+            "triage_action": "manual-replacement",
+        }.items()
+        if value is not None
+    }
+    item: dict = {
+        "content": text,
+        "document_id": f"manual-triage--{bank_id}--{memory_id}",
+        "metadata": metadata,
+        "tags": tags,
+    }
+    if memory.get("date"):
+        item["timestamp"] = memory.get("date")
+    return item
+
+
+def invalidate_memory_unit(bank_id: str, memory_id: str, reason: str) -> bool:
+    """Invalidate one memory without deleting it (reversible curation)."""
+    return api_patch(
+        f"/v1/default/banks/{bank_id}/memories/{memory_id}",
+        {"state": "invalidated", "reason": reason},
+    )
+
+
 # --- Data fetching ---
 
 def fetch_all_memories(bank_id: str) -> list[dict]:
@@ -190,7 +331,7 @@ def fetch_all_documents(bank_id: str) -> list[dict]:
 
 # --- Classification ---
 
-def classify_memory(memory: dict, stale_cutoff: datetime) -> list[str]:
+def classify_memory(memory: dict, stale_cutoff: datetime, bank_id: str = DEFAULT_BANK) -> list[str]:
     """Classify a memory into zero or more cleanup categories.
 
     Returns list of reason strings. Empty list means the memory is clean.
@@ -204,6 +345,12 @@ def classify_memory(memory: dict, stale_cutoff: datetime) -> list[str]:
     for pat in VALUABLE_PATTERNS:
         if pat.search(text):
             return []
+
+    if bank_id in PRAXIS_BANKS:
+        for pat in NOISE_PATTERNS:
+            if pat.search(text):
+                reasons.append("format-noise")
+                break
 
     for pat in EPHEMERAL_PATTERNS:
         if pat.search(text):
@@ -295,8 +442,9 @@ def rearrange_document(
 ) -> dict:
     """Delete a document and re-retain only its valuable memories.
 
-    Uses strategy='exact' to store each memory text verbatim (no LLM
-    re-extraction), preserving timestamps and tags.
+    Re-retention goes through the bank's default chunks config (no LLM and no
+    `strategy` override -- `strategy="exact"` was never registered and is
+    silently ignored). Preserves timestamps and tags.
 
     Returns dict with counts of kept/removed memories.
     """
@@ -306,7 +454,6 @@ def rearrange_document(
     for idx, m in enumerate(keep_memories):
         item: dict = {
             "content": m["text"],
-            "strategy": "exact",
             "document_id": f"{doc_prefix}-{uuid.uuid4().hex[:8]}",
         }
         if m.get("date"):
@@ -344,15 +491,92 @@ def rearrange_document(
     return {"kept": retained, "doc_deleted": True}
 
 
+def _apply_invalidate_high_confidence(
+    bank_id: str,
+    memories: list[dict],
+    mem_by_id: dict[str, dict],
+    exact_groups: dict[str, list[str]],
+    max_items: int = 0,
+) -> dict:
+    """Non-destructive clean-slate pass: dedupe exact copies, report orphans.
+
+    Only one bucket auto-mutates, reversibly: exact-duplicate groups keep the
+    newest valid copy; older valid copies are invalidated (no replacement
+    needed -- the text survives verbatim).
+
+    Orphan observations (legacy LLM extractions with no document link) are
+    deliberately NOT replaced here: the server rejects curation of
+    observation facts ("only world/experience facts can be curated"), single
+    memories cannot be deleted (405), and orphans have no document to delete
+    -- so a replacement would only duplicate content that default recall
+    already excludes. They are counted and reported; genuinely removing them
+    needs a source-backed bank rebuild, proposed separately.
+    """
+    replaced: list[str] = []
+    invalidated: list[str] = []
+    errors: list[str] = []
+    skipped_orphans = 0
+    budget = max_items if max_items and max_items > 0 else None
+
+    def capped() -> bool:
+        return budget is not None and (len(replaced) + len(invalidated)) >= budget
+
+    ordered = sorted(memories, key=lambda m: (m.get("date", ""), m.get("id", "")))
+    for m in ordered:
+        if (m.get("state") or "valid") != "valid":
+            continue
+        if m.get("fact_type") != "observation":
+            continue
+        if not m.get("document_id"):
+            skipped_orphans += 1
+    if skipped_orphans:
+        log.info(
+            "Skipping %d orphan observations (server-immortal without "
+            "consolidation; see docstring)", skipped_orphans,
+        )
+
+    for _, ids in sorted(exact_groups.items()):
+        if capped():
+            break
+        valid = [i for i in ids if (mem_by_id.get(i, {}).get("state") or "valid") == "valid"]
+        if len(valid) < 2:
+            continue
+        dated = sorted(valid, key=lambda i: (mem_by_id[i].get("date", ""), i), reverse=True)
+        for mid in dated[1:]:
+            if capped():
+                break
+            if invalidate_memory_unit(bank_id, mid, "praxis clean-slate: exact duplicate of a newer retained copy"):
+                invalidated.append(mid)
+            else:
+                errors.append(f"exact-duplicate invalidate failed for {mid}")
+
+    return {
+        "orphan_replacements": len(replaced),
+        "orphans_skipped_server_immortal": skipped_orphans,
+        "exact_duplicates_invalidated": len(invalidated),
+        "replaced_ids": replaced,
+        "invalidated_ids": invalidated,
+        "errors": errors,
+    }
+
+
 def triage(
     bank_id: str,
     stale_days: int = 14,
     apply: bool = False,
+    apply_mode: str = "rearrange",
+    reviewer: str | None = None,
+    max_items: int = 0,
 ) -> dict:
     """Run triage on a memory bank.
 
-    When apply=True, documents are rearranged: each document containing
+    When apply=True with apply_mode="rearrange" (default, cursor-memory
+    behavior preserved), documents are rearranged: each document containing
     flagged memories is deleted and rebuilt with only the valuable memories.
+
+    With apply_mode="invalidate" (Praxis clean-slate), nothing is deleted:
+    orphan observations get verbatim manual replacements and exact duplicates
+    are invalidated. Everything else is reported only.
     """
     stale_cutoff = datetime.now() - timedelta(days=stale_days)
 
@@ -368,13 +592,36 @@ def triage(
     # --- Phase 1: Classify each memory ---
     flagged: dict[str, list[str]] = {}
     for m in memories:
-        reasons = classify_memory(m, stale_cutoff)
+        reasons = classify_memory(m, stale_cutoff, bank_id)
         if reasons:
             flagged[m["id"]] = reasons
 
-    # --- Phase 2: Near-duplicate detection ---
-    dup_pairs = find_near_duplicates(memories)
     mem_by_id = {m["id"]: m for m in memories}
+
+    # --- Phase 2: Duplicate detection ---
+    # cursor-memory keeps the legacy global near-duplicate scan. Praxis banks
+    # bound near-duplicate comparisons to one document family (cheap, and the
+    # only place positional splits can masquerade as duplicates) and add a
+    # bank-wide exact-text pass for genuinely repeated content.
+    dup_pairs: list[tuple[str, str, float]] = []
+    exact_groups: dict[str, list[str]] = {}
+    if bank_id in PRAXIS_BANKS:
+        families: dict[str, list[dict]] = defaultdict(list)
+        for m in memories:
+            families[family_key(str(m.get("document_id") or f"orphan:{m.get('id')}"))].append(m)
+        for fam_mems in families.values():
+            if len(fam_mems) < 2:
+                continue
+            dup_pairs.extend(find_near_duplicates(fam_mems))
+        exact_groups = find_exact_duplicates(memories)
+        for ids in exact_groups.values():
+            dated = sorted(ids, key=lambda i: (mem_by_id[i].get("date", ""), i), reverse=True)
+            for mid in dated[1:]:
+                if mid not in flagged:
+                    flagged[mid] = []
+                flagged[mid].append("exact-duplicate")
+    else:
+        dup_pairs = find_near_duplicates(memories)
     for id_a, id_b, ratio in dup_pairs:
         date_a = mem_by_id[id_a].get("date", "")
         date_b = mem_by_id[id_b].get("date", "")
@@ -397,13 +644,13 @@ def triage(
     doc_to_flagged: dict[str, set] = defaultdict(set)
 
     for m in memories:
-        chunk_id = m.get("chunk_id", "")
-        match = re.match(r"cursor-memory_([a-f0-9-]+)_", chunk_id)
-        if match:
-            doc_id = match.group(1)
-            doc_to_memories[doc_id].append(m)
-            if m["id"] in flagged:
-                doc_to_flagged[doc_id].add(m["id"])
+        doc_key = document_key(m, bank_id)
+        if not doc_key:
+            continue
+        doc_to_memories[doc_key].append(m)
+        if m["id"] in flagged:
+            doc_to_flagged[doc_key].add(m["id"])
+    orphan_docs = sorted(d for d in doc_to_memories if d.startswith("orphan:"))
 
     # Classify documents
     fully_flagged = []
@@ -439,10 +686,12 @@ def triage(
         "flagged_pct": round(memories_removable / len(memories) * 100, 1),
         "by_reason": dict(reason_counts),
         "near_duplicate_pairs": len(dup_pairs),
+        "exact_duplicate_groups": len(exact_groups),
         "repeated_fact_groups": len(repeated),
         "documents_clean": clean_docs,
         "documents_fully_flagged": len(fully_flagged),
         "documents_mixed": len(mixed_docs),
+        "orphan_documents": len(orphan_docs),
         "memories_in_fully_flagged_docs": memories_in_fully,
         "memories_removed_from_mixed": memories_in_mixed_flagged,
         "memories_kept_in_mixed": memories_in_mixed_kept,
@@ -454,7 +703,9 @@ def triage(
     for reason, count in sorted(reason_counts.items(), key=lambda x: -x[1]):
         log.info("    %s: %d", reason, count)
     log.info("  Near-duplicate pairs: %d", summary["near_duplicate_pairs"])
+    log.info("  Exact-duplicate groups: %d", summary["exact_duplicate_groups"])
     log.info("  Repeated fact groups: %d", summary["repeated_fact_groups"])
+    log.info("  Orphan documents: %d", summary["orphan_documents"])
     log.info("  Documents clean (untouched): %d", clean_docs)
     log.info(
         "  Documents fully flagged (delete all %d memories): %d",
@@ -467,8 +718,26 @@ def triage(
 
     if not apply:
         summary["applied"] = False
+        summary["apply_mode"] = "dry-run"
         if fully_flagged or mixed_docs:
             log.info("Dry-run mode. Use --apply to rearrange.")
+        return summary
+
+    if apply_mode == "invalidate":
+        # --- Apply: non-destructive clean-slate pass (no deletes) ---
+        log.info("Applying non-destructive invalidate pass...")
+        result = _apply_invalidate_high_confidence(
+            bank_id, memories, mem_by_id, exact_groups, max_items,
+        )
+        summary["applied"] = True
+        summary["apply_mode"] = "invalidate"
+        summary["reviewer"] = reviewer or MANUAL_TRIAGE_REVIEWER
+        summary.update(result)
+        log.info("--- Applied (invalidate) ---")
+        log.info("  Orphan replacements: %d", result["orphan_replacements"])
+        log.info("  Exact duplicates invalidated: %d", result["exact_duplicates_invalidated"])
+        if result["errors"]:
+            log.info("  Errors: %d (see summary)", len(result["errors"]))
         return summary
 
     # --- Apply: rearrange all affected documents ---
@@ -537,7 +806,24 @@ def main():
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Rearrange documents, removing flagged memories (default: dry-run)",
+        help="Apply cleanup (default: dry-run). Combine with --apply-mode.",
+    )
+    parser.add_argument(
+        "--apply-mode",
+        choices=["rearrange", "invalidate"],
+        default="rearrange",
+        help="rearrange deletes/rebuilds docs (cursor-memory default); invalidate only replaces orphans and dedupes exact copies without deleting anything.",
+    )
+    parser.add_argument(
+        "--reviewer",
+        default=MANUAL_TRIAGE_REVIEWER,
+        help="Provenance label for manual replacements (default: manual-triage).",
+    )
+    parser.add_argument(
+        "--max-items",
+        type=int,
+        default=0,
+        help="Cap the number of applied replacements+invalidations (0 = no cap).",
     )
     parser.add_argument(
         "--stale-days",
@@ -556,6 +842,9 @@ def main():
         bank_id=args.bank,
         stale_days=args.stale_days,
         apply=args.apply,
+        apply_mode=args.apply_mode,
+        reviewer=args.reviewer,
+        max_items=args.max_items,
     )
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)

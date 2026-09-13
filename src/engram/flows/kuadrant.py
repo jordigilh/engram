@@ -128,7 +128,7 @@ PG_POOL_MIN_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MIN_SIZE", "2"))
 PG_POOL_MAX_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MAX_SIZE", "5"))
 COCOINDEX_DB = pathlib.Path(os.environ.get(
     "COCOINDEX_DB",
-    os.path.expanduser("~/.hindsight/kuadrant-cocoindex.db"),
+    os.path.expanduser("~/.engram/kuadrant-cocoindex.db"),
 ))
 
 # Unique per-file ContextKey name -- see engram-cocoindex-flows.py's PG_POOL

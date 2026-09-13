@@ -20,7 +20,7 @@ Usage:
     python3 purge-out-of-scope-memories.py            # dry run (default)
     python3 purge-out-of-scope-memories.py --execute   # actually deletes
 
-Every deletion is logged to ~/.hindsight/logs/scope-purge-<timestamp>.jsonl.
+Every deletion is logged to ~/.engram/logs/scope-purge-<timestamp>.jsonl.
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ from engram.contradiction_resolution import delete_document  # noqa: E402
 HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
 BANK_ID = "cursor-memory"
 PROJECTS_ROOT = Path(os.path.expanduser("~/.cursor/projects"))
-LOG_DIR = Path.home() / ".hindsight" / "logs"
+LOG_DIR = Path.home() / ".engram" / "logs"
 
 
 def build_transcript_project_map() -> dict[str, str]:

@@ -106,6 +106,84 @@ def test_context_returns_bounded_structured_dossier(tmp_path: Path) -> None:
     assert len(json.dumps(result, default=str)) <= 4000
 
 
+def _write_pending_interactive_fixture(root: Path) -> None:
+    (root / "crds").mkdir(parents=True)
+    (root / "logs").mkdir(parents=True)
+    target = "rr-target-1"
+    neighbor_a = "rr-neighbor-a-1"
+    neighbor_b = "rr-neighbor-b-1"
+    (root / "crds" / "sessions.yaml").write_text(
+        f"""items:
+- kind: InvestigationSession
+  metadata:
+    name: is-{target}
+    uid: is-uid-target
+    labels:
+      kubernaut.ai/rr-name: {target}
+  spec:
+    a2aTaskID: a2a-{target}
+    remediationRequestRef:
+      name: {target}
+- kind: AgentSession
+  metadata:
+    name: as-{target}
+  status:
+    phase: Pending
+    sessionID: session-target
+- kind: AgentSession
+  metadata:
+    name: as-{neighbor_a}
+  status:
+    phase: Running
+    sessionID: session-neighbor-a
+"""
+    )
+    (root / "logs" / "concurrent.log").write_text(
+        "\n".join(
+            [
+                f'2026-09-07T22:42:54Z {{"msg":"StartInvestigation: calling MCP client","rr_id":"{target}","ka_session_id":"session-target"}}',
+                f'2026-09-07T22:42:54Z {{"msg":"StartInvestigation: MCP session established","rr_id":"{neighbor_a}","session_id":"session-neighbor-a"}}',
+                f'2026-09-07T22:42:54Z {{"msg":"interactive session created with context (pending)","remediation_id":"{target}","session_id":"session-target"}}',
+                f'2026-09-07T22:42:55Z {{"msg":"Investigation still in progress, requeuing","agentSession":"as-{target}","rr_id":"{target}"}}',
+                f'2026-09-07T22:42:56Z {{"msg":"Extending Analyzing timeout for active interactive session","rr_id":"{target}","sessionID":"session-target"}}',
+                f'2026-09-07T22:42:57Z {{"msg":"StartInvestigation: MCP session established","rr_id":"{neighbor_b}","session_id":"session-neighbor-b"}}',
+                f'2026-09-07T22:42:58Z {{"msg":"MCP request returned 429","rr_id":"{target}"}}',
+            ]
+        )
+        + "\n"
+    )
+
+
+def test_pending_interactive_lifecycle_isolated_from_concurrent_remediations(tmp_path: Path) -> None:
+    _write_pending_interactive_fixture(tmp_path)
+
+    result = triage_test_failure(
+        root=tmp_path,
+        run_id="run-pending",
+        job_id="job-pending",
+        test_name="E2E-FP-1899-002",
+        failure_text='WorkflowExecution for "rr-target-1" did not complete',
+        rr_id="rr-target-1",
+    )
+
+    lifecycle = result["summary"]["interactive_lifecycle"]
+    assert lifecycle["investigation_session_count"] == 1
+    assert lifecycle["agent_session_count"] == 1
+    assert lifecycle["pending_agent_sessions"] == 1
+    assert lifecycle["af_start_events"] == 1
+    assert lifecycle["mcp_established_events"] == 0
+    assert lifecycle["ka_pending_events"] == 1
+    assert lifecycle["requeue_events"] == 1
+    assert lifecycle["timeout_extension_events"] == 1
+    assert lifecycle["earliest_causal_boundary"] == "AF-to-KA interactive session startup/handoff"
+    assert lifecycle["expected_missing_events"] == [
+        "MCP session established",
+        "interactive investigation handoff completion",
+    ]
+    assert lifecycle["possible_contributors"] == ["concurrent MCP 429/rate-limit activity"]
+    assert all("neighbor" not in json.dumps(item) for item in result["evidence"])
+
+
 def test_missing_rr_id_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="RR ID"):
         triage_test_failure(

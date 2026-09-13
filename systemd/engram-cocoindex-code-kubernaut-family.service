@@ -42,16 +42,16 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/go/src/github.com/jordigilh/kubernaut
-EnvironmentFile=%h/.hindsight/config.env
+EnvironmentFile=%h/.engram/config.env
 Environment=GOOGLE_APPLICATION_CREDENTIALS=%h/.config/gcloud/application_default_credentials.json
 Environment=COCOINDEX_PG_URL=postgresql://hindsight:hindsight@localhost:5432/hindsight
 Environment=KUBERNAUT_LIVE_CLONE_DIR=%h/go/src/github.com/jordigilh/kubernaut
 Environment=HF_HUB_OFFLINE=1
-ExecStart=%h/.hindsight/venv/bin/engram-search-kubernaut --transport streamable-http --host 127.0.0.1 --port 8891
+ExecStart=%h/.engram/venv/bin/engram-search-kubernaut --transport streamable-http --host 127.0.0.1 --port 8891
 Restart=on-failure
 RestartSec=10
-StandardOutput=append:%h/.hindsight/logs/cocoindex-code-kubernaut-family-stdout.log
-StandardError=append:%h/.hindsight/logs/cocoindex-code-kubernaut-family-stderr.log
+StandardOutput=append:%h/.engram/logs/cocoindex-code-kubernaut-family-stdout.log
+StandardError=append:%h/.engram/logs/cocoindex-code-kubernaut-family-stderr.log
 
 [Install]
 WantedBy=default.target

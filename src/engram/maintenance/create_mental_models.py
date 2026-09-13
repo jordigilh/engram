@@ -132,7 +132,7 @@ MENTAL_MODELS = [
         "bank": "engram-docs",
         "id": "engram-operations",
         "name": "Engram Operations",
-        "source_query": "How is Engram deployed and operated? Describe the launchd services, the ~/.hindsight/ symlink layout, the Python venv setup, and the pytest regression test suite.",
+        "source_query": "How is Engram deployed and operated? Describe the launchd services, the ~/.engram/ symlink layout, the Python venv setup, and the pytest regression test suite.",
         "max_tokens": 4096,
         "trigger": {"mode": "full", "refresh_after_consolidation": False},
     },

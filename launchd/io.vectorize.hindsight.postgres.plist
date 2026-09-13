@@ -71,8 +71,8 @@
     <key>ThrottleInterval</key>
     <integer>5</integer>
     <key>StandardOutPath</key>
-    <string>__HOME__/.hindsight/logs/postgres-stdout.log</string>
+    <string>__HOME__/.engram/logs/postgres-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.hindsight/logs/postgres-stderr.log</string>
+    <string>__HOME__/.engram/logs/postgres-stderr.log</string>
 </dict>
 </plist>

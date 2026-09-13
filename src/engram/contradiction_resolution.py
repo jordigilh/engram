@@ -59,7 +59,7 @@ from urllib.request import Request, urlopen
 # own resolved directory onto sys.path lets these keep resolving as plain
 # top-level modules regardless of how this file itself was reached: as
 # `engram.contradiction_resolution` (src/ on sys.path) or via the
-# `~/.hindsight/contradiction_resolution.py` flat symlink used by
+# `~/.engram/contradiction_resolution.py` flat symlink used by
 # hooks/_hindsight_check_worker.py (no `engram` package context at all there)
 # -- Path(__file__).resolve() always lands on the real src/engram/ directory
 # either way.
@@ -69,7 +69,7 @@ from hindsight_client import recall  # noqa: E402
 import pending_queue  # noqa: E402
 
 HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
-LOG_DIR = Path.home() / ".hindsight" / "logs"
+LOG_DIR = Path.home() / ".engram" / "logs"
 AUTO_RESOLVED_LOG_PATH = LOG_DIR / "contradictions-auto-resolved.jsonl"
 
 DEFAULT_AUTO_THRESHOLD = 0.9

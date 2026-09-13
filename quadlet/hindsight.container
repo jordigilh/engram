@@ -68,14 +68,14 @@
 #                                  # at logout -- see docs/INSTALL-linux.md
 #   mkdir -p ~/.config/containers/systemd
 #   cp quadlet/hindsight.container ~/.config/containers/systemd/
-#   mkdir -p ~/.hindsight-linux/pg0-data
+#   mkdir -p ~/.engram-linux/pg0-data
 #   # container runs as non-root uid 1000 (`hindsight`) internally -- a
 #   # bind-mounted host dir needs matching perms, not just SELinux :Z
 #   # relabeling (bit us during the spike: "Permission denied" on a
 #   # root-owned 600 credentials file read by uid 1000 in-container). Use
 #   # your own real UID/GID here, not a hardcoded 1000:1000 -- see the
 #   # UserNS note above for why that's the portable form:
-#   chown "$(id -u):$(id -g)" ~/.hindsight-linux/pg0-data
+#   chown "$(id -u):$(id -g)" ~/.engram-linux/pg0-data
 #   chmod 644 ~/.config/gcloud/application_default_credentials.json
 #   podman build -t localhost/engram-hindsight:latest -f Dockerfile .
 #   systemctl --user daemon-reload
@@ -86,7 +86,7 @@
 #   curl -s http://localhost:8888/health | python3 -m json.tool
 #
 # Config: HINDSIGHT_API_PORT, VERTEXAI_PROJECT, model names, etc. all come
-# from ~/.hindsight/config.env (EnvironmentFile= below) -- same single
+# from ~/.engram/config.env (EnvironmentFile= below) -- same single
 # source of truth as the macOS native install's with-config-env.sh, so
 # nothing project/LLM-specific is ever baked into this file (which, like
 # every file under quadlet/ and launchd/, is committed to a public repo).
@@ -99,7 +99,7 @@ Wants=network-online.target
 [Container]
 Image=localhost/engram-hindsight:latest
 ContainerName=hindsight
-EnvironmentFile=%h/.hindsight/config.env
+EnvironmentFile=%h/.engram/config.env
 # Local ONNX embeddings/reranker, CPU-only -- no GPU required (validated on
 # a GPU-less RHEL box; the model runs comfortably on CPU given a modern
 # multi-core host). Override in config.env if a CUDA-capable host is
@@ -123,7 +123,7 @@ Environment=GOOGLE_APPLICATION_CREDENTIALS=/creds/adc.json
 Volume=%h/.config/gcloud/application_default_credentials.json:/creds/adc.json:ro,Z
 # Persistent pg0 data dir -- see chown note above. Path confirmed via
 # `podman exec ... find / -iname '*pg0*'` during the 2026-07-29 spike.
-Volume=%h/.hindsight-linux/pg0-data:/home/hindsight/.pg0:Z
+Volume=%h/.engram-linux/pg0-data:/home/hindsight/.pg0:Z
 # Network=host was what was actually end-to-end validated during the
 # 2026-07-29 spike (retain/recall/persistence all confirmed under it), to
 # work around a stale-firewall-rule conflict specific to that (shared,

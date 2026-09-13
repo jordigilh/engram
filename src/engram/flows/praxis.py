@@ -73,7 +73,7 @@ PRAXIS_ORG_DIR = pathlib.Path(os.environ.get(
 # separately from repo docs.
 PRAXIS_MANUAL_DOCS_DIR = pathlib.Path(os.environ.get(
     "PRAXIS_MANUAL_DOCS_DIR",
-    os.path.expanduser("~/.hindsight/manual-docs/praxis"),
+    os.path.expanduser("~/.engram/manual-docs/praxis"),
 ))
 
 # Single source of truth for docs/code/issues ingestion: (local checkout dir
@@ -129,7 +129,7 @@ PG_POOL_MIN_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MIN_SIZE", "2"))
 PG_POOL_MAX_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MAX_SIZE", "5"))
 COCOINDEX_DB = pathlib.Path(os.environ.get(
     "COCOINDEX_DB",
-    os.path.expanduser("~/.hindsight/praxis-cocoindex.db"),
+    os.path.expanduser("~/.engram/praxis-cocoindex.db"),
 ))
 
 # Unique per-file ContextKey name -- see engram-cocoindex-flows.py's PG_POOL

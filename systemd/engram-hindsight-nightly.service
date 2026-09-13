@@ -17,9 +17,9 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=%h/.hindsight
-EnvironmentFile=%h/.hindsight/config.env
+WorkingDirectory=%h/.engram
+EnvironmentFile=%h/.engram/config.env
 Environment=GOOGLE_APPLICATION_CREDENTIALS=%h/.config/gcloud/application_default_credentials.json
-ExecStart=%h/.hindsight/venv/bin/python3 %h/.hindsight/nightly-learn.py --mode nightly
-StandardOutput=append:%h/.hindsight/logs/launchd-stdout.log
-StandardError=append:%h/.hindsight/logs/launchd-stderr.log
+ExecStart=%h/.engram/venv/bin/python3 %h/.engram/nightly-learn.py --mode nightly
+StandardOutput=append:%h/.engram/logs/launchd-stdout.log
+StandardError=append:%h/.engram/logs/launchd-stderr.log

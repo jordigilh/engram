@@ -4,6 +4,9 @@
   "description": "Engram plugin for OpenCode and OpenChamber: exposes the unified Engram gateway through a minimal project+family config surface.",
   "type": "module",
   "main": "index.ts",
+  "scripts": {
+    "test": "bun test ./"
+  },
   "devDependencies": {
     "@opencode-ai/plugin": "1.18.27"
   }

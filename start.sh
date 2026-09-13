@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Start Hindsight as a native macOS process.
-# LLM configuration lives in ~/.hindsight/config.env (outside this repo).
+# LLM configuration lives in ~/.engram/config.env (outside this repo).
 
 set -euo pipefail
 
-CONFIG="${HOME}/.hindsight/config.env"
+CONFIG="${HOME}/.engram/config.env"
 ADC_PATH="${HOME}/.config/gcloud/application_default_credentials.json"
-VENV="${HOME}/.hindsight/venv"
+VENV="${HOME}/.engram/venv"
 
 if [ ! -f "$CONFIG" ]; then
     echo "Error: ${CONFIG} not found."
-    echo "Copy config.env.example to ~/.hindsight/config.env and fill in your values."
+    echo "Copy config.env.example to ~/.engram/config.env and fill in your values."
     exit 1
 fi
 
@@ -26,7 +26,7 @@ if [ ! -f "$VENV/bin/hindsight-api" ]; then
     exit 1
 fi
 
-mkdir -p "$HOME/.hindsight/logs"
+mkdir -p "$HOME/.engram/logs"
 
 set -a
 source "$CONFIG"

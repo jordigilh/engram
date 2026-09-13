@@ -21,7 +21,7 @@ supported by its own cited evidence," which has no existing implementation
 in this repo.
 
 Run (needs the hindsight venv for litellm):
-    ~/.hindsight/venv/bin/python3 spike/groundedness_check_spike.py
+    ~/.engram/venv/bin/python3 spike/groundedness_check_spike.py
 """
 from __future__ import annotations
 
@@ -177,7 +177,7 @@ def main() -> int:
     try:
         import litellm  # noqa: F401
     except ImportError:
-        print("FAIL: litellm not importable -- run with ~/.hindsight/venv/bin/python3")
+        print("FAIL: litellm not importable -- run with ~/.engram/venv/bin/python3")
         return 1
 
     tp = tn = fp = fn = 0

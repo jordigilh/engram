@@ -52,7 +52,7 @@ BUCKET_MEDIUM = 100000
 TRANSCRIPTS_GLOB = os.path.expanduser(
     "~/.cursor/projects/*/agent-transcripts/**/*.jsonl"
 )
-LOG_DIR = Path.home() / ".hindsight" / "logs"
+LOG_DIR = Path.home() / ".engram" / "logs"
 MAX_CONTENT_LEN = 12000  # max chars per retain item to control token usage
 
 # Standing-cadence nudge for the human-review queue (lever #5 of the
@@ -104,7 +104,7 @@ INSTRUCTION_PATTERNS = [
     re.compile(r"\bbefore\s+(implementing|proceeding|starting\s+any)", re.I),
 ]
 
-STATE_DIR = Path.home() / ".hindsight"
+STATE_DIR = Path.home() / ".engram"
 WATERMARKS_PATH = STATE_DIR / "watermarks.json"
 RETAINED_HASHES_PATH = STATE_DIR / "retained-hashes.json"
 MODEL_REFRESH_STATE_PATH = STATE_DIR / "model-refresh-state.json"
@@ -785,7 +785,7 @@ def notify_pending_contradictions_backlog(
 
     Lever #5 of the 2026-07-14 "reduce input tokens" review: every day a
     queued contradiction sits unreviewed in
-    ~/.hindsight/logs/contradictions-pending.jsonl is a day that fact isn't
+    ~/.engram/logs/contradictions-pending.jsonl is a day that fact isn't
     available to recall (contradiction_resolution.py's three-tier check
     withholds queued items from retain until review-contradictions.py
     resolves them -- see docs/PENDING_CONTRADICTIONS.md). The dashboard

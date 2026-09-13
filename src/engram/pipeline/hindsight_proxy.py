@@ -30,7 +30,7 @@ LISTEN_HOST = os.environ.get("HINDSIGHT_PROXY_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("HINDSIGHT_PROXY_PORT", "8888"))
 STATE_FILE = os.environ.get(
     "HINDSIGHT_ACTIVE_BACKEND_FILE",
-    os.path.expanduser("~/.hindsight/state/active-backend.port"),
+    os.path.expanduser("~/.engram/state/active-backend.port"),
 )
 DEFAULT_BACKEND_PORT = int(os.environ.get("HINDSIGHT_DEFAULT_BACKEND_PORT", "18888"))
 BACKEND_HOST = "127.0.0.1"

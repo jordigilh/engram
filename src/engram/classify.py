@@ -21,7 +21,7 @@ from dataclasses import dataclass
 # these when they're not already set, so a real exported value always wins.
 #
 # "global" (not a specific region like "us-central1"): matches
-# ~/.hindsight/config.env's VERTEXAI_LOCATION, hindsight-api's own working
+# ~/.engram/config.env's VERTEXAI_LOCATION, hindsight-api's own working
 # config for the exact same model. Confirmed 2026-07-27 that
 # claude-haiku-4-5@20251001 returns FAILED_PRECONDITION ("not servable in
 # region us-central1") when called with the old "us-central1" default --

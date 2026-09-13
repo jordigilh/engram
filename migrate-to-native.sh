@@ -14,7 +14,7 @@ set -euo pipefail
 
 SOURCE_URL="${SOURCE_URL:-http://localhost:8888}"
 TARGET_URL="${TARGET_URL:-http://localhost:8889}"
-EXPORT_DIR="$HOME/.hindsight/migration-export"
+EXPORT_DIR="$HOME/.engram/migration-export"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 mkdir -p "$EXPORT_DIR"

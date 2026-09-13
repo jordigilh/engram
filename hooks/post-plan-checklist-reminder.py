@@ -9,7 +9,7 @@ preToolUse enforcer, on the same tool call, right after it (Cursor fires
 postToolUse after the tool executes, and never at all if preToolUse denied
 it -- confirmed empirically). Consumes the per-session marker written by
 hooks/_write_plan_marker.py, and if a checklist file exists for the marker's
-`repo` at ~/.hindsight/review-checklists/<repo>.md, injects it via
+`repo` at ~/.engram/review-checklists/<repo>.md, injects it via
 `additional_context` -- the one hook-output field confirmed to reliably
 reach the model as a `system_reminder` (see docs/findings/2026-08.md).
 
@@ -21,7 +21,7 @@ crash handler intentionally never deletes the marker either).
 
 Content is sourced from engram/hooks/review-checklists/<repo>.md, a
 git-tracked file symlinked (by hooks/install.sh) into
-~/.hindsight/review-checklists/. Git history is the real integrity control
+~/.engram/review-checklists/. Git history is the real integrity control
 here (any tampering shows up in `git diff`/`git log`) -- the
 is_safe_checklist_content() sanity check below is a cheap secondary layer on
 top of that, not a substitute for it, and it also catches accidental
@@ -40,8 +40,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 MARKER_DIR = Path.home() / ".cache" / "engram-hooks"
-REVIEW_CHECKLISTS_DIR = Path.home() / ".hindsight" / "review-checklists"
-LOG_PATH = Path.home() / ".hindsight" / "logs" / "post-plan-checklist-reminder.jsonl"
+REVIEW_CHECKLISTS_DIR = Path.home() / ".engram" / "review-checklists"
+LOG_PATH = Path.home() / ".engram" / "logs" / "post-plan-checklist-reminder.jsonl"
 
 MAX_CHECKLIST_CHARS = 3000
 # Best-effort text patterns, not a cryptographic guarantee -- see module

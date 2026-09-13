@@ -25,6 +25,11 @@ def extract_rr_id(text: str) -> str | None:
     return match.group(0) if match else None
 
 
+def extract_rr_ids(text: str) -> tuple[str, ...]:
+    """Return all distinct remediation-request identifiers in stable order."""
+    return tuple(dict.fromkeys(match.group(0) for match in RR_RE.finditer(text)))
+
+
 def parse_timestamp(value: Any) -> datetime | None:
     if not isinstance(value, str):
         return None
@@ -54,6 +59,59 @@ def _flatten_text(value: Any) -> str:
     return str(value) if value is not None else ""
 
 
+def _json_log_payload(content: str) -> dict[str, Any] | None:
+    match = re.match(r"^\S+\s+(\{.*\})$", content)
+    if not match:
+        return None
+    try:
+        payload = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _identifiers(value: Any, content: str) -> dict[str, str]:
+    payload = value if isinstance(value, dict) else _json_log_payload(content)
+    if not isinstance(payload, dict):
+        return {}
+
+    found: dict[str, str] = {}
+    key_names = {
+        "agentsession": "agent_session_id",
+        "agentsessionid": "agent_session_id",
+        "a2ataskid": "a2a_task_id",
+        "investigationsessionid": "investigation_session_id",
+        "isname": "investigation_session_id",
+        "kaCorrelationID".lower(): "ka_correlation_id",
+        "kacorrelationid": "ka_correlation_id",
+        "kasessionid": "ka_session_id",
+        "mcpsessionid": "mcp_session_id",
+        "reconcileid": "reconcile_id",
+        "sessionid": "session_id",
+    }
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            kind = item.get("kind")
+            metadata = item.get("metadata")
+            if kind == "AgentSession" and isinstance(metadata, dict) and metadata.get("name"):
+                found.setdefault("agent_session_id", str(metadata["name"]))
+            if kind == "InvestigationSession" and isinstance(metadata, dict) and metadata.get("name"):
+                found.setdefault("investigation_session_id", str(metadata["name"]))
+            for key, nested in item.items():
+                normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+                identifier = key_names.get(normalized)
+                if identifier and isinstance(nested, (str, int)):
+                    found.setdefault(identifier, str(nested))
+                visit(nested)
+        elif isinstance(item, list):
+            for nested in item:
+                visit(nested)
+
+    visit(payload)
+    return found
+
+
 def _metadata(value: Any, text: str) -> dict[str, Any]:
     serialized = _flatten_text(value) if not isinstance(value, str) else value
     namespace = None
@@ -80,10 +138,18 @@ def _evidence_id(source_file: str, content: str, ordinal: int) -> str:
     return f"evidence-{digest}"
 
 
-def _from_value(value: Any, source_file: str, ordinal: int, evidence_type: str) -> Evidence:
+def _from_value(
+    value: Any,
+    source_file: str,
+    ordinal: int,
+    evidence_type: str,
+    source_line: int | None = None,
+) -> Evidence:
     content = value if isinstance(value, str) else json.dumps(value, sort_keys=True, default=str)
     metadata = _metadata(value, content)
-    rr_id = extract_rr_id(content)
+    rr_ids = extract_rr_ids(content)
+    rr_id = rr_ids[0] if rr_ids else None
+    metadata["rr_ids"] = rr_ids
     timestamp = None
     if isinstance(value, dict):
         for key in ("timestamp", "creationTimestamp", "createdAt", "firingTime", "firstTimestamp", "lastTimestamp"):
@@ -105,6 +171,8 @@ def _from_value(value: Any, source_file: str, ordinal: int, evidence_type: str) 
         namespace=metadata["namespace"],
         pod=metadata["pod"],
         severity=severity,
+        source_line=source_line,
+        identifiers=_identifiers(value, content),
     )
 
 
@@ -150,9 +218,11 @@ def iter_evidence(root: Path) -> Iterator[Evidence]:
                     yield _from_value(item, relative, ordinal, "json_record")
                     ordinal += 1
             elif path.name.endswith(".log") or path.name == "logs.txt":
-                for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                for line_number, line in enumerate(
+                    path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
+                ):
                     if line.strip():
-                        yield _from_value(line, relative, ordinal, "log_event")
+                        yield _from_value(line, relative, ordinal, "log_event", source_line=line_number)
                         ordinal += 1
         except (OSError, UnicodeError, ValueError):
             continue

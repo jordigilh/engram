@@ -21,7 +21,7 @@
          path. -->
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.hindsight/venv/bin/engram-serena-multiplex</string>
+        <string>__HOME__/.engram/venv/bin/engram-serena-multiplex</string>
         <string>--host</string>
         <string>127.0.0.1</string>
         <string>--port</string>
@@ -46,14 +46,14 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>__HOME__/.hindsight/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>__HOME__/.engram/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>__HOME__</string>
     </dict>
     <key>StandardOutPath</key>
-    <string>__HOME__/.hindsight/logs/serena-multiplex-kubernaut-family-stdout.log</string>
+    <string>__HOME__/.engram/logs/serena-multiplex-kubernaut-family-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.hindsight/logs/serena-multiplex-kubernaut-family-stderr.log</string>
+    <string>__HOME__/.engram/logs/serena-multiplex-kubernaut-family-stderr.log</string>
     <key>KeepAlive</key>
     <dict>
         <key>SuccessfulExit</key>

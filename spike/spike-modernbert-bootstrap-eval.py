@@ -25,7 +25,7 @@ Methodology to avoid new circularity:
      delta attributable to bootstrapping is unambiguous.
 
 Run with the hindsight venv:
-    ~/.hindsight/venv/bin/python3 spike/spike-modernbert-bootstrap-eval.py
+    ~/.engram/venv/bin/python3 spike/spike-modernbert-bootstrap-eval.py
 """
 from __future__ import annotations
 

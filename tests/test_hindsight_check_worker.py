@@ -14,8 +14,8 @@ import _hindsight_check_worker as worker
 
 class TestLoadConfigEnv:
     def test_loads_key_value_pairs(self, monkeypatch, tmp_path):
-        (tmp_path / ".hindsight").mkdir()
-        config = tmp_path / ".hindsight" / "config.env"
+        (tmp_path / ".engram").mkdir()
+        config = tmp_path / ".engram" / "config.env"
         config.write_text("FOO=bar\nBAZ=qux\n")
         monkeypatch.setattr(worker.Path, "home", staticmethod(lambda: tmp_path))
         monkeypatch.delenv("FOO", raising=False)
@@ -28,8 +28,8 @@ class TestLoadConfigEnv:
         assert os.environ["BAZ"] == "qux"
 
     def test_does_not_overwrite_existing_env(self, monkeypatch, tmp_path):
-        (tmp_path / ".hindsight").mkdir()
-        config = tmp_path / ".hindsight" / "config.env"
+        (tmp_path / ".engram").mkdir()
+        config = tmp_path / ".engram" / "config.env"
         config.write_text("FOO=from_file\n")
         monkeypatch.setattr(worker.Path, "home", staticmethod(lambda: tmp_path))
         monkeypatch.setenv("FOO", "already_set")
@@ -40,8 +40,8 @@ class TestLoadConfigEnv:
         assert os.environ["FOO"] == "already_set"
 
     def test_skips_comments_and_blank_lines(self, monkeypatch, tmp_path):
-        (tmp_path / ".hindsight").mkdir()
-        config = tmp_path / ".hindsight" / "config.env"
+        (tmp_path / ".engram").mkdir()
+        config = tmp_path / ".engram" / "config.env"
         config.write_text("# a comment\n\nGOOD=value\n")
         monkeypatch.setattr(worker.Path, "home", staticmethod(lambda: tmp_path))
         monkeypatch.delenv("GOOD", raising=False)

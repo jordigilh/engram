@@ -4,6 +4,13 @@ __pycache__/
 *.log
 .DS_Store
 config.env
+node_modules/
+
+# Local OpenCode/Codex configuration and Cursor hook installation. These files
+# contain machine-specific localhost endpoints and absolute home-directory
+# paths; the tracked plugin/source files remain shareable.
+.codex/
+.cursor/hooks.json
 
 # Personal, machine-local Serena onboarding state (project.yml/cache/memories
 # for whoever's local install has this repo activated) -- not shared repo

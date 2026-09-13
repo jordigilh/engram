@@ -494,6 +494,78 @@ class TestHandleJsonRpcMessage:
             "forward:find_symbol",
         ]  # second call skipped re-activation
 
+    def test_concurrent_mount_calls_keep_each_project_identity(self, serena_multiplex):
+        """The route's project, not the caller's timing, controls activation.
+
+        This exercises the same JSON-RPC boundary used by the HTTP endpoint,
+        including the shared tracker and the entire forwarded call body.
+        """
+        tracker = serena_multiplex.ActiveProjectTracker()
+        events: list[str] = []
+
+        async def activate(project):
+            events.append(f"activate:{project}")
+            await asyncio.sleep(0)
+
+        async def forward(message):
+            project = message["params"]["arguments"]["project_seen_by_fake"]
+            events.append(f"forward:{project}")
+            await asyncio.sleep(0.01)
+            return project
+
+        async def call(project):
+            message = {
+                "jsonrpc": "2.0",
+                "id": project,
+                "method": "tools/call",
+                "params": {
+                    "name": "find_symbol",
+                    "arguments": {"project_seen_by_fake": project},
+                },
+            }
+            return await serena_multiplex.handle_json_rpc_message(
+                message, project, tracker, activate, forward
+            )
+
+        async def run():
+            return await asyncio.gather(call("kubernaut"), call("kubernaut-operator"))
+
+        results = asyncio.run(run())
+
+        assert results == ["kubernaut", "kubernaut-operator"]
+        assert events.index("forward:kubernaut") < events.index("activate:kubernaut-operator")
+        assert events.index("forward:kubernaut-operator") > events.index("activate:kubernaut-operator")
+
+    def test_scoped_call_ignores_caller_project_argument(self, serena_multiplex):
+        tracker = serena_multiplex.ActiveProjectTracker()
+        record: list[str] = []
+
+        async def activate(project):
+            record.append(f"activate:{project}")
+
+        async def forward(message):
+            record.append(message["params"]["arguments"]["requested_project"])
+            return "forwarded"
+
+        message = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "find_symbol",
+                "arguments": {"requested_project": "kubernaut-console"},
+            },
+        }
+
+        result = asyncio.run(
+            serena_multiplex.handle_json_rpc_message(
+                message, "kubernaut-operator", tracker, activate, forward
+            )
+        )
+
+        assert record == ["activate:kubernaut-operator", "kubernaut-console"]
+        assert result == "forwarded"
+
     def test_agnostic_tool_passthrough_without_activation(self, serena_multiplex):
         tracker = serena_multiplex.ActiveProjectTracker()
         record: list[str] = []
@@ -571,3 +643,202 @@ class TestBuildApp:
         response = client.get("/mcp/kubernaut")
 
         assert response.status_code == 405
+
+    def test_initialize_maps_downstream_session_to_upstream_session(self, serena_multiplex, monkeypatch):
+        import httpx
+        from starlette.testclient import TestClient
+
+        calls = []
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def request(self, method, url, content=None, headers=None):
+                calls.append((method, content, dict(headers or {})))
+                if len(calls) == 1:
+                    return httpx.Response(
+                        200,
+                        headers={"mcp-session-id": "upstream-1", "content-type": "application/json"},
+                        content=b'{"jsonrpc":"2.0","id":1,"result":{}}',
+                    )
+                if method == "POST" and b"notifications/initialized" in (content or b""):
+                    return httpx.Response(202, content=b"")
+                return httpx.Response(
+                    200,
+                    headers={"content-type": "application/json"},
+                    content=b'{"jsonrpc":"2.0","id":2,"result":{}}',
+                )
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: FakeClient())
+        app = serena_multiplex.build_app(["kubernaut"], "http://upstream/mcp")
+        client = TestClient(app)
+
+        initialized = client.post(
+            "/mcp/kubernaut",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
+        downstream_id = initialized.headers["mcp-session-id"]
+        assert downstream_id != "upstream-1"
+
+        listed = client.post(
+            "/mcp/kubernaut",
+            headers={"mcp-session-id": downstream_id},
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        )
+
+        assert listed.status_code == 200
+        assert listed.headers["mcp-session-id"] == downstream_id
+        assert calls[-1][2]["mcp-session-id"] == "upstream-1"
+
+    def test_session_cannot_be_reused_on_another_project_route(self, serena_multiplex, monkeypatch):
+        import httpx
+        from starlette.testclient import TestClient
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def request(self, method, url, content=None, headers=None):
+                if b"initialize" in (content or b"") and b"notifications/initialized" not in (content or b""):
+                    return httpx.Response(
+                        200,
+                        headers={"mcp-session-id": "upstream-1"},
+                        content=b'{"jsonrpc":"2.0","id":1,"result":{}}',
+                    )
+                return httpx.Response(202, content=b"")
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: FakeClient())
+        app = serena_multiplex.build_app(
+            ["kubernaut", "kubernaut-operator"], "http://upstream/mcp"
+        )
+        client = TestClient(app)
+        initialized = client.post(
+            "/mcp/kubernaut",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
+
+        response = client.post(
+            "/mcp/kubernaut-operator",
+            headers={"mcp-session-id": initialized.headers["mcp-session-id"]},
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        )
+
+        assert response.status_code == 404
+
+    def test_delete_closes_and_removes_downstream_session(self, serena_multiplex, monkeypatch):
+        import httpx
+        from starlette.testclient import TestClient
+
+        calls = []
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def request(self, method, url, content=None, headers=None):
+                calls.append((method, dict(headers or {})))
+                if method == "POST" and b"initialize" in (content or b"") and b"notifications/initialized" not in (content or b""):
+                    return httpx.Response(
+                        200,
+                        headers={"mcp-session-id": "upstream-1"},
+                        content=b'{"jsonrpc":"2.0","id":1,"result":{}}',
+                    )
+                return httpx.Response(202, content=b"")
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: FakeClient())
+        app = serena_multiplex.build_app(["kubernaut"], "http://upstream/mcp")
+        client = TestClient(app)
+        initialized = client.post(
+            "/mcp/kubernaut",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
+        session_id = initialized.headers["mcp-session-id"]
+
+        deleted = client.delete("/mcp/kubernaut", headers={"mcp-session-id": session_id})
+        reused = client.post(
+            "/mcp/kubernaut",
+            headers={"mcp-session-id": session_id},
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        )
+
+        assert deleted.status_code == 200
+        assert reused.status_code == 404
+        assert calls[-1][0] == "DELETE"
+        assert calls[-1][1]["mcp-session-id"] == "upstream-1"
+
+    def test_expired_session_is_rejected(self, serena_multiplex):
+        import asyncio
+
+        now = [100.0]
+        registry = serena_multiplex.DownstreamSessionRegistry(idle_timeout_s=10, clock=lambda: now[0])
+
+        async def run():
+            session_id, _ = await registry.create("kubernaut", "upstream-1")
+            now[0] = 111.0
+            assert await registry.get(session_id, "kubernaut") is None
+            expired = await registry.expire()
+            assert len(expired) == 1
+            assert expired[0].upstream_session_id == "upstream-1"
+
+        asyncio.run(run())
+
+    def test_upstream_session_loss_reinitializes_once_and_retries(self, serena_multiplex, monkeypatch):
+        import httpx
+        from starlette.testclient import TestClient
+
+        calls = []
+        init_count = [0]
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def request(self, method, url, content=None, headers=None):
+                calls.append((method, content, dict(headers or {})))
+                if method == "POST" and b"initialize" in (content or b"") and b"notifications/initialized" not in (content or b""):
+                    init_count[0] += 1
+                    return httpx.Response(
+                        200,
+                        headers={"mcp-session-id": f"upstream-{init_count[0]}"},
+                        content=b'{"jsonrpc":"2.0","id":1,"result":{}}',
+                    )
+                if method == "POST" and b"notifications/initialized" in (content or b""):
+                    return httpx.Response(202, content=b"")
+                if len([call for call in calls if call[0] == "POST" and b"tools/list" in (call[1] or b"")]) == 1:
+                    return httpx.Response(400, content=b"Bad Request: Missing session ID")
+                return httpx.Response(200, content=b'{"jsonrpc":"2.0","id":2,"result":{}}')
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: FakeClient())
+        app = serena_multiplex.build_app(["kubernaut"], "http://upstream/mcp")
+        client = TestClient(app)
+        initialized = client.post(
+            "/mcp/kubernaut",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
+        session_id = initialized.headers["mcp-session-id"]
+
+        response = client.post(
+            "/mcp/kubernaut",
+            headers={"mcp-session-id": session_id},
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        )
+
+        assert response.status_code == 200
+        assert init_count[0] == 2
+        assert [call[2].get("mcp-session-id") for call in calls if b"tools/list" in (call[1] or b"")] == [
+            "upstream-1",
+            "upstream-2",
+        ]

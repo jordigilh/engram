@@ -6,26 +6,26 @@
     <string>io.vectorize.prefilter-shadow-trial</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.hindsight/with-config-env.sh</string>
-        <string>__HOME__/.hindsight/venv/bin/python3</string>
-        <string>__HOME__/.hindsight/prefilter-shadow-trial.py</string>
+        <string>__HOME__/.engram/with-config-env.sh</string>
+        <string>__HOME__/.engram/venv/bin/python3</string>
+        <string>__HOME__/.engram/prefilter-shadow-trial.py</string>
     </array>
     <key>StartInterval</key>
     <integer>1200</integer>
     <key>EnvironmentVariables</key>
     <dict>
-        <!-- LLM configuration comes from ~/.hindsight/config.env via
+        <!-- LLM configuration comes from ~/.engram/config.env via
              with-config-env.sh, not hardcoded here -- see
              io.vectorize.hindsight.service-blue.plist for rationale. -->
         <key>PATH</key>
-        <string>__HOME__/.hindsight/venv/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+        <string>__HOME__/.engram/venv/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
         <key>HOME</key>
         <string>__HOME__</string>
     </dict>
     <key>StandardOutPath</key>
-    <string>__HOME__/.hindsight/logs/prefilter-shadow-trial-stdout.log</string>
+    <string>__HOME__/.engram/logs/prefilter-shadow-trial-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.hindsight/logs/prefilter-shadow-trial-stderr.log</string>
+    <string>__HOME__/.engram/logs/prefilter-shadow-trial-stderr.log</string>
     <key>ThrottleInterval</key>
     <integer>60</integer>
 </dict>

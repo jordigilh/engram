@@ -54,7 +54,7 @@ At 5 sessions/day over a month, this translates to:
 A `afterMCPExecution` hook logs every MCP tool call as it happens:
 
 ```
-~/.hindsight/logs/mcp-calls.jsonl
+~/.engram/logs/mcp-calls.jsonl
 ```
 
 Each line contains:
@@ -76,7 +76,7 @@ Each line contains:
 
 ### Real-time: Gateway Call Log (token estimates)
 
-`~/.hindsight/logs/mcp-calls.jsonl` above is written client-side by a Cursor
+`~/.engram/logs/mcp-calls.jsonl` above is written client-side by a Cursor
 hook, whose `afterMCPExecution` payload usually omits the actual response
 text (`result_chars` is best-effort and frequently 0 -- see
 `cursor/hooks/log-mcp-calls.sh`'s own comment). For any repo routed through
@@ -85,7 +85,7 @@ gateway-owned log fills that gap, since the gateway sees the real,
 un-redacted response for every backend it proxies:
 
 ```
-~/.hindsight/logs/gateway-calls.jsonl
+~/.engram/logs/gateway-calls.jsonl
 ```
 
 Each line contains:
@@ -120,14 +120,14 @@ call involved.
 
 The nightly script (`nightly-learn.py`) produces two outputs:
 
-**Daily report** (`~/.hindsight/logs/YYYY-MM-DD.json`):
+**Daily report** (`~/.engram/logs/YYYY-MM-DD.json`):
 - Corrections detected per transcript
 - Instructions detected
 - Token usage for retain/reflect
 - Bank stats (nodes, documents, links)
 - Recall probe latency and results
 
-**Effectiveness report** (`~/.hindsight/logs/effectiveness-report.jsonl`):
+**Effectiveness report** (`~/.engram/logs/effectiveness-report.jsonl`):
 - Per-server call counts and hit rates
 - Correction rate comparison (sessions with recall vs. without)
 - Estimated correction reduction percentage
@@ -288,7 +288,7 @@ python3 -m engram.maintenance.report --csv
 ### Actions
 
 - **Low hit rate on hindsight-docs**: Check CocoIndex flow status; for manual recovery, run `python3 -m engram.pipeline.ingest_docs`
-- **Low hit rate on hindsight-issues**: Check CocoIndex flow status; for manual recovery, run `~/.hindsight/venv/bin/engram-ingest-issues` or check `gh auth status`
+- **Low hit rate on hindsight-issues**: Check CocoIndex flow status; for manual recovery, run `~/.engram/venv/bin/engram-ingest-issues` or check `gh auth status`
 - **High corrections with recall active**: Retained patterns may be outdated — run reflect manually
 - **Mental models stale**: Run `python3 -m engram.maintenance.create_mental_models --refresh` to force refresh
 - **Low proactive recall**: Strengthen the `alwaysApply` rule wording, ensure it says "ALWAYS recall before starting work"
@@ -377,7 +377,7 @@ nightly pipeline doesn't double-process.
 
 ### Triage log
 
-Results are appended to `~/.hindsight/logs/triage-report.jsonl` with per-run breakdowns.
+Results are appended to `~/.engram/logs/triage-report.jsonl` with per-run breakdowns.
 
 ## Fallback Extraction Backlog
 
@@ -407,7 +407,7 @@ Once hindsight-api's Vertex AI dependency has recovered, retry every
 buffered entry against the real extraction pipeline:
 
 ```bash
-~/.hindsight/venv/bin/engram-nightly-learn --mode reprocess-fallback
+~/.engram/venv/bin/engram-nightly-learn --mode reprocess-fallback
 ```
 
 Entries that succeed are removed from the backlog; entries that still fail
@@ -430,12 +430,12 @@ remain buffered for the next pass.
 
 | File | Content | Written by |
 |------|---------|-----------|
-| `~/.hindsight/logs/mcp-calls.jsonl` | Real-time MCP call log | Cursor hook |
-| `~/.hindsight/logs/effectiveness-report.jsonl` | Daily effectiveness metrics | Nightly script |
-| `~/.hindsight/logs/recall-signals.jsonl` | Bank stats + recall probes | Nightly script |
-| `~/.hindsight/logs/triage-report.jsonl` | Memory triage results | Nightly script |
-| `~/.hindsight/logs/fallback-retained.jsonl` | Locally-buffered windows whose retain call to hindsight-api failed transiently | `fallback_extract.py` (via `nightly-learn.py`) |
-| `~/.hindsight/logs/YYYY-MM-DD.json` | Full daily report | Nightly script |
+| `~/.engram/logs/mcp-calls.jsonl` | Real-time MCP call log | Cursor hook |
+| `~/.engram/logs/effectiveness-report.jsonl` | Daily effectiveness metrics | Nightly script |
+| `~/.engram/logs/recall-signals.jsonl` | Bank stats + recall probes | Nightly script |
+| `~/.engram/logs/triage-report.jsonl` | Memory triage results | Nightly script |
+| `~/.engram/logs/fallback-retained.jsonl` | Locally-buffered windows whose retain call to hindsight-api failed transiently | `fallback_extract.py` (via `nightly-learn.py`) |
+| `~/.engram/logs/YYYY-MM-DD.json` | Full daily report | Nightly script |
 
 ## CocoIndex-Aware Metrics
 
@@ -455,9 +455,9 @@ mode effectiveness to understand which retrieval method contributes most:
 To compare modes manually:
 
 ```bash
-~/.hindsight/venv/bin/engram-search-kubernaut --query "reconciler error handling" --mode hybrid
-~/.hindsight/venv/bin/engram-search-kubernaut --query "reconciler error handling" --mode dense
-~/.hindsight/venv/bin/engram-search-kubernaut --query "ParseConfig" --mode bm25
+~/.engram/venv/bin/engram-search-kubernaut --query "reconciler error handling" --mode hybrid
+~/.engram/venv/bin/engram-search-kubernaut --query "reconciler error handling" --mode dense
+~/.engram/venv/bin/engram-search-kubernaut --query "ParseConfig" --mode bm25
 ```
 
 **Healthy indicators:**
@@ -469,7 +469,7 @@ To compare modes manually:
 - BM25 returns 0 results for known identifiers: the `search_vector` trigger
   may not be firing — check `SELECT count(*) FROM cocoindex.code_embeddings WHERE search_vector IS NULL`
 - Hybrid results identical to dense-only: BM25 index may be empty — re-run
-  `~/.hindsight/venv/bin/engram-flows-kubernaut --mode backfill`
+  `~/.engram/venv/bin/engram-flows-kubernaut --mode backfill`
 
 ### Freshness-at-Recall
 
@@ -486,7 +486,7 @@ significantly lower than with batch ingestion.
 
 **Warning signs:**
 - `avg_staleness_hours` > 24 for docs/issues: CocoIndex may not be running — check `launchctl list | grep cocoindex`
-- `avg_staleness_hours` > 1 for code: delta processing may be stalled — check `~/.hindsight/logs/cocoindex-stdout.log`
+- `avg_staleness_hours` > 1 for code: delta processing may be stalled — check `~/.engram/logs/cocoindex-stdout.log`
 
 ### Exploration Efficiency
 
@@ -507,7 +507,7 @@ locate unfamiliar code.
 
 **Warning signs:**
 - Exploration calls/task increasing: code index may not be covering the queried area — check if the source directory is configured
-- Code index hit rate < 50%: embeddings may need reprocessing — run `~/.hindsight/venv/bin/engram-flows-kubernaut --mode backfill`
+- Code index hit rate < 50%: embeddings may need reprocessing — run `~/.engram/venv/bin/engram-flows-kubernaut --mode backfill`
 
 ## Exploration Efficiency
 
@@ -560,7 +560,7 @@ over time. Key metrics to watch:
 python3 -m engram.maintenance.report --snapshot
 
 # Compare after a week
-python3 -m engram.maintenance.report --compare ~/.hindsight/logs/baseline-2026-06-22.json
+python3 -m engram.maintenance.report --compare ~/.engram/logs/baseline-2026-06-22.json
 ```
 
 ## Setup

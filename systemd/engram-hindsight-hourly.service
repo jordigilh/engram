@@ -3,7 +3,7 @@
 #
 # Runs NATIVELY, not containerized -- unlike hindsight.container (the
 # Hindsight service itself). The macOS install already proves the batch
-# scripts don't need the host's system Python: `uv venv ~/.hindsight/venv
+# scripts don't need the host's system Python: `uv venv ~/.engram/venv
 # --python 3.14` (see docs/INSTALL.md step 4) creates a hermetic,
 # version-pinned interpreter independent of whatever Python the OS ships.
 # The same `uv venv --python 3.14` command works identically on Linux, so
@@ -25,8 +25,8 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=%h/.hindsight
-EnvironmentFile=%h/.hindsight/config.env
+WorkingDirectory=%h/.engram
+EnvironmentFile=%h/.engram/config.env
 # Always the real ADC default path, regardless of what (if anything)
 # config.env sets for this -- mirrors with-config-env.sh's identical
 # override in the macOS launchd path, same reason: config.env's
@@ -34,6 +34,6 @@ EnvironmentFile=%h/.hindsight/config.env
 # account key path) that doesn't exist on this machine. A later
 # Environment= line overrides the same key from EnvironmentFile=.
 Environment=GOOGLE_APPLICATION_CREDENTIALS=%h/.config/gcloud/application_default_credentials.json
-ExecStart=%h/.hindsight/venv/bin/python3 %h/.hindsight/nightly-learn.py --mode hourly
-StandardOutput=append:%h/.hindsight/logs/hourly-stdout.log
-StandardError=append:%h/.hindsight/logs/hourly-stderr.log
+ExecStart=%h/.engram/venv/bin/python3 %h/.engram/nightly-learn.py --mode hourly
+StandardOutput=append:%h/.engram/logs/hourly-stdout.log
+StandardError=append:%h/.engram/logs/hourly-stderr.log

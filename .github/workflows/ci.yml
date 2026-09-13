@@ -25,6 +25,24 @@ jobs:
       - name: pytest (unit tier)
         run: pytest tests/ -m "not integration" -q
 
+  opencode-plugin-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install plugin deps
+        run: bun install
+        working-directory: opencode-plugin
+
+      - name: bun test (opencode plugin)
+        run: bun test ./
+        working-directory: opencode-plugin
+
   integration-tests:
     runs-on: ubuntu-latest
     services:

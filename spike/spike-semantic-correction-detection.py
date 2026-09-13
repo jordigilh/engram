@@ -10,7 +10,7 @@ the full design and rationale.
 
 Run with the hindsight venv (has litellm/vertexai/sentence-transformers/
 psycopg2 installed):
-    ~/.hindsight/venv/bin/python3 spike-semantic-correction-detection.py
+    ~/.engram/venv/bin/python3 spike-semantic-correction-detection.py
 
 Steps:
     0. Preflight smoke test (litellm/Vertex auth) -- abort if it fails.

@@ -56,6 +56,35 @@ class TestModuleLoads:
         assert len(kuadrant_cocoindex_flows.ISSUES_REPOS) == 9
 
 
+class TestLiveModeWatchSchedule:
+    """Same regression shape as praxis's TestLiveModeWatchSchedule (see
+    docs/findings/2026-08.md's 2026-08-12 entry): docs_main and code_main
+    walk the same checkout roots, so a second live=True watcher collides in
+    watchdog's per-process FSEvents registry ("already scheduled", 147
+    occurrences in this service's own log) and code freshness silently goes
+    stale. code_app must poll, never live-watch."""
+
+    def test_code_app_is_polled_not_live_watched(self, kuadrant_cocoindex_flows):
+        live_names = [name for name, _ in kuadrant_cocoindex_flows._live_apps()]
+        poll_names = [name for name, _, _ in kuadrant_cocoindex_flows._poll_schedule()]
+
+        assert "docs" in live_names
+        assert "code" not in live_names
+        assert "code" in poll_names
+
+    def test_all_live_and_poll_apps_cover_every_cli_app(self, kuadrant_cocoindex_flows):
+        names = {name for name, _ in kuadrant_cocoindex_flows._live_apps()}
+        names |= {name for name, _, _ in kuadrant_cocoindex_flows._poll_schedule()}
+
+        # git-sync is a plain git-pull loop, not a CocoIndex app, so it is
+        # scheduled separately in _run_live and excluded here.
+        assert names == {"docs", "issues", "code"}
+
+    def test_poll_intervals_are_positive(self, kuadrant_cocoindex_flows):
+        for _name, _app, interval in kuadrant_cocoindex_flows._poll_schedule():
+            assert interval > 0
+
+
 class TestProcessDocFile:
     def test_root_level_doc_gets_root_section_tag(self, kuadrant_cocoindex_flows, monkeypatch):
         retain_calls = []

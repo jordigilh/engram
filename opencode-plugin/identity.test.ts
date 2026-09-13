@@ -8,39 +8,66 @@ describe("deriveIdentity", () => {
   })
 
   test("family override lets N sibling repos share one bank while project stays per-repo", () => {
-    const repoA = deriveIdentity({ directoryBasename: "kubernaut-operator", branch: "main", options: { family: "kubernaut" } })
-    const repoB = deriveIdentity({ directoryBasename: "kubernaut-console", branch: "main", options: { family: "kubernaut" } })
-    expect(repoA.family).toBe("kubernaut")
-    expect(repoB.family).toBe("kubernaut")
+    const repoA = deriveIdentity({ directoryBasename: "service-api", branch: "main", options: { family: "platform" } })
+    const repoB = deriveIdentity({ directoryBasename: "service-ui", branch: "main", options: { family: "platform" } })
+    expect(repoA.family).toBe("platform")
+    expect(repoB.family).toBe("platform")
     expect(repoA.project).not.toBe(repoB.project)
-    expect(repoA.project).toBe("kubernaut-operator")
-    expect(repoB.project).toBe("kubernaut-console")
+    expect(repoA.project).toBe("service-api")
+    expect(repoB.project).toBe("service-ui")
   })
 
   test("release branch does not invent an unregistered gateway route", () => {
-    const id = deriveIdentity({ directoryBasename: "kubernaut", branch: "release/v1.5", options: { family: "kubernaut" } })
-    expect(id.project).toBe("kubernaut")
-    expect(id.family).toBe("kubernaut")
+    const id = deriveIdentity({ directoryBasename: "service-api", branch: "release/v1.5", options: { family: "platform" } })
+    expect(id.project).toBe("service-api")
+    expect(id.family).toBe("platform")
     expect(id.branchSuffix).toBe("v1.5")
   })
 
   test("a feature/fix branch (not release/vX.Y) falls back to the main suffix", () => {
-    const id = deriveIdentity({ directoryBasename: "kubernaut", branch: "feature/some-fix", options: {} })
+    const id = deriveIdentity({ directoryBasename: "service-api", branch: "feature/some-fix", options: {} })
     expect(id.branchSuffix).toBe("main")
-    expect(id.project).toBe("kubernaut")
+    expect(id.project).toBe("service-api")
   })
 
   test("a dedicated per-release-line clone directory (name ends in -vX.Y) is detected without needing the branch at all", () => {
-    const id = deriveIdentity({ directoryBasename: "kubernaut-v1.6", branch: "main", options: { family: "kubernaut" } })
+    const id = deriveIdentity({ directoryBasename: "service-api-v1.6", branch: "main", options: { family: "platform" } })
     expect(id.branchSuffix).toBe("v1.6")
-    expect(id.project).toBe("kubernaut-v1.6")
-    expect(id.family).toBe("kubernaut")
+    expect(id.project).toBe("service-api-v1.6")
+    expect(id.family).toBe("platform")
   })
 
   test("explicit project selects an exact registered release route", () => {
-    const id = deriveIdentity({ directoryBasename: "some-clone-dir", branch: "release/v1.5", options: { project: "kubernaut-v1.5", family: "kubernaut" } })
-    expect(id.project).toBe("kubernaut-v1.5")
-    expect(id.family).toBe("kubernaut")
+    const id = deriveIdentity({ directoryBasename: "some-clone-dir", branch: "release/v1.5", options: { project: "service-api-v1.5", family: "platform" } })
+    expect(id.project).toBe("service-api-v1.5")
+    expect(id.family).toBe("platform")
+  })
+
+  test("configured branch route selects the release gateway mount", () => {
+    const id = deriveIdentity({
+      directoryBasename: "service-api",
+      branch: "release/v1.5",
+      options: {
+        family: "platform",
+        branchRoutes: { main: "service-api", "release/v1.5": "service-api-v1.5" },
+      },
+    })
+
+    expect(id.project).toBe("service-api-v1.5")
+    expect(id.family).toBe("platform")
+  })
+
+  test("explicit project takes precedence over configured branch route", () => {
+    const id = deriveIdentity({
+      directoryBasename: "service-api",
+      branch: "release/v1.5",
+      options: {
+        project: "custom-route",
+        branchRoutes: { "release/v1.5": "service-api-v1.5" },
+      },
+    })
+
+    expect(id.project).toBe("custom-route")
   })
 
   test("git branch detection failing (e.g. not a git repo) falls back to main, not an error", () => {
@@ -52,16 +79,16 @@ describe("deriveIdentity", () => {
 
 describe("buildMcpConfig", () => {
   test("produces one gateway entry", () => {
-    const cfg = buildMcpConfig({ project: "kubernaut-v1.5", family: "kubernaut", branchSuffix: "v1.5" })
+    const cfg = buildMcpConfig({ project: "service-api-v1.5", family: "platform", branchSuffix: "v1.5" })
     expect(Object.keys(cfg)).toEqual(["engram"])
-    expect(cfg.engram).toEqual({ type: "remote", url: "http://127.0.0.1:8896/mcp/kubernaut-v1.5", enabled: true })
+    expect(cfg.engram).toEqual({ type: "remote", url: "http://127.0.0.1:8896/mcp/service-api-v1.5", enabled: true })
   })
 
   test("builds an exact gateway route without using family to construct backend URLs", () => {
     const cfg = buildMcpConfig(
-      { project: "kubernaut-v1.5", family: "kubernaut", branchSuffix: "v1.5" },
+      { project: "service-api-v1.5", family: "platform", branchSuffix: "v1.5" },
     )
-    expect(cfg.engram).toEqual({ type: "remote", url: "http://127.0.0.1:8896/mcp/kubernaut-v1.5", enabled: true })
+    expect(cfg.engram).toEqual({ type: "remote", url: "http://127.0.0.1:8896/mcp/service-api-v1.5", enabled: true })
   })
 
   test("allows overriding only the gateway URL", () => {

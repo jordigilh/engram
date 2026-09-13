@@ -1,0 +1,52 @@
+# Direct multi-backend configuration for Dockerfile.engram.
+# The image is deliberately stateless: mount this file at
+# /etc/engram/instances.toml and point each URL at an already-running MCP
+# backend. For Podman on macOS/Linux, host.containers.internal reaches the host.
+
+[instances.kubernaut.backends.docs]
+kind = "http"
+url = "http://host.containers.internal:8888/mcp/kubernaut-docs/"
+
+[instances.kubernaut.backends.issues]
+kind = "http"
+url = "http://host.containers.internal:8888/mcp/kubernaut-issues/"
+
+[instances.kubernaut.backends.code]
+kind = "http"
+url = "http://host.containers.internal:8891/mcp"
+# The host adapter rejects the container bridge hostname unless its expected
+# virtual-host value is restored on the forwarded request.
+headers = { Host = "localhost:8891" }
+
+[instances.kubernaut.backends.serena]
+kind = "http"
+url = "http://host.containers.internal:8893/mcp/kubernaut"
+
+[instances.kubernaut.backends.rca]
+kind = "http"
+url = "http://host.containers.internal:8897/mcp"
+headers = { Host = "localhost:8897" }
+
+# A release route is a separate public mount, but still one gateway process.
+# Repeat or generate the backend tables when its Serena mount differs.
+[instances."kubernaut-v1.5".backends.docs]
+kind = "http"
+url = "http://host.containers.internal:8888/mcp/kubernaut-docs/"
+
+[instances."kubernaut-v1.5".backends.issues]
+kind = "http"
+url = "http://host.containers.internal:8888/mcp/kubernaut-issues/"
+
+[instances."kubernaut-v1.5".backends.code]
+kind = "http"
+url = "http://host.containers.internal:8891/mcp"
+headers = { Host = "localhost:8891" }
+
+[instances."kubernaut-v1.5".backends.serena]
+kind = "http"
+url = "http://host.containers.internal:8893/mcp/kubernaut-v1.5"
+
+[instances."kubernaut-v1.5".backends.rca]
+kind = "http"
+url = "http://host.containers.internal:8897/mcp"
+headers = { Host = "localhost:8897" }

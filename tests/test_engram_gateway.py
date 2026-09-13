@@ -110,17 +110,20 @@ class TestBuildCatalog:
         assert catalog == {}
         assert tool_defs == []
 
-    def test_duplicate_unprefixed_name_across_backends_keeps_first_and_does_not_raise(self, engram_gateway):
+    def test_duplicate_unprefixed_name_across_backends_is_qualified(self, engram_gateway):
         """code and serena are both unprefixed -- if they ever define the
         same tool name (shouldn't happen today, verified empirically in the
         plan, but must fail safe rather than silently overwrite/crash), the
-        first backend processed wins and the collision is only logged."""
+        second backend gets a qualified name."""
         catalog, tool_defs = engram_gateway.build_catalog(
             {"code": [_tool("shared_name")], "serena": [_tool("shared_name")]}
         )
 
-        assert catalog == {"shared_name": ("code", "shared_name")}
-        assert len(tool_defs) == 1
+        assert catalog == {
+            "shared_name": ("code", "shared_name"),
+            "serena_shared_name": ("serena", "shared_name"),
+        }
+        assert {tool["name"] for tool in tool_defs} == {"shared_name", "serena_shared_name"}
 
 
 class TestRouteCall:
@@ -497,8 +500,9 @@ class TestBuildProjectRegistry:
     def test_covers_every_onboarded_project(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
 
-        assert len(registry) == 35  # +1 for praxis-benchmarks (2026-09-11)
+        assert len(registry) == 34  # no redundant kubernaut-v1.6 route
         assert "rhdh-plugins" not in registry  # decommissioned 2026-09-09
+        assert "kubernaut-v1.6" not in registry
 
     def test_kubernaut_family_is_fully_http_already(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
@@ -752,40 +756,121 @@ class TestLoadInstanceRegistry:
     def test_loads_http_host_adapter_instances(self, engram_gateway, tmp_path):
         config = tmp_path / "instances.toml"
         config.write_text(
-            """
-[instances.kubernaut]
-endpoint = "http://host.containers.internal:9001/mcp/kubernaut"
+            '[instances.kubernaut]\nendpoint = "http://host.containers.internal:9001/mcp/kubernaut"\n'
+        )
 
-[instances.engram]
-endpoint = "http://host.containers.internal:9001/mcp/engram"
+        assert engram_gateway.load_instance_registry(config) == {
+            "kubernaut": {
+                "host": {"kind": "http", "url": "http://host.containers.internal:9001/mcp/kubernaut"}
+            }
+        }
+
+    def test_loads_multiple_direct_backends_per_instance(self, engram_gateway, tmp_path):
+        config = tmp_path / "instances.toml"
+        config.write_text(
+            """
+[instances.kubernaut.backends.docs]
+kind = "http"
+url = "http://host.containers.internal:8888/mcp/kubernaut-docs/"
+
+[instances.kubernaut.backends.code]
+kind = "http"
+url = "http://host.containers.internal:8891/mcp"
+headers = { Host = "localhost:8891" }
+
+[instances.kubernaut.backends.serena]
+kind = "http"
+url = "http://host.containers.internal:8893/mcp/kubernaut"
+
+[instances.kubernaut.backends.rca]
+kind = "http"
+url = "http://host.containers.internal:8897/mcp"
 """
         )
 
         registry = engram_gateway.load_instance_registry(config)
 
-        assert registry == {
-            "kubernaut": {
-                "host": {"kind": "http", "url": "http://host.containers.internal:9001/mcp/kubernaut"}
-            },
-            "engram": {"host": {"kind": "http", "url": "http://host.containers.internal:9001/mcp/engram"}},
+        assert set(registry["kubernaut"]) == {"docs", "code", "serena", "rca"}
+        assert registry["kubernaut"]["code"]["headers"] == {"Host": "localhost:8891"}
+        adapters = engram_gateway.build_backend_adapters(registry)
+        assert adapters["kubernaut"]["code"].headers == {"Host": "localhost:8891"}
+
+    def test_loads_stdio_backend_with_environment_and_shared_key(self, engram_gateway, tmp_path):
+        config = tmp_path / "instances.toml"
+        config.write_text(
+            """
+[instances.praxis.backends.code]
+kind = "stdio"
+command = "/opt/engram/search"
+args = ["--repo", "praxis-grid"]
+env = { COCOINDEX_PG_URL = "postgresql://example/db" }
+shared_key = "praxis-code"
+"""
+        )
+
+        registry = engram_gateway.load_instance_registry(config)
+
+        assert registry["praxis"]["code"] == {
+            "kind": "stdio",
+            "command": "/opt/engram/search",
+            "args": ["--repo", "praxis-grid"],
+            "env": {"COCOINDEX_PG_URL": "postgresql://example/db"},
+            "shared_key": "praxis-code",
         }
+
+    @pytest.mark.parametrize(
+        "contents",
+        [
+            "",
+            '[instances.demo]\nendpoint = "not-a-url"\n',
+            '[instances.demo]\nendpoint = "http://user:secret@example/mcp"\n',
+        ],
+    )
+    def test_rejects_invalid_instance_config(self, engram_gateway, tmp_path, contents):
+        config = tmp_path / "instances.toml"
+        config.write_text(contents)
+
+        with pytest.raises(ValueError):
+            engram_gateway.load_instance_registry(config)
 
     @pytest.mark.parametrize(
         ("contents", "message"),
         [
-            ("", "non-empty .*instances.* table"),
-            ("[instances.demo]\nendpoint = \"not-a-url\"\n", "HTTP.*URL"),
             (
-                "[instances.demo]\nendpoint = \"http://user:secret@example/mcp\"\n",
+                "[instances.demo.backends.docs]\nkind = \"smtp\"\nurl = \"http://example/mcp\"\n",
+                "kind must be",
+            ),
+            (
+                "[instances.demo.backends.docs]\nkind = \"http\"\nurl = \"http://user:secret@example/mcp\"\n",
                 "must not contain credentials",
+            ),
+            (
+                "[instances.demo.backends.code]\nkind = \"stdio\"\ncommand = \"x\"\nargs = \"not-an-array\"\n",
+                "args must be",
             ),
         ],
     )
-    def test_rejects_invalid_instance_config(self, engram_gateway, tmp_path, contents, message):
+    def test_rejects_invalid_direct_backend_config(self, engram_gateway, tmp_path, contents, message):
         config = tmp_path / "instances.toml"
         config.write_text(contents)
 
         with pytest.raises(ValueError, match=message):
+            engram_gateway.load_instance_registry(config)
+
+    def test_rejects_mixing_legacy_endpoint_and_direct_backends(self, engram_gateway, tmp_path):
+        config = tmp_path / "instances.toml"
+        config.write_text(
+            """
+[instances.demo]
+endpoint = "http://example/mcp/demo"
+
+[instances.demo.backends.docs]
+kind = "http"
+url = "http://example/mcp/docs"
+"""
+        )
+
+        with pytest.raises(ValueError, match="both endpoint and backends"):
             engram_gateway.load_instance_registry(config)
 
     def test_dynamic_registry_builds_one_route_per_instance(self, engram_gateway, tmp_path):

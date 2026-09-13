@@ -11,6 +11,9 @@ Each project gets:
 - **Dedicated CocoIndex flows**: Separate ingestion script with its own state database
 - **Dedicated launchd service**: Independent process lifecycle
 - **Workspace-level MCP config**: `.cursor/mcp.json` in each repo so Cursor only sees relevant servers
+- **Optional stateless runtime image**: A containerized gateway can aggregate
+  project backends from a mounted TOML registry instead of requiring a native
+  gateway process on the host
 
 > **2026-08-21 update**: the four backend servers below (`hindsight-docs`,
 > `hindsight-issues`, `cocoindex-code`, `serena`) are now fronted by one
@@ -18,15 +21,16 @@ Each project gets:
 > engram_gateway.py`, supervised by `launchd/io.vectorize.engram-gateway.plist`)
 > instead of each getting its own `.cursor/mcp.json` entry — see
 > `docs/findings/2026-08.md`'s 2026-08-21 rollout entry for the full
-> rationale (recurring Cursor MCP client flakiness with 4 separate
-> connections per repo) and the current registry of every onboarded repo.
-> The steps below (dedicated banks, pgvector table, CocoIndex flow, launchd
-> service) are all still accurate and still what you set up per new
-> project — only the *last* step changes: instead of adding 3-4 raw server
-> entries to `.cursor/mcp.json`, add one entry to
-> `build_project_registry()` in `engram_gateway.py` (with a test in
-> `tests/test_engram_gateway.py`) and point the new repo's
-> `.cursor/mcp.json` at `http://127.0.0.1:8896/mcp/<project>` instead.
+> rationale (recurring Cursor MCP client flakiness with 4 separate connections
+> per repo) and the current registry of every onboarded repo. The gateway can
+> run natively under launchd or as the stateless `Dockerfile.engram` runtime
+> image. New project onboarding should use the image's generic
+> `[instances.<project>.backends.<name>]` TOML tables when possible; native
+> deployments add the equivalent route to `build_project_registry()`.
+> In either case, the client points at one route:
+> `http://127.0.0.1:8896/mcp/<project>`. Kubernaut RCA is the only intentionally
+> project-specific optional backend; all other gateway and runtime configuration
+> is reusable across projects.
 
 ## Prerequisites
 
@@ -35,6 +39,7 @@ Each project gets:
 - PostgreSQL with pgvector running on `localhost:5432`
 - CocoIndex Python environment at `~/.engram/venv/`
 - `gh` CLI authenticated with access to the target organization
+- Podman, if using the optional containerized runtime image
 
 ## Variants
 
@@ -226,7 +231,9 @@ Use the Hindsight API or MCP to create mental models for each bank:
 
 ### 4. Create CocoIndex Flows
 
-Create `src/engram/flows/<project>.py` adapted from `src/engram/flows/kubernaut.py`:
+Create `src/engram/flows/<project>.py` from the closest generic flow module
+(for example, `src/engram/flows/engram.py`) rather than copying a
+project-specific flow:
 
 - Three apps: docs, issues, code
 - Banks: `<project>-docs`, `<project>-issues`
@@ -241,8 +248,7 @@ console script.
 
 > **Gotcha**: give the Postgres pool `coco.ContextKey(...)` a name unique
 > across *every* flow module in this package, not just this project's own
-> module (e.g. `"<project>_repo_pg_pool"`, not the generic `"pg_pool"` that
-> `engram.flows.kubernaut` already uses). CocoIndex registers `ContextKey`s
+> module (e.g. `"<project>_repo_pg_pool"`). CocoIndex registers `ContextKey`s
 > process-globally and raises `ValueError` on a same-name second
 > registration — harmless in production (each flow module runs as its own
 > `launchd` process), but it means the pytest suite will crash at collection
@@ -253,7 +259,9 @@ console script.
 
 ### 5. Create Code Search Server
 
-Create `src/engram/search/<project>.py` adapted from `src/engram/search/kubernaut.py`:
+Create `src/engram/search/<project>.py` from the generic
+`src/engram/search/engram.py` search-server pattern rather than copying
+project-specific behavior:
 
 - Queries `cocoindex.<project>_code_embeddings` table
 - MCP server name: `<project>-code`
@@ -336,7 +344,10 @@ onboarded so far — it wraps the language's real LSP (`gopls` for Go,
 surface, so the same `find_symbol`/`find_referencing_symbols`/
 `get_diagnostics_for_file` tools work regardless of language.
 
-Add a `serena` entry to the project's `.cursor/mcp.json` (step 8 below):
+With the packaged image or native aggregating gateway, configure Serena as the
+project's `backends.serena` entry in step 8 and do not add it directly to the
+client config. The direct stdio entry below is only for the legacy native
+layout, when Serena is intentionally run outside the gateway:
 
 ```json
 "serena": {
@@ -407,42 +418,107 @@ tool still works normally when this happens.
 
 ### 8. Configure Workspace-Level MCP
 
-Create `.cursor/mcp.json` in each project repository:
+The project should expose one MCP route through the Engram gateway. The
+recommended deployment for a new project is the stateless runtime image, which
+keeps aggregation configuration outside the image and makes the same gateway
+portable across hosts.
+
+#### Packaged runtime image
+
+Build locally or pull the published multi-architecture image:
+
+```bash
+podman build -t localhost/engram-runtime:local -f /path/to/engram/Dockerfile.engram /path/to/engram
+# Or use: quay.io/jordigilh/engram:runtime-latest
+```
+
+Create a runtime registry file. Each instance name is an exact public gateway
+route, and each backend is either an HTTP MCP endpoint or a stdio command that
+is available inside the container:
+
+```toml
+[instances."<project>".backends.docs]
+kind = "http"
+url = "http://host.containers.internal:8888/mcp/<project>-docs/"
+
+[instances."<project>".backends.issues]
+kind = "http"
+url = "http://host.containers.internal:8888/mcp/<project>-issues/"
+
+[instances."<project>".backends.code]
+kind = "http"
+url = "http://host.containers.internal:<code-port>/mcp"
+
+[instances."<project>".backends.serena]
+kind = "http"
+url = "http://host.containers.internal:<serena-port>/mcp/<project>"
+
+# Or use a command that exists inside the image:
+# [instances."<project>".backends.code]
+# kind = "stdio"
+# command = "/opt/engram/bin/engram-search-<project>"
+# args = []
+# env = { COCOINDEX_PG_URL = "postgresql://hindsight:hindsight@host.containers.internal:5432/hindsight" }
+```
+
+Include only the backend tables that the project actually uses. HTTP backends
+accept optional string-to-string `headers`; stdio backends accept `args`,
+`env`, and an optional `shared_key` for sharing one subprocess across routes.
+Do not define both `endpoint` and `backends` for one instance.
+
+The tracked [`docs/runtime-kubernaut.toml.example`](runtime-kubernaut.toml.example)
+is a Kubernaut-specific example, including the optional Kubernaut RCA backend
+and its `kubernaut-v1.5` release route. Do not copy those Kubernaut-specific
+routes or RCA settings into an unrelated project.
+
+Mount the registry read-only and expose the gateway port:
+
+```bash
+mkdir -p ~/.engram/runtime
+$EDITOR ~/.engram/runtime/<project>.toml
+
+podman run --rm \
+  --add-host host.containers.internal:host-gateway \
+  -v "$HOME/.engram/runtime/<project>.toml:/etc/engram/instances.toml:ro" \
+  -p 127.0.0.1:8896:8896 \
+  quay.io/jordigilh/engram:runtime-latest
+```
+
+The image is stateless and non-root. It validates backend URLs, rejects
+credentials embedded in URLs, queries configured backends concurrently, and
+keeps one unavailable backend from taking down the whole project route.
+
+#### Workspace configuration
+
+Create `.cursor/mcp.json` in each project repository with one gateway entry:
 
 ```json
 {
   "mcpServers": {
-    "hindsight-docs": {
+    "engram": {
       "type": "http",
-      "url": "http://localhost:8888/mcp/<project>-docs/"
-    },
-    "hindsight-issues": {
-      "type": "http",
-      "url": "http://localhost:8888/mcp/<project>-issues/"
-    },
-    "cocoindex-code": {
-      "command": "/Users/jgil/.engram/venv/bin/engram-search-<project>",
-      "type": "stdio",
-      "env": {
-        "COCOINDEX_PG_URL": "postgresql://hindsight:hindsight@localhost:5432/hindsight"
-      }
+      "url": "http://127.0.0.1:8896/mcp/<project>"
     }
   }
 }
 ```
 
-The workspace-level config uses the same server **names** as kubernaut (`hindsight-docs`, `hindsight-issues`, `cocoindex-code`) but points to different backends. Cursor rules reference these server names, so the same `recall` calls work across projects.
+The gateway owns the Hindsight, CocoIndex, Serena, and project-specific backend
+connections. Do not register those backends separately, or the client will see
+duplicate tools and bypass the gateway's isolation and routing.
+
+If the runtime is deployed natively instead of as an image, keep this same
+`.cursor/mcp.json` entry and start the launchd gateway after adding the project
+to `build_project_registry()`. The TOML registry is the image equivalent of
+that native registry.
 
 > **Gotcha**: whether to commit this file depends on whether the repo is
-> personal/single-machine or shared/multi-contributor. `engram` and
-> `kubernaut-console` commit `.cursor/mcp.json` directly (only this machine
-> ever clones them). Repos with real outside contributors (`kubernaut`,
-> `kubernaut-v1.5`, `kubernaut-v1.6`, `kubernaut-operator`) instead gitignore
-> it via a blanket `.cursor/*` in `.gitignore` (with `!.cursor/rules/` /
-> `!.cursor/skills/` carved back out, but no exception for `mcp.json`) —
-> because the file embeds this machine's absolute paths
-> (`/Users/jgil/.engram/venv/bin/python3`, `/Users/jgil/.local/bin/uvx`),
-> which would be wrong on every other contributor's machine if committed.
+> personal/single-machine or shared/multi-contributor. The gateway URL and
+> project route are stable, but a repo may still gitignore local
+> `.cursor/mcp.json` so contributors can select their own gateway host. If the
+> file is committed, do not put credentials or machine-specific backend URLs
+> in it; keep those in the runtime TOML, which should be mounted from a local,
+> ignored path.
 > An untracked, gitignored `.cursor/mcp.json` still survives ordinary
 > `git checkout`/`git switch` between branches in the same working directory
 > (checkout only adds/removes *tracked* files) — verified empirically
@@ -452,6 +528,11 @@ The workspace-level config uses the same server **names** as kubernaut (`hindsig
 > materialize tracked content — if a repo is ever missing this file, that's
 > the likely cause; just redo this step rather than trying to make git
 > remember a file it's deliberately excluding (see FINDINGS.md).
+
+> **Legacy native-backend note**: the shared-daemon notes below apply only
+> when deliberately running individual backend processes instead of the
+> aggregating gateway. The packaged image and the native gateway both require
+> one client route per project.
 
 > **Gotcha (repo families sharing one physical file)**: a family of closely
 > related repos (e.g. `kubernaut`/`kubernaut-v1.5`/`kubernaut-v1.6`/
@@ -508,7 +589,7 @@ The workspace-level config uses the same server **names** as kubernaut (`hindsig
 > whichever repo isn't currently active" is acceptable, stop here. If you
 > want every repo to get full read+write all the time, do step 8a too.
 
-### 8a. (Optional, Repo Families Only) Give Every Family Repo Full Read+Write via `engram-serena-multiplex`
+### 8a. (Optional, Native Repo Families Only) Give Every Family Repo Full Read+Write via `engram-serena-multiplex`
 
 If you're setting up a **family of repos under one org that should share one
 Serena instance** (the exact scenario this section exists for), you will hit
@@ -757,6 +838,20 @@ curl -X POST http://localhost:8888/v1/default/banks/<project>-docs/memories/reca
 uvx --from git+https://github.com/oraios/serena serena project health-check /path/to/target-repo
 ```
 
+If using the packaged runtime image, also verify the configured route and
+confirm that an unconfigured route is not exposed. The request must be a POST
+because the gateway deliberately returns `405` for GET requests:
+
+```bash
+payload='{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -X POST -H 'Content-Type: application/json' -d "$payload" \
+  http://127.0.0.1:8896/mcp/<project>       # expected: 200
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -X POST -H 'Content-Type: application/json' -d "$payload" \
+  http://127.0.0.1:8896/mcp/<unconfigured-project>  # expected: 404
+```
+
 ### 13. Install the Deterministic Correction Enforcement Hooks (optional)
 
 Recall and cursor rules are *advisory* — a model can always choose not to
@@ -943,6 +1038,9 @@ generic variant deliberately omits.
 | `cursor/generate-mdc.sh` | Generates .mdc from template + vars |
 | Each repo's `.cursor/mcp.json` | Workspace-level MCP routing |
 | Each repo's `.serena/project.yml` | Per-repo Serena language-server registration (step 7); cannot be shared/symlinked, keyed by absolute path |
+| `Dockerfile.engram` | Optional stateless, project-agnostic MCP gateway image |
+| Local `instances.toml` | Mounted runtime registry of project backends (step 8) |
+| `docs/runtime-kubernaut.toml.example` | Kubernaut-only example, including the optional RCA backend; do not use as the generic template |
 | `src/engram/pipeline/serena_multiplex.py` / `engram-serena-multiplex` | (Optional, step 8a) Gives every repo in a shared-Serena family full read+write instead of just whichever is "active" |
 | `launchd/io.vectorize.serena-multiplex.<family>.plist` | (Optional, step 8a) macOS service for the multiplex daemon, one per family |
 | `systemd/engram-{cocoindex-code,serena,serena-project-server,serena-multiplex}-kubernaut-family.service` | (Optional, steps 8/8a) Linux (`systemd --user`) analogs of the 4 shared-daemon launchd plists above — see `docs/INSTALL-linux.md` step 9 |
@@ -964,7 +1062,7 @@ generic variant deliberately omits.
   (tag-scoped variant)
 - **CocoIndex state**: Separate SQLite databases (`cocoindex.db` vs `<project>-cocoindex.db`)
   (full variant only — the tag-scoped variant adds no new CocoIndex app at all)
-- **MCP routing**: Workspace-level config ensures agents only see their project's data
+- **MCP routing**: One workspace route maps to the project's native registry or mounted TOML `instances` entry; the optional Kubernaut RCA backend is the only project-specific gateway exception
 - **Nightly analytics**: `effectiveness` and `mcp_usage` are isolated per project **only if**
   `workspace_prefixes` is set on the `PROJECT_CONFIGS` entry (step 11a) — this is not
   automatic and does not fail loudly if skipped

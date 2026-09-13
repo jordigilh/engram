@@ -56,7 +56,7 @@ PRAXIS_ORG_DIR = pathlib.Path(os.environ.get(
 # praxis-cocoindex-flows.py's localfs.walk_dir(path_matcher=
 # PatternFilePathMatcher(...)) call exactly. Only the Rust repos (those with
 # has_rust_code=True in PRAXIS_REPOS) are searchable here.
-_RUST_REPOS = ["praxis", "praxis-ai", "praxis-demos", "praxis-forge", "praxis-grid", "praxis-operator", "praxis-policy"]
+_RUST_REPOS = ["praxis", "praxis-ai", "praxis-benchmarks", "praxis-demos", "praxis-experiments", "praxis-forge", "praxis-grid", "praxis-operator", "praxis-policy"]
 _PATTERN_SEARCH_ROOTS = [
     (tag, PRAXIS_ORG_DIR / tag, ["**/*.rs"], ["**/target/**"])
     for tag in _RUST_REPOS
@@ -248,7 +248,7 @@ def _format_pattern_results(pattern: str, language: str, results: list[dict]) ->
 # Call graph -- thin wrappers around callgraph.py's generic multi-org query/
 # format layer: this module only supplies which roots/language to build
 # from. Praxis differs from koku.py/rhdh_plugins.py (single root each) in
-# searching seven independently-checked-out Rust repos in one call, so this
+# searching nine independently-checked-out Rust repos in one call, so this
 # uses build_multi_repo_call_graph_with_stats (all of _PATTERN_SEARCH_ROOTS,
 # not just its first entry) -- see that function's docstring in callgraph.py
 # for why cross-repo call resolution is deliberately NOT attempted.
@@ -352,7 +352,7 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
         codebases, up to `depth` hops -- "what breaks if I change this."
 
         `function` may be a bare name ("score_backends") if unambiguous
-        across all seven repos, or a qualified name including the repo tag
+        across all nine repos, or a qualified name including the repo tag
         ("praxis-ai/src/lib.rs::score_backends").
 
         Call resolution is purely name-based (no type info) and per-repo
@@ -363,7 +363,7 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8889, transport: str = 
         produce false-positive edges within a repo; associated-function
         calls (`Type::method()`) and method calls (`x.method()`) are both
         supported. See docs/CALL_GRAPH_CLUSTERING.md. Rebuilds the call
-        graph fresh across all seven repos on every call (no persisted
+        graph fresh across all nine repos on every call (no persisted
         index).
         """
         result = call_graph_blast_radius(function, depth=depth)

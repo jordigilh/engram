@@ -655,14 +655,14 @@ class TestHindsightRetain:
 
 class TestReleaseLineWiring:
     """code_main's multi-branch extension (2026-08-10): the kubernaut
-    family's *code* index additionally covers release/v1.5 and release/v1.6
+    family's *code* index additionally covers the supported release/v1.5
     mirrors (docs/issues stay main-only -- unchanged, LLM-consolidation-costed
     via hindsight_retain(), unlike code embedding). See
     watch-mirrors-config.sh's RELEASE_LINES/RELEASE_WATCH_MIRRORS and
     docs/FINDINGS.md."""
 
-    def test_default_release_lines_are_v1_5_and_v1_6(self, cocoindex_flows):
-        assert cocoindex_flows.KUBERNAUT_RELEASE_LINES == ["v1.5", "v1.6"]
+    def test_default_release_lines_only_include_v1_5(self, cocoindex_flows):
+        assert cocoindex_flows.KUBERNAUT_RELEASE_LINES == ["v1.5"]
 
     def test_release_line_dir_matches_watch_mirrors_config_convention(self, cocoindex_flows):
         """Must match watch-mirrors-config.sh's RELEASE_WATCH_MIRRORS
@@ -698,3 +698,19 @@ class TestReleaseLineWiring:
         assert '@release-{line}"' in source
         for repo_name in ("kubernaut", "kubernaut-operator", "kubernaut-console"):
             assert f'"{repo_name}"' in source, f"code_main's release-line loop is missing {repo_name}"
+
+    def test_code_main_wires_demo_scenarios_live(self, cocoindex_flows):
+        import inspect
+
+        source = inspect.getsource(cocoindex_flows.code_main)
+        assert "scenarios_dir" in source
+        assert "SCENARIOS_CODE_INCLUDE_PATTERNS" in source
+        assert 'coco.component_subpath("kubernaut-demo-scenarios-code")' in source
+        assert "live=True" in source
+
+    def test_scenario_docs_do_not_duplicate_code_watch(self, cocoindex_flows):
+        import inspect
+
+        source = inspect.getsource(cocoindex_flows.docs_main)
+        assert "scenarios_docs" in source
+        assert "live=False" in source

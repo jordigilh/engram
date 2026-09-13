@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
-"""Aggregates hindsight-docs, hindsight-issues, cocoindex-code, and serena
-behind ONE Cursor-facing MCP HTTP mount per repo, instead of the 3-4
-separate `.cursor/mcp.json` server entries every onboarded repo had before
-this module existed.
+"""Generic MCP gateway with optional project-specific legacy configuration.
+
+The config-driven runtime aggregates any configured HTTP or stdio MCP backends
+behind one client-facing HTTP mount per project. The no-config native mode
+retains the historical static registry for this installation's onboarded
+projects; that registry is compatibility configuration, not gateway behavior.
+
+The original use case aggregated hindsight-docs, hindsight-issues,
+cocoindex-code, and serena behind ONE Cursor-facing MCP HTTP mount per repo,
+instead of the 3-4 separate `.cursor/mcp.json` server entries every onboarded
+repo had before this module existed.
 
 Graduated from a single-repo (`praxis-grid`) spike on 2026-08-21 to cover
 every onboarded repo across all families (kubernaut, koku, dcm, praxis,
@@ -208,9 +215,8 @@ def build_catalog(per_backend_tools: dict[str, list[dict]]) -> tuple[dict[str, t
 
     Fails safe on an unexpected unprefixed-name collision across backends
     (shouldn't happen today -- verified empirically, see module docstring
-    -- but a future backend addition could introduce one): the first
-    backend processed (dict iteration order) wins, the collision is only
-    logged, never raised.
+    -- but a future backend addition could introduce one): the colliding
+    tool is qualified with its backend key instead of being silently dropped.
     """
     catalog: dict[str, tuple[str, str]] = {}
     tool_defs: list[dict] = []
@@ -219,13 +225,21 @@ def build_catalog(per_backend_tools: dict[str, list[dict]]) -> tuple[dict[str, t
             raw_name = tool["name"]
             final_name = prefixed_tool_name(backend_key, raw_name)
             if final_name in catalog:
+                base_name = f"{backend_key}_{raw_name}"
+                final_name = base_name
+                duplicate = 2
+                while final_name in catalog:
+                    final_name = f"{base_name}_{duplicate}"
+                    duplicate += 1
                 log.warning(
-                    "tool name collision: %r from backend %r ignored, already owned by backend %r",
-                    final_name,
+                    "tool name collision: %r from backend %r qualified as %r; already owned by backend %r",
+                    raw_name,
                     backend_key,
-                    catalog[final_name][0],
+                    final_name,
+                    catalog[prefixed_tool_name(backend_key, raw_name)][0]
+                    if prefixed_tool_name(backend_key, raw_name) in catalog
+                    else "another backend",
                 )
-                continue
             catalog[final_name] = (backend_key, raw_name)
             tool_defs.append({**tool, "name": final_name})
     return catalog, tool_defs
@@ -476,13 +490,18 @@ class HttpRelayAdapter:
     matching serena_multiplex.py's "POST-only, never GET/SSE" design to
     avoid the upstream mcp/fastmcp SSE-reconnect bug documented there."""
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, headers: dict[str, str] | None = None) -> None:
         self.url = url
+        self.headers = dict(headers or {})
 
     async def _roundtrip(self, method: str, params: dict | None = None) -> dict:
         import httpx
 
+        # Some local MCP adapters route by the HTTP Host header and reject the
+        # container bridge hostname. Keep this configurable in the runtime
+        # image instead of embedding host-specific behavior in the adapter.
         headers = {
+            **self.headers,
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
@@ -837,8 +856,10 @@ def build_app(projects: dict[str, dict[str, BackendAdapter]]):
 
 
 # ---------------------------------------------------------------------------
-# Full rollout registry (2026-08-21): every onboarded repo, config only (no
+# Legacy native registry (2026-08-21): every onboarded repo, config only (no
 # I/O, no adapter instantiation -- see `build_backend_adapters` for that).
+# The portable runtime path uses `load_instance_registry()` instead and does
+# not depend on this installation-specific project list.
 # Deliberately preserves each repo's *existing* backend set exactly rather
 # than normalizing towards a uniform 4-backend shape: several repos are
 # missing one or more backends today (kubernaut-console has no serena,
@@ -890,8 +911,11 @@ def _hindsight(bank: str) -> dict:
     return {"kind": "http", "url": f"{_HINDSIGHT_BASE}/mcp/{bank}/"}
 
 
-def _http(url: str) -> dict:
-    return {"kind": "http", "url": url}
+def _http(url: str, headers: dict[str, str] | None = None) -> dict:
+    spec = {"kind": "http", "url": url}
+    if headers:
+        spec["headers"] = headers
+    return spec
 
 
 def _stdio(command: str, args: list[str] | None = None, env: dict | None = None, shared_key: str | None = None) -> dict:
@@ -935,7 +959,9 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     def kubernaut_serena(project: str) -> dict:
         return _http(f"http://127.0.0.1:8893/mcp/{project}")
 
-    for name in ("kubernaut", "kubernaut-operator", "kubernaut-v1.5", "kubernaut-v1.6"):
+    # `kubernaut` is the current main/v1.6 line. Keep only the v1.5 release
+    # route until v1.6 is GA; do not create a redundant kubernaut-v1.6 mount.
+    for name in ("kubernaut", "kubernaut-operator", "kubernaut-v1.5"):
         registry[name] = {
             "docs": _hindsight("kubernaut-docs"),
             "issues": _hindsight("kubernaut-issues"),
@@ -1056,12 +1082,80 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     return registry
 
 
-def load_instance_registry(path: str | pathlib.Path) -> dict[str, dict[str, dict]]:
-    """Load the minimal container runtime registry from a TOML file.
+def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
+    """Validate and normalize one backend from the container registry."""
+    if not isinstance(settings, dict):
+        raise ValueError(f"Backend {instance!r}/{backend!r} must be a TOML table")
 
-    Gate A deliberately supports only one HTTP host-adapter endpoint per
-    instance. The native host adapter owns source trees, subprocesses, and
-    backend-specific details; the core gateway only routes MCP traffic.
+    kind = settings.get("kind")
+    if kind not in {"http", "stdio"}:
+        raise ValueError(f"Backend {instance!r}/{backend!r} kind must be 'http' or 'stdio'")
+
+    if kind == "http":
+        endpoint = settings.get("url")
+        if not isinstance(endpoint, str) or not endpoint:
+            raise ValueError(f"Backend {instance!r}/{backend!r} requires a non-empty url")
+        parsed = urlparse(endpoint)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError(f"Backend {instance!r}/{backend!r} url must be an HTTP(S) URL: {endpoint!r}")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError(f"Backend {instance!r}/{backend!r} url must not contain credentials")
+
+        headers = settings.get("headers")
+        if headers is not None:
+            if not isinstance(headers, dict) or any(
+                not isinstance(key, str) or not isinstance(value, str)
+                for key, value in headers.items()
+            ):
+                raise ValueError(f"Backend {instance!r}/{backend!r} headers must be a string-to-string table")
+
+        spec = {"kind": "http", "url": endpoint}
+        if headers:
+            spec["headers"] = dict(headers)
+        return spec
+
+    command = settings.get("command")
+    if not isinstance(command, str) or not command:
+        raise ValueError(f"Backend {instance!r}/{backend!r} requires a non-empty command")
+
+    args = settings.get("args", [])
+    if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
+        raise ValueError(f"Backend {instance!r}/{backend!r} args must be a string array")
+
+    env = settings.get("env")
+    if env is not None:
+        if not isinstance(env, dict) or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in env.items()
+        ):
+            raise ValueError(f"Backend {instance!r}/{backend!r} env must be a string-to-string table")
+
+    shared_key = settings.get("shared_key")
+    if shared_key is not None and (not isinstance(shared_key, str) or not shared_key):
+        raise ValueError(f"Backend {instance!r}/{backend!r} shared_key must be a non-empty string")
+
+    spec = {"kind": "stdio", "command": command, "args": list(args), "env": dict(env) if env else None}
+    if shared_key is not None:
+        spec["shared_key"] = shared_key
+    return spec
+
+
+def load_instance_registry(path: str | pathlib.Path) -> dict[str, dict[str, dict]]:
+    """Load the container runtime registry from a TOML file.
+
+    The original ``endpoint`` form remains valid as a compatibility shim for
+    a host adapter. New configs use ``backends`` to aggregate multiple HTTP or
+    stdio MCP servers directly inside this gateway process.
+
+    Example::
+
+        [instances.kubernaut.backends.docs]
+        kind = "http"
+        url = "http://host.containers.internal:8888/mcp/kubernaut-docs/"
+
+        [instances.kubernaut.backends.serena]
+        kind = "http"
+        url = "http://host.containers.internal:8893/mcp/kubernaut"
     """
     import tomllib
 
@@ -1086,15 +1180,22 @@ def load_instance_registry(path: str | pathlib.Path) -> dict[str, dict[str, dict
             raise ValueError(f"Instance {name!r} must be a TOML table")
 
         endpoint = settings.get("endpoint")
-        if not isinstance(endpoint, str) or not endpoint:
-            raise ValueError(f"Instance {name!r} requires a non-empty endpoint")
-        parsed = urlparse(endpoint)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError(f"Instance {name!r} endpoint must be an HTTP(S) URL: {endpoint!r}")
-        if parsed.username is not None or parsed.password is not None:
-            raise ValueError(f"Instance {name!r} endpoint must not contain credentials")
+        backend_settings = settings.get("backends")
+        if endpoint is not None and backend_settings is not None:
+            raise ValueError(f"Instance {name!r} cannot define both endpoint and backends")
 
-        registry[name] = {"host": {"kind": "http", "url": endpoint}}
+        if endpoint is not None:
+            registry[name] = {"host": _parse_runtime_backend(name, "host", {"kind": "http", "url": endpoint})}
+            continue
+
+        if not isinstance(backend_settings, dict) or not backend_settings:
+            raise ValueError(f"Instance {name!r} requires a non-empty backends table")
+
+        registry[name] = {}
+        for backend, backend_config in backend_settings.items():
+            if not isinstance(backend, str) or not backend or "/" in backend:
+                raise ValueError(f"Invalid backend key for instance {name!r}: {backend!r}")
+            registry[name][backend] = _parse_runtime_backend(name, backend, backend_config)
 
     return registry
 
@@ -1114,11 +1215,12 @@ def _bank_name_from_spec(spec: dict, suffix: str) -> str:
 def build_gateway_identity_registry(
     registry: dict[str, dict[str, dict]],
 ) -> dict[str, dict[str, str | None]]:
-    """Build the public project/family identity view from backend bindings.
+    """Build the legacy Hindsight project/family identity view.
 
     The gateway route is the project key. Backend specs remain authoritative for
-    actual routing, while this derived view makes the family/bank relationship
-    explicit for validation, diagnostics, and future config endpoints.
+    actual routing, while this derived view validates the historical native
+    registry's Hindsight bank relationship. Config-driven runtime registries
+    are intentionally not required to use Hindsight or these bank suffixes.
     """
     identities: dict[str, dict[str, str | None]] = {}
     for project, backends in registry.items():
@@ -1170,7 +1272,7 @@ def build_backend_adapters(registry: dict[str, dict[str, dict]]) -> dict[str, di
         adapters[project] = {}
         for backend_key, spec in specs.items():
             if spec["kind"] == "http":
-                adapters[project][backend_key] = HttpRelayAdapter(spec["url"])
+                adapters[project][backend_key] = HttpRelayAdapter(spec["url"], spec.get("headers"))
                 continue
 
             shared_key = spec.get("shared_key")

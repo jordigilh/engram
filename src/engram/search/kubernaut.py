@@ -61,6 +61,22 @@ KUBERNAUT_OPERATOR_DIR = pathlib.Path(os.environ.get(
 KUBERNAUT_CONSOLE_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_CONSOLE_DIR", os.path.expanduser("~/.engram/watch/kubernaut-console"),
 ))
+KUBERNAUT_SCENARIOS_DIR = pathlib.Path(os.environ.get(
+    "ENGRAM_SCENARIOS_DIR", os.path.expanduser("~/.engram/watch/kubernaut-demo-scenarios"),
+))
+
+SCENARIOS_CODE_INCLUDE_PATTERNS = [
+    "**/*.yaml", "**/*.yml", "**/*.json", "**/*.sh", "**/*.tape",
+    "**/*.rego", "**/*.go", "**/*.py", "**/*.conf", "**/*.mod",
+    "**/*.sum", "**/Dockerfile", "**/*.tpl",
+]
+SCENARIOS_CODE_EXCLUDE_PATTERNS = [
+    "**/node_modules/**", "**/dist/**", "**/target/**", "**/vendor/**",
+    "**/golden-transcripts/**", "**/overnight-logs-*/**",
+    "**/parallel-results-*/**", "**/rerun-*/**", "**/redeploy-*/**",
+    "**/sequential-*/**", "**/*.log", "**/*.jsonl", "**/*.mp4",
+    "**/*.gif", "**/*.tape.option-b-backup",
+]
 
 # (repo_tag, root, included_patterns, excluded_patterns) -- mirrors the
 # localfs.walk_dir(path_matcher=PatternFilePathMatcher(...)) calls in
@@ -76,6 +92,8 @@ _PATTERN_SEARCH_ROOTS = [
     ("kubernaut-console", KUBERNAUT_CONSOLE_DIR,
      ["**/*.ts", "**/*.tsx"],
      ["**/node_modules/**", "**/dist/**", "**/storybook-static/**", "**/*.d.ts"]),
+    ("kubernaut-demo-scenarios", KUBERNAUT_SCENARIOS_DIR,
+     SCENARIOS_CODE_INCLUDE_PATTERNS, SCENARIOS_CODE_EXCLUDE_PATTERNS),
 ]
 
 # Call-graph scope (docs/CALL_GRAPH_CLUSTERING.md, 2026-08-24 Phase 5):
@@ -101,8 +119,8 @@ _CALL_GRAPH_ROOTS = [
 
 # --- Multi-branch (2026-08-10) ------------------------------------------
 #
-# code_main (cocoindex-flows.py) additionally indexes release/v1.5 and
-# release/v1.6 mirrors of the kubernaut family, tagging rows with
+# code_main (cocoindex-flows.py) additionally indexes the release/v1.5
+# mirror of the kubernaut family, tagging rows with
 # repo_tag="{repo}@release-{line}" (docs/issues stay main-only, unaffected
 # -- see docs/FINDINGS.md 2026-08-03 and its 2026-08-10 refinement). This
 # section makes search_code()/pattern_search_code() branch-aware: by
@@ -113,7 +131,7 @@ _CALL_GRAPH_ROOTS = [
 # KUBERNAUT_RELEASE_LINES (same env var name/default).
 KUBERNAUT_RELEASE_LINES = [
     line.strip()
-    for line in os.environ.get("KUBERNAUT_RELEASE_LINES", "v1.5,v1.6").split(",")
+    for line in os.environ.get("KUBERNAUT_RELEASE_LINES", "v1.5").split(",")
     if line.strip()
 ]
 # Set by mcp.json (per-workspace ${workspaceFolder} substitution in the

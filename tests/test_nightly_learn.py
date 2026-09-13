@@ -1117,6 +1117,26 @@ class TestRunNightlyProjectClobbering:
             p.write_text("{}")
             paths.append(p)
 
+        # run_nightly()'s tail writes real side effects: the daily JSON log
+        # (LOG_DIR), the topic-shift refresh-state file, and a full
+        # generate-dashboard.main() rewrite of the tracked
+        # docs/DASHBOARD.md + docs/PENDING_CONTRADICTIONS.md. A full-suite
+        # run at 2026-09-11 07:39 executed these tests unpatched and wrote
+        # fabricated daily logs (2026-09-11.json/-dcm.json: 1 fake
+        # transcript, 1 fake correction) plus a dashboard regen mixing that
+        # fake data into the aggregates -- all into the real ~/.engram and
+        # the real working tree. Redirect every sink into tmp_path and stub
+        # dashboard/notify tail so these tests are hermetic.
+        monkeypatch.setattr(nightly_learn, "LOG_DIR", tmp_path / "logs")
+        monkeypatch.setattr(
+            nightly_learn, "MODEL_REFRESH_STATE_PATH", tmp_path / "model-refresh-state.json"
+        )
+        monkeypatch.setattr("engram.pipeline.generate_dashboard.main", lambda: None)
+        monkeypatch.setattr(
+            nightly_learn,
+            "notify_pending_contradictions_backlog",
+            lambda *a, **k: {"notified": False, "pending_count": 0, "skipped_reason": "stubbed"},
+        )
         monkeypatch.setattr(nightly_learn, "collect_bank_stats", lambda project: {})
         monkeypatch.setattr(nightly_learn, "find_recent_transcripts", lambda **k: paths)
         monkeypatch.setattr(
@@ -1310,6 +1330,20 @@ class TestRunNightlyReflectRetired:
         p = tmp_path / "t0.jsonl"
         p.write_text("{}")
 
+        # Hermetic sinks -- see TestRunNightlyProjectClobbering._stub_common
+        # for the 2026-09-11 incident this guards against (run_nightly()'s
+        # tail writes the daily JSON log, the refresh-state file, and a full
+        # dashboard regen unless redirected).
+        monkeypatch.setattr(nightly_learn, "LOG_DIR", tmp_path / "logs")
+        monkeypatch.setattr(
+            nightly_learn, "MODEL_REFRESH_STATE_PATH", tmp_path / "model-refresh-state.json"
+        )
+        monkeypatch.setattr("engram.pipeline.generate_dashboard.main", lambda: None)
+        monkeypatch.setattr(
+            nightly_learn,
+            "notify_pending_contradictions_backlog",
+            lambda *a, **k: {"notified": False, "pending_count": 0, "skipped_reason": "stubbed"},
+        )
         monkeypatch.setattr(nightly_learn, "collect_bank_stats", lambda project: {})
         monkeypatch.setattr(nightly_learn, "find_recent_transcripts", lambda **k: [p])
         monkeypatch.setattr(

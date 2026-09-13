@@ -1,9 +1,9 @@
 """Tests for praxis-cocoindex-search.py (engram.search.praxis) -- the Praxis
 code search MCP server. See tests/test_dcm_cocoindex_search.py's module
 docstring for the shared-logic rationale; praxis.py differs from dcm.py/
-koku.py in searching Rust source across seven separately-configured repo
+koku.py in searching Rust source across nine separately-configured repo
 roots (_RUST_REPOS), with no `repo=` scoping param on pattern_search_code
-(all seven are always searched, same as koku.py's single root).
+(all nine are always searched, same as koku.py's single root).
 """
 from __future__ import annotations
 
@@ -203,7 +203,7 @@ class TestCallGraphWiring:
     selection, multi-repo delegation), not call-graph correctness -- that's
     already covered exhaustively in tests/test_callgraph.py against the
     shared implementation every org reuses. Praxis differs from koku.py/
-    rhdh_plugins.py (single root each) in searching all seven
+    rhdh_plugins.py (single root each) in searching all nine
     _PATTERN_SEARCH_ROOTS repos in one call via
     callgraph.build_multi_repo_call_graph_with_stats, so these also pin down
     the repo-tag-prefixed qualified names and per-repo-only resolution that

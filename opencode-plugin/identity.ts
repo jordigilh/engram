@@ -16,6 +16,8 @@ export interface EngramPluginOptions {
   project?: string
   family?: string
   gatewayUrl?: string
+  /** Optional exact gateway routes keyed by raw branch or release suffix. */
+  branchRoutes?: Record<string, string>
 }
 
 export interface DeriveIdentityInput {
@@ -52,9 +54,15 @@ export function deriveIdentity(input: DeriveIdentityInput): ResolvedIdentity {
   const branchSuffix = detectBranchSuffix(input.directoryBasename, input.branch)
 
   const baseName = input.directoryBasename.replace(RELEASE_DIR_SUFFIX, "")
-  // Gateway routes are explicit registry keys. Never invent a branch-suffixed
-  // route that the gateway may not expose; use `project` for registered aliases.
-  const project = options.project || input.directoryBasename
+  // Gateway routes are explicit registry keys. A configured branch route is
+  // safe to select automatically; without one, keep the historical exact
+  // directory-name behavior rather than inventing an unregistered route.
+  const branchRoute = options.branchRoutes && [
+    input.branch,
+    branchSuffix,
+    branchSuffix === "main" ? "main" : `release/${branchSuffix}`,
+  ].filter((key): key is string => Boolean(key)).map((key) => options.branchRoutes?.[key]).find(Boolean)
+  const project = options.project || branchRoute || input.directoryBasename
   const family = options.family || baseName
 
   return { project, family, branchSuffix }

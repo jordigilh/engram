@@ -35,11 +35,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from .artifact_selection import is_must_gather, select_artifact
 from .branch_scope import normalize_branch
 from .normalize import iter_evidence
 from .testlog import classify_failure, deduplicate_failures, extract_test_failures, infer_rr_ids
 
-MUST_GATHER_NAME_RE = re.compile(r"must.?gather|fullpipeline|coverage-e2e-fullpipeline", re.IGNORECASE)
 DOWNSTREAM_JOB_RE = re.compile(r"summary|merge.?gate|report", re.IGNORECASE)
 
 _TIMEOUT_MARKERS = (
@@ -172,24 +172,18 @@ def discover_ci_urls(
         for item in artifacts
     ]
     candidates = [item for item in artifact_records if not item.get("expired")]
-    if artifact_hint:
-        hinted = [item for item in candidates if artifact_hint.lower() in (item.get("name") or "").lower()]
-        if hinted:
-            candidates = hinted
-        else:
-            warnings.append(f"artifact_hint {artifact_hint!r} matched nothing; falling back to must-gather match")
-    must_gather = [item for item in candidates if MUST_GATHER_NAME_RE.search(item.get("name") or "")]
-    artifact = (must_gather or candidates or [None])[0]
-    if must_gather:
+    artifact = select_artifact(candidates, job_name=job.get("name"), artifact_hint=artifact_hint)
+    if artifact_hint and artifact is None:
+        warnings.append(f"artifact_hint {artifact_hint!r} matched nothing; falling back to must-gather match")
+        artifact = select_artifact(candidates, job_name=job.get("name"))
+    if artifact and is_must_gather(artifact.get("name")):
         pass  # exact must-gather match: no warning needed
-    elif candidates:
+    elif artifact:
         warnings.append(f"no must-gather-named artifact; using {artifact['name']!r} instead")
     elif artifact_records:
         warnings.append("all artifacts are expired; continuing with log-only RCA")
-        artifact = None
     else:
         warnings.append("run lists no artifacts; continuing with log-only RCA")
-        artifact = None
 
     return {
         "run": {

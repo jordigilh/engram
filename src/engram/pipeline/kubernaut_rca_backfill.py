@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -11,6 +10,7 @@ from typing import Any
 
 from engram.incident.remote import ingest_urls
 from engram.incident.normalize import iter_evidence
+from engram.incident.artifact_selection import select_artifact
 from engram.incident.postgres_retention import promote_incident_pg
 from engram.incident.quality import validate_dossier
 from engram.incident.retention import promote_incident
@@ -18,10 +18,11 @@ from engram.incident.service import triage_test_failure
 from engram.incident.testlog import classify_failure, deduplicate_failures, extract_test_failures, infer_rr_ids
 
 
-def _select_artifact(run: dict[str, Any]) -> dict[str, Any] | None:
-    artifacts = [item for item in run.get("relevant_artifacts", []) if not item.get("expired")]
-    artifacts.sort(key=lambda item: (0 if re.search(r"must.?gather", item.get("name", ""), re.I) else 1, item.get("name", "")))
-    return artifacts[0] if artifacts else None
+def _select_artifact(run: dict[str, Any], job: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    return select_artifact(
+        run.get("relevant_artifacts", []),
+        job_name=(job or {}).get("name"),
+    )
 
 
 def backfill(
@@ -56,13 +57,13 @@ def backfill(
     failure_manifest: list[dict[str, Any]] = []
     for run in runs:
         metrics["runs_scanned"] += 1
-        artifact = _select_artifact(run)
-        if not artifact:
-            metrics["errors"].append({"run_id": run.get("run_id"), "error": "no usable must-gather artifact"})
-            continue
         run_output = output / str(run["run_id"])
         for job in run.get("primary_failed_jobs", run.get("failed_jobs", [])):
             metrics["jobs_scanned"] += 1
+            artifact = _select_artifact(run, job)
+            if not artifact:
+                metrics["errors"].append({"run_id": run.get("run_id"), "job_id": job.get("job_id"), "error": "no usable must-gather artifact"})
+                continue
             with tempfile.TemporaryDirectory(prefix=f"engram-rca-{run['run_id']}-") as temp_dir:
                 try:
                     ingested = ingest_urls(job["log_url"], artifact["url"], destination=Path(temp_dir))

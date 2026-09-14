@@ -7,22 +7,45 @@ from typing import Iterable
 
 from .models import Evidence, TestFailure
 from .normalize import extract_rr_id
+from .testlog import infer_rr_ids
 
 
-def resolve_rr_id(failure: TestFailure) -> str:
+def resolve_rr_id(failure: TestFailure, evidence: Iterable[Evidence] | None = None) -> str:
     rr_id = failure.rr_id or extract_rr_id(failure.failure_text)
+    if not rr_id and evidence is not None:
+        inferred = infer_rr_ids({"failure_text": failure.failure_text}, list(evidence))
+        if len(inferred) == 1:
+            rr_id = inferred[0]
     if not rr_id:
         raise ValueError("failure text does not contain an RR ID")
     return rr_id
 
 
 def correlate(failure: TestFailure, evidence: Iterable[Evidence]) -> list[Evidence]:
-    rr_id = resolve_rr_id(failure)
+    evidence = list(evidence)
+    rr_id = resolve_rr_id(failure, evidence)
     related = [
         item
         for item in evidence
-        if item.rr_id == rr_id or rr_id in item.content or rr_id in item.metadata.get("rr_ids", ())
+        if item.rr_id == rr_id
+        or rr_id.casefold() in item.content.casefold()
+        or rr_id in item.metadata.get("rr_ids", ())
     ]
+    blocking_workflows = {
+        item.metadata.get("structured", {}).get("blocking_workflow_execution")
+        for item in related
+        if item.metadata.get("structured", {}).get("kind", "").lower() == "remediationrequest"
+        and item.metadata.get("structured", {}).get("name") == rr_id
+    }
+    blocking_workflows.discard(None)
+    for item in evidence:
+        structured = item.metadata.get("structured", {})
+        if (
+            structured.get("name") in blocking_workflows
+            or structured.get("remediation_request_ref") == rr_id
+            or any(workflow.casefold() in item.content.casefold() for workflow in blocking_workflows)
+        ):
+            related.append(item)
     # A resource name alone is not a safe join: the fixture contains many
     # independent memory-eater incidents in different namespaces.
     unique = {item.id: item for item in related}
@@ -54,7 +77,8 @@ def build_clusters(evidence: Iterable[Evidence]) -> list[dict]:
 
 
 def rank_evidence(failure: TestFailure, evidence: Iterable[Evidence]) -> list[Evidence]:
-    rr_id = resolve_rr_id(failure)
+    evidence = list(evidence)
+    rr_id = resolve_rr_id(failure, evidence)
     target_time = failure.failed_at
     scored: list[tuple[float, Evidence]] = []
     for item in evidence:
@@ -68,6 +92,13 @@ def rank_evidence(failure: TestFailure, evidence: Iterable[Evidence]) -> list[Ev
             score += 0.15
         if any(term in item.content.lower() for term in ("workflow", "manualreview", "operator_escalation", "failed")):
             score += 0.15
+        structured = item.metadata.get("structured", {})
+        if structured.get("kind", "").lower() in {"remediationrequest", "workflowexecution"}:
+            score += 0.25
+        if structured.get("block_reason", "").replace("_", "").replace("-", "").lower() == "resourcebusy":
+            score += 0.4
+        if structured.get("failure_reason", "").replace("_", "").replace("-", "").lower() == "unsupportedengine":
+            score += 0.2
         scored.append((score, item))
     return [
         item

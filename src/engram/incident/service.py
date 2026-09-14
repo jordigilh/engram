@@ -8,6 +8,7 @@ from typing import Any, Iterable
 
 from .correlate import build_clusters, correlate, rank_evidence, resolve_rr_id
 from .branch_scope import normalize_branch
+from .causal import analyze_resource_busy
 from .models import Evidence, TestFailure
 from .lifecycle import analyze_interactive_lifecycle
 from .normalize import extract_rr_id, iter_evidence
@@ -36,6 +37,7 @@ def _failure_timestamp(text: str) -> datetime | None:
 def _summary(rr_id: str, evidence: list[Evidence]) -> dict[str, Any]:
     text = "\n".join(item.content for item in evidence).lower()
     lifecycle = analyze_interactive_lifecycle(rr_id, evidence)
+    causal_finding = analyze_resource_busy(rr_id, evidence)
     result = {
         "rr_id": rr_id,
         "evidence_count": len(evidence),
@@ -49,6 +51,7 @@ def _summary(rr_id: str, evidence: list[Evidence]) -> dict[str, Any]:
         ),
         "affected_namespaces": sorted({item.namespace for item in evidence if item.namespace}),
         "interactive_lifecycle": lifecycle,
+        "causal_finding": causal_finding,
     }
     return result
 
@@ -69,7 +72,8 @@ def _bounded(items: Iterable[Evidence], max_chars: int) -> list[Evidence]:
 
 
 def build_context(failure: TestFailure, evidence: Iterable[Evidence], max_tokens: int = 12000) -> dict[str, Any]:
-    rr_id = resolve_rr_id(failure)
+    evidence = list(evidence)
+    rr_id = resolve_rr_id(failure, evidence)
     related = correlate(failure, evidence)
     ranked = rank_evidence(failure, related)
     selected = _bounded(ranked, max_tokens * 4)
@@ -82,6 +86,7 @@ def build_context(failure: TestFailure, evidence: Iterable[Evidence], max_tokens
             "source_line": item.source_line,
             "evidence_id": item.id,
             "identifiers": item.identifiers,
+            "metadata": item.metadata,
             "content": item.content[:1000],
         }
         for item in sorted(
@@ -110,13 +115,17 @@ def build_context(failure: TestFailure, evidence: Iterable[Evidence], max_tokens
                 "source_file": item.source_file,
                 "source_line": item.source_line,
                 "identifiers": item.identifiers,
+                "metadata": item.metadata,
                 "content": item.content[:2000],
             }
             for item in selected
         ],
     }
     output_budget = max_tokens * 4
-    while len(json.dumps(result, default=str)) > output_budget and result["evidence"]:
+    # Preserve representative evidence by discarding lower-value cluster summaries first.
+    while len(json.dumps(result, default=str)) > output_budget and result["clusters"]:
+        result["clusters"].pop()
+    while len(json.dumps(result, default=str)) > output_budget and len(result["evidence"]) > 1:
         result["evidence"].pop()
         result["timeline"] = [
             item for item in result["timeline"] if item["evidence_id"] in {entry["id"] for entry in result["evidence"]}

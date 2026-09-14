@@ -5,7 +5,7 @@ import re
 import hashlib
 from typing import Any
 
-from .normalize import RR_RE, extract_rr_id
+from .normalize import RR_RE, extract_rr_id, extract_target_resource
 
 _FAILURE_START = re.compile(r"^\s*\[FAILED\]\s+(?!in \[It\]|Timed out)")
 _TIMESTAMP = re.compile(r"@\s*(\d\d/\d\d/\d\d\s+\d\d:\d\d:\d\d\.\d+)")
@@ -69,7 +69,32 @@ def extract_test_failures(text: str) -> list[dict[str, Any]]:
 
 
 def infer_rr_ids(failure: dict, evidence: list[Any]) -> list[str]:
-    """Infer an RR only from an exact namespace/resource evidence intersection."""
+    """Infer an RR from an exact target match or one unique structured blocker."""
+    target = extract_target_resource(failure.get("failure_text", ""))
+    if target:
+        matches = []
+        for item in evidence:
+            structured = item.metadata.get("structured", {})
+            if structured.get("kind", "").lower() != "remediationrequest":
+                continue
+            candidate = structured.get("target_resource", {})
+            if all(candidate.get(key) == target[key] for key in ("kind", "namespace", "name")):
+                if structured.get("name"):
+                    matches.append(structured["name"])
+        return sorted(set(matches))
+
+    blocked = {
+        item.metadata.get("structured", {}).get("name")
+        for item in evidence
+        if item.metadata.get("structured", {}).get("kind", "").lower() == "remediationrequest"
+        and item.metadata.get("structured", {}).get("block_reason", "").replace("_", "").replace("-", "").lower()
+        == "resourcebusy"
+        and item.metadata.get("structured", {}).get("blocking_workflow_execution")
+    }
+    blocked.discard(None)
+    if len(blocked) == 1:
+        return sorted(blocked)
+
     namespaces = [namespace for namespace in failure.get("namespaces", []) if namespace.lower().startswith("fp-")]
     resources = failure.get("resources", [])
     if not namespaces or not resources:

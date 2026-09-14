@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-MUST_GATHER_NAME_RE = re.compile(r"must.?gather|fullpipeline|coverage-e2e-fullpipeline", re.IGNORECASE)
+from engram.incident.artifact_selection import is_must_gather
 DOWNSTREAM_JOB_RE = re.compile(r"summary|merge.?gate|report", re.IGNORECASE)
 
 
@@ -79,7 +79,7 @@ class GitHubActionsClient:
             }
             for artifact in artifacts
         ]
-        relevant_artifacts = [artifact for artifact in artifact_records if MUST_GATHER_NAME_RE.search(artifact["name"] or "")]
+        relevant_artifacts = [artifact for artifact in artifact_records if is_must_gather(artifact["name"])]
         primary_failed_jobs = [job for job in failed_jobs if not DOWNSTREAM_JOB_RE.search(job["name"] or "")]
         return {
             "run_id": run_id,

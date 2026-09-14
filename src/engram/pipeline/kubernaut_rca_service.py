@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+from dataclasses import asdict
 from pathlib import Path
 
 from engram.incident.service import triage_test_failure as build_triage_context
 from engram.incident.ondemand import generate_rca as build_rca_ondemand
+from engram.incident.normalize import iter_evidence
 from engram.incident.remote import ingest_urls
 from engram.incident.branch_scope import normalize_branch
 from engram.incident.retention import (
@@ -22,6 +25,38 @@ from engram.incident.postgres_retention import (
 )
 
 
+def _evidence_record(item: dict) -> dict:
+    return {
+        "id": item["id"],
+        "type": item.get("type", item.get("evidence_type")),
+        "timestamp": item.get("timestamp"),
+        "source_file": item.get("source_file"),
+        "source_line": item.get("source_line"),
+        "identifiers": item.get("identifiers", {}),
+        "metadata": item.get("metadata", {}),
+        "content": item.get("content", "")[:2000],
+    }
+
+
+def lookup_indexed_evidence(root: Path, evidence_id: str) -> dict | None:
+    """Resolve evidence IDs outside the bounded subset returned in a dossier."""
+    index_path = root / ".engram" / "evidence-index.jsonl"
+    if index_path.is_file():
+        with index_path.open(encoding="utf-8") as index:
+            for line in index:
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if item.get("id") == evidence_id:
+                    return _evidence_record(item)
+        return None
+    for item in iter_evidence(root):
+        if item.id == evidence_id:
+            return _evidence_record(asdict(item))
+    return None
+
+
 def _run_mcp_server(
     root: Path,
     host: str = "127.0.0.1",
@@ -31,8 +66,6 @@ def _run_mcp_server(
     pg_url: str | None = None,
 ) -> None:
     from engram import mcp_compat  # 1.x/2.x compat (mcp<2.0 pinned)
-
-    import json
 
     mcp = mcp_compat.make_server("kubernaut-rca", host=host, port=port)
     contexts: dict[tuple[str, str], dict] = {}
@@ -168,6 +201,9 @@ def _run_mcp_server(
             for item in dossier.get("evidence", []):
                 if item["id"] == evidence_id:
                     return json.dumps(item, default=str)
+        indexed = lookup_indexed_evidence(roots.get(scope_key(project, branch), root), evidence_id)
+        if indexed:
+            return json.dumps(indexed, default=str)
         return json.dumps({"error": f"unknown evidence id: {evidence_id}"})
 
     @mcp.tool()

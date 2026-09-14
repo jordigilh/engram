@@ -17,6 +17,17 @@ TARGET_NAMESPACE_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 POD_RE = re.compile(r"\b(?:pod|Pod):\s*[\"']?([a-z0-9][a-z0-9.-]+)", re.IGNORECASE)
+_TARGET_RESOURCE_PATTERNS = (
+    re.compile(
+        r"\b(?P<namespace>[a-z0-9][a-z0-9.-]+)/(?P<kind>[A-Za-z][A-Za-z0-9.-]*)/"
+        r"(?P<name>[a-z0-9][a-z0-9.-]*)\b"
+    ),
+    re.compile(
+        r"\b(?P<kind>[A-Za-z][A-Za-z0-9.-]*)/(?P<namespace>[a-z0-9][a-z0-9.-]+)/"
+        r"(?P<name>[a-z0-9][a-z0-9.-]*)\b"
+    ),
+)
+_WORKFLOW_EXECUTION_RE = re.compile(r"\bwe-[a-z0-9]+(?:-[a-z0-9]+)+\b", re.IGNORECASE)
 
 
 def extract_rr_id(text: str) -> str | None:
@@ -28,6 +39,19 @@ def extract_rr_id(text: str) -> str | None:
 def extract_rr_ids(text: str) -> tuple[str, ...]:
     """Return all distinct remediation-request identifiers in stable order."""
     return tuple(dict.fromkeys(match.group(0) for match in RR_RE.finditer(text)))
+
+
+def extract_target_resource(text: str) -> dict[str, str] | None:
+    """Extract a Kubernetes target from either namespace/kind/name ordering."""
+    for pattern in _TARGET_RESOURCE_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return {
+                "kind": match.group("kind"),
+                "namespace": match.group("namespace"),
+                "name": match.group("name"),
+            }
+    return None
 
 
 def parse_timestamp(value: Any) -> datetime | None:
@@ -133,6 +157,97 @@ def _metadata(value: Any, text: str) -> dict[str, Any]:
     }
 
 
+def _first_value(*values: Any) -> Any:
+    return next((value for value in values if value not in (None, "")), None)
+
+
+def _target_resource(value: Any, content: str, spec: dict[str, Any]) -> dict[str, str] | None:
+    target = spec.get("targetResource")
+    if target is None and isinstance(value, dict):
+        target = value.get("targetResource")
+    if target is None:
+        parameters = spec.get("parameters")
+        if isinstance(parameters, dict):
+            target = {
+                "kind": parameters.get("TARGET_RESOURCE_KIND"),
+                "name": parameters.get("TARGET_RESOURCE_NAME"),
+                "namespace": parameters.get("TARGET_RESOURCE_NAMESPACE"),
+            }
+    if isinstance(target, dict):
+        kind = target.get("kind")
+        name = target.get("name")
+        namespace = target.get("namespace")
+        if kind and name and namespace:
+            return {"kind": str(kind), "namespace": str(namespace), "name": str(name)}
+    if isinstance(target, str):
+        parsed = extract_target_resource(target)
+        if parsed:
+            return parsed
+    return extract_target_resource(content)
+
+
+def _structured_metadata(value: Any, content: str) -> dict[str, Any]:
+    payload = value if isinstance(value, dict) else _json_log_payload(content)
+    if not isinstance(payload, dict):
+        return {}
+    spec = payload.get("spec") if isinstance(payload.get("spec"), dict) else {}
+    status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
+    resource_kind = str(_first_value(payload.get("kind"), payload.get("controllerKind")) or "")
+    resource = payload.get(resource_kind) if resource_kind and isinstance(payload.get(resource_kind), dict) else {}
+    resource_metadata = resource.get("metadata") if isinstance(resource.get("metadata"), dict) else {}
+    object_metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    object_metadata = object_metadata or resource_metadata
+    if not resource_kind and resource:
+        resource_kind = str(_first_value(resource.get("kind"), payload.get("kind")) or "")
+
+    target = _target_resource(payload, content, spec)
+    routing = status.get("routingStatus") if isinstance(status.get("routingStatus"), dict) else {}
+    reference = spec.get("remediationRequestRef")
+    if not isinstance(reference, dict):
+        reference = payload.get("remediationRequestRef") if isinstance(payload.get("remediationRequestRef"), dict) else {}
+    block_reason = _first_value(
+        routing.get("blockReason"),
+        status.get("blockReason"),
+        payload.get("blockReason"),
+        payload.get("reason"),
+    )
+    blocking_workflow = _first_value(
+        routing.get("blockingWorkflowExecution"),
+        payload.get("blockingWorkflowExecution"),
+        payload.get("workflowExecution"),
+    )
+    if not blocking_workflow and block_reason and "resourcebusy" in str(block_reason).replace("_", "").replace("-", "").lower():
+        workflow_match = _WORKFLOW_EXECUTION_RE.search(content)
+        blocking_workflow = workflow_match.group(0) if workflow_match else None
+    workflow_ref = spec.get("workflowRef") if isinstance(spec.get("workflowRef"), dict) else {}
+    cluster_id = _first_value(
+        spec.get("clusterID"),
+        payload.get("clusterID"),
+        resource.get("clusterID"),
+        target.get("clusterID") if target else None,
+    )
+    structured = {
+        "kind": resource_kind or None,
+        "name": _first_value(object_metadata.get("name"), payload.get("name"), resource.get("name")),
+        "namespace": _first_value(object_metadata.get("namespace"), payload.get("namespace"), resource.get("namespace")),
+        "cluster_id": str(cluster_id) if cluster_id is not None else None,
+        "target_resource": target,
+        "phase": _first_value(status.get("overallPhase"), status.get("phase"), payload.get("phase"), payload.get("wePhase")),
+        "block_reason": str(block_reason) if block_reason is not None else None,
+        "block_message": _first_value(routing.get("blockMessage"), payload.get("blockMessage")),
+        "blocking_workflow_execution": str(blocking_workflow) if blocking_workflow is not None else None,
+        "remediation_request_ref": _first_value(reference.get("name"), payload.get("remediationRequest")),
+        "workflow_engine": _first_value(workflow_ref.get("executionEngine"), payload.get("engine")),
+        "failure_reason": _first_value(
+            status.get("failureReason"),
+            status.get("reason"),
+            payload.get("failureReason"),
+            payload.get("reason"),
+        ),
+    }
+    return {key: item for key, item in structured.items() if item not in (None, "", {})}
+
+
 def _evidence_id(source_file: str, content: str, ordinal: int) -> str:
     digest = hashlib.sha1(f"{source_file}\0{ordinal}\0{content}".encode()).hexdigest()[:16]
     return f"evidence-{digest}"
@@ -150,6 +265,10 @@ def _from_value(
     rr_ids = extract_rr_ids(content)
     rr_id = rr_ids[0] if rr_ids else None
     metadata["rr_ids"] = rr_ids
+    structured = _structured_metadata(value, content)
+    if structured:
+        metadata["structured"] = structured
+        metadata["namespace"] = metadata.get("namespace") or structured.get("namespace")
     timestamp = None
     if isinstance(value, dict):
         for key in ("timestamp", "creationTimestamp", "createdAt", "firingTime", "firstTimestamp", "lastTimestamp"):
@@ -173,6 +292,7 @@ def _from_value(
         severity=severity,
         source_line=source_line,
         identifiers=_identifiers(value, content),
+        metadata=metadata,
     )
 
 

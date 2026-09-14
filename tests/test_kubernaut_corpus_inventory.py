@@ -26,7 +26,7 @@ def test_inventory_filters_failed_jobs_and_relevant_artifacts() -> None:
         },
         "actions/runs/123/artifacts": {
             "artifacts": [
-                {"id": 789, "name": "coverage-e2e-fullpipeline", "expired": False, "size_in_bytes": 10},
+                {"id": 789, "name": "must-gather-logs-e2e-fleet-123", "expired": False, "size_in_bytes": 10},
                 {"id": 790, "name": "unrelated", "expired": False, "size_in_bytes": 10},
             ]
         },
@@ -41,7 +41,7 @@ def test_inventory_filters_failed_jobs_and_relevant_artifacts() -> None:
     assert result["usable_runs"] == 1
     assert result["runs"][0]["failed_jobs"][0]["job_id"] == 456
     assert result["runs"][0]["primary_failed_jobs"][0]["job_id"] == 456
-    assert [item["name"] for item in result["runs"][0]["relevant_artifacts"]] == ["coverage-e2e-fullpipeline"]
+    assert [item["name"] for item in result["runs"][0]["relevant_artifacts"]] == ["must-gather-logs-e2e-fleet-123"]
 
 
 def test_inventory_marks_run_without_artifact_unusable() -> None:

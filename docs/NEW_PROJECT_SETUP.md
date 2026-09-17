@@ -383,10 +383,8 @@ layout, when Serena is intentionally run outside the gateway:
 ```
 
 Plus a per-repo `.serena/project.yml` — Serena's project registration is
-keyed by absolute path, so unlike `.cursor/mcp.json` (which some repo
-families share via a symlinked template, see step 8's kubernaut-family
-gotcha) this file can never be shared across repos, even siblings in the
-same family:
+keyed by absolute path, so this file can never be shared across repos, even
+siblings in the same family:
 
 ```yaml
 language_servers: [<go|python|rust|typescript>]
@@ -522,27 +520,15 @@ duplicate tools and bypass the gateway's isolation and routing.
 > aggregating gateway. The packaged image and the native gateway both require
 > one client route per project.
 
-> **Gotcha (repo families sharing one physical file)**: a family of closely
-> related repos (e.g. `kubernaut`/`kubernaut-v1.5`/`kubernaut-v1.6`/
-> `kubernaut-operator`) can have every repo's `.cursor/mcp.json` be a
-> filesystem symlink to one shared file under
-> `~/.engram/cursor-mcp-templates/<family>.json`, so a config change (like
-> adding step 7's `serena` entry) is one edit that cascades to every repo in
-> the family instead of N separate edits. This is easy to miss when
-> retrofitting an existing family — check with `readlink` before assuming a
-> repo's `.cursor/mcp.json` is a plain, independent file.
->
 > **Evolution (2026-08-13, shared HTTP daemons instead of one stdio process
-> per window)**: for a large family (kubernaut-family: 6 repos), even with
-> the symlinked-template gotcha above, opening N repos as N separate Cursor
-> windows still spawns N `cocoindex-code` subprocesses and N `serena`+`gopls`
-> subprocesses (loading the same ~855-package Go module N times). If that's
-> a real resource concern, run `engram-search-<project>`/`serena
-> start-mcp-server` once each as permanent `launchd` daemons
-> (`--transport streamable-http`, fixed host/port) instead, and point the
-> shared template's `cocoindex-code`/`serena` entries at
-> `"type": "http"` + a fixed `http://127.0.0.1:<port>/mcp` URL instead of
-> `command`/`stdio`. See `launchd/io.vectorize.cocoindex-code.kubernaut-family.plist`,
+> per window)**: for a large family (kubernaut-family: 6 repos), opening N
+> repos as N separate OpenCode sessions can still spawn N
+> `cocoindex-code`/`serena` subprocesses (loading the same ~855-package Go
+> module N times). If that's a real resource concern, run
+> `engram-search-<project>`/`serena start-mcp-server` once each as permanent
+> `launchd` daemons (`--transport streamable-http`, fixed host/port) instead,
+> and register their project routes through the OpenCode plugin. See
+> `launchd/io.vectorize.cocoindex-code.kubernaut-family.plist`,
 > `launchd/io.vectorize.serena.kubernaut-family.plist`, and
 > `launchd/io.vectorize.serena-project-server.plist` for the concrete
 > templates, and `docs/findings/2026-08.md`'s 2026-08-13 (same day, seventh
@@ -555,9 +541,10 @@ duplicate tools and bypass the gateway's isolation and routing.
 > read-only peek at a different family member without switching. `serena
 > start-project-server` (one instance, not per-repo) must also be running as
 > a separate daemon for `query_project` to work at all. This pattern doesn't
-> replace per-window `stdio` as the *default* for a newly onboarded, standalone
-> project — only worth the added complexity once a family is large enough
-> that N duplicate processes are a measurable resource concern.
+> replace the gateway's per-project route as the *default* for a newly
+> onboarded, standalone project — it is only worth the added complexity once a
+> family is large enough that N duplicate processes are a measurable resource
+> concern.
 >
 > **On Linux**: same architecture, `systemd --user` units instead of
 > `launchd` plists — see `docs/INSTALL-linux.md` step 9 and
@@ -572,7 +559,7 @@ duplicate tools and bypass the gateway's isolation and routing.
 > daemon has exactly one process-global "active project" at a time, so only
 > whichever family repo last called `activate_project` gets full read+write —
 > every other repo is stuck on read-only `query_project` until it "steals"
-> activation back (and two windows on two different repos genuinely race for
+> activation back (and two sessions on two different repos genuinely race for
 > it). If your family is small/rarely-concurrent enough that "read-only for
 > whichever repo isn't currently active" is acceptable, stop here. If you
 > want every repo to get full read+write all the time, do step 8a too.
@@ -598,8 +585,8 @@ SDKs' SSE-reconnect handling; the shipped version is a minimal one-shot
 `httpx` POST relay that avoids it entirely).
 
 **When to use this**: you already did step 8's shared-daemon setup, your
-family has 2+ repos that get worked on concurrently (even just "you, in two
-Cursor windows"), and read-only access to whichever repo *isn't* currently
+ family has 2+ repos that get worked on concurrently (even just "you, in two
+ OpenCode sessions"), and read-only access to whichever repo *isn't* currently
 active is not acceptable. **When to skip it**: a single-repo project (there's
 nothing to multiplex), or a family where only one repo is ever actively
 edited at a time (step 8's plain shared daemon is simpler and sufficient).
@@ -878,8 +865,8 @@ file existence, not a hardcoded project list.
 > Hindsight's venv. `hooks/install.sh` gets this right automatically; if
 > you ever hand-edit `hooks.json`, don't "simplify" the interpreter path.
 
-> **Gotcha**: like `.cursor/mcp.json` (step 8), `hooks.json` embeds this
-> machine's absolute paths and is gitignored via the same blanket
+> **Gotcha**: `hooks.json` embeds this machine's absolute paths and is
+> gitignored via the same blanket
 > `.cursor/*` pattern — it will not exist in a fresh clone/worktree until
 > `hooks/install.sh` is re-run there.
 
@@ -912,34 +899,21 @@ hooks (`post-checkout`, `post-merge`, `reference-transaction`) — see
 `git-hooks/README.md` for the full reference; this step is a summary.
 `~/.engram/git-hooks/` is where you *install* (symlink or generate) them
 per-machine — it does not come pre-populated; that directory is created by
-this step, not shipped with engram. These hooks keep two things from
-silently going stale as a repo's working tree changes underneath a running
-Cursor session:
+this step, not shipped with engram. These hooks keep language-server state from
+going stale as a repo's working tree changes underneath a running
+ MCP client session:
 
 1. **Language-server staleness**: `gopls mcp` / `serena start-mcp-server`
    processes cache file state at startup. A `git checkout`/`pull`/`merge`/
    `reset`/`rebase` that rewrites files on disk without restarting these
    processes leaves them serving stale symbol/reference data. These hooks
-   kill any matching stale process (matched by cwd for `gopls`, by
-   `--project <toplevel>` for `serena`) so the next Cursor MCP call
+    kill any matching stale process (matched by cwd for `gopls`, by
+    `--project <toplevel>` for `serena`) so the next MCP call
    auto-respawns a fresh one.
-2. **(kubernaut/dcm families only) `.cursor/mcp.json` template drift**: for
-   repo families sharing one symlinked `.cursor/mcp.json` template (step 8's
-   "repo families" gotcha), `post-checkout-cursor-mcp.sh`/
-   `post-checkout-dcm-mcp.sh` also re-provision that symlink on checkout.
-
-This gap was found and closed 2026-08-13: koku (3 clones), every
-praxis-proxy repo (10 clones), and engram itself had never received this
-rollout (only kubernaut-family and dcm-project had it), which was the
-concrete, fixable half of Cursor repeatedly showing MCP servers as
-"Disabled" across those projects (see docs/findings/2026-08.md's 2026-08-13
-entry — the other half is a genuine Cursor UI stale-label bug with no
-hook-side fix). A **generic** variant is checked into this repo at
-`git-hooks/generic/` for exactly this case: same gopls/serena-restart +
-self-provisioning behavior as the family variant, but deliberately skips
-the `.cursor/mcp.json` symlink step, since koku/praxis-proxy/engram (and any
-newly onboarded single-repo project like `rhdh-plugins`) use real,
-non-symlinked `mcp.json` files per repo.
+The **generic** variant is checked into this repo at `git-hooks/generic/` for
+standalone projects. The **family** variant is for projects sharing long-lived
+HTTP daemons; both variants only restart stale language-server processes and
+never create client configuration files.
 
 **2026-08-16 correction**: an earlier version of `post-checkout-generic-mcp.sh`
 (and the dcm-family variant) self-provisioned `post-merge`/
@@ -969,13 +943,11 @@ ln -sf /path/to/engram/git-hooks/generic/reference-transaction-generic-mcp.sh "$
 `post-checkout` after a fresh clone is normally enough — but link all three
 explicitly for a brand-new onboarding rather than relying on that
 self-healing to fire first. Use the **family** variant instead of generic
-only if the new project *does* share either a symlinked `.cursor/mcp.json`
-template or a long-lived shared HTTP MCP daemon with sibling repos (step 8's
-family gotcha / step 8a) — see `git-hooks/README.md` for the family variant's
-templated install (`git-hooks/family/*.sh.tmpl` + `git-hooks/generate-hooks.sh`
-+ a real worked example at `git-hooks/families/kubernaut-family.vars`),
-which also carries the `.cursor/mcp.json` template-selection logic the
-generic variant deliberately omits.
+ only if the new project shares a long-lived shared HTTP MCP daemon with
+ sibling repos (step 8/8a) — see `git-hooks/README.md` for the family
+ variant's templated install (`git-hooks/family/*.sh.tmpl` +
+ `git-hooks/generate-hooks.sh` + a real worked example at
+ `git-hooks/families/kubernaut-family.vars`).
 
 > **Gotcha**: these are plain POSIX shell hooks in `.git/hooks/`
 > (or the repo's `core.hooksPath` equivalent, if set), not Cursor

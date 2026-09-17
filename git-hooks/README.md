@@ -1,17 +1,14 @@
 # Self-Healing Git Hooks — Templates and Examples
 
 Plain POSIX-shell `post-checkout` / `post-merge` / `reference-transaction`
-git hooks that keep two things from silently going stale as a repo's
-working tree changes underneath a running Cursor (or any other MCP client)
+git hooks that keep language-server state from silently going stale as a repo's
+working tree changes underneath a running OpenCode (or any other MCP client)
 session:
 
 1. **Language-server staleness**: `gopls mcp` / `serena start-mcp-server`
    processes cache file state at startup. A `git checkout`/`pull`/`merge`/
    `reset`/`rebase` that rewrites files on disk without restarting these
    processes leaves them serving stale symbol/reference data.
-2. **`.cursor/mcp.json` template drift** (family variant only): for a group
-   of repos sharing one symlinked `.cursor/mcp.json` template, re-provisions
-   that symlink on checkout.
 
 See `docs/NEW_PROJECT_SETUP.md` step 14 for the full installation walk-through
 and step 8a for the shared-daemon "family" concept these hooks assume.
@@ -20,7 +17,7 @@ and step 8a for the shared-daemon "family" concept these hooks assume.
 
 | Your project is... | Use |
 |---|---|
-| A standalone repo with its own real (non-symlink) `.cursor/mcp.json`, no shared multi-repo daemon | [`generic/`](generic/) — ready to symlink as-is, no templating needed |
+| A standalone repo with no shared multi-repo daemon | [`generic/`](generic/) — ready to symlink as-is, no templating needed |
 | One of several repos sharing one long-lived HTTP MCP daemon (e.g. one shared Serena instance for a repo family) | [`family/`](family/) — `.sh.tmpl` templates, rendered per-family by [`generate-hooks.sh`](generate-hooks.sh) |
 
 Only the `family` variant needs a shared daemon restart at all. If you're
@@ -51,7 +48,7 @@ repo without a re-run.
    [`families/kubernaut-family.vars`](families/kubernaut-family.vars) for a
    real, fully-worked example) with two required keys:
    - `FAMILY_NAME` — e.g. `"my-family"`; must match the launchd label suffix
-     and `.cursor/mcp.json` template filename prefix you use elsewhere.
+     you use elsewhere.
    - `DAEMON_LABELS` — space-separated full launchd labels to restart. **Only
      list a daemon that actually caches live checkout-file/symbol state in
      memory** (typically a Serena/gopls daemon with a shared "active

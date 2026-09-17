@@ -2,16 +2,14 @@
 #
 # Generate a family's self-healing git-hook scripts from the templates in
 # family/*.sh.tmpl, substituting {{FAMILY_NAME}}/{{DAEMON_LABELS}}/
-# {{DEBOUNCE_SECONDS}} from a vars file. Mirrors cursor/generate-mdc.sh's
-# pattern for Cursor rules.
+# {{DEBOUNCE_SECONDS}} from a vars file.
 #
 # Usage:
 #   ./generate-hooks.sh <config-file> [output-dir]
 #
 # Config file is a simple KEY=VALUE file. Required keys:
 #   FAMILY_NAME    e.g. "kubernaut-family" -- must match the launchd label
-#                  suffix / .cursor/mcp.json template filename prefix you
-#                  use elsewhere for this family.
+#                  suffix you use elsewhere for this family.
 #   DAEMON_LABELS  space-separated full launchd labels to restart, e.g.
 #                  "io.vectorize.serena.kubernaut-family
 #                   io.vectorize.serena-project-server"

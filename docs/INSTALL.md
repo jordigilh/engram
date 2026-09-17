@@ -387,9 +387,8 @@ python3 -m engram.maintenance.create_mental_models --refresh
 go install golang.org/x/tools/gopls@latest
 ```
 
-The `gopls` entry is already in `cursor/mcp.json`. It provides type-aware Go
-intelligence (implementations, references, definitions) directly in Cursor without
-ingesting source code.
+Type-aware code intelligence is provided by the gateway's Serena backend through
+the OpenCode plugin; do not configure a separate Cursor MCP `gopls` entry.
 
 ## 15. Install the observability hook
 
@@ -773,6 +772,4 @@ rm ~/.cursor/rules/hindsight-memory.mdc
 rm ~/.cursor/hooks.json
 rm -rf ~/.cursor/hooks/log-mcp-calls.sh
 
-# Remove MCP entries: delete hindsight, hindsight-docs, hindsight-issues,
-# and gopls from ~/.cursor/mcp.json (or restore your previous mcp.json)
 ```

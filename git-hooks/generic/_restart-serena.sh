@@ -1,7 +1,7 @@
 #!/bin/sh
 # Shared helper: kill any running `serena start-mcp-server --project
-# <toplevel>` process for the given repo, so Cursor's MCP client respawns a
-# fresh one on the next Serena tool call.
+# <toplevel>` process for the given repo, so the MCP client can respawn a fresh
+# one on the next Serena tool call.
 #
 # Why this exists: this is the Serena equivalent of _restart-gopls.sh --
 # Serena wraps gopls (or another LSP) inside its own long-lived process, so
@@ -12,8 +12,8 @@
 #
 # Usage: _restart-serena.sh <toplevel-path>
 # Safe to call with no matching process running (silent no-op).
-# Only applicable if this repo's .cursor/mcp.json runs Serena per-repo
-# (`--project <toplevel>`) rather than pointing at a shared family daemon --
+# Only applicable if this repo runs Serena per-repo (`--project <toplevel>`)
+# rather than pointing at a shared family daemon --
 # see ../family/ for the shared-daemon variant.
 
 TOPLEVEL="$1"

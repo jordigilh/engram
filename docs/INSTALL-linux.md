@@ -247,7 +247,7 @@ The 4 unit files are named/scoped for this project's own repo family
 (`kubernaut`, `kubernaut-operator`, `kubernaut-console`,
 `kubernaut-demo-scenarios`, `kubernaut-v1.5`, `kubernaut-v1.6`) — for a
 different family, copy and rename them, and edit each unit's `--project`/
-`ExecStart` args plus `.cursor/mcp.json`'s ports/URLs to match. See each
+`ExecStart` args plus the OpenCode plugin's project/branch routes to match. See each
 unit file's own header comments (and the direct-analog `launchd/*.plist`
 they mirror) for the full per-flag rationale.
 
@@ -272,13 +272,9 @@ they mirror) for the full per-flag rationale.
 > (or a plain `bash -c 'echo > /dev/tcp/localhost/5432'` reachability check
 > if `psql` isn't installed) before enabling the unit.
 
-Give each family repo its own `.cursor/mcp.json` `serena` entry pointed at
-its own multiplex mount, exactly as `NEW_PROJECT_SETUP.md` step 8a
-describes — this part is pure JSON config and identical on every platform:
-
-```json
-"serena": { "type": "http", "url": "http://127.0.0.1:8893/mcp/<project-name>" }
-```
+Register each family repo's multiplex mount through the OpenCode plugin's
+project route and optional `branchRoutes`, as described in
+`docs/OPENCODE.md`. Do not create per-repo Cursor MCP configuration files.
 
 Verify the daemons are up and correctly isolating per project:
 

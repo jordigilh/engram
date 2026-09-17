@@ -3,8 +3,8 @@
 # kubernaut-demo-scenarios, kubernaut-v1.5, kubernaut-v1.6). Direct analog of
 # launchd/io.vectorize.cocoindex-code.kubernaut-family.plist.
 #
-# Each repo's .cursor/mcp.json points its "cocoindex-code" entry at this
-# daemon's fixed HTTP URL (http://127.0.0.1:8891/mcp) instead of spawning its
+# Each repo's OpenCode project route points its "cocoindex-code" backend at
+# this daemon's fixed HTTP URL (http://127.0.0.1:8891/mcp) instead of spawning its
 # own stdio subprocess. Already multi-repo-aware via --repo/--branch query
 # params; no per-repo instance needed. See docs/findings/2026-08.md,
 # 2026-08-13 (same day, seventh follow-up) for the design rationale (written

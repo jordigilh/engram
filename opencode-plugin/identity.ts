@@ -11,6 +11,7 @@
 // See docs/findings/2026-08.md (2026-08-13, thirteenth-sixteenth follow-ups)
 // and https://github.com/jordigilh/engram/issues/22 for the design spikes
 // this implements.
+import { resolve as resolvePath } from "node:path"
 
 export interface EngramPluginOptions {
   project?: string
@@ -18,6 +19,21 @@ export interface EngramPluginOptions {
   gatewayUrl?: string
   /** Optional exact gateway routes keyed by raw branch or release suffix. */
   branchRoutes?: Record<string, string>
+  /** Repository-specific overrides for a shared/global plugin configuration. */
+  repositories?: RepositoryRoutes
+}
+
+export interface RepositoryRoute {
+  project?: string
+  family?: string
+  gatewayUrl?: string
+  /** Branch routes apply only after this repository route matches. */
+  branchRoutes?: Record<string, string>
+}
+
+export interface RepositoryRoutes {
+  directories?: Record<string, RepositoryRoute>
+  remotes?: Record<string, RepositoryRoute>
 }
 
 export interface DeriveIdentityInput {
@@ -66,6 +82,67 @@ export function deriveIdentity(input: DeriveIdentityInput): ResolvedIdentity {
   const family = options.family || baseName
 
   return { project, family, branchSuffix }
+}
+
+export interface ResolveRepositoryOptionsInput {
+  directory: string
+  remote?: string
+  options?: EngramPluginOptions
+}
+
+/**
+ * Merge global plugin options with the most specific repository route.
+ * Directory routes win over remotes, and remotes win over top-level options.
+ */
+export function resolveRepositoryOptions(input: ResolveRepositoryOptionsInput): EngramPluginOptions {
+  const options = input.options || {}
+  const remoteRoute = findRoute(options.repositories?.remotes, input.remote, normalizeRemote)
+  const directoryRoute = findRoute(options.repositories?.directories, input.directory, normalizeDirectory)
+
+  return {
+    ...options,
+    ...remoteRoute,
+    ...directoryRoute,
+  }
+}
+
+export function normalizeDirectory(directory: string): string {
+  return resolvePath(directory)
+}
+
+export function normalizeRemote(remote: string | undefined): string | undefined {
+  if (!remote) return undefined
+  const value = remote.trim()
+  if (!value) return undefined
+
+  const scp = !value.includes("://") && value.match(/^(?:[^@]+@)?([^:/]+):(.+)$/)
+  if (scp) return normalizeRemoteParts(scp[1], scp[2])
+
+  try {
+    const parsed = new URL(value.replace(/^git\+/, ""))
+    return normalizeRemoteParts(parsed.hostname, parsed.pathname)
+  } catch {
+    return value.toLowerCase().replace(/\.git$/, "").replace(/\/$/, "")
+  }
+}
+
+function normalizeRemoteParts(host: string, pathname: string): string {
+  const path = pathname.replace(/^\/+|\/+$/g, "").replace(/\.git$/, "")
+  return `https://${host.toLowerCase()}/${path.toLowerCase()}`
+}
+
+function findRoute<T>(
+  routes: Record<string, T> | undefined,
+  value: string | undefined,
+  normalize: (value: string) => string | undefined,
+): T | undefined {
+  const normalized = value === undefined ? undefined : normalize(value)
+  if (!normalized || !routes) return undefined
+
+  for (const [key, route] of Object.entries(routes)) {
+    if (normalize(key) === normalized) return route
+  }
+  return undefined
 }
 
 export interface McpServerEntry {

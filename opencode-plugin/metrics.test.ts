@@ -10,6 +10,8 @@ describe("steering metrics", () => {
   test("detects engram tools only", () => {
     expect(isEngramTool("engram_code_search")).toBe(true)
     expect(isEngramTool("mcp_engram_docs_recall")).toBe(true)
+    expect(isEngramTool("not_engram_docs_recall")).toBe(false)
+    expect(isEngramTool("engram-plugin")).toBe(false)
     expect(isEngramTool("grep")).toBe(false)
     expect(isEngramTool("bash")).toBe(false)
   })

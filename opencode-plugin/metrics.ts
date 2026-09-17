@@ -35,7 +35,13 @@ export function buildEngramToolUseEvent(sessionID: string, tool: string): Engram
 
 export function isEngramTool(tool: string): boolean {
   const t = tool.toLowerCase()
-  return t.includes("engram") && !t.includes("engram-plugin")
+  return (
+    t === "engram" ||
+    t.startsWith("engram_") ||
+    t.startsWith("engram:") ||
+    t.startsWith("mcp_engram_") ||
+    t.startsWith("mcp:engram:")
+  )
 }
 
 export interface ConversionSummary {

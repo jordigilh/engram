@@ -6,6 +6,11 @@ __pycache__/
 config.env
 node_modules/
 
+# Deployment-local runtime registries and mirror lists. Keep these under
+# ~/.engram; only shareable examples belong in the repository.
+config/*.toml
+watch-mirrors-config.sh
+
 # Local OpenCode/Codex configuration and Cursor hook installation. These files
 # contain machine-specific localhost endpoints and absolute home-directory
 # paths; the tracked plugin/source files remain shareable.

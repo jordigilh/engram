@@ -8,6 +8,8 @@ describe("buildCompactionContext", () => {
     const ctx = buildCompactionContext(id)
     expect(ctx).toMatch(/recall project methodology/i)
     expect(ctx).toMatch(/MCP.*over CLI|over CLI.*MCP/i)
+    expect(ctx).toMatch(/prefer find_symbol.*find_referencing_symbols/i)
+    expect(ctx).toMatch(/search_for_pattern only for raw text\/regex/i)
     expect(ctx).toContain("engram")
   })
 

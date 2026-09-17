@@ -7,7 +7,8 @@ Coverage focuses on:
 - the praxis-specific additions over the dcm/koku reference pattern: issue
   milestone metadata, GitHub Discussions ingestion (with the deliberately
   relaxed comment filter -- no TRUSTED_ASSOCIATIONS gate, unlike issues), and
-  org Project (v2) board Status snapshot formatting.
+  org Project (v2) board Status snapshot formatting, plus tracked Jira ticket
+  ingestion.
 """
 from __future__ import annotations
 
@@ -333,6 +334,71 @@ class TestProcessIssue:
             assert second_by_id[doc_id] == content
         assert "ai-issue-74-comment1" in second_by_id
         assert "ai-issue-74-comment1" not in first_by_id
+
+
+class TestProcessJiraIssue:
+    def _issue(self, **overrides):
+        issue = {
+            "key": "TEST-6638",
+            "fields": {
+                "summary": "Improve routing telemetry",
+                "status": {"name": "In Progress"},
+                "issuetype": {"name": "Story"},
+                "labels": ["routing"],
+                "reporter": {"displayName": "alice"},
+                "created": "2026-01-01T00:00:00.000+0000",
+                "updated": "2026-09-14T22:00:00.000+0000",
+                "description": {"type": "doc", "content": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "Detailed ticket description."}]},
+                ]},
+                "comment": {"comments": []},
+            },
+        }
+        issue.update(overrides)
+        return issue
+
+    def test_retains_jira_ticket_with_tracker_metadata(self, praxis_cocoindex_flows, monkeypatch):
+        retain_calls = []
+        monkeypatch.setattr(praxis_cocoindex_flows, "hindsight_retain", lambda **kwargs: retain_calls.append(kwargs))
+
+        praxis_cocoindex_flows.process_jira_issue(self._issue())
+
+        assert len(retain_calls) == 1
+        call = retain_calls[0]
+        assert call["bank_id"] == "praxis-issues"
+        assert call["document_id"] == "jira-TEST-6638"
+        assert call["metadata"]["tracker"] == "jira"
+        assert call["metadata"]["key"] == "TEST-6638"
+        assert "jira" in call["tags"]
+        assert "Detailed ticket description." in call["content"]
+
+    def test_fetch_uses_tracked_keys_and_jira_cursor_api(self, praxis_cocoindex_flows, monkeypatch):
+        captured_requests = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps({"issues": [{"key": "TEST-6638"}], "isLast": True}).encode()
+
+        def fake_urlopen(req, timeout=60):
+            captured_requests.append(req)
+            return FakeResponse()
+
+        monkeypatch.setattr(praxis_cocoindex_flows, "_jira_token", lambda: "fake-token")
+        monkeypatch.setattr(praxis_cocoindex_flows, "urlopen", fake_urlopen)
+
+        result = praxis_cocoindex_flows._fetch_jira_issues(["TEST-6638", "TEST-2409"])
+
+        body = json.loads(captured_requests[0].data)
+        assert result == [{"key": "TEST-6638"}]
+        assert "TEST-6638" in body["jql"]
+        assert "TEST-2409" in body["jql"]
+        assert "order by updated desc" in body["jql"]
 
 
 class TestProcessDiscussion:

@@ -167,7 +167,24 @@ def backfill(
                     metrics["errors"].append({"run_id": run.get("run_id"), "job_id": job.get("job_id"), "error": str(error)})
                 finally:
                     shutil.rmtree(temp_dir, ignore_errors=True)
-    result = {"inventory": {"repository": inventory.get("repository"), "runs": len(runs)}, "metrics": metrics}
+    result = {
+        "inventory": {
+            "repository": inventory.get("repository"),
+            "runs": len(runs),
+            "run_states": [
+                {
+                    "run_id": run.get("run_id"),
+                    "status": run.get("status"),
+                    "conclusion": run.get("conclusion"),
+                    "status_observed_at": run.get("status_observed_at"),
+                    "status_is_final": run.get("status_is_final"),
+                    "usable_for_dossier": run.get("usable_for_dossier"),
+                }
+                for run in runs
+            ],
+        },
+        "metrics": metrics,
+    }
     (output / "baseline-metrics.json").write_text(json.dumps(result, indent=2) + "\n")
     (output / "failure-anchors.jsonl").write_text(
         "".join(json.dumps(item, sort_keys=True) + "\n" for item in failure_manifest)

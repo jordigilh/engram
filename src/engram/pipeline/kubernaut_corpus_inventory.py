@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from engram.incident.artifact_selection import is_must_gather
+
 DOWNSTREAM_JOB_RE = re.compile(r"summary|merge.?gate|report", re.IGNORECASE)
 
 
@@ -54,6 +55,7 @@ class GitHubActionsClient:
 
     def inventory_run(self, run: dict[str, Any]) -> dict[str, Any]:
         run_id = int(run["id"])
+        status_observed_at = datetime.now(timezone.utc).isoformat()
         jobs = self.get(f"actions/runs/{run_id}/jobs", per_page=100).get("jobs", [])
         artifacts = self.get(f"actions/runs/{run_id}/artifacts", per_page=100).get("artifacts", [])
         failed_jobs = [
@@ -88,6 +90,8 @@ class GitHubActionsClient:
             "workflow": run.get("name") or run.get("workflow_name"),
             "status": run.get("status"),
             "conclusion": run.get("conclusion"),
+            "status_observed_at": status_observed_at,
+            "status_is_final": run.get("status") == "completed",
             "created_at": run.get("created_at"),
             "updated_at": run.get("updated_at"),
             "commit_sha": run.get("head_sha"),
@@ -114,13 +118,14 @@ class GitHubActionsClient:
         }
 
     def inventory_run_id(self, run_id: int) -> dict[str, Any]:
+        inventory = self.inventory_run(self.get(f"actions/runs/{run_id}"))
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "repository": self.repository,
             "requested_failed_runs": 1,
             "failed_runs_scanned": 1,
-            "usable_runs": 1,
-            "runs": [self.inventory_run(self.get(f"actions/runs/{run_id}") )],
+            "usable_runs": int(inventory["usable_for_dossier"]),
+            "runs": [inventory],
         }
 
 

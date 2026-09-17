@@ -1,0 +1,79 @@
+# Image-backed macOS front door.
+#
+# The native gateway owns the host-only stdio backends and listens privately on
+# 8898. The published image uses this registry to relay each route through it,
+# preserving the complete multi-repository catalog while moving the public
+# MCP listener into a reproducible container.
+
+[instances."dcm-acm-cluster-service-provider"]
+endpoint = "http://host.containers.internal:8898/mcp/dcm-acm-cluster-service-provider"
+[instances."dcm"]
+endpoint = "http://host.containers.internal:8898/mcp/dcm"
+[instances."dcm-cli"]
+endpoint = "http://host.containers.internal:8898/mcp/dcm-cli"
+[instances."control-plane"]
+endpoint = "http://host.containers.internal:8898/mcp/control-plane"
+[instances."dcm-dcm-project.github.io"]
+endpoint = "http://host.containers.internal:8898/mcp/dcm-dcm-project.github.io"
+[instances."dcm-enhancements"]
+endpoint = "http://host.containers.internal:8898/mcp/dcm-enhancements"
+[instances."dcm-k8s-container-service-provider"]
+endpoint = "http://host.containers.internal:8898/mcp/dcm-k8s-container-service-provider"
+[instances."dcm-kubevirt-service-provider"]
+endpoint = "http://host.containers.internal:8898/mcp/dcm-kubevirt-service-provider"
+[instances."dcm-osac-service-provider"]
+endpoint = "http://host.containers.internal:8898/mcp/dcm-osac-service-provider"
+[instances."dcm-quadlet-deploy"]
+endpoint = "http://host.containers.internal:8898/mcp/dcm-quadlet-deploy"
+[instances."dcm-shared-workflows"]
+endpoint = "http://host.containers.internal:8898/mcp/dcm-shared-workflows"
+[instances."dcm-three-tier-app-demo-service-provider"]
+endpoint = "http://host.containers.internal:8898/mcp/dcm-three-tier-app-demo-service-provider"
+[instances."dcm-udlm"]
+endpoint = "http://host.containers.internal:8898/mcp/dcm-udlm"
+[instances."dcm-utilities"]
+endpoint = "http://host.containers.internal:8898/mcp/dcm-utilities"
+[instances."engram"]
+endpoint = "http://host.containers.internal:8898/mcp/engram"
+[instances."koku"]
+endpoint = "http://host.containers.internal:8898/mcp/koku"
+[instances."koku-insights-onprem"]
+endpoint = "http://host.containers.internal:8898/mcp/koku-insights-onprem"
+[instances."koku-service-operator"]
+endpoint = "http://host.containers.internal:8898/mcp/koku-service-operator"
+[instances."kuadrant"]
+endpoint = "http://host.containers.internal:8898/mcp/kuadrant"
+[instances."kubernaut"]
+endpoint = "http://host.containers.internal:8898/mcp/kubernaut"
+[instances."kubernaut-console"]
+endpoint = "http://host.containers.internal:8898/mcp/kubernaut-console"
+[instances."kubernaut-docs"]
+endpoint = "http://host.containers.internal:8898/mcp/kubernaut-docs"
+[instances."kubernaut-operator"]
+endpoint = "http://host.containers.internal:8898/mcp/kubernaut-operator"
+[instances."kubernaut-v1.5"]
+endpoint = "http://host.containers.internal:8898/mcp/kubernaut-v1.5"
+[instances."praxis"]
+endpoint = "http://host.containers.internal:8898/mcp/praxis"
+[instances."praxis-ai"]
+endpoint = "http://host.containers.internal:8898/mcp/praxis-ai"
+[instances."praxis-benchmarks"]
+endpoint = "http://host.containers.internal:8898/mcp/praxis-benchmarks"
+[instances."praxis-conventions"]
+endpoint = "http://host.containers.internal:8898/mcp/praxis-conventions"
+[instances."praxis-demos"]
+endpoint = "http://host.containers.internal:8898/mcp/praxis-demos"
+[instances."praxis-enhancements"]
+endpoint = "http://host.containers.internal:8898/mcp/praxis-enhancements"
+[instances."praxis-experiments"]
+endpoint = "http://host.containers.internal:8898/mcp/praxis-experiments"
+[instances."praxis-forge"]
+endpoint = "http://host.containers.internal:8898/mcp/praxis-forge"
+[instances."praxis-grid"]
+endpoint = "http://host.containers.internal:8898/mcp/praxis-grid"
+[instances."praxis-operator"]
+endpoint = "http://host.containers.internal:8898/mcp/praxis-operator"
+[instances."praxis-policy"]
+endpoint = "http://host.containers.internal:8898/mcp/praxis-policy"
+[instances."praxis-proxy-github-io"]
+endpoint = "http://host.containers.internal:8898/mcp/praxis-proxy-github-io"

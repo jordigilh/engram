@@ -77,6 +77,9 @@ class TestPrefixedToolName:
         assert engram_gateway.prefixed_tool_name("kuadrant_docs", "recall") == "kuadrant_docs_recall"
         assert engram_gateway.prefixed_tool_name("kuadrant_issues", "recall") == "kuadrant_issues_recall"
 
+    def test_manual_bank_tool_avoids_repeating_the_manual_prefix(self, engram_gateway):
+        assert engram_gateway.prefixed_tool_name("docs_manual", "manual_mental_model") == "docs_manual_mental_model"
+
 
 class TestBuildCatalog:
     def test_unprefixed_backends_use_raw_name(self, engram_gateway):
@@ -208,6 +211,71 @@ class TestFilterRelevantTools:
         filtered = engram_gateway.filter_relevant_tools("kuadrant_code", tools)
 
         assert {t["name"] for t in filtered} == {"kuadrant_code_search"}
+
+    def test_manual_mental_model_backend_keeps_only_manual_writer(self, engram_gateway):
+        tools = [_tool("manual_mental_model"), _tool("refresh_mental_model")]
+
+        filtered = engram_gateway.filter_relevant_tools("docs_manual", tools)
+
+        assert {t["name"] for t in filtered} == {"manual_mental_model"}
+
+
+class TestManualMentalModelAdapter:
+    def test_lists_a_gateway_owned_manual_tool(self, engram_gateway):
+        adapter = engram_gateway.ManualMentalModelAdapter(FakeAdapter())
+
+        tools = asyncio.run(adapter.list_tools())
+
+        assert [tool["name"] for tool in tools] == ["manual_mental_model"]
+        assert tools[0]["inputSchema"]["required"] == ["model_id", "content"]
+
+    def test_stores_a_replaceable_canonical_document_via_retain(self, engram_gateway):
+        docs = FakeAdapter(call_results={"retain": {"content": [{"type": "text", "text": "accepted"}], "isError": False}})
+        adapter = engram_gateway.ManualMentalModelAdapter(docs)
+
+        result = asyncio.run(
+            adapter.call_tool(
+                "manual_mental_model",
+                {
+                    "model_id": "engram-architecture",
+                    "content": "# Engram\n\nThe manual model.",
+                    "name": "Engram Architecture",
+                    "source_query": "How does Engram work?",
+                    "tags": ["engram"],
+                    "metadata": {"reviewer": "manual"},
+                },
+            )
+        )
+
+        assert result["isError"] is False
+        assert docs.call_log == [
+            (
+                "retain",
+                {
+                    "content": "# Engram\n\nThe manual model.",
+                    "context": "mental-models",
+                    "document_id": "manual-mental-model-engram-architecture",
+                    "metadata": {
+                        "reviewer": "manual",
+                        "source": "manual_mental_model",
+                        "mental_model_id": "engram-architecture",
+                        "name": "Engram Architecture",
+                        "source_query": "How does Engram work?",
+                    },
+                    "update_mode": "replace",
+                    "tags": ["engram"],
+                },
+            )
+        ]
+
+    def test_invalid_manual_content_is_rejected_without_backend_call(self, engram_gateway):
+        docs = FakeAdapter()
+        adapter = engram_gateway.ManualMentalModelAdapter(docs)
+
+        result = asyncio.run(adapter.call_tool("manual_mental_model", {"model_id": "Bad ID", "content": "  "}))
+
+        assert result["isError"] is True
+        assert docs.call_log == []
 
 
 class TestAggregateToolsList:
@@ -500,9 +568,21 @@ class TestBuildProjectRegistry:
     def test_covers_every_onboarded_project(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
 
-        assert len(registry) == 34  # no redundant kubernaut-v1.6 route
-        assert "rhdh-plugins" not in registry  # decommissioned 2026-09-09
+        assert len(registry) == 36  # includes exact routes for DCM review workspaces
         assert "kubernaut-v1.6" not in registry
+        assert "rhdh-plugins" not in registry  # decommissioned 2026-09-09
+
+    def test_dcm_review_workspaces_have_exact_routes(self, engram_gateway):
+        registry = engram_gateway.build_project_registry("/home/u")
+
+        assert "dcm" in registry
+        assert "control-plane" in registry
+        assert registry["dcm"]["code"] == registry["dcm-cli"]["code"]
+        assert registry["control-plane"]["code"] == registry["dcm-cli"]["code"]
+        assert registry["dcm"]["serena"]["args"][-1] == "false"
+        assert registry["control-plane"]["serena"]["args"][-1] == "false"
+        assert registry["dcm"]["serena"]["args"][5].endswith("/dcm-project/dcm")
+        assert registry["control-plane"]["serena"]["args"][5].endswith("/dcm-project/control-plane")
 
     def test_kubernaut_family_is_fully_http_already(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
@@ -671,6 +751,21 @@ class TestBuildBackendAdapters:
 
         assert isinstance(adapters["kubernaut"]["docs"], engram_gateway.HttpRelayAdapter)
         assert adapters["kubernaut"]["docs"].url == "http://x/mcp/kubernaut-docs/"
+        assert isinstance(adapters["kubernaut"]["docs_manual"], engram_gateway.ManualMentalModelAdapter)
+        assert adapters["kubernaut"]["docs_manual"].hindsight_adapter is adapters["kubernaut"]["docs"]
+
+    def test_manual_tools_are_added_for_each_writable_hindsight_bank(self, engram_gateway):
+        registry = {
+            "demo": {
+                "docs": {"kind": "http", "url": "http://x/mcp/demo-docs/"},
+                "issues": {"kind": "http", "url": "http://x/mcp/demo-issues/"},
+            }
+        }
+
+        adapters = engram_gateway.build_backend_adapters(registry)
+
+        assert isinstance(adapters["demo"]["docs_manual"], engram_gateway.ManualMentalModelAdapter)
+        assert isinstance(adapters["demo"]["issues_manual"], engram_gateway.ManualMentalModelAdapter)
 
     def test_stdio_spec_without_shared_key_becomes_its_own_adapter(self, engram_gateway):
         registry = {

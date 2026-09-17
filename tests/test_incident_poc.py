@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import io
+import sqlite3
 import zipfile
 from pathlib import Path
 
@@ -100,10 +101,28 @@ def test_context_returns_bounded_structured_dossier(tmp_path: Path) -> None:
     assert result["summary"]["workflow_resolution_failed"] is True
     assert result["summary"]["manual_review_required"] is True
     assert result["summary"]["operator_escalation"] is True
-    assert result["confidence"] == 0.94
+    assert result["summary"]["status"] == "workflow_resolution_failed_manual_review_required"
+    assert result["evidence_assessment"]["rr_id_correlation"] == "exact"
+    assert "confidence" not in result
+    assert "confidence_basis" not in result
     assert result["evidence"]
     assert json.dumps(result, default=str).count("unrelated-namespace") == 0
     assert len(json.dumps(result, default=str)) <= 4000
+
+
+def test_context_does_not_invent_status_or_confidence_without_evidence(tmp_path: Path) -> None:
+    result = triage_test_failure(
+        root=tmp_path,
+        run_id="run-empty",
+        job_id="job-empty",
+        test_name="E2E-FP-unknown",
+        failure_text='WorkflowExecution for "rr-a-1" did not complete',
+        rr_id="rr-a-1",
+    )
+
+    assert result["summary"]["status"] == "not_observed"
+    assert result["evidence_assessment"]["rr_id_correlation"] == "missing"
+    assert "confidence" not in result
 
 
 def _write_pending_interactive_fixture(root: Path) -> None:
@@ -252,3 +271,25 @@ def test_promote_incident_aggregates_repeated_failure_and_links_changes(tmp_path
     history = failure_history(db_path, family_signature(context))
     assert len(history) == 1
     assert incident_timeline(db_path, first["incident_id"])["changes"][0]["commit_sha"] == "abc123"
+
+
+def test_promote_incident_removes_legacy_confidence_column(tmp_path: Path) -> None:
+    _write_fixture(tmp_path / "evidence")
+    context = triage_test_failure(
+        root=tmp_path / "evidence",
+        run_id="run-legacy",
+        job_id="job-legacy",
+        test_name="E2E-FP-1899-002",
+        failure_text=FAILURE_TEXT,
+    )
+    db_path = tmp_path / "legacy.sqlite3"
+    promote_incident(context, db_path)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("ALTER TABLE incidents ADD COLUMN confidence REAL NOT NULL DEFAULT 0.55")
+        connection.commit()
+
+    promote_incident(context, db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(incidents)")}
+    assert "confidence" not in columns

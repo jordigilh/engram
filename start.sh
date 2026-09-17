@@ -6,7 +6,7 @@ set -euo pipefail
 
 CONFIG="${HOME}/.engram/config.env"
 ADC_PATH="${HOME}/.config/gcloud/application_default_credentials.json"
-VENV="${HOME}/.engram/venv"
+VENV="${HOME}/.engram/hindsight-venv"
 
 if [ ! -f "$CONFIG" ]; then
     echo "Error: ${CONFIG} not found."
@@ -22,7 +22,8 @@ fi
 
 if [ ! -f "$VENV/bin/hindsight-api" ]; then
     echo "Error: Hindsight not installed in $VENV"
-    echo "Run: uv pip install --python $VENV/bin/python 'hindsight-api[all]' 'google-cloud-aiplatform>=1.38'"
+    echo "Run: uv venv $VENV --python 3.13"
+    echo "     uv pip install --python $VENV/bin/python 'hindsight-api==0.10.0'"
     exit 1
 fi
 

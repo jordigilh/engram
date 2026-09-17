@@ -54,6 +54,7 @@ def test_namespace_kind_name_target_is_parsed_without_swapping_fields() -> None:
         "namespace": "kubernaut-system",
         "name": "memory-eater",
     }
+    assert extract_target_resource("/home/runner/work/kubernaut/kubernaut/test.go") is None
 
 
 def test_unique_structured_resource_busy_blocker_infers_rr() -> None:

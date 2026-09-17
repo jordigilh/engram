@@ -64,6 +64,14 @@ Only GitHub Actions job and artifact URLs are accepted. Authentication uses
 Builds a bounded dossier using exact RR-ID correlation, typed Kubernetes
 evidence, timestamps, error clusters, and provenance.
 
+The dossier does not expose a numeric confidence score. `summary.status` and
+`evidence_assessment` report the observed terminal state and correlation facts;
+promotion uses those explicit checks rather than an uncalibrated probability.
+
+Backfill metrics also preserve each inventory run's `status`, `conclusion`,
+`status_observed_at`, and `status_is_final`. A non-final snapshot must be shown
+as such in CI output rather than presented as the run's final result.
+
 Required arguments:
 
 ```text

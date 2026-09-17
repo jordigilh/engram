@@ -19,11 +19,11 @@ TARGET_NAMESPACE_RE = re.compile(
 POD_RE = re.compile(r"\b(?:pod|Pod):\s*[\"']?([a-z0-9][a-z0-9.-]+)", re.IGNORECASE)
 _TARGET_RESOURCE_PATTERNS = (
     re.compile(
-        r"\b(?P<namespace>[a-z0-9][a-z0-9.-]+)/(?P<kind>[A-Za-z][A-Za-z0-9.-]*)/"
+        r"\b(?P<namespace>[a-z0-9][a-z0-9.-]+)/(?P<kind>[A-Z][A-Za-z0-9.-]*)/"
         r"(?P<name>[a-z0-9][a-z0-9.-]*)\b"
     ),
     re.compile(
-        r"\b(?P<kind>[A-Za-z][A-Za-z0-9.-]*)/(?P<namespace>[a-z0-9][a-z0-9.-]+)/"
+        r"\b(?P<kind>[A-Z][A-Za-z0-9.-]*)/(?P<namespace>[a-z0-9][a-z0-9.-]+)/"
         r"(?P<name>[a-z0-9][a-z0-9.-]*)\b"
     ),
 )

@@ -62,6 +62,31 @@ The existing GitHub Actions workflow publishes a new multi-architecture
 `runtime-<commit>` image and updates `runtime-latest` whenever
 `Dockerfile.engram` or `src/engram/**` changes.
 
+## macOS launchd deployment
+
+On macOS, the image-backed public gateway is supervised by
+`launchd/io.vectorize.engram-runtime.plist`. The runner waits for the Podman
+machine, refreshes `runtime-latest` when possible, starts the named container
+in the foreground, and retries after Podman or the container exits. This is
+intentional: a Podman machine restart is treated as a normal recovery event.
+
+The complete macOS setup keeps the native gateway as an upstream because its
+stdio backends need the host's macOS tools and checkout paths:
+
+```bash
+mkdir -p ~/.engram/runtime ~/.engram/logs
+install -m 755 scripts/run-engram-runtime.sh ~/.engram/run-engram-runtime.sh
+install -m 644 config/runtime-macos.toml ~/.engram/runtime/instances.toml
+```
+
+Install the two plist templates after replacing `__HOME__` with the user's
+home directory, then bootstrap them into the user's launchd domain. The native
+gateway listens privately on `8898`; the container owns the public `8896`.
+Do not run a second hand-started gateway on either port.
+
+The runtime image remains stateless. The TOML file contains routing only; the
+host config, source trees, and backend daemons remain outside the image.
+
 ## Branch-Aware Codex
 
 Codex MCP URLs are static. Use the tracked launcher when working from a

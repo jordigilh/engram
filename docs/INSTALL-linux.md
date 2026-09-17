@@ -157,10 +157,9 @@ directory detected" startup log line and by querying the bank after restart.
 
 ```bash
 uv venv ~/.engram/venv --python 3.14
-uv pip install --python ~/.engram/venv/bin/python \
-  'hindsight-api[all]' 'google-cloud-aiplatform>=1.38'
 uv pip install --python ~/.engram/venv/bin/python -e ".[dev]"
-uv pip install --python ~/.engram/venv/bin/python cocoindex
+uv pip install --python ~/.engram/venv/bin/python 'google-cloud-aiplatform>=1.38'
+uv pip install --python ~/.engram/venv/bin/python cocoindex==1.0.23
 
 ln -sf "$(pwd)/src/engram/pipeline/nightly_learn.py" ~/.engram/nightly-learn.py
 ln -sf "$(pwd)/src/engram/pipeline/ingest_issues.py" ~/.engram/ingest-issues.py

@@ -26,6 +26,7 @@ addition to the standard issues+PRs fetch, feeding the same praxis-issues bank.
 """
 
 import argparse
+import base64
 import dataclasses
 import json
 import logging
@@ -63,7 +64,7 @@ HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
 PRAXIS_ORG = "praxis-proxy"
 PRAXIS_ORG_DIR = pathlib.Path(os.environ.get(
     "PRAXIS_ORG_DIR",
-    os.path.expanduser("~/go/src/github.com/praxis-proxy"),
+    os.path.expanduser("~/.engram/watch/praxis-proxy"),
 ))
 
 # Manually-curated supplementary docs (e.g. project-overview PDFs) that don't
@@ -100,6 +101,21 @@ ISSUES_REPOS = os.environ.get(
     ",".join(upstream for _, upstream, _ in PRAXIS_REPOS),
 ).split(",")
 ISSUES_POLL_INTERVAL = int(os.environ.get("PRAXIS_ISSUES_POLL_SECONDS", "300"))
+
+# Jira tickets are supplied by a host-local key file. The file contains
+# identifiers only; credentials stay in the macOS Keychain and are read by
+# _jira_token() below.
+PRAXIS_JIRA_SERVER = os.environ.get("PRAXIS_JIRA_SERVER", "https://redhat.atlassian.net")
+PRAXIS_JIRA_EMAIL = os.environ.get("PRAXIS_JIRA_EMAIL", "")
+PRAXIS_JIRA_KEYS_FILE = pathlib.Path(os.environ.get(
+    "PRAXIS_JIRA_KEYS_FILE",
+    os.path.expanduser("~/.engram/scripts/jira-keys.txt"),
+))
+PRAXIS_JIRA_KEYS = os.environ.get("PRAXIS_JIRA_KEYS", "")
+JIRA_FIELDS = [
+    "summary", "description", "status", "issuetype", "priority",
+    "labels", "reporter", "created", "updated", "comment",
+]
 
 # docs_main and code_main walk the SAME repo roots (every PRAXIS_REPOS dir,
 # recursively). Running both with live=True registers two macOS FSEvents
@@ -396,7 +412,7 @@ docs_app = coco.App(
 
 
 # ---------------------------------------------------------------------------
-# App 2: praxis-issues — Issues/PRs + Discussions + Project(v2) board status
+# App 2: praxis-issues — Issues/PRs + Jira + Discussions + Project(v2) board status
 #         → Hindsight praxis-issues bank
 # ---------------------------------------------------------------------------
 
@@ -530,8 +546,188 @@ def issues_main(repos: str) -> None:
         for issue in issues:
             process_issue(issue, repo)
 
+    jira_keys = _read_jira_keys()
+    jira_issues = _fetch_jira_issues(jira_keys)
+    log.info("Fetched %d Jira issues from tracked keys", len(jira_issues))
+    for issue in jira_issues:
+        process_jira_issue(issue)
 
-issues_app = coco.App("praxis-issues", issues_main, repos=",".join(ISSUES_REPOS))
+
+# ---------------------------------------------------------------------------
+# Jira tickets — tracked Praxis work items → Hindsight praxis-issues bank
+# ---------------------------------------------------------------------------
+
+def _jira_token() -> str | None:
+    """Read the jira CLI token directly from the macOS Keychain."""
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-a", "jira-cli", "-s", "jira-cloud-api-token", "-w"],
+            capture_output=True, text=True, timeout=10,
+        )
+        token = result.stdout.strip()
+        if result.returncode != 0 or not token:
+            log.error("Could not read jira-cli API token from macOS Keychain")
+            return None
+        return token
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        log.error("_jira_token: keychain lookup failed: %s", e)
+        return None
+
+
+def _read_jira_keys() -> list[str]:
+    if PRAXIS_JIRA_KEYS:
+        return [key.strip() for key in PRAXIS_JIRA_KEYS.split(",") if key.strip()]
+    try:
+        return [
+            line.strip()
+            for line in PRAXIS_JIRA_KEYS_FILE.read_text().splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+    except OSError as e:
+        log.error("Could not read Praxis Jira key file %s: %s", PRAXIS_JIRA_KEYS_FILE, e)
+        return []
+
+
+def _adf_to_text(node: Any) -> str:
+    """Flatten Jira Atlassian Document Format into searchable plain text."""
+    if node is None:
+        return ""
+    if isinstance(node, str):
+        return node
+    if isinstance(node, list):
+        return "".join(_adf_to_text(child) for child in node)
+    if not isinstance(node, dict):
+        return ""
+
+    node_type = node.get("type", "")
+    if node_type == "text":
+        return node.get("text", "")
+    if node_type == "mention":
+        return node.get("attrs", {}).get("text", "")
+    if node_type == "hardBreak":
+        return "\n"
+    if node_type == "rule":
+        return "\n---\n"
+
+    inner = "".join(_adf_to_text(child) for child in node.get("content", []))
+    if node_type in ("paragraph", "heading", "listItem", "codeBlock"):
+        return inner + "\n"
+    return inner
+
+
+def _fetch_jira_issues(keys: list[str], page_size: int = 100) -> list[dict]:
+    """Fetch the host-configured Praxis tickets through Jira's cursor API."""
+    if not keys:
+        log.warning("No Praxis Jira keys configured")
+        return []
+    token = _jira_token()
+    if token is None:
+        return []
+
+    auth = base64.b64encode(f"{PRAXIS_JIRA_EMAIL}:{token}".encode()).decode()
+    all_items: list[dict] = []
+    next_page_token: str | None = None
+    quoted_keys = ", ".join(keys)
+    while True:
+        body: dict[str, Any] = {
+            "jql": f"key in ({quoted_keys}) order by updated desc",
+            "maxResults": page_size,
+            "fields": JIRA_FIELDS,
+        }
+        if next_page_token:
+            body["nextPageToken"] = next_page_token
+        req = Request(
+            f"{PRAXIS_JIRA_SERVER}/rest/api/3/search/jql",
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json", "Authorization": f"Basic {auth}"},
+            method="POST",
+        )
+        try:
+            with urlopen(req, timeout=60) as resp:
+                data = json.loads(resp.read())
+        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as e:
+            log.error("_fetch_jira_issues request failed: %s", e)
+            break
+
+        batch = data.get("issues", [])
+        all_items.extend(batch)
+        log.info("Fetched %d Jira issues (total so far: %d)", len(batch), len(all_items))
+        if data.get("isLast", True) or not batch:
+            break
+        next_page_token = data.get("nextPageToken")
+        if not next_page_token:
+            break
+    return all_items
+
+
+def _format_jira_issue_header(issue: dict) -> str:
+    fields = issue.get("fields", {}) or {}
+    key = issue.get("key", "?")
+    summary = fields.get("summary", "")
+    issue_type = (fields.get("issuetype") or {}).get("name", "Issue")
+    reporter = (fields.get("reporter") or {}).get("displayName", "unknown")
+    created = (fields.get("created") or "")[:10]
+    description = _adf_to_text(fields.get("description")).strip()
+    parts = [
+        f"# {issue_type} {key}: {summary}",
+        f"Jira: {key} | Reporter: {reporter} | Created: {created}",
+        "",
+    ]
+    if description:
+        parts.append(description)
+    return "\n".join(parts)
+
+
+def _filter_jira_comments(issue: dict) -> list[dict]:
+    fields = issue.get("fields", {}) or {}
+    comments = ((fields.get("comment") or {}).get("comments", [])) or []
+    return [comment for comment in comments if len(_adf_to_text(comment.get("body")).strip()) > 20][:10]
+
+
+def _format_jira_comment(comment: dict) -> str:
+    author = (comment.get("author") or {}).get("displayName", "?")
+    body = _adf_to_text(comment.get("body")).strip()
+    if len(body) > 2000:
+        body = body[:2000] + "\n[...truncated]"
+    return f"**{author}:**\n{body}"
+
+
+@coco.fn(memo=True)
+def process_jira_issue(issue: dict) -> None:
+    header = _format_jira_issue_header(issue)
+    if not header.strip() or len(header) < 50:
+        return
+
+    fields = issue.get("fields", {}) or {}
+    key = issue.get("key", "unknown")
+    status = ((fields.get("status") or {}).get("name") or "unknown").lower()
+    issue_type = ((fields.get("issuetype") or {}).get("name") or "issue").lower()
+    labels = fields.get("labels", []) or []
+    updated = fields.get("updated", "")
+    comments = [_format_jira_comment(comment) for comment in _filter_jira_comments(issue)]
+    sections = chunking.split_issue_sections(header, comments, chunk_size=12000, chunk_overlap=500)
+    for suffix, chunk in sections:
+        document_id = f"jira-{key}" if not suffix else f"jira-{key}-{suffix}"
+        hindsight_retain(
+            bank_id="praxis-issues",
+            content=chunk,
+            document_id=document_id,
+            timestamp=updated,
+            metadata={
+                "source": "cocoindex",
+                "tracker": "jira",
+                "key": key,
+                "status": status,
+            },
+            tags=[status, issue_type, "jira", key.split("-", 1)[0]] + labels[:5],
+        )
+
+
+issues_app = coco.App(
+    "praxis-issues",
+    issues_main,
+    repos=",".join(ISSUES_REPOS),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -927,7 +1123,7 @@ async def code_main(org_dir: pathlib.Path) -> None:
                 included_patterns=["**/*.rs"],
                 excluded_patterns=["**/target/**"],
             ),
-            live=True,
+            live=False,
         )
         await coco.mount_each(
             coco.component_subpath(local_dir),

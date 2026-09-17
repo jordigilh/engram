@@ -72,3 +72,6 @@ def test_inventory_can_scope_to_one_run() -> None:
 
     assert result["runs"][0]["run_id"] == 123
     assert result["failed_runs_scanned"] == 1
+    assert result["usable_runs"] == 0
+    assert result["runs"][0]["status_is_final"] is False
+    assert result["runs"][0]["status_observed_at"]

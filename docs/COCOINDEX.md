@@ -7,6 +7,10 @@ batch scripts (`ingest-docs.py`, `ingest-issues.py`) with continuous, delta-awar
 sync for four source types: documentation, GitHub issues, codebase, and agent
 transcripts.
 
+For operational configuration of GitHub and Jira issue polling, including
+credentials, LaunchAgents, backfills, and verification, see
+[`ISSUE_INGESTION.md`](ISSUE_INGESTION.md).
+
 CocoIndex runs as a KeepAlive launchd service alongside Hindsight. It watches
 source directories and APIs for changes, processes only the delta, and writes
 results either through the Hindsight retain API (for docs, issues, transcripts)
@@ -16,7 +20,7 @@ or directly into pgvector tables (for the code index).
 flowchart LR
     subgraph sources["Sources"]
         docs["Markdown docs"]
-        issues["GitHub issues (gh CLI)"]
+        issues["GitHub issues (gh CLI) + Jira REST API"]
         code["Go source files"]
         transcripts["Agent transcripts (.jsonl)"]
     end
@@ -47,7 +51,7 @@ CocoIndex declares four flows, each with a source, transform pipeline, and sink.
 | Flow | Source | Transforms | Sink | Frequency |
 |------|--------|-----------|------|-----------|
 | **docs** | Markdown files in `ENGRAM_DOCS_DIR` + repo docs | Split by heading → chunk → embed | Hindsight retain API (`kubernaut-docs` bank) | File-watching (instant) |
-| **issues** | GitHub issues + PRs via `gh` CLI | Serialize issue/PR + comments → chunk → embed | Hindsight retain API (`kubernaut-issues` bank) | Polling every 5 min (`ENGRAM_ISSUES_POLL_SECONDS`) |
+| **issues** | GitHub issues + PRs via `gh` CLI, or Jira REST API | Serialize issue/PR/ticket + comments → chunk → embed | Hindsight retain API (`<project>-issues` bank) | Polling every 5 min (`<PROJECT>_ISSUES_POLL_SECONDS`) |
 | **code** | Go source files in `ENGRAM_CODE_DIR` | tree-sitter AST parse → dense embed + BM25 tsvector | pg0 pgvector hybrid search (`code-index`) | File-watching (instant) |
 | **transcripts** | `.jsonl` files in Cursor transcripts dir | Extract correction windows → embed | Hindsight retain API (`cursor-memory` bank) | File-watching (instant) |
 
@@ -57,11 +61,11 @@ CocoIndex declares four flows, each with a source, transform pipeline, and sink.
 exceeding the token limit, and generates embeddings using the same local ONNX
 model as Hindsight.
 
-**Issues flow:** Fetches all issues and PRs via `gh issue list --limit 10000`
-and `gh pr list --limit 10000` (both with `--state all`). Each item is tagged
-with `_kind` (`issue` or `pr`) and gets a distinct `document_id` (`issue-N` or
-`pr-N`). Title + body + human comments are serialized, chunked, and pushed to
-Hindsight with `kind` and `state` tags. Re-ingestion is idempotent.
+**Issues flow:** GitHub-backed flows fetch all issues and PRs via `gh issue list
+--limit 10000` and `gh pr list --limit 10000` (both with `--state all`). Jira-
+backed flows call Jira's REST API directly. Each item is tagged with its
+source and gets a distinct `document_id`. Title + body + human comments are
+serialized, chunked, and pushed to Hindsight. Re-ingestion is idempotent.
 
 **Code flow:** Detects each file's language from its extension
 (`cocoindex.ops.text.detect_code_language`) and splits it with cocoindex's

@@ -27,8 +27,6 @@
     </array>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>PRAXIS_ORG_DIR</key>
-        <string>__HOME__/go/src/github.com/praxis-proxy</string>
         <key>HINDSIGHT_URL</key>
         <string>http://localhost:8888</string>
         <key>COCOINDEX_PG_URL</key>

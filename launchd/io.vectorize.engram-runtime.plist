@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.vectorize.engram-runtime</string>
+    <!-- The image-backed public gateway. run-engram-runtime.sh deliberately
+         stays in the foreground so launchd can restart it when the Podman
+         machine or the container disappears. The native gateway remains on
+         its private upstream port 8898 because the image cannot execute the
+         host's macOS stdio backends. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.engram/run-engram-runtime.sh</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/podman/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>ENGRAM_RUNTIME_IMAGE</key>
+        <string>quay.io/jordigilh/engram:runtime-latest</string>
+        <key>ENGRAM_RUNTIME_CONFIG</key>
+        <string>__HOME__/.engram/runtime/instances.toml</string>
+        <key>ENGRAM_RUNTIME_CONTAINER</key>
+        <string>engram-runtime</string>
+        <key>ENGRAM_RUNTIME_PORT</key>
+        <string>8896</string>
+        <key>ENGRAM_RUNTIME_RETRY_SECONDS</key>
+        <string>10</string>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>__HOME__/.engram</string>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.engram/logs/engram-runtime-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.engram/logs/engram-runtime-stderr.log</string>
+</dict>
+</plist>

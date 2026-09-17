@@ -18,7 +18,7 @@ Each project gets:
 > **2026-08-21 update**: the four backend servers below (`hindsight-docs`,
 > `hindsight-issues`, `cocoindex-code`, `serena`) are now fronted by one
 > aggregating gateway, `engram-gateway` (`src/engram/pipeline/
-> engram_gateway.py`, supervised by `launchd/io.vectorize.engram-gateway.plist`)
+> engram_gateway.py`, supervised by `launchd/io.vectorize.engram-runtime.plist`)
 > instead of each getting its own `.cursor/mcp.json` entry — see
 > `docs/findings/2026-08.md`'s 2026-08-21 rollout entry for the full
 > rationale (recurring Cursor MCP client flakiness with 4 separate connections
@@ -310,6 +310,24 @@ run first), it's fine to create the plist in `launchd/` and commit it without
 this `load` step — `engram`'s own plist shipped this way initially. Nothing
 else in this guide depends on the service actually being loaded.
 
+### Deployment-local mirror configuration
+
+If the project reads repositories through detached branch mirrors, keep the
+repository list, local checkout paths, and branch choices outside this
+repository. Copy `watch-mirrors-config.example.sh` to
+`~/.engram/watch-mirrors-config.sh`, fill in the deployment's entries, and run:
+
+```bash
+ENGRAM_WATCH_MIRRORS_CONFIG=~/.engram/watch-mirrors-config.sh \
+  ./setup-watch-mirrors.sh
+```
+
+The same configuration is used by `refresh-watch-mirrors.sh` and the
+`io.vectorize.cocoindex.watch-sync` LaunchAgent. The LaunchAgent template is
+generic; render it with `__HOME__` replacement as above and bootstrap it with
+`launchctl`. Do not commit the populated mirror configuration or deployment
+helper scripts; those belong under `~/.engram`.
+
 > **Cold start: backfill first, live-watch second (2026-09-09).** A fresh
 > project (empty pg tables + empty tracking DB) must be populated with a
 > one-shot `--mode backfill --apps code` (+ docs/issues as needed) run
@@ -353,7 +371,7 @@ layout, when Serena is intentionally run outside the gateway:
 "serena": {
   "command": "/Users/jgil/.local/bin/uvx",
   "args": [
-    "--from", "git+https://github.com/oraios/serena",
+    "--from", "git+https://github.com/oraios/serena@1bbe53546124c00e4238972f1599a91fbf8c6539",
     "serena", "start-mcp-server",
     "--project", "${workspaceFolder}",
     "--context", "ide",
@@ -835,7 +853,7 @@ curl -X POST http://localhost:8888/v1/default/banks/<project>-docs/memories/reca
 # NOTE: the target path is a positional argument, not a --project flag --
 # `serena project health-check --project <path>` fails with an unrecognized-
 # option error (verified 2026-08-13); `--help` confirms the positional form.
-uvx --from git+https://github.com/oraios/serena serena project health-check /path/to/target-repo
+uvx --from git+https://github.com/oraios/serena@1bbe53546124c00e4238972f1599a91fbf8c6539 serena project health-check /path/to/target-repo
 ```
 
 If using the packaged runtime image, also verify the configured route and

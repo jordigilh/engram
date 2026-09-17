@@ -17,10 +17,11 @@ def validate_dossier(dossier: dict[str, Any]) -> list[str]:
     if test_name.startswith("In [It]") or test_name.startswith("Timed out"):
         problems.append("weak_test_attribution")
     summary = dossier.get("summary", {})
+    terminal_state_complete = summary.get("workflow_resolution_failed") and summary.get("manual_review_required")
     if summary.get("workflow_resolution_failed") and not summary.get("manual_review_required"):
         problems.append("inconsistent_terminal_state")
-    if float(dossier.get("confidence", 0.0)) < 0.9:
-        problems.append("low_confidence")
+    elif not terminal_state_complete:
+        problems.append("incomplete_terminal_state")
     return problems
 
 

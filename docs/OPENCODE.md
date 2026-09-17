@@ -88,8 +88,10 @@ such as `main=project,release/vX.Y=project-vX.Y`; see [Runtime Image](RUNTIME_IM
 ## Gateway
 
 The gateway normally runs on `127.0.0.1:8896` under the
-`io.vectorize.engram-gateway` launchd service. The Hindsight API and backend
-daemons remain behind it.
+`io.vectorize.engram-runtime` launchd service. On macOS, the published runtime
+image is the public front door; the native `io.vectorize.engram-gateway-native`
+service listens privately on `127.0.0.1:8898` for host-only stdio backends. The
+Hindsight API and backend daemons remain behind both gateway layers.
 
 If OpenChamber is connected to a remote OpenCode/OpenChamber server,
 `127.0.0.1` refers to that server. The gateway must be reachable from the

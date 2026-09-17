@@ -38,11 +38,22 @@ def _summary(rr_id: str, evidence: list[Evidence]) -> dict[str, Any]:
     text = "\n".join(item.content for item in evidence).lower()
     lifecycle = analyze_interactive_lifecycle(rr_id, evidence)
     causal_finding = analyze_resource_busy(rr_id, evidence)
+    workflow_resolution_failed = "workflowresolutionfailed" in text or "workflow resolution failed" in text
+    manual_review_required = "manualreviewrequired" in text or "manual review required" in text
+    if workflow_resolution_failed and manual_review_required:
+        status = "workflow_resolution_failed_manual_review_required"
+    elif workflow_resolution_failed:
+        status = "workflow_resolution_failed"
+    elif manual_review_required:
+        status = "manual_review_required"
+    else:
+        status = "not_observed"
     result = {
         "rr_id": rr_id,
         "evidence_count": len(evidence),
-        "workflow_resolution_failed": "workflowresolutionfailed" in text or "workflow resolution failed" in text,
-        "manual_review_required": "manualreviewrequired" in text or "manual review required" in text,
+        "status": status,
+        "workflow_resolution_failed": workflow_resolution_failed,
+        "manual_review_required": manual_review_required,
         "operator_escalation": "operator_escalation" in text,
         "workflow_execution_evidence": sum(
             '"kind": "WorkflowExecution"' in item.content
@@ -54,6 +65,23 @@ def _summary(rr_id: str, evidence: list[Evidence]) -> dict[str, Any]:
         "causal_finding": causal_finding,
     }
     return result
+
+
+def _evidence_assessment(rr_id: str, evidence: list[Evidence], summary: dict[str, Any]) -> dict[str, Any]:
+    if any(item.rr_id == rr_id for item in evidence):
+        rr_id_correlation = "exact"
+    elif any(rr_id.casefold() in item.content.casefold() for item in evidence):
+        rr_id_correlation = "content_match"
+    else:
+        rr_id_correlation = "missing"
+    return {
+        "rr_id_correlation": rr_id_correlation,
+        "evidence_count": len(evidence),
+        "workflow_resolution_failed": summary["workflow_resolution_failed"],
+        "manual_review_required": summary["manual_review_required"],
+        "workflow_execution_count": summary["workflow_execution_evidence"],
+        "causal_classification": summary["causal_finding"]["classification"],
+    }
 
 
 def _bounded(items: Iterable[Evidence], max_chars: int) -> list[Evidence]:
@@ -78,6 +106,7 @@ def build_context(failure: TestFailure, evidence: Iterable[Evidence], max_tokens
     ranked = rank_evidence(failure, related)
     selected = _bounded(ranked, max_tokens * 4)
     summary = _summary(rr_id, related)
+    evidence_assessment = _evidence_assessment(rr_id, related, summary)
     timeline = [
         {
             "timestamp": item.timestamp.isoformat() if item.timestamp else None,
@@ -98,13 +127,7 @@ def build_context(failure: TestFailure, evidence: Iterable[Evidence], max_tokens
         "rr_id": rr_id,
         "test": {"run_id": failure.run_id, "job_id": failure.job_id, "name": failure.test_name},
         "summary": summary,
-        "confidence": 0.94 if summary["workflow_resolution_failed"] and summary["manual_review_required"] else 0.55,
-        "confidence_basis": [
-            "exact RR-ID correlation",
-            "terminal AIAnalysis status",
-            "RemediationRequest completion status",
-            "absence of a correlated WorkflowExecution",
-        ],
+        "evidence_assessment": evidence_assessment,
         "timeline": timeline,
         "clusters": build_clusters(related)[:20],
         "evidence": [

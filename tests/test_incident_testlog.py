@@ -35,6 +35,35 @@ def test_extracts_multiple_failures_without_merging_blocks() -> None:
     assert [failure["test_name"] for failure in failures] == ["first test [FP-1]", "second test [FP-2]"]
 
 
+def test_extracts_diagnostic_resources_and_infers_rr() -> None:
+    text = """[FAILED] crashloop test [E2E-FP-1542-001]
+  Timeline >>
+  diagnostics namespace=fp-e2e-crashloop-1789562871 pods=1
+  pod=crashloop-app-55f8859c7-wt5z2 phase=Running
+  diagnostics deployment=crashloop-app replicas=1 available=0
+  << Timeline
+"""
+    failure = extract_test_failures(text)[0]
+    evidence = [
+        Evidence(
+            "1",
+            "crd.yaml",
+            "resource",
+            "namespace: fp-e2e-crashloop-1789562871\n"
+            "kind: Deployment\n"
+            "name: crashloop-app\n"
+            "rr-b8c99c9213f4-99770512",
+            namespace="fp-e2e-crashloop-1789562871",
+        )
+    ]
+
+    assert failure["resources"] == [
+        "Deployment/crashloop-app",
+        "Pod/crashloop-app-55f8859c7-wt5z2",
+    ]
+    assert infer_rr_ids(failure, evidence) == ["rr-b8c99c9213f4-99770512"]
+
+
 def test_infer_rr_requires_one_namespace_resource_match() -> None:
     failure = {"namespaces": ["fp-test-123"], "resources": ["Deployment/memory-eater"]}
     evidence = [

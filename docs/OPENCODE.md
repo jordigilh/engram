@@ -85,6 +85,65 @@ route and never invents a route the gateway may not expose. Codex users can use
 `-c` override. Set `ENGRAM_CODEX_BRANCH_ROUTES` to a comma-separated mapping
 such as `main=project,release/vX.Y=project-vX.Y`; see [Runtime Image](RUNTIME_IMAGE.md#branch-aware-codex).
 
+### Global Repository Routing
+
+A shared global plugin configuration can select repository-specific routes by
+canonical directory or Git remote. Directory matches take precedence over
+remote matches, and remote matches take precedence over the top-level options:
+
+```json
+{
+  "plugin": [[
+    "/path/to/engram/opencode-plugin/index.ts",
+    {
+      "project": "default-project",
+      "repositories": {
+        "remotes": {
+          "https://github.com/acme/service-api": {
+            "project": "service-api",
+            "family": "platform",
+            "branchRoutes": {
+              "main": "service-api",
+              "release/vX.Y": "service-api-vX.Y"
+            }
+          }
+        },
+        "directories": {
+          "/workspaces/service-api": {
+            "project": "service-api-local"
+          }
+        }
+      }
+    }
+  ]]
+}
+```
+
+Remote keys normalize HTTPS and SSH/scp forms, including a trailing `.git`.
+Branch routes nested under a repository route are considered only after that
+repository matches; they cannot leak into another checkout.
+
+## Subagent Enforcement
+
+OpenCode creates a subagent session with the current session's ID as
+`parentID`. The plugin uses that persisted ancestry field rather than agent
+names, so native and custom agents are handled identically. Root sessions have
+no `parentID` and are not gated.
+
+For child sessions, the plugin fails closed at both enforcement points:
+
+1. `permission.ask` changes non-Engram requests to `deny`.
+2. `tool.execute.before` throws before execution, including when a saved
+   permission would otherwise bypass `permission.ask`.
+
+Engram MCP tools are allowed before initialization. A child unlocks only when
+`tool.execute.after` runs for an Engram tool, which means the MCP call returned
+successfully. Denied or failed Engram calls do not unlock the session. Gate
+state is isolated per session and removed when the session is deleted.
+
+Forked sessions are not treated as subagents because OpenCode does not assign
+them a `parentID`.
+
 ## Gateway
 
 The gateway normally runs on `127.0.0.1:8896` under the

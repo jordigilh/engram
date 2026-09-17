@@ -49,7 +49,7 @@ Run it with:
 ```bash
 podman run --rm \
   --add-host host.containers.internal:host-gateway \
-  -v "$PWD/instances.toml:/etc/engram/instances.toml:ro" \
+  -v "$HOME/.engram/runtime/instances.toml:/etc/engram/instances.toml:ro" \
   -p 127.0.0.1:8896:8896 \
   quay.io/jordigilh/engram:runtime-latest
 ```
@@ -76,7 +76,8 @@ stdio backends need the host's macOS tools and checkout paths:
 ```bash
 mkdir -p ~/.engram/runtime ~/.engram/logs
 install -m 755 scripts/run-engram-runtime.sh ~/.engram/run-engram-runtime.sh
-install -m 644 config/runtime-macos.toml ~/.engram/runtime/instances.toml
+# Create the deployment-specific route registry outside the repository.
+$EDITOR ~/.engram/runtime/instances.toml
 ```
 
 Install the two plist templates after replacing `__HOME__` with the user's
@@ -84,8 +85,9 @@ home directory, then bootstrap them into the user's launchd domain. The native
 gateway listens privately on `8898`; the container owns the public `8896`.
 Do not run a second hand-started gateway on either port.
 
-The runtime image remains stateless. The TOML file contains routing only; the
-host config, source trees, and backend daemons remain outside the image.
+The runtime image remains stateless. The TOML file contains deployment-specific
+routing only; keep it under `~/.engram/runtime/` alongside the host config,
+source trees, and backend daemons. Do not commit the populated route registry.
 
 ## Branch-Aware Codex
 

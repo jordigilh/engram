@@ -10,7 +10,7 @@ Each project gets:
 - **Dedicated pgvector table**: `cocoindex.<project>_code_embeddings` for code search isolation
 - **Dedicated CocoIndex flows**: Separate ingestion script with its own state database
 - **Dedicated launchd service**: Independent process lifecycle
-- **Workspace-level MCP config**: `.cursor/mcp.json` in each repo so Cursor only sees relevant servers
+- **OpenCode plugin configuration**: `opencode.json` loads the unified gateway plugin and derives the project route
 - **Optional stateless runtime image**: A containerized gateway can aggregate
   project backends from a mounted TOML registry instead of requiring a native
   gateway process on the host
@@ -19,7 +19,7 @@ Each project gets:
 > `hindsight-issues`, `cocoindex-code`, `serena`) are now fronted by one
 > aggregating gateway, `engram-gateway` (`src/engram/pipeline/
 > engram_gateway.py`, supervised by `launchd/io.vectorize.engram-runtime.plist`)
-> instead of each getting its own `.cursor/mcp.json` entry — see
+> instead of each getting its own client-specific MCP entries — see
 > `docs/findings/2026-08.md`'s 2026-08-21 rollout entry for the full
 > rationale (recurring Cursor MCP client flakiness with 4 separate connections
 > per repo) and the current registry of every onboarded repo. The gateway can
@@ -506,46 +506,16 @@ The image is stateless and non-root. It validates backend URLs, rejects
 credentials embedded in URLs, queries configured backends concurrently, and
 keeps one unavailable backend from taking down the whole project route.
 
-#### Workspace configuration
+#### OpenCode configuration
 
-Create `.cursor/mcp.json` in each project repository with one gateway entry:
-
-```json
-{
-  "mcpServers": {
-    "engram": {
-      "type": "http",
-      "url": "http://127.0.0.1:8896/mcp/<project>"
-    }
-  }
-}
-```
+Engram no longer ships or supports per-repository `.cursor/mcp.json` files.
+Configure the OpenCode plugin in `opencode.json` and let it derive the project
+route from the current checkout. See [OpenCode Integration](OPENCODE.md) for
+explicit project and branch-route options.
 
 The gateway owns the Hindsight, CocoIndex, Serena, and project-specific backend
 connections. Do not register those backends separately, or the client will see
 duplicate tools and bypass the gateway's isolation and routing.
-
-If the runtime is deployed natively instead of as an image, keep this same
-`.cursor/mcp.json` entry and start the launchd gateway after adding the project
-to `build_project_registry()`. The TOML registry is the image equivalent of
-that native registry.
-
-> **Gotcha**: whether to commit this file depends on whether the repo is
-> personal/single-machine or shared/multi-contributor. The gateway URL and
-> project route are stable, but a repo may still gitignore local
-> `.cursor/mcp.json` so contributors can select their own gateway host. If the
-> file is committed, do not put credentials or machine-specific backend URLs
-> in it; keep those in the runtime TOML, which should be mounted from a local,
-> ignored path.
-> An untracked, gitignored `.cursor/mcp.json` still survives ordinary
-> `git checkout`/`git switch` between branches in the same working directory
-> (checkout only adds/removes *tracked* files) — verified empirically
-> 2026-08-03 in `kubernaut-operator`. It does **not** survive
-> `git clean -fdx` (the `-x` pulls in ignored files) or a brand-new
-> `git clone`/`git worktree add` of the repo elsewhere, since those only
-> materialize tracked content — if a repo is ever missing this file, that's
-> the likely cause; just redo this step rather than trying to make git
-> remember a file it's deliberately excluding (see FINDINGS.md).
 
 > **Legacy native-backend note**: the shared-daemon notes below apply only
 > when deliberately running individual backend processes instead of the
@@ -658,21 +628,11 @@ edited at a time (step 8's plain shared daemon is simpler and sufficient).
    </array>
    ```
 
-3. **Give each repo its own `.cursor/mcp.json` `serena` entry**, pointed at
-   its own mount:
-
-   ```json
-   "serena": { "type": "http", "url": "http://127.0.0.1:8893/mcp/<project-name>" }
-   ```
-
-   **This breaks the step-8 "one shared template symlinked by every family
-   repo" trick for the `serena` entry specifically** — the URL is now
-   per-repo, so a single template file can no longer serve every repo
-   verbatim. Either give each repo its own small template file (one per
-   project, everything else identical) or drop the symlink for just this key
-   and hand-edit it per repo. `cocoindex-code`/`hindsight-docs`/
-   `hindsight-issues` entries are unaffected (still identical across the
-   family) and can stay shared.
+    3. **Register each family mount through the OpenCode plugin**, using the
+       project route and optional `branchRoutes` described in
+       [OpenCode Integration](OPENCODE.md). Do not create per-repo Cursor MCP
+       configuration files. `cocoindex-code`/`hindsight-docs`/
+       `hindsight-issues` remain owned by the unified gateway.
 
 4. **Update your family's git-hook restart script** (step 14) to also
    `launchctl kickstart -k` the multiplex daemon's label alongside `serena`
@@ -681,8 +641,8 @@ edited at a time (step 8's plain shared daemon is simpler and sufficient).
    (currently nothing beyond the active-project pointer, but keep it
    symmetric with the other two daemons for when that changes).
 
-5. **Verify**: open two repos' mounts as two independent MCP sessions (or
-   two real Cursor windows) and confirm each keeps reporting its own project
+  5. **Verify**: open two repos' mounts as two independent OpenCode MCP sessions
+     and confirm each keeps reporting its own project
    via `get_current_config` even after the other activates a different one
    in between — that's the actual guarantee this buys you, not just "it
    responds to requests."
@@ -696,29 +656,11 @@ edited at a time (step 8's plain shared daemon is simpler and sufficient).
 > together with steps 2 and 3's plain shared-daemon units, since on Linux
 > there's no reason to install one without the other).
 
-### 9. Slim the Global MCP Config
+### 9. Client Configuration
 
-The global `~/.cursor/mcp.json` should only contain servers that are truly
-shared across every project on the machine — in practice, today, just
-`hindsight` (the `cursor-memory` bank):
-
-```json
-{
-  "mcpServers": {
-    "hindsight": {
-      "type": "http",
-      "url": "http://localhost:8888/mcp/cursor-memory/"
-    }
-  }
-}
-```
-
-The code-intelligence backend (step 7) is **workspace-scoped, not global** —
-each repo's own `.cursor/mcp.json` carries its own `serena` entry with
-`--project ${workspaceFolder}`, since Serena's language server and index are
-per-project state that a single global entry couldn't represent correctly
-across repos in different languages anyway. Project-specific servers are
-defined at workspace level and override global ones when names collide.
+Cursor MCP configuration is retired. Do not create or commit
+`.cursor/mcp.json` or add Engram servers to `~/.cursor/mcp.json`; use the
+OpenCode plugin described in [OpenCode Integration](OPENCODE.md).
 
 ### 10. Create Cursor Rule
 
@@ -1054,7 +996,7 @@ generic variant deliberately omits.
 | `cursor/projects/<project>.vars` | Template variables for cursor rule generation |
 | `cursor/hindsight-memory.mdc.tmpl` | Shared template (do not edit per-project) |
 | `cursor/generate-mdc.sh` | Generates .mdc from template + vars |
-| Each repo's `.cursor/mcp.json` | Workspace-level MCP routing |
+| `opencode.json` | OpenCode plugin and unified gateway routing |
 | Each repo's `.serena/project.yml` | Per-repo Serena language-server registration (step 7); cannot be shared/symlinked, keyed by absolute path |
 | `Dockerfile.engram` | Optional stateless, project-agnostic MCP gateway image |
 | Local `instances.toml` | Mounted runtime registry of project backends (step 8) |
@@ -1066,7 +1008,7 @@ generic variant deliberately omits.
 | Each opted-in repo's `.cursor/hooks.json` | Harness-enforced plan-kickoff detector + contradiction-check enforcer (+ checklist reminder for non-kubernaut repos) |
 | `hooks/review-checklists/<repo>.md` | Per-repo PR review checklist content, injected by the checklist-reminder hook when present |
 | `git-hooks/generic/*.sh` | Self-healing plain git hooks, single-repo variant: restart stale gopls/serena processes on checkout/merge/rebase/reset (recommended, step 14) |
-| `git-hooks/family/*.sh.tmpl` + `git-hooks/generate-hooks.sh` + `git-hooks/families/*.vars` | Templated variant for repos sharing a long-lived HTTP MCP daemon: same restart behavior + re-provisions a shared `.cursor/mcp.json` template (optional, steps 8/8a/14) |
+| `git-hooks/family/*.sh.tmpl` + `git-hooks/generate-hooks.sh` + `git-hooks/families/*.vars` | Templated variant for repos sharing a long-lived HTTP MCP daemon and restarting family services (optional, steps 8a/14) |
 | `~/.engram/git-hooks/*.sh` | Per-machine install target: symlinks (generic) or `generate-hooks.sh` output (family) land here (step 14) |
 | Each opted-in repo's `.git/hooks/{post-checkout,post-merge,reference-transaction}` | Symlinks into the installed git-hooks scripts above (step 14) |
 

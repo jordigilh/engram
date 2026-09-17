@@ -214,14 +214,11 @@ curl -s -X POST http://localhost:8888/v1/default/banks/cursor-memory/memories/re
   -d '{"query": "Go testing best practices"}' | python3 -m json.tool
 ```
 
-## 7. Configure Cursor MCP
+## 7. Configure OpenCode
 
-```bash
-cp cursor/mcp.json ~/.cursor/mcp.json
-```
-
-> If you already have an `~/.cursor/mcp.json`, merge the `hindsight` entry into
-> your existing `mcpServers` object.
+Configure the OpenCode plugin and unified Engram gateway as described in
+[`OPENCODE.md`](OPENCODE.md). Engram no longer ships or supports Cursor MCP
+configuration files.
 
 ## 8. Install Cursor rule
 

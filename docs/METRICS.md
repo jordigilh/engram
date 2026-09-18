@@ -292,7 +292,7 @@ python3 -m engram.maintenance.report --csv
 - **High corrections with recall active**: Retained patterns may be outdated — run reflect manually
 - **Mental models stale**: Run `python3 -m engram.maintenance.create_mental_models --refresh` to force refresh
 - **Low proactive recall**: Strengthen the `alwaysApply` rule wording, ensure it says "ALWAYS recall before starting work"
-- **gopls not being used**: Verify `~/.cursor/mcp.json` has the gopls entry and restart Cursor
+- **gopls not being used**: Check the Serena/OpenCode gateway route and restart the language-server daemon
 
 ## Memory Triage
 

@@ -9,11 +9,8 @@
 # which is exactly why _restart-{{FAMILY_NAME}}-daemons.sh debounces instead
 # of kicking unconditionally on every call.
 #
-# Deliberately does NOT touch .cursor/mcp.json (unlike post-checkout) --
-# only restarts daemons. Re-touching the mcp.json symlink on every ref
-# update (this hook fires far more often than checkout/merge, e.g. on
-# background fetches) would multiply exposure to Cursor's MCP-client
-# reload-on-config-change bug.
+# This hook only restarts daemons; client configuration is managed separately
+# by the OpenCode plugin.
 #
 # Safety: the exit status of this hook is ignored in "committed" state (see
 # `git help githooks`), but ALWAYS exits 0 defensively anyway -- a

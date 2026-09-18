@@ -5,8 +5,8 @@
     <key>Label</key>
     <string>io.vectorize.serena.kubernaut-family</string>
     <!-- Single shared serena MCP daemon for all 6 kubernaut-family repos. Each
-         repo's .cursor/mcp.json points its "serena" entry at this daemon's fixed
-         HTTP URL instead of spawning its own stdio subprocess -- see
+         repo's OpenCode project route points its "serena" backend at this
+         daemon's fixed HTTP URL instead of spawning its own stdio subprocess -- see
          docs/findings/2026-08.md, 2026-08-13 (same day, seventh + eighth
          follow-ups).
 
@@ -39,7 +39,7 @@
     <array>
         <string>__HOME__/.local/bin/uvx</string>
         <string>--from</string>
-        <string>git+https://github.com/oraios/serena</string>
+        <string>git+https://github.com/oraios/serena@1bbe53546124c00e4238972f1599a91fbf8c6539</string>
         <string>serena</string>
         <string>start-mcp-server</string>
         <string>--context</string>

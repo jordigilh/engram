@@ -31,7 +31,7 @@
     <array>
         <string>__HOME__/.local/bin/uvx</string>
         <string>--from</string>
-        <string>git+https://github.com/oraios/serena</string>
+        <string>git+https://github.com/oraios/serena@1bbe53546124c00e4238972f1599a91fbf8c6539</string>
         <string>serena</string>
         <string>start-mcp-server</string>
         <string>--context</string>

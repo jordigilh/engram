@@ -129,8 +129,8 @@ graph TB
 |-----------|----------|---------|
 | Project source | `<your-clone>/engram/` | Code pushed to GitHub |
 | LLM config | `~/.engram/config.env` | Real project IDs, model names (never committed) |
-| Hindsight process | `~/.engram/venv/bin/hindsight-api` | Native macOS service (launchd managed) |
-| MCP config | `~/.cursor/mcp.json` (or a per-repo `.cursor/mcp.json`) | Connects Cursor to Hindsight (memory + docs + issues), CocoIndex code search, and Serena |
+| Hindsight process | `~/.engram/hindsight-venv/bin/hindsight-api` | Native macOS service (launchd managed) |
+| MCP config | OpenCode plugin (`opencode.json`) | Derives the project route and connects to the unified Engram gateway |
 | Serena | [oraios/serena](https://github.com/oraios/serena) (LSP-wrapping MCP server) | Type-aware code intelligence — `find_symbol`/`find_referencing_symbols`/`get_symbols_overview`/diagnostics, backed by the real per-language LSP (`gopls`/`pyright`/`rust-analyzer`/`typescript-language-server`) — see [Division of Labor](#hindsight-vs-cocoindex-vs-serena-division-of-labor) below |
 | Cursor rule | `~/.cursor/rules/hindsight-memory.mdc` | Instructs agent to recall from all three banks |
 | Example rules | `cursor/examples/*.mdc` | Ready-made rules for Go, Python, Rust, TypeScript, minimal |
@@ -365,6 +365,15 @@ Mental models are persistent, LLM-synthesized documents that sit above raw facts
 | `kubernaut-docs` | `platform-topology` | Service interactions, infrastructure | Manual |
 | `kubernaut-issues` | `active-priorities` | Open issues, priorities, platform direction | Nightly |
 | `kubernaut-issues` | `known-bugs` | Known bugs, root causes, workarounds | Nightly |
+
+#### Manual Model Content
+
+The unified gateway exposes `docs_manual_mental_model` and
+`issues_manual_mental_model` for caller-generated Markdown. Each call replaces
+the prior `manual-mental-model-<model-id>` canonical memory through `retain`,
+without invoking `refresh_mental_model` or its Sonnet-backed synthesis path.
+This is a replacement memory, not an overwrite of Hindsight's pinned
+mental-model record; the upstream API does not expose a content setter.
 
 #### Cross-Bank Association
 

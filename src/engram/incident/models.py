@@ -41,4 +41,4 @@ class IncidentContext:
     timeline: tuple[Evidence, ...]
     clusters: tuple[dict[str, Any], ...]
     summary: dict[str, Any]
-    confidence: float
+    evidence_assessment: dict[str, Any]

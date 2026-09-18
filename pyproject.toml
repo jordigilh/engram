@@ -8,13 +8,13 @@ version = "0.1.0"
 description = "Hindsight/CocoIndex ingestion and memory-management pipeline for engram and its client projects"
 requires-python = ">=3.13"
 dependencies = [
-    "cocoindex==1.0.22",
+    "cocoindex==1.0.23",
     "anthropic==1.5.0",
     "litellm==1.100.1",
     # 2026-09-09: mcp 2.x removed `request_ctx`, breaking fastmcp 3.4.7's
     # server import (hindsight-api fails to start). Pin below 2.0 to match
     # the working live venv until fastmcp supports mcp 2.x.
-    "mcp==2.2.0",
+    "mcp==1.30.0",
     "httpx==0.28.1",
     "starlette==1.6.0",
     "uvicorn==0.52.4",
@@ -79,6 +79,7 @@ engram-ingest-issues = "engram.pipeline.ingest_issues:main"
 engram-hindsight-proxy = "engram.pipeline.hindsight_proxy:cli_main"
 engram-serena-multiplex = "engram.pipeline.serena_multiplex:main"
 engram-gateway = "engram.pipeline.engram_gateway:main"
+engram-latest-state = "engram.pipeline.latest_state_service:main"
 engram-kubernaut-rca = "engram.pipeline.kubernaut_rca_service:main"
 engram-kubernaut-corpus-inventory = "engram.pipeline.kubernaut_corpus_inventory:main"
 engram-kubernaut-rca-backfill = "engram.pipeline.kubernaut_rca_backfill:main"

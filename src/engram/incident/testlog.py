@@ -13,7 +13,23 @@ _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _RUNNER_PREFIX = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z\s+")
 _TASK_ID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE)
 _ISSUE_REF = re.compile(r"\b(?:E2E-FP-\d+-\d+|FP-[A-Z0-9-]+|issue-\d+)\b", re.IGNORECASE)
-_RESOURCE = re.compile(r"\b(?:Deployment|StatefulSet|DaemonSet|Pod|Service)/[a-z0-9][a-z0-9.-]+\b", re.IGNORECASE)
+_RESOURCE_KINDS = {
+    "deployment": "Deployment",
+    "statefulset": "StatefulSet",
+    "daemonset": "DaemonSet",
+    "pod": "Pod",
+    "service": "Service",
+}
+_RESOURCE_REF = re.compile(
+    r"\b(?P<kind>Deployment|StatefulSet|DaemonSet|Pod|Service)(?:\.[a-z0-9-]+)?/"
+    r"(?P<name>[a-z0-9][a-z0-9.-]+)\b",
+    re.IGNORECASE,
+)
+_RESOURCE_ASSIGNMENT = re.compile(
+    r"\b(?P<kind>deployment|statefulset|daemonset|pod|service)\s*[=:]\s*"
+    r"(?P<name>[a-z0-9][a-z0-9.-]+)\b",
+    re.IGNORECASE,
+)
 _NAMESPACE = re.compile(r"\b(?:namespace|ns)[=:/ ]+([a-z0-9][a-z0-9.-]+)\b", re.IGNORECASE)
 _NAMESPACE_CANDIDATE = re.compile(r"\bfp-(?!\d)[a-z0-9][a-z0-9.-]+\b", re.IGNORECASE)
 
@@ -55,7 +71,7 @@ def extract_test_failures(text: str) -> list[dict[str, Any]]:
             "failure_timestamp": timestamp.group(1) if timestamp else None,
             "task_ids": sorted(set(_TASK_ID.findall(block)), key=str.lower),
             "issue_refs": sorted(set(_ISSUE_REF.findall(block)), key=str.lower),
-            "resources": sorted(set(_RESOURCE.findall(block)), key=str.lower),
+            "resources": _extract_resources(block),
             "namespaces": sorted(
                 {
                     candidate
@@ -66,6 +82,16 @@ def extract_test_failures(text: str) -> list[dict[str, Any]]:
             ),
         })
     return failures
+
+
+def _extract_resources(block: str) -> list[str]:
+    """Normalize canonical and diagnostic key/value Kubernetes resources."""
+    resources = {
+        f"{_RESOURCE_KINDS[match.group('kind').lower()]}/{match.group('name')}"
+        for pattern in (_RESOURCE_REF, _RESOURCE_ASSIGNMENT)
+        for match in pattern.finditer(block)
+    }
+    return sorted(resources, key=str.lower)
 
 
 def infer_rr_ids(failure: dict, evidence: list[Any]) -> list[str]:

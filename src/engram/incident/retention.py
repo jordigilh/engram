@@ -25,7 +25,6 @@ CREATE TABLE IF NOT EXISTS incidents (
     classification TEXT NOT NULL,
     symptom TEXT NOT NULL,
     cause TEXT NOT NULL,
-    confidence REAL NOT NULL,
     first_seen TEXT,
     last_seen TEXT,
     resolution TEXT,
@@ -74,6 +73,8 @@ def _connection(path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(path)
     connection.row_factory = sqlite3.Row
     connection.executescript(SCHEMA)
+    if any(row[1] == "confidence" for row in connection.execute("PRAGMA table_info(incidents)")):
+        connection.execute("ALTER TABLE incidents DROP COLUMN confidence")
     return connection
 
 
@@ -123,7 +124,7 @@ def promote_incident(
     classification, cause = _classification(context)
     first_seen, last_seen = _time_bounds(context)
     metadata = {
-        "confidence_basis": context.get("confidence_basis", []),
+        "evidence_assessment": context.get("evidence_assessment", {}),
         "affected_namespaces": context.get("summary", {}).get("affected_namespaces", []),
     }
     with _connection(db_path) as connection:
@@ -131,12 +132,11 @@ def promote_incident(
         connection.execute(
             """INSERT INTO incidents
             (incident_id, family_signature, rr_id, run_id, job_id, test_name,
-             classification, symptom, cause, confidence, first_seen, last_seen,
+             classification, symptom, cause, first_seen, last_seen,
              resolution, validated_by, metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(incident_id) DO UPDATE SET
-              confidence = excluded.confidence,
-              last_seen = excluded.last_seen,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(incident_id) DO UPDATE SET
+               last_seen = excluded.last_seen,
               resolution = COALESCE(excluded.resolution, incidents.resolution),
               validated_by = COALESCE(excluded.validated_by, incidents.validated_by),
               metadata_json = excluded.metadata_json""",
@@ -150,7 +150,6 @@ def promote_incident(
                 classification,
                 "WorkflowExecution was not created for the correlated RR",
                 cause,
-                float(context.get("confidence", 0.0)),
                 first_seen,
                 last_seen,
                 resolution,

@@ -3,8 +3,8 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>io.vectorize.engram-gateway</string>
-    <!-- Single aggregating MCP gateway fronting every onboarded repo (see
+    <string>io.vectorize.engram-gateway-native</string>
+    <!-- Native backend gateway fronting every onboarded repo (see
          src/engram/pipeline/engram_gateway.py's module docstring and
          docs/findings/2026-08.md's 2026-08-21 entries for the full design
          and rollout rationale). Supervision here is not optional: the
@@ -26,7 +26,7 @@
         <string>--host</string>
         <string>127.0.0.1</string>
         <string>--port</string>
-        <string>8896</string>
+        <string>8898</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
@@ -66,9 +66,9 @@
         <string>__HOME__</string>
     </dict>
     <key>StandardOutPath</key>
-    <string>__HOME__/.engram/logs/engram-gateway-stdout.log</string>
+    <string>__HOME__/.engram/logs/engram-gateway-native-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>__HOME__/.engram/logs/engram-gateway-stderr.log</string>
+    <string>__HOME__/.engram/logs/engram-gateway-native-stderr.log</string>
     <key>KeepAlive</key>
     <dict>
         <key>SuccessfulExit</key>

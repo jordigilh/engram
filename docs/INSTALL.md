@@ -14,7 +14,7 @@
 - [uv](https://docs.astral.sh/uv/) — fast Python package manager (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
 - [gh](https://cli.github.com/) — GitHub CLI for issues ingestion (`brew install gh && gh auth login`)
 - [jq](https://jqlang.github.io/jq/) — JSON processor for MCP hook (`brew install jq`)
-- `pip install cocoindex` (or `uv pip install cocoindex`) — incremental ingestion engine
+- `pip install cocoindex==1.0.23` (or `uv pip install cocoindex==1.0.23`) — incremental ingestion engine
 - For code indexing: no separate install needed — `cocoindex` bundles its own tree-sitter-backed AST chunking (`cocoindex.ops.text.RecursiveSplitter`) and hybrid search (dense + BM25) out of the box.
 - Google Cloud SDK (`gcloud`) with Application Default Credentials configured
 - Vertex AI API enabled on your GCP project
@@ -55,14 +55,16 @@ $EDITOR ~/.engram/config.env
 ## 4. Install Hindsight (native)
 
 ```bash
-uv venv ~/.engram/venv --python 3.14
-uv pip install --python ~/.engram/venv/bin/python \
-  'hindsight-api[all]' 'google-cloud-aiplatform>=1.38'
+uv venv ~/.engram/hindsight-venv --python 3.13
+uv pip install --python ~/.engram/hindsight-venv/bin/python \
+  'hindsight-api==0.10.0'
 ```
 
 This installs Hindsight with embedded PostgreSQL (pg0), local ONNX embeddings,
-and local reranker — all running natively on macOS with no container or VM
-dependency. Data persists at `~/.pg0/instances/hindsight/data/`.
+and local reranker in its own native Python environment. The separate venv is
+intentional: Hindsight 0.10.0 requires a patched LiteLLM/protobuf combination
+that cannot coexist with Engram's Vertex AI environment. Data persists at
+`~/.pg0/instances/hindsight/data/`.
 
 ### Recommended for always-on/multi-project setups: decouple Postgres
 
@@ -212,14 +214,11 @@ curl -s -X POST http://localhost:8888/v1/default/banks/cursor-memory/memories/re
   -d '{"query": "Go testing best practices"}' | python3 -m json.tool
 ```
 
-## 7. Configure Cursor MCP
+## 7. Configure OpenCode
 
-```bash
-cp cursor/mcp.json ~/.cursor/mcp.json
-```
-
-> If you already have an `~/.cursor/mcp.json`, merge the `hindsight` entry into
-> your existing `mcpServers` object.
+Configure the OpenCode plugin and unified Engram gateway as described in
+[`OPENCODE.md`](OPENCODE.md). Engram no longer ships or supports Cursor MCP
+configuration files.
 
 ## 8. Install Cursor rule
 
@@ -251,7 +250,9 @@ individually; they're just importable as `engram.*` from anywhere once
 installed):
 
 ```bash
+uv venv ~/.engram/venv --python 3.14
 uv pip install --python ~/.engram/venv/bin/python -e .
+uv pip install --python ~/.engram/venv/bin/python 'google-cloud-aiplatform>=1.38'
 ```
 
 This also generates 13 console scripts in `~/.engram/venv/bin/` for the
@@ -325,10 +326,14 @@ python3 -m engram.pipeline.ingest_docs --docs-dir ~/go/src/github.com/jordigilh/
 The script creates the bank, configures `chunks` extraction mode, and ingests all
 markdown files. This only needs to be run once (or re-run when docs are updated).
 
-## 12. Ingest GitHub issues (Knowledge RAG)
+## 12. Ingest issues (Knowledge RAG)
 
-This creates a `kubernaut-issues` knowledge bank and ingests open issues plus
-recently closed issues from the kubernaut repository:
+Issue ingestion is now owned by each project's CocoIndex flow. The complete
+GitHub/Jira configuration, credential setup, immediate backfill, LaunchAgent
+startup, and verification procedure is documented in
+[`ISSUE_INGESTION.md`](ISSUE_INGESTION.md).
+
+For the legacy standalone Kubernaut GitHub importer only, the old command is:
 
 ```bash
 ~/.engram/venv/bin/engram-ingest-issues
@@ -339,8 +344,10 @@ Options:
 - `--days 180` — include closed issues from last 180 days (default: 90)
 - `--repo org/other-repo` — target a different repository
 
-Re-run periodically to pick up new issues. The script uses `document_id` per
-issue, so re-ingestion is idempotent. To schedule nightly (daily at 1:00 AM):
+This legacy command is not the normal path for a CocoIndex-managed project.
+Re-run periodically only when maintaining that legacy deployment. The script
+uses `document_id` per issue, so re-ingestion is idempotent. To schedule it
+nightly (daily at 1:00 AM):
 
 ```bash
 sed "s|__HOME__|$HOME|g" launchd/io.vectorize.hindsight.issues.plist \
@@ -380,9 +387,8 @@ python3 -m engram.maintenance.create_mental_models --refresh
 go install golang.org/x/tools/gopls@latest
 ```
 
-The `gopls` entry is already in `cursor/mcp.json`. It provides type-aware Go
-intelligence (implementations, references, definitions) directly in Cursor without
-ingesting source code.
+Type-aware code intelligence is provided by the gateway's Serena backend through
+the OpenCode plugin; do not configure a separate Cursor MCP `gopls` entry.
 
 ## 15. Install the observability hook
 
@@ -401,10 +407,10 @@ sed "s|__HOME__|$HOME|g" cursor/hooks.json > ~/.cursor/hooks.json
 CocoIndex replaces the batch ingestion scripts (`ingest-docs.py`, `ingest-issues.py`)
 with continuous, incremental sync for docs, issues, code, and transcripts.
 
-### Install CocoIndex into the Hindsight venv
+### Install CocoIndex into the Engram venv
 
 ```bash
-uv pip install --python ~/.engram/venv/bin/python cocoindex
+uv pip install --python ~/.engram/venv/bin/python cocoindex==1.0.23
 ```
 
 `pdfplumber` (PDF text extraction) rides along as a transitive dependency of
@@ -649,7 +655,7 @@ tail -20 ~/.engram/logs/blue-green-restart.log
 ## Upgrading
 
 ```bash
-uv pip install --python ~/.engram/venv/bin/python -U 'hindsight-api[all]'
+uv pip install --python ~/.engram/hindsight-venv/bin/python 'hindsight-api==0.10.0'
 ~/.engram/hindsight-blue-green-restart.sh
 ```
 
@@ -766,6 +772,4 @@ rm ~/.cursor/rules/hindsight-memory.mdc
 rm ~/.cursor/hooks.json
 rm -rf ~/.cursor/hooks/log-mcp-calls.sh
 
-# Remove MCP entries: delete hindsight, hindsight-docs, hindsight-issues,
-# and gopls from ~/.cursor/mcp.json (or restore your previous mcp.json)
 ```

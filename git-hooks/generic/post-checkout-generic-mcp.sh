@@ -5,15 +5,11 @@
 # post-merge/reference-transaction siblings alongside itself so
 # `git pull`/`git merge`/`git reset`/`git rebase` get the same treatment.
 #
-# Use this variant for a standalone project with its own real (non-symlink)
-# .cursor/mcp.json and no shared multi-repo daemon. If this project is one
-# of several repos sharing one long-lived HTTP MCP daemon (the way
+# Use this variant for a standalone project with no shared multi-repo daemon.
+# If this project is one of several repos sharing one long-lived HTTP MCP
+# daemon (the way
 # kubernaut's 6 repos share one Serena/CocoIndex daemon each), use
 # ../family/ instead -- see docs/NEW_PROJECT_SETUP.md step 8a and step 14.
-#
-# Deliberately does NOT touch .cursor/mcp.json: a standalone project's
-# mcp.json is a real, per-repo file, not a symlink into a shared template,
-# so there's nothing to (re-)provision here.
 #
 # Safe to re-run; safe with no matching gopls/serena process running.
 

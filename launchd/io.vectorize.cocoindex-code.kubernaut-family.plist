@@ -6,8 +6,8 @@
     <string>io.vectorize.cocoindex-code.kubernaut-family</string>
     <!-- Single shared cocoindex-code MCP daemon for all 6 kubernaut-family repos
          (kubernaut, kubernaut-operator, kubernaut-console, kubernaut-demo-scenarios,
-         kubernaut-v1.5, kubernaut-v1.6). Each repo's .cursor/mcp.json points its
-         "cocoindex-code" entry at this daemon's fixed HTTP URL instead of spawning
+         kubernaut-v1.5, kubernaut-v1.6). Each repo's OpenCode project route points
+         its "cocoindex-code" backend at this daemon's fixed HTTP URL instead of spawning
          its own stdio subprocess -- see docs/findings/2026-08.md, 2026-08-13
          (same day, seventh follow-up). Already multi-repo-aware via --repo/--branch
          query params; no per-repo instance needed. -->

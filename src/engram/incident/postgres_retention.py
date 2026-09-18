@@ -16,6 +16,7 @@ def _connect(pg_url: str):
         cursor.execute("CREATE SCHEMA IF NOT EXISTS cocoindex")
         cursor.execute("SET search_path TO cocoindex, public")
         cursor.execute(SCHEMA)
+        cursor.execute("ALTER TABLE incidents DROP COLUMN IF EXISTS confidence")
     connection.commit()
     return connection, RealDictCursor
 
@@ -36,7 +37,7 @@ def promote_incident_pg(
     classification, cause = _classification(context)
     first_seen, last_seen = _time_bounds(context)
     metadata = json.dumps({
-        "confidence_basis": context.get("confidence_basis", []),
+        "evidence_assessment": context.get("evidence_assessment", {}),
         "affected_namespaces": context.get("summary", {}).get("affected_namespaces", []),
     }, sort_keys=True)
     connection, cursor_factory = _connect(pg_url)
@@ -47,19 +48,18 @@ def promote_incident_pg(
             cursor.execute(
                 """INSERT INTO incidents
                 (incident_id, family_signature, rr_id, run_id, job_id, test_name,
-                 classification, symptom, cause, confidence, first_seen, last_seen,
+                 classification, symptom, cause, first_seen, last_seen,
                  resolution, validated_by, metadata_json)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (incident_id) DO UPDATE SET
-                  confidence = EXCLUDED.confidence,
-                  last_seen = EXCLUDED.last_seen,
+                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 ON CONFLICT (incident_id) DO UPDATE SET
+                   last_seen = EXCLUDED.last_seen,
                   resolution = COALESCE(EXCLUDED.resolution, incidents.resolution),
                   validated_by = COALESCE(EXCLUDED.validated_by, incidents.validated_by),
                   metadata_json = EXCLUDED.metadata_json""",
                 (incident_id, family, rr_id, test.get("run_id", ""), test.get("job_id", ""),
-                 test.get("name", ""), classification,
-                 "WorkflowExecution was not created for the correlated RR", cause,
-                 float(context.get("confidence", 0.0)), first_seen, last_seen,
+                  test.get("name", ""), classification,
+                  "WorkflowExecution was not created for the correlated RR", cause,
+                  first_seen, last_seen,
                  resolution, validated_by, metadata),
             )
             cursor.execute(

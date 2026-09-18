@@ -8,6 +8,8 @@ describe("buildSystemRecall", () => {
     const text = buildSystemRecall(id)
     expect(text).toMatch(/recall.*methodology/i)
     expect(text).toMatch(/MCP.*over CLI|over CLI.*MCP/i)
+    expect(text).toMatch(/prefer find_symbol.*find_referencing_symbols/i)
+    expect(text).toMatch(/search_for_pattern only for raw text\/regex/i)
     expect(text).toContain("engram")
   })
 

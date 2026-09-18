@@ -61,7 +61,7 @@ other three families or the gateway process itself. A backend that dies
 surfaces as a clean per-call JSON-RPC error instead of a hang or 500.
 
 Runs as a single supervised launchd service
-(`launchd/io.vectorize.engram-gateway.plist`) fronting every registry entry
+(`launchd/io.vectorize.engram-gateway-native.plist`) fronting every registry entry
 at once -- see that plist's own header for the KeepAlive/restart rationale
 (a bare, unsupervised `engram-gateway` process was found during the spike to
 die silently without one, twice, in well under an hour).
@@ -183,7 +183,14 @@ def _log_gateway_call(
 # would collide client-side, so these get project-qualified names
 # (kuadrant_docs_recall, kuadrant_issues_recall) instead of the usual
 # docs_recall/issues_recall.
-PREFIXED_BACKENDS = frozenset({"docs", "issues", "kuadrant_docs", "kuadrant_issues"})
+PREFIXED_BACKENDS = frozenset({
+    "docs",
+    "issues",
+    "docs_manual",
+    "issues_manual",
+    "kuadrant_docs",
+    "kuadrant_issues",
+})
 
 
 class BackendAdapter(Protocol):
@@ -197,6 +204,8 @@ class BackendAdapter(Protocol):
 
 def prefixed_tool_name(backend_key: str, raw_name: str) -> str:
     """Aggregated-catalog name for a tool `raw_name` from `backend_key`."""
+    if backend_key in {"docs_manual", "issues_manual"} and raw_name == "manual_mental_model":
+        return f"{backend_key}_mental_model"
     if backend_key in PREFIXED_BACKENDS:
         return f"{backend_key}_{raw_name}"
     return raw_name
@@ -310,6 +319,8 @@ RECALL_ONLY_HINDSIGHT_TOOLS = frozenset({"recall"})
 # docstring.
 RECALL_ONLY_CODE_TOOLS = frozenset({"kuadrant_code_search"})
 
+MANUAL_MENTAL_MODEL_TOOLS = frozenset({"manual_mental_model"})
+
 RELEVANT_SERENA_TOOLS = frozenset(
     {
         "replace_content",
@@ -338,6 +349,8 @@ RELEVANT_TOOLS_BY_BACKEND: dict[str, frozenset[str]] = {
     "docs": RELEVANT_HINDSIGHT_TOOLS,
     "issues": RELEVANT_HINDSIGHT_TOOLS,
     "serena": RELEVANT_SERENA_TOOLS,
+    "docs_manual": MANUAL_MENTAL_MODEL_TOOLS,
+    "issues_manual": MANUAL_MENTAL_MODEL_TOOLS,
     "kuadrant_docs": RECALL_ONLY_HINDSIGHT_TOOLS,
     "kuadrant_issues": RECALL_ONLY_HINDSIGHT_TOOLS,
     "kuadrant_code": RECALL_ONLY_CODE_TOOLS,
@@ -551,6 +564,131 @@ class HttpRelayAdapter:
 
     async def call_tool(self, name: str, arguments: dict) -> dict:
         return await self._roundtrip("tools/call", {"name": name, "arguments": arguments})
+
+
+MANUAL_MENTAL_MODEL_TOOL = {
+    "name": "manual_mental_model",
+    "description": (
+        "Store caller-generated Markdown as a canonical replacement memory for a mental model. "
+        "This does not refresh or overwrite Hindsight's pinned mental-model record; it replaces "
+        "the previous manual document for the same model_id and avoids the LLM-backed refresh path."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["model_id", "content"],
+        "properties": {
+            "model_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Stable lowercase mental-model ID, for example 'engram-architecture'.",
+            },
+            "content": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Complete manually generated Markdown content.",
+            },
+            "name": {
+                "type": "string",
+                "description": "Optional human-readable mental-model name kept as provenance metadata.",
+            },
+            "source_query": {
+                "type": "string",
+                "description": "Optional query or scope used to manually produce the content.",
+            },
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional visibility tags for the canonical memory.",
+            },
+            "metadata": {
+                "type": "object",
+                "additionalProperties": {"type": "string"},
+                "description": "Optional additional string metadata.",
+            },
+        },
+    },
+}
+
+
+def _manual_tool_error(message: str) -> dict:
+    return {
+        "content": [{"type": "text", "text": json.dumps({"error": message})}],
+        "isError": True,
+    }
+
+
+def _valid_manual_model_id(value: object) -> bool:
+    if not isinstance(value, str) or not value or value != value.lower():
+        return False
+    parts = value.split("-")
+    return all(part.isalnum() for part in parts)
+
+
+class ManualMentalModelAdapter:
+    """Expose manual mental-model replacement on top of Hindsight retain.
+
+    Hindsight's pinned mental-model content is only writable through its
+    refresh pipeline. This adapter deliberately stores the caller's finished
+    Markdown as a stable document instead, using the existing retain tool and
+    replacing the prior manual document for the same model ID.
+    """
+
+    def __init__(self, hindsight_adapter: BackendAdapter) -> None:
+        self.hindsight_adapter = hindsight_adapter
+
+    async def list_tools(self) -> list[dict]:
+        return [MANUAL_MENTAL_MODEL_TOOL]
+
+    async def call_tool(self, name: str, arguments: dict) -> dict:
+        if name != "manual_mental_model":
+            return _manual_tool_error(f"Unknown tool: {name!r}")
+
+        model_id = arguments.get("model_id")
+        content = arguments.get("content")
+        if not _valid_manual_model_id(model_id):
+            return _manual_tool_error("model_id must be lowercase alphanumeric words separated by single hyphens")
+        if not isinstance(content, str) or not content.strip():
+            return _manual_tool_error("content must be a non-empty Markdown string")
+
+        tags = arguments.get("tags")
+        if tags is not None and (not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags)):
+            return _manual_tool_error("tags must be an array of strings")
+
+        metadata = arguments.get("metadata")
+        if metadata is not None and (
+            not isinstance(metadata, dict)
+            or any(not isinstance(key, str) or not isinstance(value, str) for key, value in metadata.items())
+        ):
+            return _manual_tool_error("metadata must be an object of string values")
+
+        name = arguments.get("name")
+        source_query = arguments.get("source_query")
+        if name is not None and not isinstance(name, str):
+            return _manual_tool_error("name must be a string")
+        if source_query is not None and not isinstance(source_query, str):
+            return _manual_tool_error("source_query must be a string")
+
+        manual_metadata = dict(metadata or {})
+        manual_metadata.update({
+            "source": "manual_mental_model",
+            "mental_model_id": model_id,
+        })
+        if name:
+            manual_metadata["name"] = name
+        if source_query:
+            manual_metadata["source_query"] = source_query
+
+        retain_arguments = {
+            "content": content,
+            "context": "mental-models",
+            "document_id": f"manual-mental-model-{model_id}",
+            "metadata": manual_metadata,
+            "update_mode": "replace",
+        }
+        if tags is not None:
+            retain_arguments["tags"] = tags
+        return await self.hindsight_adapter.call_tool("retain", retain_arguments)
 
 
 class StdioSubprocessAdapter:
@@ -930,7 +1068,7 @@ def _serena_stdio(home: str, workspace: str) -> dict:
         f"{home}/.local/bin/uvx",
         [
             "--from",
-            "git+https://github.com/oraios/serena",
+            "git+https://github.com/oraios/serena@1bbe53546124c00e4238972f1599a91fbf8c6539",
             "serena",
             "start-mcp-server",
             "--project",
@@ -1026,8 +1164,14 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     dcm_code_stdio = _stdio(
         f"{venv_bin}/engram-search-dcm", env={"COCOINDEX_PG_URL": _PG_URL, "HF_HUB_OFFLINE": "1"}, shared_key="dcm-code"
     )
-    for repo in DCM_REPOS:
-        registry[f"dcm-{repo}"] = {
+    # The architecture and control-plane checkouts are the two DCM review
+    # workspaces whose old MCP links predate the unified gateway. Keep their
+    # exact directory names as routes so the plugin can derive them without a
+    # special alias; the remaining DCM routes retain their established
+    # dcm-<repo> names.
+    for repo in (*DCM_REPOS, "dcm", "control-plane"):
+        route = repo if repo in {"dcm", "control-plane"} else f"dcm-{repo}"
+        registry[route] = {
             "docs": _hindsight("dcm-docs"),
             "issues": _hindsight("dcm-issues"),
             "code": dcm_code_stdio,
@@ -1282,6 +1426,14 @@ def build_backend_adapters(registry: dict[str, dict[str, dict]]) -> dict[str, di
                 adapters[project][backend_key] = shared_stdio_cache[shared_key]
             else:
                 adapters[project][backend_key] = StdioSubprocessAdapter(spec["command"], spec["args"], spec["env"])
+
+        # Hindsight does not expose a content-write tool for pinned mental
+        # models. Add a gateway-owned replacement tool beside each writable
+        # docs/issues bank without changing the underlying adapter type.
+        for bank_key in ("docs", "issues"):
+            hindsight_adapter = adapters[project].get(bank_key)
+            if hindsight_adapter is not None:
+                adapters[project][f"{bank_key}_manual"] = ManualMentalModelAdapter(hindsight_adapter)
 
     return adapters
 

@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { deriveIdentity, buildMcpConfig } from "./identity"
+import {
+  buildMcpConfig,
+  deriveIdentity,
+  normalizeRemote,
+  resolveRepositoryOptions,
+} from "./identity"
 
 describe("deriveIdentity", () => {
   test("single repo, main branch, zero options: family and project both default to directory name, no branch suffix", () => {
@@ -74,6 +79,58 @@ describe("deriveIdentity", () => {
     const id = deriveIdentity({ directoryBasename: "engram", branch: undefined, options: {} })
     expect(id.branchSuffix).toBe("main")
     expect(id.project).toBe("engram")
+  })
+
+  test("directory routes override remote routes and top-level options", () => {
+    const options = resolveRepositoryOptions({
+      directory: "/workspace/service-api",
+      remote: "git@github.com:acme/service-api.git",
+      options: {
+        project: "default-project",
+        family: "default-family",
+        repositories: {
+          remotes: {
+            "https://github.com/acme/service-api": {
+              project: "remote-project",
+              family: "remote-family",
+            },
+          },
+          directories: {
+            "/workspace/service-api": {
+              project: "directory-project",
+              family: "directory-family",
+            },
+          },
+        },
+      },
+    })
+
+    expect(options.project).toBe("directory-project")
+    expect(options.family).toBe("directory-family")
+  })
+
+  test("remote route keys normalize SSH and HTTPS forms", () => {
+    expect(normalizeRemote("git@github.com:Acme/Service-API.git")).toBe("https://github.com/acme/service-api")
+    expect(normalizeRemote("https://github.com/acme/service-api/")).toBe("https://github.com/acme/service-api")
+  })
+
+  test("unmatched repository does not inherit another repository's branch routes", () => {
+    const options = resolveRepositoryOptions({
+      directory: "/workspace/service-api",
+      remote: "https://github.com/acme/service-api",
+      options: {
+        repositories: {
+          remotes: {
+            "https://github.com/acme/other": {
+              branchRoutes: { "release/v1.5": "other-v1.5" },
+            },
+          },
+        },
+      },
+    })
+
+    const id = deriveIdentity({ directoryBasename: "service-api", branch: "release/v1.5", options })
+    expect(id.project).toBe("service-api")
   })
 })
 

@@ -257,6 +257,7 @@ the full list and what each one means):
 | [Call-Graph Design](docs/CALL_GRAPH_DESIGN.md) | How call-graph extraction, resolution, clustering, and caching actually work |
 | [Call-Graph Findings](docs/CALL_GRAPH_CLUSTERING.md) | Chronological spike + multi-org rollout findings, bugs found, precision measurements |
 | [Metrics & Monitoring](docs/METRICS.md) | Effectiveness tracking, proactive recall, triage, report interpretation |
+| [MCP Response-Shaping Spike](docs/MCP_RESPONSE_SHAPING_BENCHMARK.md) | Disabled lossless response-shaping experiment and live findings |
 | [Effectiveness Dashboard](docs/DASHBOARD.md) | Daily metrics trend, updated on-demand via `engram-nightly-learn` |
 | [Research Findings](docs/FINDINGS.md) | Empirical results, incidents, and lessons learned |
 

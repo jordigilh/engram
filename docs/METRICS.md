@@ -116,6 +116,19 @@ section: total/average tokens, and a per-tool breakdown ranked by token
 consumption. Pure local aggregation over the JSONL file above -- no LLM
 call involved.
 
+### Response-Shaping Spike
+
+The experimental lexical JSON-whitespace compactor lives in
+`spike/response_shaping.py` and is not imported or invoked by the production
+gateway. The live benchmark found that Hindsight already returns compact JSON,
+so the spike produced `0.0%` savings while adding unnecessary response-scan
+work. See `docs/MCP_RESPONSE_SHAPING_BENCHMARK.md` for the findings.
+
+If a future model-facing compaction strategy is developed, it should remain a
+separate experiment until it demonstrates useful semantic reduction on real
+traffic and preserves identifiers, provenance, paths, lines, graph edges,
+diagnostics, and evidence.
+
 ### Nightly: Effectiveness Analysis
 
 The nightly script (`nightly-learn.py`) produces two outputs:

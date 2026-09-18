@@ -469,10 +469,12 @@ async def handle_tools_call(
         )
         return _jsonrpc_error_result(message_id, f"backend {backend_key!r} failed: {exc}")
 
-    text = _extract_result_text(result)
+    result_text = _extract_result_text(result)
     _log_gateway_call(
         project=project, backend=backend_key, tool=tool_name,
-        is_error=bool(result.get("isError")), result_chars=len(text), est_tokens=_estimate_tokens(text),
+        is_error=bool(result.get("isError")),
+        result_chars=len(result_text),
+        est_tokens=_estimate_tokens(result_text),
     )
     return _jsonrpc_success_result(message_id, result)
 

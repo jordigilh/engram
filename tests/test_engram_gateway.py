@@ -476,6 +476,25 @@ class TestGatewayCallMetricsLogging:
         assert entry["is_error"] is False
         assert entry["result_chars"] == len("hello world")
         assert entry["est_tokens"] == 2
+        assert "output_chars" not in entry
+        assert "savings_tokens" not in entry
+
+    def test_successful_call_returns_backend_result_without_spike_shaping(self, engram_gateway, tmp_path, monkeypatch):
+        log_path = tmp_path / "gateway-calls.jsonl"
+        monkeypatch.setattr(engram_gateway, "GATEWAY_CALLS_LOG", log_path)
+
+        original = '{ "items": [ 1, 2, 3 ], "note": "keep  spaces" }'
+        docs = FakeAdapter(call_results={"recall": {"content": [{"type": "text", "text": original}], "isError": False}})
+        catalog = {"docs_recall": ("docs", "recall")}
+        message = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "docs_recall", "arguments": {}}}
+
+        result = asyncio.run(engram_gateway.handle_tools_call(message, catalog, {"docs": docs}, project="engram"))
+
+        assert result["result"]["content"][0]["text"] == original
+        entry = json.loads(log_path.read_text().strip())
+        assert entry["result_chars"] == len(original)
+        assert entry["est_tokens"] == engram_gateway._estimate_tokens(original)
+        assert "shaping" not in entry
 
     def test_project_defaults_to_none_when_not_passed(self, engram_gateway, tmp_path, monkeypatch):
         """Existing call sites/tests predate the `project` param -- must stay

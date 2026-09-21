@@ -13,6 +13,7 @@ _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _RUNNER_PREFIX = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z\s+")
 _TASK_ID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE)
 _ISSUE_REF = re.compile(r"\b(?:E2E-FP-\d+-\d+|FP-[A-Z0-9-]+|issue-\d+)\b", re.IGNORECASE)
+_SCENARIO_ID = re.compile(r"\bE2E-[A-Z0-9]+(?:-[A-Z0-9]+)+\b", re.IGNORECASE)
 _RESOURCE_KINDS = {
     "deployment": "Deployment",
     "statefulset": "StatefulSet",
@@ -71,6 +72,7 @@ def extract_test_failures(text: str) -> list[dict[str, Any]]:
             "failure_timestamp": timestamp.group(1) if timestamp else None,
             "task_ids": sorted(set(_TASK_ID.findall(block)), key=str.lower),
             "issue_refs": sorted(set(_ISSUE_REF.findall(block)), key=str.lower),
+            "scenario_ids": sorted(set(_SCENARIO_ID.findall(block)), key=str.lower),
             "resources": _extract_resources(block),
             "namespaces": sorted(
                 {
@@ -82,6 +84,18 @@ def extract_test_failures(text: str) -> list[dict[str, Any]]:
             ),
         })
     return failures
+
+
+def extract_expected_actual(text: str) -> dict[str, str]:
+    """Extract the received and expected values from a Gomega assertion."""
+    match = re.search(
+        r"Expected\s*\n\s*(?:<[^>]+>:\s*)?(?P<actual>.+?)\s+to be\s+(?P<expected>[^\r\n]+)",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return {}
+    return {"expected": match.group("expected").strip(), "actual": match.group("actual").strip()}
 
 
 def _extract_resources(block: str) -> list[str]:

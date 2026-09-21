@@ -47,3 +47,24 @@ def select_artifact(
         exact = [artifact for artifact in hinted if (artifact.get("name") or "").casefold() == normalized_hint]
         candidates = exact or hinted
     return min(candidates, key=lambda artifact: _sort_key(artifact, job_name), default=None)
+
+
+def select_sibling_artifacts(
+    artifacts: Iterable[dict[str, Any]],
+    *,
+    job_name: str | None = None,
+    primary_artifact: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Select deterministic service/log artifacts adjacent to the primary gather."""
+    primary_id = (primary_artifact or {}).get("artifact_id")
+    candidates = []
+    for artifact in artifacts:
+        if artifact.get("expired") or artifact.get("artifact_id") == primary_id:
+            continue
+        name = (artifact.get("name") or "").lower()
+        if not any(marker in name for marker in ("integration", "service", "log")):
+            continue
+        if job_name and _job_match_count(name, job_name) == 0:
+            continue
+        candidates.append(artifact)
+    return sorted(candidates, key=lambda artifact: _sort_key(artifact, job_name))

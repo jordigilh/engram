@@ -35,10 +35,10 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .artifact_selection import is_must_gather, select_artifact
+from .artifact_selection import is_must_gather, select_artifact, select_sibling_artifacts
 from .branch_scope import normalize_branch
 from .normalize import iter_evidence
-from .testlog import classify_failure, deduplicate_failures, extract_test_failures, infer_rr_ids
+from .testlog import classify_failure, deduplicate_failures, extract_expected_actual, extract_test_failures, infer_rr_ids
 
 DOWNSTREAM_JOB_RE = re.compile(r"summary|merge.?gate|report", re.IGNORECASE)
 
@@ -173,6 +173,11 @@ def discover_ci_urls(
     ]
     candidates = [item for item in artifact_records if not item.get("expired")]
     artifact = select_artifact(candidates, job_name=job.get("name"), artifact_hint=artifact_hint)
+    sibling_artifacts = select_sibling_artifacts(
+        candidates,
+        job_name=job.get("name"),
+        primary_artifact=artifact,
+    )
     if artifact_hint and artifact is None:
         warnings.append(f"artifact_hint {artifact_hint!r} matched nothing; falling back to must-gather match")
         artifact = select_artifact(candidates, job_name=job.get("name"))
@@ -202,6 +207,7 @@ def discover_ci_urls(
         },
         "log_url": log_url,
         "artifact": artifact,
+        "sibling_artifacts": sibling_artifacts,
         "artifact_url": artifact["url"] if artifact else None,
         "warnings": warnings,
     }
@@ -248,7 +254,7 @@ def _evidence_summary(evidence: list[Any]) -> dict[str, Any]:
 
 
 def _failure_manifest_entry(
-    run_id: str, job_id: str, failure: dict[str, Any], log_excerpt_limit: int = 2000
+    run_id: str, job_id: str, failure: dict[str, Any], log_excerpt_limit: int = 12000
 ) -> dict[str, Any]:
     return {
         "run_id": run_id,
@@ -259,6 +265,8 @@ def _failure_manifest_entry(
         "failure_timestamp": failure["failure_timestamp"],
         "task_ids": failure["task_ids"],
         "issue_refs": failure["issue_refs"],
+        "scenario_ids": failure.get("scenario_ids", []),
+        **extract_expected_actual(failure["failure_text"]),
         "resources": failure["resources"],
         "namespaces": failure["namespaces"],
         "failure_excerpt": failure["failure_text"][:log_excerpt_limit],
@@ -351,8 +359,23 @@ def generate_rca(
             "indexed_evidence": 0,
             "sources": {"test_log_url": test_log_url, "must_gather_url": None},
         }
+        source_manifest_path = root / ".engram" / "source-manifest.json"
+        source_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        source_manifest_path.write_text(
+            json.dumps({"job_log": {"url": test_log_url, "source_file": "ci/job.log"}, "artifacts": []}) + "\n"
+        )
     else:
-        manifest = ingest_urls(test_log_url, must_gather_url, destination=root)
+        siblings = (discovery or {}).get("sibling_artifacts", [])
+        if siblings:
+            manifest = ingest_urls(
+                test_log_url,
+                must_gather_url,
+                destination=root,
+                sibling_artifacts=siblings,
+                primary_artifact=(discovery or {}).get("artifact"),
+            )
+        else:
+            manifest = ingest_urls(test_log_url, must_gather_url, destination=root)
 
     log_text = (root / manifest["job_log"]).read_text(encoding="utf-8", errors="replace")
     evidence = list(iter_evidence(root))
@@ -361,6 +384,11 @@ def generate_rca(
     failures = extract_test_failures(log_text)
     unique_failures = deduplicate_failures(failures)
     failure_manifest = [_failure_manifest_entry(str(run_id), str(job_id), failure) for failure in unique_failures]
+    for entry in failure_manifest:
+        entry["job_url"] = test_log_url
+        entry["source_artifact"] = (discovery or {}).get("artifact") or (
+            {"url": must_gather_url} if must_gather_url else None
+        )
 
     # RR-ID inference against must-gather evidence, same as the batch backfill.
     resolved = 0
@@ -454,6 +482,22 @@ def generate_rca(
             "dossiers_generated": len(dossiers),
             "indexed_evidence": len(evidence),
             "artifact_files": manifest.get("artifact_files", 0),
+            "failure_anchors_preserved": sum(
+                bool(dossier.get("failure_anchor", {}).get("failure_excerpt")) for dossier in dossiers
+            ),
+            "terminal_failures_observed": sum(
+                "service_terminal_failure"
+                in dossier.get("summary", {}).get("lifecycle_completeness", {}).get("observed_events", [])
+                for dossier in dossiers
+            ),
+            "artifact_scope_gaps": sum(
+                dossier.get("summary", {}).get("lifecycle_completeness", {}).get("coverage") == "artifact_scope_gap"
+                for dossier in dossiers
+            ),
+            "effective_assessments": sum(
+                dossier.get("summary", {}).get("status") not in {"not_observed", "insufficient_evidence"}
+                for dossier in dossiers
+            ),
         },
         "failure_manifest": failure_manifest,
         "dossiers": dossiers,

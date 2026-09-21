@@ -265,6 +265,8 @@ def _from_value(
     rr_ids = extract_rr_ids(content)
     rr_id = rr_ids[0] if rr_ids else None
     metadata["rr_ids"] = rr_ids
+    if evidence_type == "failure_anchor":
+        metadata["failure_anchor"] = True
     structured = _structured_metadata(value, content)
     if structured:
         metadata["structured"] = structured
@@ -308,12 +310,14 @@ def _load_yaml_documents(path: Path) -> Iterator[Any]:
 
 
 def iter_evidence(root: Path) -> Iterator[Evidence]:
-    """Parse supported must-gather YAML, JSON, and log files deterministically."""
+    """Parse supported must-gather YAML, JSON, failure-anchor, and log files."""
     ordinal = 0
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.name.endswith(".pre-sanitize"):
             continue
         relative = str(path.relative_to(root))
+        if relative == ".engram" or relative.startswith(".engram/"):
+            continue
         suffix = path.suffix.lower()
         try:
             if suffix in {".yaml", ".yml"}:
@@ -336,6 +340,18 @@ def iter_evidence(root: Path) -> Iterator[Evidence]:
                 values = value.get("items", []) if isinstance(value, dict) and isinstance(value.get("items"), list) else [value]
                 for item in values:
                     yield _from_value(item, relative, ordinal, "json_record")
+                    ordinal += 1
+            elif path.name == "failure-anchors.jsonl":
+                for line_number, line in enumerate(
+                    path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
+                ):
+                    if not line.strip():
+                        continue
+                    try:
+                        value = json.loads(line)
+                    except json.JSONDecodeError:
+                        value = line
+                    yield _from_value(value, relative, ordinal, "failure_anchor", source_line=line_number)
                     ordinal += 1
             elif path.name.endswith(".log") or path.name == "logs.txt":
                 for line_number, line in enumerate(

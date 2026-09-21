@@ -46,6 +46,21 @@ def correlate(failure: TestFailure, evidence: Iterable[Evidence]) -> list[Eviden
             or any(workflow.casefold() in item.content.casefold() for workflow in blocking_workflows)
         ):
             related.append(item)
+    # Service-specific sibling logs often identify the RR only on the session
+    # creation line, then emit terminal events without repeating that ID.
+    related_times = {
+        item.timestamp
+        for item in related
+        if item.timestamp and any(marker in item.source_file.lower() for marker in ("integration", "service", "aianalysis"))
+    }
+    if related_times:
+        for item in evidence:
+            if not item.timestamp or not any(
+                marker in item.source_file.lower() for marker in ("integration", "service", "aianalysis")
+            ):
+                continue
+            if any(abs((item.timestamp - timestamp).total_seconds()) <= 10 for timestamp in related_times):
+                related.append(item)
     # A resource name alone is not a safe join: the fixture contains many
     # independent memory-eater incidents in different namespaces.
     unique = {item.id: item for item in related}

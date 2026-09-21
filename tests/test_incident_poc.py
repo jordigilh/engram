@@ -251,6 +251,39 @@ def test_ingest_urls_writes_log_and_extracts_archive(tmp_path: Path, monkeypatch
     assert (tmp_path / "must-gather" / "must-gather" / "events.yaml").exists()
 
 
+def test_ingest_urls_indexes_selected_sibling_artifact(tmp_path: Path, monkeypatch) -> None:
+    primary = io.BytesIO()
+    with zipfile.ZipFile(primary, "w") as archive:
+        archive.writestr("must-gather/resources.yaml", "kind: Event\nmessage: rr-a-1\n")
+    sibling = io.BytesIO()
+    with zipfile.ZipFile(sibling, "w") as archive:
+        archive.writestr("integration-aianalysis.log", "rr-a-1 Analysis failed during investigation\n")
+    downloads = {
+        "https://api.github.com/repos/o/r/actions/jobs/2/logs": b"rr-a-1 failed\n",
+        "https://api.github.com/repos/o/r/actions/artifacts/3/zip": primary.getvalue(),
+        "https://api.github.com/repos/o/r/actions/artifacts/4/zip": sibling.getvalue(),
+    }
+    monkeypatch.setattr("engram.incident.remote._download", downloads.__getitem__)
+
+    manifest = ingest_urls(
+        "https://github.com/o/r/actions/runs/1/job/2",
+        "https://github.com/o/r/actions/runs/1/artifacts/3",
+        destination=tmp_path,
+        sibling_artifacts=[
+            {
+                "artifact_id": 4,
+                "name": "integration-log-aianalysis",
+                "url": "https://github.com/o/r/actions/runs/1/artifacts/4",
+            }
+        ],
+    )
+
+    assert manifest["artifact_files"] == 2
+    assert (tmp_path / "siblings" / "integration-log-aianalysis-4" / "integration-aianalysis.log").exists()
+    assert len(manifest["artifacts"]) == 2
+    assert len(list(iter_evidence(tmp_path))) == 3
+
+
 def test_promote_incident_aggregates_repeated_failure_and_links_changes(tmp_path: Path) -> None:
     _write_fixture(tmp_path / "evidence")
     context = triage_test_failure(

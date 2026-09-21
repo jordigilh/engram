@@ -10,12 +10,18 @@ from typing import Any
 
 from engram.incident.remote import ingest_urls
 from engram.incident.normalize import iter_evidence
-from engram.incident.artifact_selection import select_artifact
+from engram.incident.artifact_selection import select_artifact, select_sibling_artifacts
 from engram.incident.postgres_retention import promote_incident_pg
 from engram.incident.quality import validate_dossier
 from engram.incident.retention import promote_incident
 from engram.incident.service import triage_test_failure
-from engram.incident.testlog import classify_failure, deduplicate_failures, extract_test_failures, infer_rr_ids
+from engram.incident.testlog import (
+    classify_failure,
+    deduplicate_failures,
+    extract_expected_actual,
+    extract_test_failures,
+    infer_rr_ids,
+)
 
 
 def _select_artifact(run: dict[str, Any], job: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -53,6 +59,10 @@ def backfill(
         "candidates_promoted": 0,
         "promotion_skipped_quality": 0,
         "promotion_errors": 0,
+        "failure_anchors_preserved": 0,
+        "terminal_failures_observed": 0,
+        "artifact_scope_gaps": 0,
+        "effective_assessments": 0,
     }
     failure_manifest: list[dict[str, Any]] = []
     for run in runs:
@@ -66,7 +76,21 @@ def backfill(
                 continue
             with tempfile.TemporaryDirectory(prefix=f"engram-rca-{run['run_id']}-") as temp_dir:
                 try:
-                    ingested = ingest_urls(job["log_url"], artifact["url"], destination=Path(temp_dir))
+                    siblings = select_sibling_artifacts(
+                        run.get("artifacts", run.get("relevant_artifacts", [])),
+                        job_name=job.get("name"),
+                        primary_artifact=artifact,
+                    )
+                    if siblings:
+                        ingested = ingest_urls(
+                            job["log_url"],
+                            artifact["url"],
+                            destination=Path(temp_dir),
+                            sibling_artifacts=siblings,
+                            primary_artifact=artifact,
+                        )
+                    else:
+                        ingested = ingest_urls(job["log_url"], artifact["url"], destination=Path(temp_dir))
                     metrics["jobs_downloaded"] += 1
                     log_text = (Path(temp_dir) / ingested["job_log"]).read_text(encoding="utf-8", errors="replace")
                     failures = extract_test_failures(log_text)
@@ -85,9 +109,11 @@ def backfill(
                             "failure_timestamp": failure["failure_timestamp"],
                             "task_ids": failure["task_ids"],
                             "issue_refs": failure["issue_refs"],
+                            "scenario_ids": failure.get("scenario_ids", []),
+                            **extract_expected_actual(failure["failure_text"]),
                             "resources": failure["resources"],
                             "namespaces": failure["namespaces"],
-                            "failure_excerpt": failure["failure_text"][:2000],
+                            "failure_excerpt": failure["failure_text"][:12000],
                             "fallback_anchor_candidate": bool(
                                 not failure["rr_id"]
                                 and (
@@ -96,6 +122,12 @@ def backfill(
                                 )
                             ),
                             "classification": classify_failure(failure),
+                            "job_url": job.get("log_url"),
+                            "source_artifact": {
+                                "artifact_id": artifact.get("artifact_id"),
+                                "name": artifact.get("name"),
+                                "url": artifact.get("url"),
+                            },
                         })
                         if not failure["rr_id"]:
                             metrics["failures_without_rr"] += 1
@@ -131,6 +163,17 @@ def backfill(
                         destination_path.parent.mkdir(parents=True, exist_ok=True)
                         destination_path.write_text(json.dumps(context, indent=2, default=str) + "\n")
                         metrics["dossiers_generated"] += 1
+                        if context.get("failure_anchor", {}).get("failure_excerpt"):
+                            metrics["failure_anchors_preserved"] += 1
+                        if context.get("summary", {}).get("lifecycle_completeness", {}).get("coverage") == "artifact_scope_gap":
+                            metrics["artifact_scope_gaps"] += 1
+                        if context.get("summary", {}).get("lifecycle_completeness", {}).get("observed_events"):
+                            metrics["terminal_failures_observed"] += int(
+                                "service_terminal_failure"
+                                in context["summary"]["lifecycle_completeness"]["observed_events"]
+                            )
+                        if context.get("summary", {}).get("status") not in {"not_observed", "insufficient_evidence"}:
+                            metrics["effective_assessments"] += 1
                         if not promote:
                             continue
                         quality_problems = validate_dossier(context)

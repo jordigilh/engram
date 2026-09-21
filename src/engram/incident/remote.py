@@ -14,6 +14,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 from dataclasses import asdict
+from typing import Any, Iterable
 
 MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 500 * 1024 * 1024
@@ -154,8 +155,19 @@ def _expand_nested_archives(root: Path) -> int:
     return count
 
 
-def ingest_urls(test_log_url: str, must_gather_url: str, destination: Path | None = None) -> dict:
-    """Download and safely extract one CI log plus one must-gather artifact."""
+def _artifact_directory_name(name: str | None, artifact_id: Any) -> str:
+    value = re.sub(r"[^a-zA-Z0-9._-]+", "-", name or "artifact").strip(".-")
+    return f"{value or 'artifact'}-{artifact_id or 'unknown'}"
+
+
+def ingest_urls(
+    test_log_url: str,
+    must_gather_url: str,
+    destination: Path | None = None,
+    sibling_artifacts: Iterable[dict[str, Any]] | None = None,
+    primary_artifact: dict[str, Any] | None = None,
+) -> dict:
+    """Download one CI log, a primary gather, and selected sibling artifacts."""
     root = destination or Path(tempfile.mkdtemp(prefix="engram-kubernaut-rca-"))
     root.mkdir(parents=True, exist_ok=True)
     log_api_url, log_kind = github_api_url(test_log_url)
@@ -170,6 +182,44 @@ def ingest_urls(test_log_url: str, must_gather_url: str, destination: Path | Non
     artifact_root.mkdir(parents=True, exist_ok=True)
     files = _extract_archive(_download(artifact_api_url), artifact_root)
     files += _expand_nested_archives(artifact_root)
+    source_artifacts = [
+        {
+            "artifact_id": (primary_artifact or {}).get("artifact_id"),
+            "name": (primary_artifact or {}).get("name"),
+            "url": must_gather_url,
+            "root": "must-gather",
+            "role": "primary",
+        }
+    ]
+    for sibling in sibling_artifacts or ():
+        sibling_url = sibling.get("url")
+        if not sibling_url:
+            continue
+        sibling_api_url, sibling_kind = github_api_url(sibling_url)
+        if sibling_kind != "artifact":
+            raise ValueError("sibling_artifacts entries must identify GitHub Actions artifacts")
+        sibling_root = root / "siblings" / _artifact_directory_name(
+            sibling.get("name"), sibling.get("artifact_id")
+        )
+        sibling_root.mkdir(parents=True, exist_ok=True)
+        files += _extract_archive(_download(sibling_api_url), sibling_root)
+        files += _expand_nested_archives(sibling_root)
+        source_artifacts.append(
+            {
+                "artifact_id": sibling.get("artifact_id"),
+                "name": sibling.get("name"),
+                "url": sibling_url,
+                "root": str(sibling_root.relative_to(root)),
+                "role": "sibling",
+            }
+        )
+    source_manifest = {
+        "job_log": {"url": test_log_url, "source_file": "ci/job.log"},
+        "artifacts": source_artifacts,
+    }
+    source_manifest_path = root / ".engram" / "source-manifest.json"
+    source_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    source_manifest_path.write_text(json.dumps(source_manifest, indent=2) + "\n", encoding="utf-8")
     from .normalize import iter_evidence
 
     index_path = root / ".engram" / "evidence-index.jsonl"
@@ -185,5 +235,6 @@ def ingest_urls(test_log_url: str, must_gather_url: str, destination: Path | Non
         "artifact_files": files,
         "indexed_evidence": indexed,
         "index_file": str(index_path.relative_to(root)),
+        "artifacts": source_artifacts,
         "sources": {"test_log_url": test_log_url, "must_gather_url": must_gather_url},
     }

@@ -1,4 +1,4 @@
-from engram.incident.artifact_selection import is_must_gather, select_artifact
+from engram.incident.artifact_selection import is_must_gather, select_artifact, select_sibling_artifacts
 from engram.pipeline.kubernaut_corpus_inventory import GitHubActionsClient
 from engram.pipeline.kubernaut_rca_backfill import _select_artifact
 
@@ -43,3 +43,19 @@ def test_inventory_records_only_must_gather_artifacts() -> None:
     assert [item["name"] for item in result["runs"][0]["relevant_artifacts"]] == [
         "must-gather-logs-e2e-fleet-1"
     ]
+
+
+def test_sibling_selection_includes_matching_integration_logs() -> None:
+    artifacts = [
+        {"artifact_id": 1, "name": "must-gather-logs-integration-aianalysis"},
+        {"artifact_id": 2, "name": "integration-log-aianalysis"},
+        {"artifact_id": 3, "name": "coverage-e2e-fullpipeline"},
+    ]
+
+    selected = select_sibling_artifacts(
+        artifacts,
+        job_name="E2E (aianalysis)",
+        primary_artifact=artifacts[0],
+    )
+
+    assert [item["name"] for item in selected] == ["integration-log-aianalysis"]

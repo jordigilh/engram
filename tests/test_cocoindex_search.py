@@ -189,16 +189,20 @@ class TestBranchWhere:
 
 
 class TestSelectPatternRoots:
-    def test_no_scoping_returns_all_three_main_repos(self, cocoindex_search):
+    def test_no_scoping_returns_all_configured_main_sources(self, cocoindex_search):
         tags = [r[0] for r in cocoindex_search._select_pattern_roots(None, None)]
-        assert set(tags) == {"kubernaut", "kubernaut-operator", "kubernaut-console"}
+        assert set(tags) == {
+            "kubernaut", "kubernaut-operator", "kubernaut-console",
+            "kubernaut-demo-scenarios",
+        }
 
-    def test_release_line_without_repo_returns_all_three_tagged_repos(self, cocoindex_search):
+    def test_release_line_without_repo_returns_all_configured_sources(self, cocoindex_search):
         tags = [r[0] for r in cocoindex_search._select_pattern_roots(None, "v1.5")]
         assert set(tags) == {
             "kubernaut@release-v1.5",
             "kubernaut-operator@release-v1.5",
             "kubernaut-console@release-v1.5",
+            "kubernaut-demo-scenarios",
         }
 
     def test_repo_and_release_line_returns_single_exact_tag(self, cocoindex_search):

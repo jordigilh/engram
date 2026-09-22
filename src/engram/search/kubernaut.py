@@ -35,6 +35,7 @@ from typing import Any
 # be run via `-m`/an installed console script (not yet true in this repo).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 from engram import callgraph, chunking  # noqa: E402
+from engram.configured_sources import ConfiguredSource, load_configured_sources  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,17 +54,18 @@ RRF_K = 60  # RRF constant — standard value from the original paper
 # .env that already configures the ingestion flow's source directories also
 # configures pattern search's live file walk with no extra setup.
 KUBERNAUT_CODE_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_CODE_DIR", os.path.expanduser("~/.engram/watch/kubernaut"),
+    "ENGRAM_CODE_DIR", os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut"),
 ))
 KUBERNAUT_OPERATOR_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_OPERATOR_DIR", os.path.expanduser("~/.engram/watch/kubernaut-operator"),
+    "ENGRAM_OPERATOR_DIR", os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-operator"),
 ))
 KUBERNAUT_CONSOLE_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_CONSOLE_DIR", os.path.expanduser("~/.engram/watch/kubernaut-console"),
+    "ENGRAM_CONSOLE_DIR", os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-console"),
 ))
 KUBERNAUT_SCENARIOS_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_SCENARIOS_DIR", os.path.expanduser("~/.engram/watch/kubernaut-demo-scenarios"),
+    "ENGRAM_SCENARIOS_DIR", os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-demo-scenarios"),
 ))
+EXTRA_SOURCES: tuple[ConfiguredSource, ...] = load_configured_sources()
 
 SCENARIOS_CODE_INCLUDE_PATTERNS = [
     "**/*.yaml", "**/*.yml", "**/*.json", "**/*.sh", "**/*.tape",
@@ -95,6 +97,16 @@ _PATTERN_SEARCH_ROOTS = [
     ("kubernaut-demo-scenarios", KUBERNAUT_SCENARIOS_DIR,
      SCENARIOS_CODE_INCLUDE_PATTERNS, SCENARIOS_CODE_EXCLUDE_PATTERNS),
 ]
+_PATTERN_SEARCH_ROOTS.extend(
+    (
+        source.tag,
+        source.root,
+        list(source.code_include),
+        list(source.code_exclude),
+    )
+    for source in EXTRA_SOURCES
+    if source.code_include
+)
 
 # Call-graph scope (docs/CALL_GRAPH_CLUSTERING.md, 2026-08-24 Phase 5):
 # deliberately narrower than _PATTERN_SEARCH_ROOTS above in one dimension --
@@ -136,9 +148,10 @@ KUBERNAUT_RELEASE_LINES = [
 ]
 # Set by mcp.json (per-workspace ${workspaceFolder} substitution in the
 # kubernaut-family templates) to whichever live dev clone this MCP server
-# instance was spawned alongside -- NOT one of the read-only mirrors, since
-# it's the *caller's actual checkout* we need to detect, not what's mirrored.
-KUBERNAUT_LIVE_CLONE_DIR = os.environ.get("KUBERNAUT_LIVE_CLONE_DIR")
+# instance was spawned alongside. The code root is the safe local fallback for
+# direct/manual launches, so branch detection and pattern search use the same
+# worktree as the embedding flow by default.
+KUBERNAUT_LIVE_CLONE_DIR = os.environ.get("KUBERNAUT_LIVE_CLONE_DIR", str(KUBERNAUT_CODE_DIR))
 
 
 def _release_line_dir(repo_name: str, line: str) -> pathlib.Path:
@@ -437,10 +450,14 @@ def _select_pattern_roots(repo: str | None, release_line: str | None) -> list[tu
     """Pick which _PATTERN_SEARCH_ROOTS entries apply, given a resolved repo
     scope + release line. release_line=None means main -- the plain,
     untagged repo_tags ("kubernaut", not "kubernaut@release-v1.5")."""
-    repo_names = ("kubernaut", "kubernaut-operator", "kubernaut-console")
+    repo_names = tuple(root[0] for root in _PATTERN_SEARCH_ROOTS if "@release-" not in root[0])
     if release_line is not None:
+        requested = (repo,) if repo else repo_names
         target_tags = {
-            f"{r}@release-{release_line}" for r in ((repo,) if repo else repo_names)
+            f"{tag}@release-{release_line}"
+            if tag in {"kubernaut", "kubernaut-operator", "kubernaut-console"}
+            else tag
+            for tag in requested
         }
     else:
         target_tags = {repo} if repo else set(repo_names)

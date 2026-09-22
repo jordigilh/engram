@@ -671,9 +671,22 @@ class TestBuildProjectRegistry:
     def test_covers_every_onboarded_project(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
 
-        assert len(registry) == 36  # includes exact routes for DCM review workspaces
+        assert len(registry) == 37  # includes exact routes for DCM review workspaces
         assert "kubernaut-v1.6" not in registry
         assert "rhdh-plugins" not in registry  # decommissioned 2026-09-09
+
+    def test_kubernaut_demo_scenarios_has_shared_code_and_scoped_serena(self, engram_gateway):
+        registry = engram_gateway.build_project_registry("/home/u")
+
+        assert set(registry["kubernaut-demo-scenarios"]) == {"docs", "issues", "code", "serena"}
+        assert registry["kubernaut-demo-scenarios"]["code"] == {
+            "kind": "http",
+            "url": "http://127.0.0.1:8891/mcp",
+        }
+        assert registry["kubernaut-demo-scenarios"]["serena"] == {
+            "kind": "http",
+            "url": "http://127.0.0.1:8893/mcp/kubernaut-demo-scenarios",
+        }
 
     def test_dcm_review_workspaces_have_exact_routes(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
@@ -696,6 +709,16 @@ class TestBuildProjectRegistry:
         assert spec["code"] == {"kind": "http", "url": "http://127.0.0.1:8891/mcp"}
         assert spec["rca"] == {"kind": "http", "url": "http://127.0.0.1:8897/mcp"}
         assert spec["serena"] == {"kind": "http", "url": "http://127.0.0.1:8893/mcp/kubernaut-operator"}
+
+    def test_current_kubernaut_route_uses_codanna_directly(self, engram_gateway):
+        """The current workspace uses its Codanna MCP relay; the legacy
+        CocoIndex code backend remains available only on the other family
+        routes until they migrate."""
+        registry = engram_gateway.build_project_registry("/home/u")
+
+        assert set(registry["kubernaut"]) == {"docs", "issues", "rca", "serena"}
+        assert "code" not in registry["kubernaut"]
+        assert "code" in registry["kubernaut-operator"]
 
     def test_rca_backend_is_kubernaut_only(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")

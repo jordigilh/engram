@@ -9,6 +9,7 @@ does and why, see the [root README](../README.md).
 - [Key Design Decisions](#key-design-decisions)
 - [Architecture](#architecture)
 - [Hindsight vs. CocoIndex vs. Serena: Division of Labor](#hindsight-vs-cocoindex-vs-serena-division-of-labor)
+- [Semantic Code Intelligence: Findings and Pilot Decision](SEMANTIC_CODE_INTELLIGENCE.md)
 - [Knowledge Graph and Mental Models](#knowledge-graph-and-mental-models)
 - [How Correction Detection Works](#how-correction-detection-works)
 - [Backup and Restore](#backup-and-restore)

@@ -1162,12 +1162,11 @@ def build_app(projects: dict[str, dict[str, BackendAdapter]]):
 # capabilities a repo never had. See docs/findings/2026-08.md's 2026-08-21
 # rollout entry for the full survey this was built from.
 #
-# Explicitly excluded (see that entry for why): kubernaut-demo-scenarios (no
-# .cursor/mcp.json today -- nothing to consolidate) and the two
-# kubernaut-fix-1995-* scratch worktrees (serena still points directly at
-# the raw upstream daemon on :8892 rather than through the :8893 multiplex,
-# a stale/pre-multiplex config on what look like abandoned one-off
-# branch-fix clones -- not guessed at here).
+# Explicitly excluded (see that entry for why): the two kubernaut-fix-1995-*
+# scratch worktrees (serena still points directly at the raw upstream daemon
+# on :8892 rather than through the :8893 multiplex, a stale/pre-multiplex
+# config on what look like abandoned one-off branch-fix clones -- not guessed
+# at here).
 # ---------------------------------------------------------------------------
 
 _HINDSIGHT_BASE = "http://localhost:8888"
@@ -1253,9 +1252,17 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     def kubernaut_serena(project: str) -> dict:
         return _http(f"http://127.0.0.1:8893/mcp/{project}")
 
-    # `kubernaut` is the current main/v1.6 line. Keep only the v1.5 release
-    # route until v1.6 is GA; do not create a redundant kubernaut-v1.6 mount.
-    for name in ("kubernaut", "kubernaut-operator", "kubernaut-v1.5"):
+    # `kubernaut` is the current main/v1.6 line. Codanna is the primary code
+    # backend for that workspace; its local MCP relay performs the optional
+    # CocoIndex shadow comparison. Keep CocoIndex on the other family routes
+    # until their clients are migrated too.
+    registry["kubernaut"] = {
+        "docs": _hindsight("kubernaut-docs"),
+        "issues": _hindsight("kubernaut-issues"),
+        "rca": kubernaut_rca,
+        "serena": kubernaut_serena("kubernaut"),
+    }
+    for name in ("kubernaut-operator", "kubernaut-v1.5"):
         registry[name] = {
             "docs": _hindsight("kubernaut-docs"),
             "issues": _hindsight("kubernaut-issues"),
@@ -1263,6 +1270,12 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
             "rca": kubernaut_rca,
             "serena": kubernaut_serena(name),
         }
+    registry["kubernaut-demo-scenarios"] = {
+        "docs": _hindsight("kubernaut-docs"),
+        "issues": _hindsight("kubernaut-issues"),
+        "code": kubernaut_http_code,
+        "serena": kubernaut_serena("kubernaut-demo-scenarios"),
+    }
     registry["kubernaut-console"] = {
         "docs": _hindsight("kubernaut-docs"),
         "issues": _hindsight("kubernaut-issues"),

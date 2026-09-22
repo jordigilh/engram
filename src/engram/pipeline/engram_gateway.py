@@ -93,6 +93,16 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8896
 FORWARD_TIMEOUT_S = 60.0
 
+# Hindsight recall returns both a text JSON envelope and an equivalent
+# `structuredContent` object. The raw envelope is useful for debugging but is
+# too large and opaque for a model-facing MCP result, especially when a broad
+# query returns long document chunks. Keep recall bounded while preserving the
+# fields needed to identify and verify each fact.
+RECALL_SCHEMA_VERSION = "engram-recall.v1"
+MAX_RECALL_RESULTS = 8
+MAX_RECALL_SUMMARY_CHARS = 800
+MAX_RECALL_METADATA_VALUE_CHARS = 240
+
 # Gateway-owned call log, distinct from the Cursor-hook-authored
 # ~/.engram/logs/mcp-calls.jsonl (cursor/hooks/log-mcp-calls.sh). That
 # hook's `result_chars` is best-effort and frequently 0 -- its own comment
@@ -142,6 +152,148 @@ def _extract_result_text(result: dict) -> str:
     well-defined token cost to estimate for those here."""
     content = result.get("content") or []
     return "".join(item.get("text", "") for item in content if isinstance(item, dict) and item.get("type") == "text")
+
+
+def _bounded_text(value: object, limit: int) -> object:
+    if not isinstance(value, str) or len(value) <= limit:
+        return value
+    return f"{value[:limit].rstrip()}\n... [truncated; {len(value)} chars total]"
+
+
+def _recall_payload(result: dict) -> dict | None:
+    """Find the Hindsight recall envelope in either MCP result representation."""
+    structured = result.get("structuredContent")
+    if isinstance(structured, dict) and isinstance(structured.get("results"), list):
+        return structured
+
+    for item in result.get("content") or []:
+        if not isinstance(item, dict) or item.get("type") != "text":
+            continue
+        text = item.get("text")
+        if not isinstance(text, str):
+            continue
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(payload, dict) and isinstance(payload.get("results"), list):
+            return payload
+    return None
+
+
+def _normalize_recall_record(record: object) -> dict | None:
+    if not isinstance(record, dict):
+        return None
+
+    normalized: dict[str, object] = {}
+    for key in (
+        "id",
+        "fact_type",
+        "context",
+        "occurred_start",
+        "occurred_end",
+        "mentioned_at",
+        "document_id",
+        "tags",
+    ):
+        value = record.get(key)
+        if value is not None:
+            normalized[key] = value
+
+    metadata = record.get("metadata")
+    if isinstance(metadata, dict):
+        summary = metadata.get("key_sentences")
+        if not isinstance(summary, str) or not summary.strip():
+            summary = record.get("text")
+        if isinstance(summary, str):
+            normalized["summary"] = _bounded_text(summary, MAX_RECALL_SUMMARY_CHARS)
+
+        keywords = metadata.get("keywords")
+        if isinstance(keywords, str):
+            compact_keywords = [keyword.strip() for keyword in keywords.split(",") if keyword.strip()]
+            if compact_keywords:
+                normalized["keywords"] = compact_keywords
+
+        compact_metadata = {
+            str(key): _bounded_text(value, MAX_RECALL_METADATA_VALUE_CHARS)
+            for key, value in metadata.items()
+            if key not in {"key_sentences", "keywords"}
+            and isinstance(key, str)
+            and isinstance(value, (str, int, float, bool))
+        }
+        if compact_metadata:
+            normalized["metadata"] = compact_metadata
+    elif isinstance(record.get("text"), str):
+        normalized["summary"] = _bounded_text(record["text"], MAX_RECALL_SUMMARY_CHARS)
+
+    scores = record.get("scores")
+    if isinstance(scores, dict):
+        compact_scores = {
+            key: round(value, 4) if isinstance(value, (int, float)) else value
+            for key, value in scores.items()
+            if value is not None
+        }
+        if compact_scores:
+            normalized["scores"] = compact_scores
+
+    return normalized
+
+
+def _format_recall_text(records: list[dict], total: int) -> str:
+    lines = [
+        f"Engram recall ({len(records)} of {total} results; schema {RECALL_SCHEMA_VERSION})",
+    ]
+    for index, record in enumerate(records, 1):
+        labels = [str(record[key]) for key in ("fact_type", "context") if record.get(key)]
+        document_id = record.get("document_id")
+        if document_id:
+            labels.append(f"document={document_id}")
+        tags = record.get("tags")
+        if tags:
+            labels.append("tags=" + ",".join(str(tag) for tag in tags))
+        lines.append(f"\n[{index}] " + (" | ".join(labels) or "memory"))
+        if record.get("summary"):
+            lines.append(str(record["summary"]))
+    if total > len(records):
+        lines.append(f"\n... {total - len(records)} lower-ranked results omitted; narrow the query for more detail.")
+    return "\n".join(lines)
+
+
+def _normalize_recall_result(result: dict) -> dict:
+    """Return a bounded, readable and structured Hindsight recall result.
+
+    This is deliberately deterministic and fail-open. It only changes a
+    result when it contains Hindsight's normal `results` envelope; malformed
+    or unfamiliar backend output remains untouched for diagnosis.
+    """
+    if result.get("isError"):
+        return result
+
+    payload = _recall_payload(result)
+    if payload is None:
+        return result
+
+    raw_records = payload["results"]
+    records = [
+        normalized
+        for raw in raw_records[:MAX_RECALL_RESULTS]
+        if (normalized := _normalize_recall_record(raw)) is not None
+    ]
+    normalized_payload = {
+        "schema_version": RECALL_SCHEMA_VERSION,
+        "results": records,
+        "total_results": len(raw_records),
+        "returned_results": len(records),
+        "truncated": len(raw_records) > len(records) or bool(payload.get("source_facts_truncated")),
+    }
+    if payload.get("source_facts_truncated"):
+        normalized_payload["source_facts_truncated"] = True
+
+    return {
+        **result,
+        "content": [{"type": "text", "text": _format_recall_text(records, len(raw_records))}],
+        "structuredContent": normalized_payload,
+    }
 
 
 def _log_gateway_call(
@@ -469,6 +621,8 @@ async def handle_tools_call(
         )
         return _jsonrpc_error_result(message_id, f"backend {backend_key!r} failed: {exc}")
 
+    if raw_name == "recall":
+        result = _normalize_recall_result(result)
     result_text = _extract_result_text(result)
     _log_gateway_call(
         project=project, backend=backend_key, tool=tool_name,

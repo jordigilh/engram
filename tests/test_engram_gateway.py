@@ -397,6 +397,90 @@ class TestHandleToolsCall:
         assert result is None
 
 
+class TestRecallResponseNormalization:
+    def test_recall_becomes_bounded_readable_and_structured(self, engram_gateway):
+        payload = {
+            "results": [
+                {
+                    "id": f"memory-{index}",
+                    "text": "fact " + ("x" * 1500),
+                    "fact_type": "world",
+                    "context": "project",
+                    "document_id": "engram-doc",
+                    "metadata": {"repo": "engram", "key_sentences": "y" * 1500, "keywords": "gateway, recall"},
+                    "tags": ["engram"],
+                    "scores": {"final": 0.123456, "semantic": None},
+                }
+                for index in range(10)
+            ],
+            "source_facts_truncated": None,
+        }
+        docs = FakeAdapter(
+            call_results={
+                "recall": {
+                    "content": [{"type": "text", "text": json.dumps(payload)}],
+                    "isError": False,
+                }
+            }
+        )
+        catalog = {"docs_recall": ("docs", "recall")}
+        message = {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "docs_recall", "arguments": {"query": "x"}},
+        }
+
+        result = asyncio.run(engram_gateway.handle_tools_call(message, catalog, {"docs": docs}))
+
+        structured = result["result"]["structuredContent"]
+        assert structured["schema_version"] == "engram-recall.v1"
+        assert structured["total_results"] == 10
+        assert structured["returned_results"] == 8
+        assert structured["truncated"] is True
+        assert len(structured["results"]) == 8
+        assert structured["results"][0]["summary"].endswith("[truncated; 1500 chars total]")
+        assert "text" not in structured["results"][0]
+        assert structured["results"][0]["keywords"] == ["gateway", "recall"]
+        assert structured["results"][0]["metadata"] == {"repo": "engram"}
+        assert structured["results"][0]["scores"] == {"final": 0.1235}
+
+        rendered = result["result"]["content"][0]["text"]
+        assert rendered.startswith("Engram recall (8 of 10 results; schema engram-recall.v1)")
+        assert "document=engram-doc" in rendered
+        assert "2 lower-ranked results omitted" in rendered
+        assert len(json.dumps(result["result"])) < 30_000
+
+    def test_existing_structured_content_is_normalized_without_requiring_text(self, engram_gateway):
+        docs = FakeAdapter(
+            call_results={
+                "recall": {
+                    "content": [],
+                    "isError": False,
+                    "structuredContent": {
+                        "results": [{"id": "memory-1", "text": "kept", "tags": ["engram"]}],
+                    },
+                }
+            }
+        )
+        catalog = {"docs_recall": ("docs", "recall")}
+        message = {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "docs_recall"}}
+
+        result = asyncio.run(engram_gateway.handle_tools_call(message, catalog, {"docs": docs}))
+
+        assert result["result"]["structuredContent"]["results"] == [
+            {"id": "memory-1", "tags": ["engram"], "summary": "kept"}
+        ]
+        assert "kept" in result["result"]["content"][0]["text"]
+
+    def test_non_recall_or_malformed_payload_passes_through(self, engram_gateway):
+        original = {"content": [{"type": "text", "text": '{"items":[1,2]}'}], "isError": False}
+        assert engram_gateway._normalize_recall_result(original) is original
+
+        malformed = {"content": [{"type": "text", "text": "not JSON"}], "isError": False}
+        assert engram_gateway._normalize_recall_result(malformed) is malformed
+
+
 class TestEstimateTokens:
     """2026-08-30: user asked whether MCP call token consumption could be
     calculated. Cursor's own hooks (afterMCPExecution etc.) don't carry any

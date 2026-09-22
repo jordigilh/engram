@@ -351,6 +351,31 @@ class TestHandleToolsCall:
         assert result["id"] == 5
         assert result["result"]["content"][0]["text"] == "found it"
 
+    def test_normalizes_prefixed_recall_from_legacy_endpoint_backend(self, engram_gateway):
+        payload = {"results": [{"id": "memory-1", "text": "kept", "tags": ["engram"]}]}
+        host = FakeAdapter(
+            call_results={
+                "docs_recall": {
+                    "content": [{"type": "text", "text": json.dumps(payload)}],
+                    "isError": False,
+                }
+            }
+        )
+        catalog = {"docs_recall": ("host", "docs_recall")}
+        message = {
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": {"name": "docs_recall", "arguments": {"query": "x"}},
+        }
+
+        result = asyncio.run(engram_gateway.handle_tools_call(message, catalog, {"host": host}))
+
+        assert result["result"]["structuredContent"]["schema_version"] == "engram-recall.v1"
+        assert result["result"]["structuredContent"]["results"] == [
+            {"id": "memory-1", "tags": ["engram"], "summary": "kept"}
+        ]
+
     def test_routes_unprefixed_call_with_unchanged_name(self, engram_gateway):
         serena = FakeAdapter(call_results={"find_symbol": {"content": [], "isError": False}})
         catalog = {"find_symbol": ("serena", "find_symbol")}

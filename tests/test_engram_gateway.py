@@ -184,6 +184,24 @@ class TestFilterRelevantTools:
 
         assert {t["name"] for t in filtered} == {"find_symbol"}
 
+    def test_serena_pattern_search_description_guides_toward_symbol_tools(self, engram_gateway):
+        original_description = "Search project files with a regular expression."
+        tools = [
+            _tool("search_for_pattern", original_description),
+            _tool("find_symbol", "Find symbols by name."),
+        ]
+
+        filtered = engram_gateway.filter_relevant_tools("serena", tools)
+        descriptions = {tool["name"]: tool["description"] for tool in filtered}
+
+        pattern_description = descriptions["search_for_pattern"]
+        assert pattern_description.startswith(original_description)
+        assert "find_symbol" in pattern_description
+        assert "find_referencing_symbols" in pattern_description
+        assert "regex" in pattern_description.lower()
+        assert "multiline" in pattern_description.lower()
+        assert tools[0]["description"] == original_description
+
     def test_unfiltered_backend_passes_through_unchanged(self, engram_gateway):
         tools = [_tool("praxis_code_search")]
 
@@ -974,6 +992,15 @@ class TestBuildApp:
 
 
 class TestLoadInstanceRegistry:
+    def test_generic_runtime_example_is_valid_for_the_registry_loader(self, engram_gateway):
+        example = pathlib.Path(__file__).parents[1] / "docs" / "runtime-instances.toml.example"
+
+        registry = engram_gateway.load_instance_registry(example)
+
+        assert set(registry) == {"my-project"}
+        assert set(registry["my-project"]) == {"docs", "issues", "code", "serena"}
+        assert all(spec["kind"] == "http" for spec in registry["my-project"].values())
+
     def test_loads_http_host_adapter_instances(self, engram_gateway, tmp_path):
         config = tmp_path / "instances.toml"
         config.write_text(

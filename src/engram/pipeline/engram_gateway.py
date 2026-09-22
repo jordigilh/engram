@@ -495,6 +495,13 @@ RELEVANT_SERENA_TOOLS = frozenset(
     }
 )
 
+SERENA_PATTERN_SEARCH_GUIDANCE = (
+    "Prefer `find_symbol` for symbol definitions and `find_referencing_symbols` for callers/references. "
+    "Use this tool for literal or regex text searches. `substring_pattern` is a regex; with multiline matching, "
+    "`.` can cross lines and `|` needs grouping. Prefer anchored patterns and narrow path/context filters; "
+    "reduce scope or context before raising `max_answer_chars`."
+)
+
 # Backends with no entry here (code/cocoindex, and any future family) pass
 # through unfiltered -- their catalogs are already small (2 tools today).
 RELEVANT_TOOLS_BY_BACKEND: dict[str, frozenset[str]] = {
@@ -521,12 +528,25 @@ RELEVANT_TOOLS_BY_BACKEND: dict[str, frozenset[str]] = {
 
 def filter_relevant_tools(backend_key: str, tools: list[dict]) -> list[dict]:
     """Drop rarely-used administrative tools for backends known to expose an
-    oversized catalog. See `RELEVANT_TOOLS_BY_BACKEND`'s module-level comment
-    for why this exists."""
+    oversized catalog. Add usage guidance to selected tools where the
+    upstream description needs project-specific routing advice. See
+    `RELEVANT_TOOLS_BY_BACKEND`'s module-level comment for why this exists."""
     allowed = RELEVANT_TOOLS_BY_BACKEND.get(backend_key)
     if allowed is None:
         return tools
-    return [tool for tool in tools if tool["name"] in allowed]
+
+    filtered = []
+    for tool in tools:
+        if tool["name"] not in allowed:
+            continue
+        if backend_key == "serena" and tool["name"] == "search_for_pattern":
+            description = (tool.get("description") or "").rstrip()
+            tool = {
+                **tool,
+                "description": f"{description}\n\n{SERENA_PATTERN_SEARCH_GUIDANCE}".strip(),
+            }
+        filtered.append(tool)
+    return filtered
 
 
 async def _fetch_backend_tools(backend_key: str, adapter: BackendAdapter) -> tuple[str, list[dict] | Exception]:

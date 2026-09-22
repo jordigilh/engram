@@ -621,7 +621,10 @@ async def handle_tools_call(
         )
         return _jsonrpc_error_result(message_id, f"backend {backend_key!r} failed: {exc}")
 
-    if raw_name == "recall":
+    # The legacy single-endpoint runtime registry forwards already-prefixed
+    # names (for example, ``docs_recall``) through a host gateway. Newer
+    # per-backend registries strip that prefix before reaching this point.
+    if raw_name == "recall" or raw_name.endswith("_recall"):
         result = _normalize_recall_result(result)
     result_text = _extract_result_text(result)
     _log_gateway_call(

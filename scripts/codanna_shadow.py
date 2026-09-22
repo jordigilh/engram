@@ -29,6 +29,8 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, TextContent, Tool
 
+from engram.mcp_compat import call_tool_is_error
+
 
 SHADOWED_TOOLS = frozenset({"semantic_search_docs", "semantic_search_with_context"})
 DEFAULT_SHADOW_TIMEOUT_SECONDS = 30.0
@@ -157,8 +159,24 @@ def _parse_codanna_semantic_text(tool: str, query: str, text: str) -> dict[str, 
     }
 
 
+def _call_tool_structured_content(result: CallToolResult) -> Any:
+    """Read structured content across MCP 1.x and 2.x attribute names."""
+    return getattr(result, "structured_content", getattr(result, "structuredContent", None))
+
+
+def _build_call_tool_result(content: list[TextContent], structured: dict[str, Any], is_error: bool) -> CallToolResult:
+    """Build a result across MCP 1.x and 2.x field names."""
+    fields = getattr(CallToolResult, "model_fields", {})
+    structured_key = "structured_content" if "structured_content" in fields else "structuredContent"
+    error_key = "is_error" if "is_error" in fields else "isError"
+    return CallToolResult(
+        content=content,
+        **{structured_key: structured, error_key: is_error},
+    )
+
+
 def _structured_primary_result(name: str, arguments: dict[str, Any], result: CallToolResult) -> CallToolResult:
-    if name not in SHADOWED_TOOLS or result.isError or result.structuredContent is not None:
+    if name not in SHADOWED_TOOLS or call_tool_is_error(result) or _call_tool_structured_content(result) is not None:
         return result
     text = "\n".join(content.text for content in result.content if isinstance(content, TextContent))
     if not text:
@@ -170,10 +188,10 @@ def _structured_primary_result(name: str, arguments: dict[str, Any], result: Cal
         structured = _parse_codanna_semantic_text(name, query, text)
     else:
         structured = decoded if isinstance(decoded, dict) else _parse_codanna_semantic_text(name, query, text)
-    return CallToolResult(
+    return _build_call_tool_result(
         content=[TextContent(type="text", text=json.dumps(structured, separators=(",", ":")))],
-        structuredContent=structured,
-        isError=result.isError,
+        structured=structured,
+        is_error=call_tool_is_error(result),
     )
 
 

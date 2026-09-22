@@ -17,6 +17,14 @@ codanna_shadow = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(codanna_shadow)
 
 
+def structured_content(result):
+    return getattr(result, "structured_content", getattr(result, "structuredContent", None))
+
+
+def is_error(result):
+    return bool(getattr(result, "is_error", getattr(result, "isError", False)))
+
+
 class FakeCodanna:
     def __init__(self):
         self.calls = []
@@ -50,13 +58,10 @@ def test_primary_result_is_returned_while_shadow_is_logged(tmp_path, monkeypatch
         )
 
         result = await relay.call_tool("semantic_search_docs", {"query": "target", "limit": 3})
-        assert result.structuredContent == {"data": [{"symbol": "target"}]}
+        assert structured_content(result) == {"data": [{"symbol": "target"}]}
         assert primary_session.calls == [("semantic_search_docs", {"query": "target", "limit": 3})]
 
-        for _ in range(20):
-            if log_path.exists():
-                break
-            await asyncio.sleep(0.01)
+        await relay.drain()
         entry = json.loads(log_path.read_text().strip())
         assert entry["tool"] == "semantic_search_docs"
         assert entry["primary"]["engine"] == "codanna"
@@ -82,8 +87,8 @@ def test_formatted_codanna_semantic_output_becomes_structured_content():
         result,
     )
 
-    assert structured.structuredContent["schema_version"] == "codanna-shadow.v1"
-    assert structured.structuredContent["results"] == [{
+    assert structured_content(structured)["schema_version"] == "codanna-shadow.v1"
+    assert structured_content(structured)["results"] == [{
         "rank": 1,
         "name": "CompletionObligation",
         "kind": "Struct",
@@ -112,12 +117,9 @@ def test_shadow_failure_does_not_change_primary_result(tmp_path, monkeypatch):
         )
 
         result = await relay.call_tool("semantic_search_docs", {"query": "target"})
-        assert result.isError is False
+        assert is_error(result) is False
 
-        for _ in range(20):
-            if log_path.exists():
-                break
-            await asyncio.sleep(0.01)
+        await relay.drain()
         entry = json.loads(log_path.read_text().strip())
         assert "database unavailable" in entry["shadow"]["error"]
 

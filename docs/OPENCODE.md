@@ -157,6 +157,19 @@ If OpenChamber is connected to a remote OpenCode/OpenChamber server,
 machine running the OpenCode server, not merely from the browser or mobile
 client.
 
+## Recall Output
+
+The gateway normalizes Hindsight `recall` results before returning them to the
+agent. Each response uses the `engram-recall.v1` structured schema and includes
+the fact summary, provenance, tags, timestamps, compact scores, and an
+explicit result count. Summaries use deterministic `key_sentences` metadata
+when available rather than returning the source document chunk. It returns at
+most eight records and bounds each summary; the `truncated` flag and text
+notice identify when a query was too broad. Full Markdown remains available
+through `get_mental_model`. Malformed or non-Hindsight tool output passes
+through unchanged for diagnosis. Use a narrower query when the response
+reports omitted results.
+
 ## Migration
 
 Remove old direct MCP entries for `hindsight-docs`, `hindsight-issues`,

@@ -30,8 +30,8 @@ function context(sessions: Record<string, { parentID?: string | null }>) {
   }
 }
 
-describe("EngramPlugin Engram-first hooks", () => {
-  test("denies non-Engram permissions and tool execution for children", async () => {
+describe("EngramPlugin hooks", () => {
+  test("does not block child permissions or tool execution", async () => {
     const hooks = await EngramPlugin(
       context({ child: { parentID: "primary" } }) as never,
       {},
@@ -42,17 +42,17 @@ describe("EngramPlugin Engram-first hooks", () => {
       { type: "bash", sessionID: "child" } as never,
       permission,
     )
-    expect(permission.status).toBe("deny")
+    expect(permission.status).toBe("allow")
 
     await expect(
       hooks["tool.execute.before"]?.(
         { tool: "bash", sessionID: "child", callID: "call-1" },
         { args: { command: "pwd" } },
       ),
-    ).rejects.toThrow("must call an Engram MCP tool")
+    ).resolves.toBeUndefined()
   })
 
-  test("unlocks a child only after the Engram after hook", async () => {
+  test("keeps child tools non-blocking before and after Engram calls", async () => {
     const hooks = await EngramPlugin(
       context({ child: { parentID: "primary" } }) as never,
       {},
@@ -65,7 +65,7 @@ describe("EngramPlugin Engram-first hooks", () => {
         { tool: "read", sessionID: "child", callID: "call-1" },
         { args: {} },
       ),
-    ).rejects.toThrow()
+    ).resolves.toBeUndefined()
 
     await after(
       { tool: "engram_docs_recall", sessionID: "child", callID: "call-2", args: {} },

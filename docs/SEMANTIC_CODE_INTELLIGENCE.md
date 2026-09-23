@@ -1,12 +1,34 @@
 # Semantic Code Intelligence: Findings and Pilot Decision
 
-**Status:** evaluation decision; Kubernaut has a Codanna-primary shadow pilot
+**Status:** Kubernaut's Engram route uses CocoIndex for semantic, structural,
+and Graphify-style graph MCP tools. Codanna is no longer the active code
+backend; zvec-grep's Go codegraph sidecar remains CLI/API-only until its graph
+operations are registered as MCP tools.
 
 **Date:** 2026-09-22
 
 **Related work:** [issue #107](https://github.com/jordigilh/engram/issues/107),
 [Graphify-inspired call graphs](CALL_GRAPH_DESIGN.md), and the
 [CocoIndex operations guide](COCOINDEX.md)
+
+## Current Kubernaut Route (2026-09-23)
+
+Kubernaut's main Engram route now uses the shared CocoIndex code MCP backend at
+`127.0.0.1:8891`, matching the other code-enabled Kubernaut-family routes. It
+exposes `cocoindex_search`, `cocoindex_pattern_search`, and the Graphify-style
+`cocoindex_call_graph_blast_radius`, `cocoindex_call_graph_shortest_path`, and
+`cocoindex_call_graph_get_cluster` tools. The native family registry gives
+those graph calls a 180-second HTTP forwarding timeout because a cold Go graph
+build took 70 seconds against the live corpus. The runtime route also allows
+180 seconds, and the active Kubernaut `.mcp.json` allows 300 seconds for the
+Engram server so its client deadline does not preempt the cold build.
+
+The Codanna `0.16.0` configuration was a temporary evaluation and is removed
+from the active Kubernaut MCP config. The separate CodeGraph MCP remains
+available for exact references, callers/callees, paths, and impact analysis.
+The local zvec-grep `zg-codegraph` extension has graph generation and query
+operations through its Rust API/CLI, but those operations are not in zvec-grep's
+MCP tool registry yet, so CocoIndex remains the family MCP graph backend.
 
 ## Decision Summary
 
@@ -327,20 +349,16 @@ worktree/commit namespace in `code_embeddings`; they must not share one
 unqualified row set. That is an explicit follow-up before claiming full
 multi-session branch isolation.
 
-## Kubernaut Evaluation Configuration
+## Historical Kubernaut Codanna Evaluation
 
-On 2026-09-21, Codanna `0.16.0` was enabled for the Kubernaut project as a
-temporary semantic-search experiment. On 2026-09-22, the local CodeGraph MCP
-entry was restored alongside Codanna. The ignored Kubernaut `.mcp.json` now
-starts CodeGraph, a Codanna-primary relay with the project-local ignored
-`.codanna/settings.toml`, and Engram. Codanna still uses local
-`AllMiniLML6V2` semantic search and file watching. The existing CodeGraph
-binary and `.codegraph` index were not deleted. The current Kubernaut gateway
-route no longer exposes the legacy CocoIndex code backend; other family routes
-remain unchanged. This is a project-scoped evaluation, not an Engram
-production-gateway adoption.
+Codanna `0.16.0` was enabled on 2026-09-21 as a temporary semantic-search
+experiment. The benchmark and shadow-relay results below record that evaluation;
+they no longer describe the active Kubernaut route. On 2026-09-23, Codanna was
+removed from the active Kubernaut MCP config and the main Engram route was
+switched back to the shared CocoIndex backend. The ignored Kubernaut `.mcp.json`
+retains the direct CodeGraph server beside Engram.
 
-The relay is `scripts/codanna_shadow.py`. Codanna's semantic MCP responses are
+During the evaluation, the relay was `scripts/codanna_shadow.py`. Codanna's semantic MCP responses were
 converted from its current formatted text into `codanna-shadow.v1` structured
 records containing rank, symbol, kind, score, file range, signature, and
 documentation. The original Codanna response is retained in the local shadow

@@ -462,9 +462,10 @@ stdio command available inside the container. Remove backend tables the project
 does not use; the example includes an optional stdio code-backend form.
 
 Include only the backend tables that the project actually uses. HTTP backends
-accept optional string-to-string `headers`; stdio backends accept `args`,
-`env`, and an optional `shared_key` for sharing one subprocess across routes.
-Do not define both `endpoint` and `backends` for one instance.
+accept optional string-to-string `headers` and `timeout_seconds` overrides
+(1–600 seconds; default 60); stdio backends accept `args`, `env`, and an
+optional `shared_key` for sharing one subprocess across routes. Do not define
+both `endpoint` and `backends` for one instance.
 
 The tracked [`docs/runtime-kubernaut.toml.example`](runtime-kubernaut.toml.example)
 is a Kubernaut-specific example, including the optional Kubernaut RCA backend

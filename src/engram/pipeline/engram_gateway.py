@@ -73,6 +73,7 @@ import asyncio
 import functools
 import json
 import logging
+import math
 import os
 import pathlib
 import sys
@@ -92,6 +93,7 @@ from engram import mcp_compat  # noqa: E402  (mcp 1.x/2.x Tool compat)
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8896
 FORWARD_TIMEOUT_S = 60.0
+MAX_FORWARD_TIMEOUT_S = 600.0
 
 # Hindsight recall returns both a text JSON envelope and an equivalent
 # `structuredContent` object. The raw envelope is useful for debugging but is
@@ -682,9 +684,15 @@ class HttpRelayAdapter:
     matching serena_multiplex.py's "POST-only, never GET/SSE" design to
     avoid the upstream mcp/fastmcp SSE-reconnect bug documented there."""
 
-    def __init__(self, url: str, headers: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        url: str,
+        headers: dict[str, str] | None = None,
+        timeout_seconds: float = FORWARD_TIMEOUT_S,
+    ) -> None:
         self.url = url
         self.headers = dict(headers or {})
+        self.timeout_seconds = timeout_seconds
 
     async def _roundtrip(self, method: str, params: dict | None = None) -> dict:
         import httpx
@@ -697,7 +705,7 @@ class HttpRelayAdapter:
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
-        async with httpx.AsyncClient(timeout=FORWARD_TIMEOUT_S) as client:
+        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             init_resp = await client.post(
                 self.url,
                 json={
@@ -1227,10 +1235,16 @@ def _hindsight(bank: str) -> dict:
     return {"kind": "http", "url": f"{_HINDSIGHT_BASE}/mcp/{bank}/"}
 
 
-def _http(url: str, headers: dict[str, str] | None = None) -> dict:
+def _http(
+    url: str,
+    headers: dict[str, str] | None = None,
+    timeout_seconds: float | None = None,
+) -> dict:
     spec = {"kind": "http", "url": url}
     if headers:
         spec["headers"] = headers
+    if timeout_seconds is not None:
+        spec["timeout_seconds"] = timeout_seconds
     return spec
 
 
@@ -1269,19 +1283,23 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     venv_bin = f"{home}/.engram/venv/bin"
     registry: dict[str, dict[str, dict]] = {}
 
-    kubernaut_http_code = _http("http://127.0.0.1:8891/mcp")
+    # Kubernaut's cold Go call-graph build takes around 70s on the live corpus;
+    # keep it within the single request's forwarding budget instead of
+    # timing out just before the fingerprinted cache is populated.
+    kubernaut_http_code = _http("http://127.0.0.1:8891/mcp", timeout_seconds=180)
     kubernaut_rca = _http("http://127.0.0.1:8897/mcp")
 
     def kubernaut_serena(project: str) -> dict:
         return _http(f"http://127.0.0.1:8893/mcp/{project}")
 
-    # `kubernaut` is the current main/v1.6 line. Codanna is the primary code
-    # backend for that workspace; its local MCP relay performs the optional
-    # CocoIndex shadow comparison. Keep CocoIndex on the other family routes
-    # until their clients are migrated too.
+    # `kubernaut` is the current main/v1.6 line. Route it through the shared
+    # CocoIndex backend like the other Kubernaut-family workspaces so semantic,
+    # structural-pattern, and Graphify-style call-graph tools are available
+    # through the single Engram MCP route.
     registry["kubernaut"] = {
         "docs": _hindsight("kubernaut-docs"),
         "issues": _hindsight("kubernaut-issues"),
+        "code": kubernaut_http_code,
         "rca": kubernaut_rca,
         "serena": kubernaut_serena("kubernaut"),
     }
@@ -1445,9 +1463,23 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
             ):
                 raise ValueError(f"Backend {instance!r}/{backend!r} headers must be a string-to-string table")
 
+        timeout_seconds = settings.get("timeout_seconds")
+        if timeout_seconds is not None and (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, (int, float))
+            or not math.isfinite(timeout_seconds)
+            or not 1 <= timeout_seconds <= MAX_FORWARD_TIMEOUT_S
+        ):
+            raise ValueError(
+                f"Backend {instance!r}/{backend!r} timeout_seconds must be between 1 and "
+                f"{MAX_FORWARD_TIMEOUT_S:g}"
+            )
+
         spec = {"kind": "http", "url": endpoint}
         if headers:
             spec["headers"] = dict(headers)
+        if timeout_seconds is not None:
+            spec["timeout_seconds"] = float(timeout_seconds)
         return spec
 
     command = settings.get("command")
@@ -1521,7 +1553,10 @@ def load_instance_registry(path: str | pathlib.Path) -> dict[str, dict[str, dict
             raise ValueError(f"Instance {name!r} cannot define both endpoint and backends")
 
         if endpoint is not None:
-            registry[name] = {"host": _parse_runtime_backend(name, "host", {"kind": "http", "url": endpoint})}
+            host_settings = {"kind": "http", "url": endpoint}
+            if "timeout_seconds" in settings:
+                host_settings["timeout_seconds"] = settings["timeout_seconds"]
+            registry[name] = {"host": _parse_runtime_backend(name, "host", host_settings)}
             continue
 
         if not isinstance(backend_settings, dict) or not backend_settings:
@@ -1608,7 +1643,9 @@ def build_backend_adapters(registry: dict[str, dict[str, dict]]) -> dict[str, di
         adapters[project] = {}
         for backend_key, spec in specs.items():
             if spec["kind"] == "http":
-                adapters[project][backend_key] = HttpRelayAdapter(spec["url"], spec.get("headers"))
+                adapters[project][backend_key] = HttpRelayAdapter(
+                    spec["url"], spec.get("headers"), spec.get("timeout_seconds", FORWARD_TIMEOUT_S)
+                )
                 continue
 
             shared_key = spec.get("shared_key")

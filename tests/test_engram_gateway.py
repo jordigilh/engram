@@ -312,6 +312,24 @@ class TestAggregateToolsList:
         assert catalog["docs_recall"] == ("docs", "recall")
         assert errors == {}
 
+    def test_cocoindex_graph_tools_are_exposed_unprefixed(self, engram_gateway):
+        graph_tools = [
+            "cocoindex_call_graph_blast_radius",
+            "cocoindex_call_graph_shortest_path",
+            "cocoindex_call_graph_get_cluster",
+        ]
+        code = FakeAdapter(tools=[_tool(name) for name in graph_tools])
+
+        tool_defs, catalog, errors = asyncio.run(
+            engram_gateway.aggregate_tools_list({"code": code})
+        )
+
+        assert {tool["name"] for tool in tool_defs} == set(graph_tools)
+        assert {name: catalog[name] for name in graph_tools} == {
+            name: ("code", name) for name in graph_tools
+        }
+        assert errors == {}
+
     def test_drops_irrelevant_tools_from_oversized_backends_before_aggregating(self, engram_gateway):
         """The exact kubernaut-family shape that triggered the ceiling bug:
         docs+issues+serena combined raw catalogs way over budget, trimmed
@@ -725,6 +743,7 @@ class TestBuildProjectRegistry:
         assert registry["kubernaut-demo-scenarios"]["code"] == {
             "kind": "http",
             "url": "http://127.0.0.1:8891/mcp",
+            "timeout_seconds": 180,
         }
         assert registry["kubernaut-demo-scenarios"]["serena"] == {
             "kind": "http",
@@ -749,18 +768,26 @@ class TestBuildProjectRegistry:
         spec = registry["kubernaut-operator"]
         assert spec["docs"] == {"kind": "http", "url": "http://localhost:8888/mcp/kubernaut-docs/"}
         assert spec["issues"] == {"kind": "http", "url": "http://localhost:8888/mcp/kubernaut-issues/"}
-        assert spec["code"] == {"kind": "http", "url": "http://127.0.0.1:8891/mcp"}
+        assert spec["code"] == {
+            "kind": "http",
+            "url": "http://127.0.0.1:8891/mcp",
+            "timeout_seconds": 180,
+        }
         assert spec["rca"] == {"kind": "http", "url": "http://127.0.0.1:8897/mcp"}
         assert spec["serena"] == {"kind": "http", "url": "http://127.0.0.1:8893/mcp/kubernaut-operator"}
 
-    def test_current_kubernaut_route_uses_codanna_directly(self, engram_gateway):
-        """The current workspace uses its Codanna MCP relay; the legacy
-        CocoIndex code backend remains available only on the other family
-        routes until they migrate."""
+    def test_current_kubernaut_route_uses_cocoindex_with_graph_timeout(self, engram_gateway):
+        """The Kubernaut main route exposes the shared CocoIndex MCP server;
+        its cold Go graph build needs more than the generic 60-second relay
+        timeout."""
         registry = engram_gateway.build_project_registry("/home/u")
 
-        assert set(registry["kubernaut"]) == {"docs", "issues", "rca", "serena"}
-        assert "code" not in registry["kubernaut"]
+        assert set(registry["kubernaut"]) == {"docs", "issues", "code", "rca", "serena"}
+        assert registry["kubernaut"]["code"] == {
+            "kind": "http",
+            "url": "http://127.0.0.1:8891/mcp",
+            "timeout_seconds": 180,
+        }
         assert "code" in registry["kubernaut-operator"]
 
     def test_rca_backend_is_kubernaut_only(self, engram_gateway):
@@ -805,7 +832,11 @@ class TestBuildProjectRegistry:
         gives it operator + kubernaut-upstream code search."""
         registry = engram_gateway.build_project_registry("/home/u")
 
-        assert registry["kubernaut-console"]["code"] == {"kind": "http", "url": "http://127.0.0.1:8891/mcp"}
+        assert registry["kubernaut-console"]["code"] == {
+            "kind": "http",
+            "url": "http://127.0.0.1:8891/mcp",
+            "timeout_seconds": 180,
+        }
 
     def test_kubernaut_docs_has_no_cocoindex_code(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")
@@ -1025,18 +1056,29 @@ class TestLoadInstanceRegistry:
         assert set(registry) == {"my-project"}
         assert set(registry["my-project"]) == {"docs", "issues", "code", "serena"}
         assert all(spec["kind"] == "http" for spec in registry["my-project"].values())
+        assert registry["my-project"]["code"]["timeout_seconds"] == 180
 
     def test_loads_http_host_adapter_instances(self, engram_gateway, tmp_path):
         config = tmp_path / "instances.toml"
         config.write_text(
-            '[instances.kubernaut]\nendpoint = "http://host.containers.internal:9001/mcp/kubernaut"\n'
+            '[instances.kubernaut]\n'
+            'endpoint = "http://host.containers.internal:9001/mcp/kubernaut"\n'
+            "timeout_seconds = 180\n"
         )
 
         assert engram_gateway.load_instance_registry(config) == {
             "kubernaut": {
-                "host": {"kind": "http", "url": "http://host.containers.internal:9001/mcp/kubernaut"}
+                "host": {
+                    "kind": "http",
+                    "url": "http://host.containers.internal:9001/mcp/kubernaut",
+                    "timeout_seconds": 180,
+                }
             }
         }
+        adapter = engram_gateway.build_backend_adapters(
+            engram_gateway.load_instance_registry(config)
+        )["kubernaut"]["host"]
+        assert adapter.timeout_seconds == 180
 
     def test_loads_multiple_direct_backends_per_instance(self, engram_gateway, tmp_path):
         config = tmp_path / "instances.toml"
@@ -1050,6 +1092,7 @@ url = "http://host.containers.internal:8888/mcp/kubernaut-docs/"
 kind = "http"
 url = "http://host.containers.internal:8891/mcp"
 headers = { Host = "localhost:8891" }
+timeout_seconds = 180
 
 [instances.kubernaut.backends.serena]
 kind = "http"
@@ -1065,8 +1108,10 @@ url = "http://host.containers.internal:8897/mcp"
 
         assert set(registry["kubernaut"]) == {"docs", "code", "serena", "rca"}
         assert registry["kubernaut"]["code"]["headers"] == {"Host": "localhost:8891"}
+        assert registry["kubernaut"]["code"]["timeout_seconds"] == 180
         adapters = engram_gateway.build_backend_adapters(registry)
         assert adapters["kubernaut"]["code"].headers == {"Host": "localhost:8891"}
+        assert adapters["kubernaut"]["code"].timeout_seconds == 180
 
     def test_loads_stdio_backend_with_environment_and_shared_key(self, engram_gateway, tmp_path):
         config = tmp_path / "instances.toml"
@@ -1121,6 +1166,14 @@ shared_key = "praxis-code"
                 "[instances.demo.backends.code]\nkind = \"stdio\"\ncommand = \"x\"\nargs = \"not-an-array\"\n",
                 "args must be",
             ),
+            (
+                "[instances.demo.backends.code]\nkind = \"http\"\nurl = \"http://example/mcp\"\ntimeout_seconds = 0\n",
+                "timeout_seconds must be",
+            ),
+            (
+                "[instances.demo.backends.code]\nkind = \"http\"\nurl = \"http://example/mcp\"\ntimeout_seconds = 601\n",
+                "timeout_seconds must be",
+            ),
         ],
     )
     def test_rejects_invalid_direct_backend_config(self, engram_gateway, tmp_path, contents, message):
@@ -1156,6 +1209,7 @@ url = "http://example/mcp/docs"
 
         assert {route.path for route in app.routes} == {"/mcp/demo"}
         assert adapters["demo"]["host"].url == "http://host.containers.internal:9001/mcp/demo"
+        assert adapters["demo"]["host"].timeout_seconds == engram_gateway.FORWARD_TIMEOUT_S
 
 
 class TestStdioSubprocessAdapterCallToolSerialization:

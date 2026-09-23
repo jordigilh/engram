@@ -1,9 +1,12 @@
 # Semantic Code Intelligence: Findings and Pilot Decision
 
-**Status:** Kubernaut's Engram route uses CocoIndex for semantic, structural,
-and Graphify-style graph MCP tools. Codanna is no longer the active code
-backend; zvec-grep's Go codegraph sidecar remains CLI/API-only until its graph
-operations are registered as MCP tools.
+**Status:** The local gateway integration now routes Kubernaut code tools to
+zvec-grep as primary and schedules CocoIndex comparisons asynchronously for
+semantic search and comparable Go core/operator graph calls. The native gateway
+route is active for Kubernaut; quality gates remain open because this pilot is
+exploratory and has no adjudicated relevance labels. Other Kubernaut-family
+routes remain on the shared CocoIndex backend. zvec-grep exposes root-scoped,
+fresh callgraph MCP tools for Go, Rust, TypeScript/TSX, and Python.
 
 **Date:** 2026-09-22
 
@@ -11,43 +14,93 @@ operations are registered as MCP tools.
 [Graphify-inspired call graphs](CALL_GRAPH_DESIGN.md), and the
 [CocoIndex operations guide](COCOINDEX.md)
 
-## Current Kubernaut Route (2026-09-23)
-
-Kubernaut's main Engram route now uses the shared CocoIndex code MCP backend at
-`127.0.0.1:8891`, matching the other code-enabled Kubernaut-family routes. It
-exposes `cocoindex_search`, `cocoindex_pattern_search`, and the Graphify-style
-`cocoindex_call_graph_blast_radius`, `cocoindex_call_graph_shortest_path`, and
-`cocoindex_call_graph_get_cluster` tools. The native family registry gives
-those graph calls a 180-second HTTP forwarding timeout because a cold Go graph
-build took 70 seconds against the live corpus. The runtime route also allows
-180 seconds, and the active Kubernaut `.mcp.json` allows 300 seconds for the
-Engram server so its client deadline does not preempt the cold build.
-
-The Codanna `0.16.0` configuration was a temporary evaluation and is removed
-from the active Kubernaut MCP config. The separate CodeGraph MCP remains
-available for exact references, callers/callees, paths, and impact analysis.
-The local zvec-grep `zg-codegraph` extension has graph generation and query
-operations through its Rust API/CLI, but those operations are not in zvec-grep's
-MCP tool registry yet, so CocoIndex remains the family MCP graph backend.
-
 ## Decision Summary
 
-Engram will keep its current CocoIndex and Serena integrations as the baseline.
-The next evaluation pilots are:
+Engram's responsibility remains project watching and memory/document ingestion
+into Hindsight. For the interactive live-worktree code profile, the local
+integration direction is:
 
-1. [`open-codebase-index`](https://github.com/Helweg/open-codebase-index) for
-   branch-aware and worktree-aware indexing.
-2. [`Codanna`](https://github.com/bartolli/codanna) for compact semantic context
-   packs that combine retrieval, symbols, callers, callees, and impact.
-3. [`SCIP`](https://github.com/scip-code/scip) as a long-term protocol and
-   snapshot-indexing track, rather than as another broad MCP server.
+- zvec-grep is primary for semantic search and root-scoped callgraph operations
+  over the selected current worktree.
+- CocoIndex remains an asynchronous shadow comparator on the same configured
+  Kubernaut source root; shadow latency or failure must never delay or alter the
+  primary result.
+- Serena and the existing CodeGraph server remain the authority for exact,
+  type-resolved references, implementations, diagnostics, and edits.
+- Hindsight remains the source for retained project memory, documents, and
+  issue context.
 
-This is an evaluation plan, not a decision to expose all three backends to
-agents permanently. The Kubernaut pilot is deliberately scoped to one project:
-Codanna is returned to the agent, while CocoIndex runs as an asynchronous
-comparison only. A pilot must demonstrate a capability that the current stack
-does not already provide, or measurably improve correctness, freshness,
-provenance, latency, or token efficiency.
+This is a local pilot, not a completed rollout. Do not retire CocoIndex or
+change other family routes until same-corpus retrieval, branch freshness,
+provenance, latency, and error-isolation gates pass. The historical
+open-codebase-index and Codanna measurements below remain evidence, not current
+production-routing decisions.
+
+## Workload-Specific Backend Direction
+
+The best code backend depends on whether the agent is working in a persistent
+developer worktree or reviewing an isolated repository snapshot. These are
+separate deployment profiles; Engram should not run multiple code indexes for
+the same session and merge their results implicitly.
+
+### Interactive worktree profile
+
+For a live developer worktree, the direction remains the zvec-grep fork plus
+Serena:
+
+- zvec-grep provides hybrid semantic and lexical retrieval over the current
+  branch and changed-file overlay.
+- The overlay manager can account for staged, unstaged, untracked, deleted,
+  and renamed files while retaining merge-base provenance.
+- Serena remains authoritative for exact symbols, references,
+  implementations, diagnostics, and edits.
+- The backend must continue to support Engram's multi-repository, mixed-file,
+  and branch/worktree freshness contracts.
+
+This profile is the reason zvec-grep is being extended with the versioned
+`codegraph-v1` sidecar described in issue
+[#113](https://github.com/jordigilh/engram/issues/113). The goal is one
+branch-aware code backend plus Serena, not concurrent zvec-grep, Sense, and
+other code indexes.
+
+### Disposable code-review profile
+
+For code review, a backend can clone a repository at the pull request or target
+commit, index that clone, answer review questions, and discard the clone and
+its indexes afterward. In that workflow, Sense plus Serena is a stronger
+candidate than the zvec-grep overlay design:
+
+```text
+clone the review revision
+  -> Sense scan and graph/search queries
+  -> Serena exact references, implementations, diagnostics, and edits
+  -> discard the clone, Sense index, and Serena process
+```
+
+A single clone represents one branch or commit, so Sense does not need
+Engram's base-plus-overlay federation, live dirty-file reconciliation, or
+multi-worktree index sharing. Sense's semantic search, symbol relationships,
+callers/callees, impact analysis, conventions, and diff-oriented blast
+analysis are useful for review-oriented questions. Serena complements those
+results with exact LSP-backed navigation and validation.
+
+Sense is not an out-of-the-box replacement for every Engram code contract. A
+review adapter would still need to provide lifecycle and provenance handling,
+and Sense does not directly replace Engram's AST pattern search, Leiden
+clustering, or broad mixed-file search over YAML, JSON, Rego, Tape, and other
+operational artifacts. Therefore this profile is intended for code-focused
+reviews, not as a replacement for the interactive worktree backend.
+
+The resulting selection is:
+
+| Workload | Backend direction |
+| --- | --- |
+| Live worktree with dirty files, branch overlays, mixed files, and multiple worktrees | zvec-grep fork plus Serena |
+| Disposable, code-focused pull-request or repository review clone | Sense plus Serena |
+
+The Sense profile should be evaluated as a separate backend mode. It should not
+be introduced by running both code indexes for the same project and silently
+combining results.
 
 ## Existing Baseline
 
@@ -352,11 +405,57 @@ multi-session branch isolation.
 ## Historical Kubernaut Codanna Evaluation
 
 Codanna `0.16.0` was enabled on 2026-09-21 as a temporary semantic-search
-experiment. The benchmark and shadow-relay results below record that evaluation;
-they no longer describe the active Kubernaut route. On 2026-09-23, Codanna was
-removed from the active Kubernaut MCP config and the main Engram route was
-switched back to the shared CocoIndex backend. The ignored Kubernaut `.mcp.json`
-retains the direct CodeGraph server beside Engram.
+experiment and removed from the active Kubernaut client configuration on
+2026-09-23. The current working-tree gateway registry now configures Kubernaut's
+code route with `ZvecShadowRelayAdapter`: zvec-grep is primary, and CocoIndex
+search plus comparable graph queries run asynchronously as a shadow. Other
+Kubernaut-family routes continue using the shared CocoIndex backend.
+
+The primary URL defaults to `http://127.0.0.1:7999/mcp` and can be overridden
+with `ZVEC_GREP_MCP_URL`; the shadow URL defaults to
+`http://127.0.0.1:8891/mcp` and can be overridden with `COCOINDEX_MCP_URL`.
+The comparison log is `~/.engram/logs/zvec-cocoindex-shadow.jsonl`. It records
+query/tool arguments, canonical root, branch, commit, dirty state, both full
+responses, per-backend latency, and shadow errors. A shadow is issued only when
+the absolute root exactly matches a configured CocoIndex live source; this
+avoids comparing unrelated or unindexed worktrees. The primary response is
+returned without waiting for the shadow. Each completed entry also identifies
+CocoIndex as the comparison reference and records unique-file rank overlap and
+rank deltas for semantic queries, or caller-by-depth and resolver-count
+differences for graph queries. These are continuous discrepancy indicators,
+not adjudicated relevance labels. The replay snapshot is also retained in
+`~/.engram/zvec-grep/live-shadow-acceptance-authoritative.jsonl`.
+
+The zvec-grep agent toolset now exposes search and root-scoped callgraph
+blast-radius, shortest-path, cluster, and communities tools; `full` adds index,
+status, and managed-rg operations. The local CodeGraph MCP remains available
+for exact, type-resolved navigation. This gateway change is implemented and
+unit-tested and active behind the Kubernaut Engram route (container front door
+8896 -> native gateway 8898 -> zvec HTTP daemon 7999). The first live replay
+indexed the current worktree's matched production-Go scope at 1,071 files and
+17,615 entities, then completed seven semantic comparisons and two graph
+comparisons. Keep the gateway shadow log under observation; this exploratory
+sample is not an acceptance decision.
+
+On that seven-query snapshot, zvec and CocoIndex agreed on the top file for one
+query; the other top-file rankings differed, with full CocoIndex-only and
+zvec-only result lists retained in the JSONL comparison records. For
+`SetDiscoveredWorkflowState`, both graph tools returned the same two-level
+caller chain. Their graph-wide resolution counters differed substantially
+(zvec: 81,033 calls, 42,705 unresolved, 21,791 ambiguous; CocoIndex: 67,292,
+39,299, 15,997). Treat CocoIndex as the comparison reference, investigate the
+scope/resolution deltas, and do not treat either backend's unadjudicated ranks
+as relevance labels. zvec's `possibly_stale` header here accompanies
+`served_from_current_index`; index status was ready and returned hits had no
+per-item stale flags.
+
+The local zvec daemon and Engram gateway are now running. Subsequent Kubernaut
+calls through the 8896 front door are automatically shadowed and compared in
+`~/.engram/logs/zvec-cocoindex-shadow.jsonl`; zvec configuration is under
+`~/.engram/zvec-grep`, and branch-bound index/graph files are under the
+Kubernaut root's locally excluded `.zvec-grep/` directory.
+
+### Historical Codanna shadow relay
 
 During the evaluation, the relay was `scripts/codanna_shadow.py`. Codanna's semantic MCP responses were
 converted from its current formatted text into `codanna-shadow.v1` structured
@@ -404,6 +503,136 @@ This is not a project configuration or stale-index setting. The active
 and guidance; it has no receiver-inference switch. Codanna `0.16.0` documents
 factory-call initializers as intentionally unbound, so the durable fix must be
 in Codanna or a different type-aware fallback, not in Kubernaut's source.
+
+## Branch Overlay Manager Spike
+
+The branch overlay spike now has a backend-neutral Git planner in
+`src/engram/code_overlay.py` and a compiled Go planner in
+`spikes/code-overlay-go`. Both planners collect the merge-base delta, staged
+and unstaged changes, untracked files, renames, deletions, content hashes, and
+provenance. The same manifest can materialize a selected-file Codanna index or
+an isolated CocoIndex table/state database. Codanna and CocoIndex use separate
+eligible-file filters because Codanna rejects YAML/config files that the
+Kubernaut CocoIndex flow accepts.
+
+The Go and Python planners produced the same changed-path set and statuses for
+the live Kubernaut worktree. Across repeated cold process runs, both planners
+took roughly one second for this unusually dirty worktree; Git subprocesses and
+file hashing dominate, not the implementation language. A compiled Go planner
+does not yet justify a Rust rewrite. The production manager should therefore
+be a long-lived Go process with cached manifests and filesystem-triggered
+refreshes, avoiding a full Git scan on every MCP request.
+
+The backend timing is materially different: a one-file Codanna overlay built
+in about 1.6 seconds, while an overlay containing roughly 140 Codanna-eligible
+files did not complete within ten minutes. This confirms that overlay
+materialization and embedding/index construction, not the manager language,
+are the current performance bottleneck. Rust should only be reconsidered if
+profiling a cached/long-lived Go manager shows manifest or staging overhead is
+materially affecting response latency.
+
+A one-file CocoIndex overlay also completed successfully in about 14 seconds
+including flow/model startup, and the resulting isolated table returned a live
+semantic search result. The search layer accepts a validated table name for
+this isolated path; the production MCP tool still defaults to the main table
+until provenance and merge behavior are approved.
+
+### Codanna overlay options measured
+
+The initial ten-minute result was caused primarily by the three changed
+generated OpenAPI Go files, not by the Go planner. The files were approximately
+1.4 MB, 1.4 MB, and 242 KB. The following measurements were taken on the
+heavily dirty Kubernaut worktree and are directional because the worktree was
+changing during the spike:
+
+| Strategy | Measurement | Trade-off |
+| --- | --- | --- |
+| One-file structural overlay | about 2 seconds | No semantic embeddings |
+| Three generated files, semantic | about 230 seconds | Complete semantic overlay, but unacceptable latency |
+| Three generated files, structural only | about 103 seconds | Still expensive due parsing/index writes |
+| Non-test, non-generated files, semantic | about 93 seconds for 33 files | Better scope, but still background work |
+| Four parallel semantic shards | about 22 seconds wall time | Semantic retrieval works; cross-file Codanna relationships are lost |
+| One-file update on a copied base index | about 51 seconds | Existing index save rewrites large global state |
+
+The spike now supports `--codanna-production-only` to exclude test/e2e/
+integration and generated files, `--codanna-no-semantic` for a structural-only
+build, and generated configs no longer retain `indexed_paths`. The latter is
+important: retaining those paths caused every later one-shot query to re-index
+the overlay. A config with no persistent paths can query the completed index
+without that re-index step.
+
+The options are therefore:
+
+1. Use a long-lived Codanna watcher and refresh asynchronously. This preserves
+   full graph semantics, but its index write cost must happen in the background.
+2. Build a production-only overlay. This reduces scope and excludes files that
+   rarely improve semantic answers, but is still not reliably interactive for a
+   large branch delta.
+3. Build structural-only first, then add semantic embeddings asynchronously.
+   This gives exact symbols and relationships sooner but does not make large
+   parsing/index writes free.
+4. Build several semantic shards in parallel and merge ranked search results.
+   This is the fastest Codanna semantic spike, but graph tools must continue to
+   use the base index or Serena/CodeGraph rather than the shards.
+5. Use CocoIndex as the semantic delta backend. Its isolated table supports
+   incremental/content-addressed ingestion more naturally; the one-file live
+   build and search path already work, but multi-file scaling remains to be
+   measured.
+
+The recommended next architecture is option 1 for Codanna structural
+freshness, option 5 for semantic deltas, and option 4 only as a bounded
+fallback when semantic results are needed before the full overlay is ready.
+No query should synchronously wait for a full branch overlay; return the last
+verified overlay with an explicit freshness state while the replacement builds.
+
+### zvec-grep ephemeral semantic overlay
+
+`zvec-grep` is a stronger fit for the ephemeral semantic half than the Codanna
+alternatives. The isolated spike used `@zvec/zvec-grep` 0.2.2 in direct mode,
+with a temporary staged root containing 220 changed files:
+
+| Operation | Measurement |
+| --- | ---: |
+| Initial hybrid index | 18 seconds |
+| Index size | 48 MB |
+| Indexed entities | 10,588 |
+| Hybrid query, including process startup | about 310 ms |
+| One-file incremental update | about 5 seconds wall time |
+| Explicit index drop | about 0.3 seconds |
+
+The index stores under `<overlay-root>/.zvec-grep`, supports BM25 plus vector
+retrieval, returns source paths and line ranges, and can be removed with
+`zg index --drop --yes` or by deleting the temporary root. Direct mode ties
+model/index lifetime to the foreground process, so this does not require a
+watcher or resident branch daemon. The benchmark used
+`local/potion-code-16m-v2`; the default code file-size limit was raised to 2 MB
+to include the generated OpenAPI files.
+
+The local zvec-grep `spike/codegraph-sidecar` work adds a Rust `zg-codegraph`
+crate and `zg graph` / `zg graph-query` CLI commands for Go call graphs,
+blast radius, shortest path, and Leiden clustering. That graph API is not yet
+registered as a zvec-grep MCP tool, so the current MCP deployment continues to
+use CocoIndex for Graphify-style graph queries. zvec-grep remains appropriate
+for semantic retrieval over the changed-file delta. The merge design is:
+
+1. Plan Git changes and tombstones with the existing backend-neutral planner.
+2. Stage only current changed files into a content-addressed temporary root.
+3. Build/query a direct zvec-grep index for that root.
+4. Suppress base semantic hits for changed and deleted paths, then combine the
+   overlay and base ranked lists using rank fusion rather than incomparable raw
+   vector scores.
+5. Remove the temporary root after the overlay is superseded or expires.
+
+This avoids Codanna's global index rewrite, watcher lifecycle, shard graph loss,
+and branch-resource leakage. The next implementation spike should wrap the
+direct zvec-grep lifecycle behind the existing overlay manager and compare
+overlay/base rank quality against the current CocoIndex shadow results.
+
+The current preflight intentionally reports base-index provenance as unverified
+until a persistent base-index manifest proves that the base index represents
+the exact merge-base commit. Overlay materialization can be run for the spike,
+but base-plus-overlay result merging must remain disabled until that check
+passes.
 
 ## References
 

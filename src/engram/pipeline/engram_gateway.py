@@ -77,7 +77,10 @@ import math
 import os
 import pathlib
 import re
+import subprocess
 import sys
+import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Protocol
 from urllib.parse import urlparse
@@ -815,7 +818,9 @@ def _parse_sse_json(body: bytes) -> dict:
     text = body.decode("utf-8", errors="replace").strip()
     for line in text.splitlines():
         if line.startswith("data:"):
-            return json.loads(line[len("data:") :].strip())
+            payload = line[len("data:") :].strip()
+            if payload:
+                return json.loads(payload)
     return json.loads(text)
 
 
@@ -893,6 +898,508 @@ class HttpRelayAdapter:
 
     async def call_tool(self, name: str, arguments: dict) -> dict:
         return await self._roundtrip("tools/call", {"name": name, "arguments": arguments})
+
+
+ZVEC_SHADOWED_TOOLS = {
+    "zvec_grep_search": "cocoindex_search",
+    "zvec_grep_callgraph_blast_radius": "cocoindex_call_graph_blast_radius",
+    "zvec_grep_callgraph_shortest_path": "cocoindex_call_graph_shortest_path",
+    "zvec_grep_callgraph_cluster": "cocoindex_call_graph_get_cluster",
+}
+MAX_PENDING_ZVEC_SHADOWS = 8
+
+
+def _kubernaut_shadow_source_roots() -> dict[str, pathlib.Path]:
+    home = pathlib.Path.home()
+    configured = {
+        "kubernaut": os.environ.get("ENGRAM_CODE_DIR", str(home / "go/src/github.com/jordigilh/kubernaut")),
+        "kubernaut-operator": os.environ.get(
+            "ENGRAM_OPERATOR_DIR", str(home / "go/src/github.com/jordigilh/kubernaut-operator")
+        ),
+        "kubernaut-console": os.environ.get(
+            "ENGRAM_CONSOLE_DIR", str(home / "go/src/github.com/jordigilh/kubernaut-console")
+        ),
+        "kubernaut-demo-scenarios": os.environ.get(
+            "ENGRAM_SCENARIOS_DIR", str(home / "go/src/github.com/jordigilh/kubernaut-demo-scenarios")
+        ),
+    }
+    return {repo: pathlib.Path(root).expanduser().resolve() for repo, root in configured.items()}
+
+
+def _git_workspace_metadata(root: pathlib.Path) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"workspace": str(root), "branch": None, "commit": None, "dirty": None}
+    for key, command in (
+        ("branch", ["git", "-C", str(root), "branch", "--show-current"]),
+        ("commit", ["git", "-C", str(root), "rev-parse", "HEAD"]),
+    ):
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=3)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if result.returncode == 0:
+            metadata[key] = result.stdout.strip() or None
+    try:
+        tracked_changes = []
+        for command in (
+            ["git", "-C", str(root), "diff", "--quiet"],
+            ["git", "-C", str(root), "diff", "--cached", "--quiet"],
+        ):
+            tracked_changes.append(
+                subprocess.run(command, capture_output=True, text=True, check=False, timeout=5)
+            )
+        untracked = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard", "--directory"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+        if all(result.returncode in {0, 1} for result in tracked_changes) and untracked.returncode == 0:
+            metadata["dirty"] = any(result.returncode == 1 for result in tracked_changes) or bool(
+                untracked.stdout.strip()
+            )
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return metadata
+
+
+def _cocoindex_branch(repo: str, root: pathlib.Path, branch: str | None) -> str:
+    release = re.search(r"-v(\d+\.\d+)$", root.name)
+    if release:
+        return f"v{release.group(1)}"
+    if branch and (match := re.match(r"^release/v(\d+\.\d+)$", branch)):
+        return f"v{match.group(1)}"
+    return "main"
+
+
+def _zvec_shadow_arguments(
+    tool: str,
+    arguments: dict,
+    *,
+    repo: str,
+    root: pathlib.Path,
+    branch: str | None,
+) -> tuple[str, dict] | None:
+    shadow_tool = ZVEC_SHADOWED_TOOLS[tool]
+    common = {"repo": repo, "branch": _cocoindex_branch(repo, root, branch)}
+    if tool == "zvec_grep_search":
+        query = arguments.get("query")
+        if not isinstance(query, str) or not query.strip():
+            for key in ("queries", "fts", "vector"):
+                value = arguments.get(key)
+                values = [value] if isinstance(value, str) else value if isinstance(value, list) else []
+                query = " ".join(item.strip() for item in values if isinstance(item, str) and item.strip())
+                if query:
+                    break
+        if not isinstance(query, str) or not query.strip():
+            return None
+        limit = arguments.get("limit", 10)
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            limit = 10
+        return shadow_tool, {"query": query, "limit": min(max(limit, 1), 20), **common}
+
+    if tool == "zvec_grep_callgraph_blast_radius":
+        payload = {key: arguments[key] for key in ("function", "depth") if key in arguments}
+    elif tool == "zvec_grep_callgraph_shortest_path":
+        payload = {key: arguments[key] for key in ("source", "target") if key in arguments}
+    else:
+        payload = {"function": arguments.get("function")}
+    return shadow_tool, {**payload, **common}
+
+
+def _append_shadow_jsonl(path: pathlib.Path, entry: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(entry, default=str, separators=(",", ":")) + "\n")
+
+
+def _tool_result_text(result: dict) -> str:
+    return "\n".join(
+        block.get("text", "")
+        for block in result.get("content", [])
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
+def _normalize_comparison_path(path: str, repo: str) -> str:
+    path = path.strip().replace("\\", "/")
+    while path.startswith("./"):
+        path = path[2:]
+    for prefix in (f"{repo}/", f"{repo}@release-"):
+        if path.startswith(prefix):
+            if prefix.endswith("release-"):
+                _release, separator, relative = path.partition("/")
+                return relative if separator else path
+            return path[len(prefix):]
+    return path
+
+
+def _ranked_search_paths(result: dict, *, engine: str, repo: str) -> list[dict[str, Any]]:
+    structured = result.get("structuredContent", result.get("structured_content"))
+    if engine == "zvec-grep" and isinstance(structured, dict):
+        items = structured.get("items")
+        if isinstance(items, list):
+            paths: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for position, item in enumerate(items, start=1):
+                if not isinstance(item, dict):
+                    continue
+                raw_path = next(
+                    (item[key] for key in ("path", "relative_path", "relativePath", "filepath")
+                     if isinstance(item.get(key), str)),
+                    None,
+                )
+                if raw_path is None:
+                    continue
+                path = _normalize_comparison_path(raw_path, repo)
+                if path not in seen:
+                    seen.add(path)
+                    paths.append({"rank": item.get("rank", position), "path": path})
+            if paths:
+                return paths
+
+    text = _tool_result_text(result)
+    paths = []
+    seen = set()
+    if engine == "zvec-grep":
+        pattern = re.compile(r"^#(?P<rank>\d+)(?:\s+\[[^\]]+\])?\s+matchedBy=[^\s]+\s+(?P<location>.+?):\d+(?:-\d+)?$")
+        for line in text.splitlines():
+            match = pattern.match(line.strip())
+            if not match:
+                continue
+            path = _normalize_comparison_path(match.group("location"), repo)
+            if path not in seen:
+                seen.add(path)
+                paths.append({"rank": int(match.group("rank")), "path": path})
+    else:
+        pattern = re.compile(r"^\[(?P<rank>\d+)\]\s+(?P<path>.+?)\s+\(score:")
+        for line in text.splitlines():
+            match = pattern.match(line.strip())
+            if not match:
+                continue
+            path = _normalize_comparison_path(match.group("path"), repo)
+            if path not in seen:
+                seen.add(path)
+                paths.append({"rank": int(match.group("rank")), "path": path})
+    return paths
+
+
+def _graph_callers(result: dict, *, engine: str, repo: str) -> list[list[str]]:
+    if engine == "zvec-grep":
+        structured = result.get("structuredContent", result.get("structured_content"))
+        if isinstance(structured, dict) and isinstance(structured.get("callers_by_depth"), list):
+            return [
+                [_normalize_comparison_path(path, repo) for path in level if isinstance(path, str)]
+                for level in structured["callers_by_depth"]
+            ]
+    text = _tool_result_text(result)
+    depth_callers: dict[int, list[str]] = {}
+    for line in text.splitlines():
+        match = re.match(r"^\s*depth\s+(\d+):\s*(.*)$", line)
+        if match:
+            depth = int(match.group(1))
+            callers = [value.strip() for value in match.group(2).split(",") if value.strip()]
+            depth_callers[depth] = [_normalize_comparison_path(value, repo) for value in callers]
+    if not depth_callers:
+        return []
+    return [depth_callers[key] for key in range(1, max(depth_callers) + 1)]
+
+
+def _graph_path(result: dict, *, engine: str, repo: str) -> list[str] | None:
+    if engine == "zvec-grep":
+        structured = result.get("structuredContent", result.get("structured_content"))
+        if isinstance(structured, dict):
+            path = structured.get("path")
+            if path is None:
+                return None
+            if isinstance(path, list):
+                return [_normalize_comparison_path(item, repo) for item in path if isinstance(item, str)]
+    text = _tool_result_text(result)
+    if "No call path found" in text:
+        return None
+    for line in text.splitlines():
+        value = line.strip()
+        if line.startswith("  ") and " -> " in value:
+            return [_normalize_comparison_path(item, repo) for item in value.split(" -> ")]
+    return None
+
+
+def _graph_cluster_members(result: dict, *, engine: str, repo: str) -> list[str]:
+    if engine == "zvec-grep":
+        structured = result.get("structuredContent", result.get("structured_content"))
+        if isinstance(structured, dict) and isinstance(structured.get("members"), list):
+            return [
+                _normalize_comparison_path(member, repo)
+                for member in structured["members"]
+                if isinstance(member, str)
+            ]
+    members: list[str] = []
+    for line in _tool_result_text(result).splitlines():
+        if line.startswith("  ") and line.strip():
+            members.append(_normalize_comparison_path(line.strip(), repo))
+    return members
+
+
+def _graph_resolution_counts(result: dict, *, engine: str) -> dict[str, int] | None:
+    if engine == "zvec-grep":
+        structured = result.get("structuredContent", result.get("structured_content"))
+        if isinstance(structured, dict):
+            values = ("unresolved_calls", "total_calls", "ambiguous_calls")
+            if all(isinstance(structured.get(key), int) for key in values):
+                return {key: structured[key] for key in values}
+    match = re.search(
+        r"(?P<unresolved>[\d,]+)/(?P<total>[\d,]+) calls.*?and "
+        r"(?P<ambiguous>[\d,]+) matched 2\+ candidates",
+        _tool_result_text(result),
+        re.DOTALL,
+    )
+    if not match:
+        return None
+    return {
+        "unresolved_calls": int(match.group("unresolved").replace(",", "")),
+        "total_calls": int(match.group("total").replace(",", "")),
+        "ambiguous_calls": int(match.group("ambiguous").replace(",", "")),
+    }
+
+
+def _compare_shadow_responses(tool: str, primary: dict, shadow: dict, repo: str) -> dict[str, Any]:
+    comparison: dict[str, Any] = {
+        "reference_engine": "cocoindex",
+        "source_of_truth": "cocoindex",
+        "candidate_engine": "zvec-grep",
+        "evaluation_note": "CocoIndex is the comparison reference; rankings are not adjudicated relevance labels.",
+    }
+    if tool == "zvec_grep_search":
+        reference = _ranked_search_paths(shadow, engine="cocoindex", repo=repo)
+        candidate = _ranked_search_paths(primary, engine="zvec-grep", repo=repo)
+        freshness = {}
+        for line in _tool_result_text(primary).splitlines():
+            key, separator, value = line.partition(":")
+            if separator and key in {"freshness", "results", "background_refresh"}:
+                freshness[key] = value.strip()
+        reference_ranks = {item["path"]: item["rank"] for item in reference}
+        candidate_ranks = {item["path"]: item["rank"] for item in candidate}
+        comparison.update({
+            "comparison_type": "unique_file_rank_overlap",
+            "zvec_provenance": freshness,
+            "cocoindex_ranked_files": reference,
+            "zvec_ranked_files": candidate,
+            "cocoindex_only_top_k": [item["path"] for item in reference if item["path"] not in candidate_ranks],
+            "zvec_only_top_k": [item["path"] for item in candidate if item["path"] not in reference_ranks],
+            "shared_file_rank_deltas": [
+                {
+                    "path": path,
+                    "cocoindex_rank": reference_ranks[path],
+                    "zvec_rank": candidate_ranks[path],
+                    "zvec_minus_cocoindex": candidate_ranks[path] - reference_ranks[path],
+                }
+                for path in sorted(
+                    reference_ranks.keys() & candidate_ranks.keys(),
+                    key=lambda value: reference_ranks[value],
+                )
+            ],
+        })
+        comparison["file_order_matches_reference"] = [item["path"] for item in reference] == [
+            item["path"] for item in candidate
+        ]
+    elif tool == "zvec_grep_callgraph_blast_radius":
+        reference = _graph_callers(shadow, engine="cocoindex", repo=repo)
+        candidate = _graph_callers(primary, engine="zvec-grep", repo=repo)
+        comparison.update({
+            "comparison_type": "callers_by_depth",
+            "cocoindex_callers_by_depth": reference,
+            "zvec_callers_by_depth": candidate,
+            "cocoindex_only_by_depth": [
+                [name for name in reference[level] if level >= len(candidate) or name not in candidate[level]]
+                for level in range(len(reference))
+            ],
+            "zvec_only_by_depth": [
+                [name for name in candidate[level] if level >= len(reference) or name not in reference[level]]
+                for level in range(len(candidate))
+            ],
+        })
+        comparison["callers_match_reference"] = reference == candidate
+        reference_counts = _graph_resolution_counts(shadow, engine="cocoindex")
+        candidate_counts = _graph_resolution_counts(primary, engine="zvec-grep")
+        if reference_counts is not None:
+            comparison["cocoindex_resolution_counts"] = reference_counts
+        if candidate_counts is not None:
+            comparison["zvec_resolution_counts"] = candidate_counts
+        if reference_counts is not None and candidate_counts is not None:
+            comparison["zvec_minus_cocoindex_resolution_counts"] = {
+                key: candidate_counts[key] - reference_counts[key]
+                for key in reference_counts
+            }
+    elif tool == "zvec_grep_callgraph_shortest_path":
+        reference = _graph_path(shadow, engine="cocoindex", repo=repo)
+        candidate = _graph_path(primary, engine="zvec-grep", repo=repo)
+        comparison.update({
+            "comparison_type": "shortest_call_path",
+            "cocoindex_path": reference,
+            "zvec_path": candidate,
+            "path_matches_reference": reference == candidate,
+        })
+    elif tool == "zvec_grep_callgraph_cluster":
+        reference = _graph_cluster_members(shadow, engine="cocoindex", repo=repo)
+        candidate = _graph_cluster_members(primary, engine="zvec-grep", repo=repo)
+        reference_set = set(reference)
+        candidate_set = set(candidate)
+        comparison.update({
+            "comparison_type": "callgraph_cluster_members",
+            "cocoindex_members": reference,
+            "zvec_members": candidate,
+            "cocoindex_only_members": sorted(reference_set - candidate_set),
+            "zvec_only_members": sorted(candidate_set - reference_set),
+            "members_match_reference": reference_set == candidate_set,
+        })
+    else:
+        comparison["comparison_type"] = "raw_result_only"
+        comparison["status"] = "no_ranked-comparison-parser"
+    return comparison
+
+
+class ZvecShadowRelayAdapter:
+    """Forward zvec-grep tools unchanged and compare selected calls in the background.
+
+    The primary backend owns the client-visible tool catalog and response. CocoIndex
+    is only called for matching, indexed live roots; failures are recorded and never
+    alter the zvec-grep result.
+    """
+
+    def __init__(
+        self,
+        primary: BackendAdapter,
+        shadow: BackendAdapter,
+        *,
+        log_path: pathlib.Path,
+        shadow_timeout_seconds: float,
+        source_roots: dict[str, pathlib.Path] | None = None,
+    ) -> None:
+        self.primary = primary
+        self.shadow = shadow
+        self.log_path = log_path.expanduser()
+        self.shadow_timeout_seconds = shadow_timeout_seconds
+        self.source_roots = source_roots or _kubernaut_shadow_source_roots()
+        self._shadow_tasks: set[asyncio.Task[None]] = set()
+        self._shadow_semaphore = asyncio.Semaphore(1)
+        self._log_lock = asyncio.Lock()
+
+    async def list_tools(self) -> list[dict]:
+        return await self.primary.list_tools()
+
+    async def call_tool(self, name: str, arguments: dict) -> dict:
+        started = time.perf_counter()
+        primary = await self.primary.call_tool(name, arguments)
+        primary_elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+        if (
+            name in ZVEC_SHADOWED_TOOLS
+            and not primary.get("isError", primary.get("is_error", False))
+            and len(self._shadow_tasks) < MAX_PENDING_ZVEC_SHADOWS
+        ):
+            task = asyncio.create_task(
+                self._run_shadow(name, dict(arguments), primary, primary_elapsed_ms)
+            )
+            self._shadow_tasks.add(task)
+            task.add_done_callback(self._shadow_tasks.discard)
+        elif name in ZVEC_SHADOWED_TOOLS and len(self._shadow_tasks) >= MAX_PENDING_ZVEC_SHADOWS:
+            log.warning("dropping CocoIndex shadow for %s: %d comparisons already pending", name, len(self._shadow_tasks))
+        return primary
+
+    async def _run_shadow(
+        self,
+        name: str,
+        arguments: dict,
+        primary: dict,
+        primary_elapsed_ms: float,
+    ) -> None:
+        started = time.perf_counter()
+        raw_root = arguments.get("root")
+        root: pathlib.Path | None = None
+        if isinstance(raw_root, str) and raw_root.strip():
+            try:
+                root = pathlib.Path(raw_root).expanduser().resolve(strict=True)
+            except OSError:
+                root = None
+        metadata = await asyncio.to_thread(_git_workspace_metadata, root) if root else {
+            "workspace": raw_root, "branch": None, "commit": None, "dirty": None,
+        }
+        entry: dict[str, Any] = {
+            "schema_version": "zvec-cocoindex-shadow.v1",
+            "id": str(uuid.uuid4()),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "tool": name,
+            "arguments": arguments,
+            "primary": {
+                "engine": "zvec-grep",
+                "elapsed_ms": primary_elapsed_ms,
+                "response": primary,
+            },
+            "shadow": {"engine": "cocoindex"},
+            "comparison_reference": "cocoindex",
+            **metadata,
+        }
+        indexed_repo = next(
+            (repo for repo, indexed_root in self.source_roots.items() if root == indexed_root),
+            None,
+        )
+        if root is None:
+            entry["shadow"].update({"skipped": "missing_or_unavailable_absolute_root"})
+        elif indexed_repo is None:
+            entry["shadow"].update({"skipped": "root_is_not_a_configured_cocoindex_source"})
+        elif name.startswith("zvec_grep_callgraph_") and indexed_repo not in {
+            "kubernaut", "kubernaut-operator"
+        }:
+            entry["shadow"].update({"skipped": "cocoindex_callgraph_only_covers_go_core_and_operator"})
+        else:
+            call = _zvec_shadow_arguments(
+                name, arguments, repo=indexed_repo, root=root, branch=metadata.get("branch")
+            )
+            if call is None:
+                entry["shadow"].update({"skipped": "no_text_query_to_compare"})
+            else:
+                shadow_tool, shadow_arguments = call
+                entry["shadow"].update({"tool": shadow_tool, "arguments": shadow_arguments})
+                try:
+                    async with self._shadow_semaphore:
+                        result = await asyncio.wait_for(
+                            self.shadow.call_tool(shadow_tool, shadow_arguments),
+                            timeout=self.shadow_timeout_seconds,
+                        )
+                    entry["shadow"].update({
+                        "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
+                        "response": result,
+                        "is_error": bool(result.get("isError", result.get("is_error", False))),
+                    })
+                    if entry["shadow"]["is_error"]:
+                        entry["comparison"] = {
+                            "reference_engine": "cocoindex",
+                            "status": "reference_tool_error",
+                        }
+                    else:
+                        entry["comparison"] = _compare_shadow_responses(name, primary, result, indexed_repo)
+                except Exception as exc:  # noqa: BLE001 - shadow errors must not affect primary
+                    entry["shadow"].update({
+                        "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
+                        "error": f"{type(exc).__name__}: {exc}",
+                    })
+                    entry["comparison"] = {
+                        "reference_engine": "cocoindex",
+                        "status": "reference_call_failed",
+                    }
+                    log.warning("CocoIndex shadow failed for %s: %s", name, exc)
+
+        if "comparison" not in entry:
+            entry["comparison"] = {
+                "reference_engine": "cocoindex",
+                "status": "skipped",
+                "reason": entry["shadow"].get("skipped", "not_compared"),
+            }
+
+        try:
+            async with self._log_lock:
+                await asyncio.to_thread(_append_shadow_jsonl, self.log_path, entry)
+        except Exception:  # noqa: BLE001 - logging must not affect primary
+            log.warning("failed to write zvec/CocoIndex shadow log %s", self.log_path, exc_info=True)
 
 
 MANUAL_MENTAL_MODEL_TOOL = {
@@ -1390,6 +1897,28 @@ def _http(
     return spec
 
 
+def _shadow_http(
+    primary_url: str,
+    shadow_url: str,
+    *,
+    log_path: str,
+    timeout_seconds: float = 300.0,
+    shadow_timeout_seconds: float = 180.0,
+    shared_key: str | None = None,
+) -> dict:
+    spec = {
+        "kind": "shadow_http",
+        "url": primary_url,
+        "shadow_url": shadow_url,
+        "timeout_seconds": timeout_seconds,
+        "shadow_timeout_seconds": shadow_timeout_seconds,
+        "shadow_log": log_path,
+    }
+    if shared_key is not None:
+        spec["shared_key"] = shared_key
+    return spec
+
+
 def _stdio(command: str, args: list[str] | None = None, env: dict | None = None, shared_key: str | None = None) -> dict:
     spec = {"kind": "stdio", "command": command, "args": args or [], "env": env}
     if shared_key is not None:
@@ -1429,19 +1958,24 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     # keep it within the single request's forwarding budget instead of
     # timing out just before the fingerprinted cache is populated.
     kubernaut_http_code = _http("http://127.0.0.1:8891/mcp", timeout_seconds=180)
+    kubernaut_zvec_code = _shadow_http(
+        os.environ.get("ZVEC_GREP_MCP_URL", "http://127.0.0.1:7999/mcp"),
+        os.environ.get("COCOINDEX_MCP_URL", "http://127.0.0.1:8891/mcp"),
+        log_path=f"{home}/.engram/logs/zvec-cocoindex-shadow.jsonl",
+        shared_key="kubernaut-zvec-shadow",
+    )
     kubernaut_rca = _http("http://127.0.0.1:8897/mcp")
 
     def kubernaut_serena(project: str) -> dict:
         return _http(f"http://127.0.0.1:8893/mcp/{project}")
 
-    # `kubernaut` is the current main/v1.6 line. Route it through the shared
-    # CocoIndex backend like the other Kubernaut-family workspaces so semantic,
-    # structural-pattern, and Graphify-style call-graph tools are available
-    # through the single Engram MCP route.
+    # Kubernaut's live-worktree code route is zvec-grep primary. CocoIndex runs
+    # only as an asynchronous shadow comparator; the other family workspaces
+    # continue using the shared CocoIndex route until separately migrated.
     registry["kubernaut"] = {
         "docs": _hindsight("kubernaut-docs"),
         "issues": _hindsight("kubernaut-issues"),
-        "code": kubernaut_http_code,
+        "code": kubernaut_zvec_code,
         "rca": kubernaut_rca,
         "serena": kubernaut_serena("kubernaut"),
     }
@@ -1584,10 +2118,10 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
         raise ValueError(f"Backend {instance!r}/{backend!r} must be a TOML table")
 
     kind = settings.get("kind")
-    if kind not in {"http", "stdio"}:
-        raise ValueError(f"Backend {instance!r}/{backend!r} kind must be 'http' or 'stdio'")
+    if kind not in {"http", "shadow_http", "stdio"}:
+        raise ValueError(f"Backend {instance!r}/{backend!r} kind must be 'http', 'shadow_http', or 'stdio'")
 
-    if kind == "http":
+    if kind in {"http", "shadow_http"}:
         endpoint = settings.get("url")
         if not isinstance(endpoint, str) or not endpoint:
             raise ValueError(f"Backend {instance!r}/{backend!r} requires a non-empty url")
@@ -1622,6 +2156,42 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
             spec["headers"] = dict(headers)
         if timeout_seconds is not None:
             spec["timeout_seconds"] = float(timeout_seconds)
+        if kind == "shadow_http":
+            shadow_endpoint = settings.get("shadow_url")
+            if not isinstance(shadow_endpoint, str) or not shadow_endpoint:
+                raise ValueError(f"Backend {instance!r}/{backend!r} requires a non-empty shadow_url")
+            shadow_parsed = urlparse(shadow_endpoint)
+            if shadow_parsed.scheme not in {"http", "https"} or not shadow_parsed.netloc:
+                raise ValueError(
+                    f"Backend {instance!r}/{backend!r} shadow_url must be an HTTP(S) URL: {shadow_endpoint!r}"
+                )
+            if shadow_parsed.username is not None or shadow_parsed.password is not None:
+                raise ValueError(f"Backend {instance!r}/{backend!r} shadow_url must not contain credentials")
+            shadow_timeout = settings.get("shadow_timeout_seconds", 60.0)
+            if (
+                isinstance(shadow_timeout, bool)
+                or not isinstance(shadow_timeout, (int, float))
+                or not math.isfinite(shadow_timeout)
+                or not 1 <= shadow_timeout <= MAX_FORWARD_TIMEOUT_S
+            ):
+                raise ValueError(
+                    f"Backend {instance!r}/{backend!r} shadow_timeout_seconds must be between 1 and "
+                    f"{MAX_FORWARD_TIMEOUT_S:g}"
+                )
+            shadow_log = settings.get("shadow_log")
+            if not isinstance(shadow_log, str) or not shadow_log.strip():
+                raise ValueError(f"Backend {instance!r}/{backend!r} requires a non-empty shadow_log")
+            shared_key = settings.get("shared_key")
+            if shared_key is not None and (not isinstance(shared_key, str) or not shared_key):
+                raise ValueError(f"Backend {instance!r}/{backend!r} shared_key must be a non-empty string")
+            spec.update({
+                "kind": "shadow_http",
+                "shadow_url": shadow_endpoint,
+                "shadow_timeout_seconds": float(shadow_timeout),
+                "shadow_log": shadow_log,
+            })
+            if shared_key is not None:
+                spec["shared_key"] = shared_key
         return spec
 
     command = settings.get("command")
@@ -1779,11 +2349,33 @@ def build_backend_adapters(registry: dict[str, dict[str, dict]]) -> dict[str, di
     unlike serena, which is bound to one repo's filesystem via `--project`
     and can never be shared."""
     shared_stdio_cache: dict[str, StdioSubprocessAdapter] = {}
+    shared_shadow_cache: dict[str, ZvecShadowRelayAdapter] = {}
     adapters: dict[str, dict[str, BackendAdapter]] = {}
 
     for project, specs in registry.items():
         adapters[project] = {}
         for backend_key, spec in specs.items():
+            if spec["kind"] == "shadow_http":
+                shared_key = spec.get("shared_key")
+                if shared_key is not None and shared_key in shared_shadow_cache:
+                    adapters[project][backend_key] = shared_shadow_cache[shared_key]
+                    continue
+                primary = HttpRelayAdapter(
+                    spec["url"], spec.get("headers"), spec.get("timeout_seconds", FORWARD_TIMEOUT_S)
+                )
+                shadow = HttpRelayAdapter(
+                    spec["shadow_url"], timeout_seconds=spec["shadow_timeout_seconds"]
+                )
+                adapter = ZvecShadowRelayAdapter(
+                    primary,
+                    shadow,
+                    log_path=pathlib.Path(spec["shadow_log"]),
+                    shadow_timeout_seconds=spec["shadow_timeout_seconds"],
+                )
+                if shared_key is not None:
+                    shared_shadow_cache[shared_key] = adapter
+                adapters[project][backend_key] = adapter
+                continue
             if spec["kind"] == "http":
                 adapters[project][backend_key] = HttpRelayAdapter(
                     spec["url"], spec.get("headers"), spec.get("timeout_seconds", FORWARD_TIMEOUT_S)

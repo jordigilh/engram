@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import pathlib
+import subprocess
 
 import pytest
 
@@ -58,6 +59,14 @@ class FakeAdapter:
 
 def _tool(name: str, description: str = "") -> dict:
     return {"name": name, "description": description, "inputSchema": {"type": "object", "properties": {}}}
+
+
+def test_parse_sse_json_skips_empty_data_prelude(engram_gateway):
+    result = engram_gateway._parse_sse_json(
+        b'data: \nid: 0\nretry: 3000\n\ndata: {"jsonrpc":"2.0","id":2,"result":{"tools":[]}}\n\n'
+    )
+
+    assert result == {"jsonrpc": "2.0", "id": 2, "result": {"tools": []}}
 
 
 class TestPrefixedToolName:
@@ -798,8 +807,9 @@ class TestBuildProjectRegistry:
     """Pure config -- no I/O, no adapter instantiation -- covering the full
     rollout across every onboarded repo (see docs/findings/2026-08.md,
     2026-08-21 rollout entry). Backend heterogeneity is real and must be
-    preserved exactly, not normalized away: kubernaut-family already has
-    everything on shared HTTP daemons (as of 2026-08-25, kubernaut-console
+    preserved exactly, not normalized away: Kubernaut's main route uses the
+    zvec-primary/CocoIndex-shadow HTTP adapter while its sibling workspaces
+    remain on shared CocoIndex HTTP daemons (as of 2026-08-25, kubernaut-console
     included -- it was the one family member missing a serena entry despite
     already being a registered project on the shared daemon, see
     test_kubernaut_console_has_serena_scoped_to_its_own_repo below); koku-
@@ -857,17 +867,20 @@ class TestBuildProjectRegistry:
         assert spec["rca"] == {"kind": "http", "url": "http://127.0.0.1:8897/mcp"}
         assert spec["serena"] == {"kind": "http", "url": "http://127.0.0.1:8893/mcp/kubernaut-operator"}
 
-    def test_current_kubernaut_route_uses_cocoindex_with_graph_timeout(self, engram_gateway):
-        """The Kubernaut main route exposes the shared CocoIndex MCP server;
-        its cold Go graph build needs more than the generic 60-second relay
-        timeout."""
+    def test_current_kubernaut_route_uses_zvec_primary_and_cocoindex_shadow(self, engram_gateway):
+        """Kubernaut exposes zvec's live-worktree catalog while CocoIndex is
+        retained as a non-blocking comparison backend."""
         registry = engram_gateway.build_project_registry("/home/u")
 
         assert set(registry["kubernaut"]) == {"docs", "issues", "code", "rca", "serena"}
         assert registry["kubernaut"]["code"] == {
-            "kind": "http",
-            "url": "http://127.0.0.1:8891/mcp",
-            "timeout_seconds": 180,
+            "kind": "shadow_http",
+            "url": "http://127.0.0.1:7999/mcp",
+            "shadow_url": "http://127.0.0.1:8891/mcp",
+            "timeout_seconds": 300.0,
+            "shadow_timeout_seconds": 180.0,
+            "shadow_log": "/home/u/.engram/logs/zvec-cocoindex-shadow.jsonl",
+            "shared_key": "kubernaut-zvec-shadow",
         }
         assert "code" in registry["kubernaut-operator"]
 
@@ -1035,6 +1048,28 @@ class TestBuildBackendAdapters:
         assert isinstance(adapters["kubernaut"]["docs_manual"], engram_gateway.ManualMentalModelAdapter)
         assert adapters["kubernaut"]["docs_manual"].hindsight_adapter is adapters["kubernaut"]["docs"]
 
+    def test_shadow_http_builds_a_shared_zvec_primary_adapter(self, engram_gateway, tmp_path):
+        spec = {
+            "kind": "shadow_http",
+            "url": "http://127.0.0.1:7999/mcp",
+            "shadow_url": "http://127.0.0.1:8891/mcp",
+            "timeout_seconds": 300.0,
+            "shadow_timeout_seconds": 180.0,
+            "shadow_log": str(tmp_path / "shadow.jsonl"),
+            "shared_key": "kubernaut-zvec-shadow",
+        }
+        adapters = engram_gateway.build_backend_adapters({
+            "kubernaut": {"code": spec},
+            "kubernaut-operator": {"code": dict(spec)},
+        })
+
+        primary = adapters["kubernaut"]["code"]
+        assert isinstance(primary, engram_gateway.ZvecShadowRelayAdapter)
+        assert adapters["kubernaut-operator"]["code"] is primary
+        assert primary.primary.url == spec["url"]
+        assert primary.shadow.url == spec["shadow_url"]
+        assert primary.log_path == pathlib.Path(spec["shadow_log"])
+
     def test_manual_tools_are_added_for_each_writable_hindsight_bank(self, engram_gateway):
         registry = {
             "demo": {
@@ -1079,6 +1114,218 @@ class TestBuildBackendAdapters:
         adapters = engram_gateway.build_backend_adapters(registry)
 
         assert adapters["praxis-grid"]["code"] is not adapters["dcm-cli"]["code"]
+
+
+class TestZvecShadowRelayAdapter:
+    def test_workspace_metadata_reports_untracked_worktree_content(self, engram_gateway, tmp_path):
+        subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True)
+        (tmp_path / "untracked.go").write_text("package sample\n")
+
+        metadata = engram_gateway._git_workspace_metadata(tmp_path)
+
+        assert metadata["workspace"] == str(tmp_path)
+        assert metadata["branch"]
+        assert metadata["commit"] is None
+        assert metadata["dirty"] is True
+
+    def test_semantic_comparison_uses_cocoindex_as_reference_and_reports_file_drift(
+        self, engram_gateway
+    ):
+        primary = {
+            "content": [{
+                "type": "text",
+                "text": (
+                    "#1 [group_coverage: Q1] matchedBy=fts+vector pkg/a.go:1-4\n"
+                    "#2 [global_fill] matchedBy=fts pkg/b.go:8-9\n"
+                ),
+            }]
+        }
+        shadow = {
+            "content": [{
+                "type": "text",
+                "text": (
+                    "[1] kubernaut/pkg/a.go (score: 0.9)\n"
+                    "[2] kubernaut/pkg/c.go (score: 0.8)\n"
+                ),
+            }]
+        }
+
+        comparison = engram_gateway._compare_shadow_responses(
+            "zvec_grep_search", primary, shadow, "kubernaut"
+        )
+
+        assert comparison["reference_engine"] == "cocoindex"
+        assert comparison["source_of_truth"] == "cocoindex"
+        assert comparison["cocoindex_only_top_k"] == ["pkg/c.go"]
+        assert comparison["zvec_only_top_k"] == ["pkg/b.go"]
+        assert comparison["shared_file_rank_deltas"] == [{
+            "path": "pkg/a.go",
+            "cocoindex_rank": 1,
+            "zvec_rank": 1,
+            "zvec_minus_cocoindex": 0,
+        }]
+        assert comparison["file_order_matches_reference"] is False
+
+    def test_graph_comparison_reports_cocoindex_reference_callers(self, engram_gateway):
+        primary = {
+            "structuredContent": {
+                "callers_by_depth": [["pkg/a.go::caller"], ["pkg/b.go::parent"]],
+                "unresolved_calls": 42,
+                "total_calls": 100,
+                "ambiguous_calls": 11,
+            }
+        }
+        shadow = {
+            "content": [{
+                "type": "text",
+                "text": (
+                    "Blast radius for kubernaut/pkg/a.go::target:\n"
+                    "  depth 1: kubernaut/pkg/a.go::caller\n"
+                    "  depth 2: kubernaut/pkg/c.go::parent\n"
+                    "\n(name-based resolution, no type info -- 35/90 calls in this repo could not be "
+                    "resolved to a known definition, and 9 matched 2+ candidates and were dropped)"
+                ),
+            }]
+        }
+
+        comparison = engram_gateway._compare_shadow_responses(
+            "zvec_grep_callgraph_blast_radius", primary, shadow, "kubernaut"
+        )
+
+        assert comparison["reference_engine"] == "cocoindex"
+        assert comparison["source_of_truth"] == "cocoindex"
+        assert comparison["cocoindex_only_by_depth"] == [[], ["pkg/c.go::parent"]]
+        assert comparison["zvec_only_by_depth"] == [[], ["pkg/b.go::parent"]]
+        assert comparison["callers_match_reference"] is False
+        assert comparison["zvec_minus_cocoindex_resolution_counts"] == {
+            "unresolved_calls": 7,
+            "total_calls": 10,
+            "ambiguous_calls": 2,
+        }
+
+    def test_primary_returns_before_shadow_and_logs_same_root_ranked_comparison(
+        self, engram_gateway, tmp_path
+    ):
+        class BlockingShadow(FakeAdapter):
+            def __init__(self):
+                super().__init__()
+                self.started = asyncio.Event()
+                self.release = asyncio.Event()
+
+            async def call_tool(self, name, arguments):
+                self.call_log.append((name, arguments))
+                self.started.set()
+                await self.release.wait()
+                return {"content": [{"type": "text", "text": "cocoindex ranked chunks"}], "isError": False}
+
+        async def scenario():
+            root = tmp_path.resolve()
+            primary_result = {
+                "content": [{"type": "text", "text": "zvec ranked chunks"}],
+                "structuredContent": {"items": [{"rank": 1, "path": "pkg/workflow.go"}]},
+                "isError": False,
+            }
+            primary = FakeAdapter(call_results={"zvec_grep_search": primary_result})
+            shadow = BlockingShadow()
+            log_path = tmp_path / "zvec-cocoindex-shadow.jsonl"
+            adapter = engram_gateway.ZvecShadowRelayAdapter(
+                primary,
+                shadow,
+                log_path=log_path,
+                shadow_timeout_seconds=1,
+                source_roots={"kubernaut": root},
+            )
+
+            arguments = {"root": str(root), "query": "workflow selection membership", "limit": 7}
+            result = await asyncio.wait_for(adapter.call_tool("zvec_grep_search", arguments), timeout=0.1)
+            assert result is primary_result
+            await asyncio.wait_for(shadow.started.wait(), timeout=0.2)
+            assert not log_path.exists(), "the shadow has not been released or logged yet"
+
+            shadow.release.set()
+            await asyncio.gather(*tuple(adapter._shadow_tasks))
+            entry = json.loads(log_path.read_text().strip())
+
+            assert shadow.call_log == [(
+                "cocoindex_search",
+                {"query": "workflow selection membership", "limit": 7, "repo": "kubernaut", "branch": "main"},
+            )]
+            assert entry["schema_version"] == "zvec-cocoindex-shadow.v1"
+            assert entry["branch"] is None
+            assert entry["commit"] is None
+            assert entry["workspace"] == str(root)
+            assert entry["primary"]["response"] == primary_result
+            assert entry["shadow"]["response"]["content"][0]["text"] == "cocoindex ranked chunks"
+            assert entry["comparison"]["reference_engine"] == "cocoindex"
+            assert entry["comparison"]["zvec_only_top_k"] == ["pkg/workflow.go"]
+
+        asyncio.run(scenario())
+
+    def test_graph_tools_map_to_cocoindex_with_root_branch_and_repo_scope(self, engram_gateway, tmp_path):
+        root = tmp_path / "kubernaut-v1.5"
+        root.mkdir()
+        tool, arguments = engram_gateway._zvec_shadow_arguments(
+            "zvec_grep_callgraph_blast_radius",
+            {"root": str(root), "function": "Reconcile", "depth": 3},
+            repo="kubernaut",
+            root=root,
+            branch="fix/123-branch",
+        )
+
+        assert tool == "cocoindex_call_graph_blast_radius"
+        assert arguments == {
+            "function": "Reconcile",
+            "depth": 3,
+            "repo": "kubernaut",
+            "branch": "v1.5",
+        }
+
+    def test_shadow_failure_is_logged_without_changing_primary_result(self, engram_gateway, tmp_path):
+        async def scenario():
+            root = tmp_path.resolve()
+            primary_result = {"content": [{"type": "text", "text": "primary"}], "isError": False}
+            adapter = engram_gateway.ZvecShadowRelayAdapter(
+                FakeAdapter(call_results={"zvec_grep_search": primary_result}),
+                FakeAdapter(call_error=RuntimeError("CocoIndex unavailable")),
+                log_path=tmp_path / "shadow.jsonl",
+                shadow_timeout_seconds=0.1,
+                source_roots={"kubernaut": root},
+            )
+
+            result = await adapter.call_tool(
+                "zvec_grep_search", {"root": str(root), "query": "workflow"}
+            )
+            await asyncio.gather(*tuple(adapter._shadow_tasks))
+            entry = json.loads((tmp_path / "shadow.jsonl").read_text().strip())
+            assert result is primary_result
+            assert entry["shadow"]["error"] == "RuntimeError: CocoIndex unavailable"
+
+        asyncio.run(scenario())
+
+    def test_typescript_worktree_does_not_call_the_go_only_cocoindex_graph(self, engram_gateway, tmp_path):
+        async def scenario():
+            root = tmp_path.resolve()
+            primary_result = {"content": [{"type": "text", "text": "zvec graph"}], "isError": False}
+            shadow = FakeAdapter()
+            adapter = engram_gateway.ZvecShadowRelayAdapter(
+                FakeAdapter(call_results={"zvec_grep_callgraph_cluster": primary_result}),
+                shadow,
+                log_path=tmp_path / "shadow.jsonl",
+                shadow_timeout_seconds=0.1,
+                source_roots={"kubernaut-console": root},
+            )
+
+            result = await adapter.call_tool(
+                "zvec_grep_callgraph_cluster",
+                {"root": str(root), "function": "resolveTheme"},
+            )
+            await asyncio.gather(*tuple(adapter._shadow_tasks))
+            entry = json.loads((tmp_path / "shadow.jsonl").read_text().strip())
+            assert result is primary_result
+            assert shadow.call_log == []
+            assert entry["shadow"]["skipped"] == "cocoindex_callgraph_only_covers_go_core_and_operator"
+
+        asyncio.run(scenario())
 
 
 class TestGatewayIdentityRegistry:
@@ -1193,6 +1440,33 @@ url = "http://host.containers.internal:8897/mcp"
         adapters = engram_gateway.build_backend_adapters(registry)
         assert adapters["kubernaut"]["code"].headers == {"Host": "localhost:8891"}
         assert adapters["kubernaut"]["code"].timeout_seconds == 180
+
+    def test_loads_shadow_http_backend_with_independent_timeouts(self, engram_gateway, tmp_path):
+        config = tmp_path / "instances.toml"
+        config.write_text(
+            f"""
+[instances.kubernaut.backends.code]
+kind = "shadow_http"
+url = "http://127.0.0.1:7999/mcp"
+shadow_url = "http://127.0.0.1:8891/mcp"
+timeout_seconds = 300
+shadow_timeout_seconds = 180
+shadow_log = "{tmp_path / 'shadow.jsonl'}"
+shared_key = "kubernaut-zvec-shadow"
+"""
+        )
+
+        registry = engram_gateway.load_instance_registry(config)
+
+        assert registry["kubernaut"]["code"] == {
+            "kind": "shadow_http",
+            "url": "http://127.0.0.1:7999/mcp",
+            "shadow_url": "http://127.0.0.1:8891/mcp",
+            "timeout_seconds": 300.0,
+            "shadow_timeout_seconds": 180.0,
+            "shadow_log": str(tmp_path / "shadow.jsonl"),
+            "shared_key": "kubernaut-zvec-shadow",
+        }
 
     def test_loads_stdio_backend_with_environment_and_shared_key(self, engram_gateway, tmp_path):
         config = tmp_path / "instances.toml"

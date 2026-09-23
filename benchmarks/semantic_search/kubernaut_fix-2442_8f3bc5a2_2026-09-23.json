@@ -1,0 +1,188 @@
+{
+  "run_id": "kubernaut-fix-2442-8f3bc5a2-2026-09-23",
+  "created_at": "2026-09-23",
+  "base_query_suite": "kubernaut-workflow-discovery",
+  "followup_query_suite": "kubernaut-workflow-discovery-followups",
+  "evaluation_status": "exploratory; no adjudicated relevance labels",
+  "source": {
+    "repository": "jordigilh/kubernaut",
+    "branch": "fix/2442-workflow-discovery-membership",
+    "head": "8f3bc5a2d7da5262553a0919f9faecb83d61a09a",
+    "selected_go_snapshot_sha256": "1eb2a57192e0af48c80741d7d732a13028f93c2614d194e3ce278234cc859dd8",
+    "scope": "all Go files selected by **/*.go, excluding vendor, *_test.go, zz_generated*, and files over 2 MiB",
+    "files": 1072,
+    "bytes": 13611586
+  },
+  "cocoindex": {
+    "table": "cocoindex.code_embeddings",
+    "mode": "hybrid",
+    "repo_filter": "kubernaut",
+    "branch_argument": "main (excludes release-tagged rows; not a Git commit pin)",
+    "distinct_files": 1072,
+    "rows": 19371,
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "bm25_hits_in_returned_top10": 0
+  },
+  "zvec": {
+    "index_root": "/var/folders/r7/gktmmltd1zq7wqhsjjslwsm80000gn/T/opencode/kubernaut-fix-2442-8f3bc-zvec",
+    "files": 1072,
+    "entities": 17629,
+    "model": "local/potion-code-16m-v2",
+    "fusion": "FTS weight 1.1, vector weight 1.0; close same-band corroboration capped at 25% of strongest route; discordant/transition-band secondary weight 7%",
+    "limit": 10
+  },
+  "notes": [
+    "CocoIndex and zvec file-path inventories both contain 1,072 entries for this branch snapshot.",
+    "Raw scores are not comparable across the different embedding models.",
+    "File overlap is descriptive only; it is not a relevance score.",
+    "Returned top-10 CocoIndex results contain no BM25-ranked hits for these queries, so the observed hybrid results are dense-only at the returned boundary.",
+    "Follow-up prompts are agent-generated probes, not captured user search logs.",
+    "For discovered-state flow, vector-only ranks the context state APIs at 1-5 while hybrid places them at ranks 7-19; inspect query-group coverage and lexical/vector interactions.",
+    "For the unrestricted-only-allow prompt, relevant vector candidates appear at ranks 5 and 12 and Validator.IsAllowed has route ranks FTS 76 / vector 39, but hybrid limit-100 ranks those entities 14, 25, and 40. These are ranking/fusion candidates rather than missing-from-recall cases."
+  ],
+  "base_queries": [
+    {
+      "id": "reject-undiscovered-catalog-workflow",
+      "unique_file_overlap_top10": 4,
+      "coco_top5": ["internal/kubernautagent/parser/validator.go#11", "cmd/kubernautagent/bootstrap.go#9", "cmd/kubernautagent/toolregistry.go#37", "internal/kubernautagent/workflowcatalog/discovery.go#5", "cmd/kubernautagent/routes.go#65"],
+      "zvec_top5": ["internal/kubernautagent/parser/validator.go::IsAllowed (FTS 4, vector 6)", "internal/kubernautagent/investigator/investigator_workflow_selection.go::runWorkflowSelection (FTS 2, vector 39)", "pkg/apifrontend/handler/mcp_bridge.go::registerKAMCPTools (FTS 1, vector 177)", "cmd/kubernautagent/toolregistry.go::FetchValidator (FTS 5, vector 1)", "test/services/mock-llm/conversation/discovery.go::PlanDiscovery (FTS 3, vector 123)"]
+    },
+    {
+      "id": "discovered-state-flow-to-validation",
+      "unique_file_overlap_top10": 0,
+      "coco_top5": ["pkg/datastorage/ogen-client/oas_schemas_gen.go#877", "pkg/datastorage/ogen-client/oas_schemas_gen.go#581", "test/services/mock-llm/conversation/conditions.go#3", "internal/kubernautagent/workflowcatalog/discovery.go#3", "pkg/datastorage/models/workflow_schema.go#9"],
+      "zvec_top5": ["internal/kubernautagent/parser/validator.go::IsAllowed (FTS 8, vector 4)", "internal/kubernautagent/tools/custom/discovery_audit.go::emitAuditEvents (FTS 10, vector 7)", "internal/controller/workflowexecution/workflowexecution_pending.go::finalizePendingToRunning (FTS 3, vector 38)", "test/infrastructure/must_gather_image.go::RunMustGatherImageOptions (FTS 1)", "pkg/authwebhook/startup_reconciler.go::syncWorkflowCRD (FTS 2)"]
+    },
+    {
+      "id": "record-listed-workflow-ids",
+      "unique_file_overlap_top10": 2,
+      "coco_top5": ["internal/kubernautagent/parser/validator.go#11", "internal/kubernautagent/workflowcatalog/discovery.go#4", "pkg/workflowexecution/audit/manager.go#21", "internal/kubernautagent/workflowcatalog/cache.go#4", "pkg/kubernautagent/types/context.go#2"],
+      "zvec_top5": ["cmd/kubernautagent/toolregistry.go::FetchValidator (FTS 1, vector 1)", "pkg/kubernautagent/types/context.go::Add (FTS 5, vector 4)", "internal/kubernautagent/mcp/tools/select_workflow.go::Handle (FTS 4, vector 45)", "internal/kubernautagent/parser/validator.go::SetDiscoveredWorkflowState (FTS 2)", "internal/kubernautagent/investigator/investigator_workflow_selection.go::runWorkflowSelection (FTS 3)"]
+    },
+    {
+      "id": "restrict-selection-to-discovered-workflows",
+      "unique_file_overlap_top10": 0,
+      "coco_top5": ["internal/kubernautagent/tools/custom/tools.go#17", "pkg/aianalysis/handlers/response_processor.go#17", "internal/kubernautagent/investigator/investigator_phases.go#10", "internal/kubernautagent/parser/validator.go#2", "pkg/shared/types/workflow_snapshot.go#7"],
+      "zvec_top5": ["pkg/apifrontend/handler/mcptools.go (FTS 4, vector 10)", "test/infrastructure/shared_e2e.go::DeployMockLLMInNamespace (FTS 1, vector 57)", "pkg/apifrontend/agent/prompt.go::BuildInstruction (FTS 2)", "pkg/apifrontend/tools/ka_investigate_mcp.go::InvestigateMCPArgs (FTS 11, vector 1)", "internal/kubernautagent/mcp/tools/investigate_discovery.go::triggerFreshInvestigationForDiscovery (FTS 8, vector 141)"]
+    },
+    {
+      "id": "outcome-for-undiscovered-selection",
+      "unique_file_overlap_top10": 3,
+      "coco_top5": ["internal/kubernautagent/tools/custom/tools.go#17", "internal/kubernautagent/mcp/tools/select_workflow.go#30", "internal/kubernautagent/workflowcatalog/discovery.go#5", "internal/kubernautagent/parser/validator.go#11", "pkg/kubernautagent/types/context.go#3"],
+      "zvec_top5": ["internal/kubernautagent/workflowcatalog/discovery.go::GetWorkflowWithContextFilters (FTS 1, vector 47)", "internal/kubernautagent/parser/validator.go::IsAllowed (FTS 2, vector 36)", "internal/kubernautagent/mcp/tools/select_workflow.go::buildFinalResult (FTS 3, vector 11)", "internal/kubernautagent/investigator/investigator_workflow_selection.go::runWorkflowSelection (FTS 6, vector 17)", "pkg/workflowexecution/client/schema_metadata.go::SchemaMetadata (FTS 4, vector 177)"]
+    },
+    {
+      "id": "detected-labels-to-discovery-filters",
+      "unique_file_overlap_top10": 5,
+      "coco_top5": ["pkg/datastorage/ogen-client/oas_schemas_gen.go#1829", "internal/kubernautagent/audit/ds_workflow_catalog_payloads.go#7", "pkg/datastorage/models/workflow.go#25", "pkg/datastorage/models/workflow_schema.go#7", "pkg/datastorage/models/workflow.go#26"],
+      "zvec_top5": ["internal/kubernautagent/tools/custom/discovery_audit.go::applyDiscoveryFilterData (FTS 1, vector 1)", "internal/kubernautagent/tools/custom/tools.go::filtersFromSignal (FTS 2, vector 2)", "pkg/datastorage/ogen-client/oas_schemas_gen.go::WorkflowDiscoveryAuditContext (FTS 3, vector 6)", "pkg/datastorage/models/workflow.go::WorkflowSearchFilters (FTS 6, vector 3)", "internal/kubernautagent/workflowcatalog/cache_filter.go::matchesSearchFilters (FTS 8, vector 4)"]
+    },
+    {
+      "id": "membership-across-self-correction-retries",
+      "unique_file_overlap_top10": 2,
+      "coco_top5": ["internal/kubernautagent/workflowcatalog/cache.go#16", "test/services/mock-llm/conversation/discovery.go#4", "internal/kubernautagent/investigator/investigator_workflow_selection.go#5", "internal/kubernautagent/investigator/investigator_workflow_selection.go#32", "internal/kubernautagent/investigator/investigator_workflow_selection.go#31"],
+      "zvec_top5": ["internal/kubernautagent/parser/validator.go::SetDiscoveredWorkflowState (FTS 1, vector 84)", "pkg/kubernautagent/types/types.go::InvestigationResult (FTS 2)", "internal/kubernautagent/investigator/investigator_workflow_selection.go::runWorkflowSelection (FTS 4, vector 70)", "internal/kubernautagent/investigator/investigator_workflow_selection.go::classifySelfCorrectionLoopResult (FTS 3)", "internal/kubernautagent/investigator/investigator_gates.go::retryForAPIVersion (FTS 23, vector 1)"]
+    }
+  ],
+  "follow_up_queries": [
+    {
+      "id": "validator-identifier-anchor",
+      "unique_file_overlap_top10": 3,
+      "coco_top5": ["internal/kubernautagent/parser/validator.go#11", "internal/kubernautagent/investigator/investigator_gates.go#44", "cmd/kubernautagent/toolregistry.go#37", "cmd/kubernautagent/bootstrap.go#9", "internal/kubernautagent/investigator/investigator_gates.go#45"],
+      "zvec_top5": ["internal/kubernautagent/parser/validator.go::IsAllowed (FTS 1, vector 1)", "internal/kubernautagent/parser/validator.go::Validate (FTS 3, vector 7)", "cmd/kubernautagent/toolregistry.go::FetchValidator (FTS 4, vector 3)", "internal/kubernautagent/parser/validator.go::Validator (FTS 7, vector 6)", "internal/kubernautagent/workflowcatalog/list_cache.go::listFromCache (FTS 10, vector 4)"]
+    },
+    {
+      "id": "catalog-valid-undiscovered-validator-check",
+      "unique_file_overlap_top10": 3,
+      "coco_top5": ["internal/kubernautagent/parser/validator.go#11", "cmd/kubernautagent/toolregistry.go#37", "internal/kubernautagent/workflowcatalog/discovery.go#4", "internal/kubernautagent/workflowcatalog/discovery.go#5", "cmd/kubernautagent/routes.go#65"],
+      "zvec_top5": ["internal/kubernautagent/parser/validator.go::IsAllowed (FTS 1, vector 16)", "cmd/kubernautagent/toolregistry.go::FetchValidator (FTS 3, vector 1)", "pkg/apifrontend/handler/mcp_bridge.go::registerKAMCPTools (FTS 2, vector 131)", "test/services/mock-llm/conversation/discovery.go::PlanDiscovery (FTS 5, vector 195)", "pkg/notification/enrichment/enricher.go::EnrichNotification (FTS 4)"]
+    },
+    {
+      "id": "discovery-membership-through-retry",
+      "unique_file_overlap_top10": 2,
+      "coco_top5": ["internal/kubernautagent/parser/validator.go#11", "internal/kubernautagent/parser/validator.go#9", "pkg/shared/types/workflow_snapshot.go#7", "internal/kubernautagent/investigator/investigator_workflow_selection.go#5", "internal/kubernautagent/investigator/investigator_workflow_selection.go#31"],
+      "zvec_top5": ["internal/kubernautagent/parser/validator.go::SetDiscoveredWorkflowState (FTS 1, vector 2)", "cmd/kubernautagent/toolregistry.go::FetchValidator (FTS 4, vector 5)", "internal/kubernautagent/parser/validator.go::IsAllowed (FTS 2, vector 19)", "internal/kubernautagent/investigator/investigator_workflow_selection.go::runSelfCorrectionAttempt (FTS 3)", "internal/kubernautagent/tools/custom/tools.go::convertWorkflowsToDiscoveryEntries (FTS 19, vector 1)"]
+    },
+    {
+      "id": "selection-result-discovery-guard",
+      "unique_file_overlap_top10": 2,
+      "coco_top5": ["internal/kubernautagent/mcp/tools/select_workflow.go#30", "internal/kubernautagent/parser/validator.go#11", "internal/kubernautagent/tools/custom/tools.go#17", "internal/kubernautagent/mcp/tools/select_workflow.go#26", "internal/kubernautagent/investigator/investigator_workflow_selection.go#28"],
+      "zvec_top5": ["internal/kubernautagent/mcp/tools/select_workflow.go::Handle (FTS 3, vector 4)", "internal/kubernautagent/mcp/tools/select_workflow.go::buildFinalResult (FTS 1, vector 6)", "internal/kubernautagent/parser/validator.go::Validate (FTS 2, vector 8)", "internal/kubernautagent/mcp/interfaces.go::WorkflowDiscoveryResult (FTS 6, vector 26)", "internal/kubernautagent/mcp/tools/complete_no_action.go::CompleteNoActionTool (FTS 4)"]
+    }
+  ],
+  "route_diagnostics": [
+    {
+      "id": "discovered-state-flow-to-validation",
+      "zvec_limit": 100,
+      "hits": [
+        {"rank": 1, "symbol": "Validator.IsAllowed", "fts": 8, "vector": 4},
+        {"rank": 7, "symbol": "Validator.SetDiscoveredWorkflowState", "fts": 13, "vector": 3},
+        {"rank": 9, "symbol": "DiscoveredWorkflowStateFromContext", "fts": 224, "vector": 1},
+        {"rank": 10, "symbol": "WithDiscoveredWorkflowState", "fts": 185, "vector": 2},
+        {"rank": 16, "symbol": "NewDiscoveredWorkflowState", "vector": 5},
+        {"rank": 19, "symbol": "DiscoveredWorkflowState.Contains", "vector": 8}
+      ]
+    },
+    {
+      "id": "restrict-selection-to-discovered-workflows",
+      "zvec_limit": 100,
+      "hits": [
+        {"rank": 14, "symbol": "WorkflowCatalog.GetWorkflowWithContextFilters", "vector": 5},
+        {"rank": 25, "symbol": "convertWorkflowsToDiscoveryEntries", "vector": 12},
+        {"rank": 27, "symbol": "buildFinalResult", "vector": 13},
+        {"rank": 40, "symbol": "Validator.IsAllowed", "fts": 76, "vector": 39}
+      ]
+    }
+  ],
+  "query_group_coverage_spike": [
+    {
+      "id": "discovered-state-flow-to-validation",
+      "baseline": {
+        "mode": "single hybrid",
+        "limit": 10,
+        "relevant_state_hits": [
+          "Validator.IsAllowed#1",
+          "Validator.SetDiscoveredWorkflowState#7",
+          "WithDiscoveredWorkflowState#9",
+          "runSelfCorrectionAttempt#10"
+        ]
+      },
+      "grouped": {
+        "mode": "natural hybrid + state-focused vector query, no cross-group fusion",
+        "limit_per_group": 5,
+        "total_results": 10,
+        "state_group_hits": [
+          "DiscoveredWorkflowStateFromContext#2",
+          "WithDiscoveredWorkflowState#4",
+          "NewDiscoveredWorkflowState#6",
+          "SetDiscoveredWorkflowState#8",
+          "DiscoveredWorkflowState#10"
+        ]
+      },
+      "observation": "The grouped result preserves all five state/context symbols in the same 10-hit budget; the single hybrid list returns only some of them and omits creation/accessor coverage."
+    },
+    {
+      "id": "restrict-selection-to-discovered-workflows",
+      "baseline": {
+        "mode": "single hybrid",
+        "limit": 10,
+        "unique_file_overlap_with_cocoindex": 0,
+        "Validator.IsAllowed_in_top10": false
+      },
+      "grouped": {
+        "mode": "natural hybrid + identifier-anchored FTS query, no cross-group fusion",
+        "limit_per_group": 5,
+        "total_results": 10,
+        "Validator.IsAllowed_rank": 2,
+        "Validator.SetDiscoveredWorkflowState_rank": 4,
+        "Validator.Validate_rank": 6
+      },
+      "fused_variant": {
+        "mode": "natural hybrid + identifier-anchored FTS query with --fuse",
+        "Validator.IsAllowed_rank": 3,
+        "top_result": "FetchValidator"
+      },
+      "observation": "Preserving the supplemental FTS query as a separate group surfaces the exact guard in the top 2; fusing that route dilutes it to rank 3."
+    }
+  ]
+}

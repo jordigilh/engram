@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "suite_id": "kubernaut-workflow-discovery",
+  "suite_version": 1,
+  "description": "Exploratory semantic code-search queries about workflow discovery and selection on Kubernaut.",
+  "created_at": "2026-09-23",
+  "evaluation_status": "exploratory; no adjudicated relevance labels",
+  "notes": [
+    "Query text is passed unchanged to each backend.",
+    "This suite records search prompts, not gold target paths. Historical expected-file lists were provisional and must not be scored as relevance judgments.",
+    "Compare file discovery and relevant-snippet ranking separately; do not compare raw scores from different embedding models."
+  ],
+  "queries": [
+    {
+      "id": "reject-undiscovered-catalog-workflow",
+      "query": "How does workflow selection reject a catalog-valid workflow that was never discovered by list_workflows?",
+      "status": "active"
+    },
+    {
+      "id": "discovered-state-flow-to-validation",
+      "query": "Where is discovered workflow state created, attached to context, and passed to result validation?",
+      "status": "active"
+    },
+    {
+      "id": "record-listed-workflow-ids",
+      "query": "How does list_workflows record workflow IDs for later selection validation?",
+      "status": "active"
+    },
+    {
+      "id": "issue-2442-test-name-probe",
+      "query": "workflow_discovery_membership_2442",
+      "status": "excluded",
+      "exclusion_reason": "The intended target was a *_test.go file, excluded from the matched production-code index scope. Retained here to reproduce the original probe, but do not include it in production-code quality scoring."
+    },
+    {
+      "id": "restrict-selection-to-discovered-workflows",
+      "query": "Only allow the model to select remediation workflows discovered in this investigation context",
+      "status": "active"
+    },
+    {
+      "id": "outcome-for-undiscovered-selection",
+      "query": "What happens when the model selects a workflow that exists in the catalog but was not returned by workflow discovery?",
+      "status": "active"
+    },
+    {
+      "id": "detected-labels-to-discovery-filters",
+      "query": "How are detected signal labels applied before workflow discovery filters available actions?",
+      "status": "active"
+    },
+    {
+      "id": "membership-across-self-correction-retries",
+      "query": "How does workflow discovery membership persist across self-correction and retry attempts?",
+      "status": "active"
+    }
+  ]
+}

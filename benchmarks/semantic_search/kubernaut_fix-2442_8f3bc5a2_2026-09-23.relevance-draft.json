@@ -1,0 +1,330 @@
+{
+  "schema_version": 1,
+  "suite_id": "kubernaut-workflow-discovery",
+  "source_run": "kubernaut-fix-2442-8f3bc5a2-2026-09-23",
+  "judgment_status": "source-grounded-draft-needs-human-review",
+  "unit_type": "qualified-symbol-or-source-span",
+  "grade_scale": {
+    "0": "irrelevant; assigned only after judging a pooled candidate",
+    "1": "related context but not useful answer evidence",
+    "2": "useful support or one necessary step in a multi-step answer",
+    "3": "direct answer or primary implementation site"
+  },
+  "notes": [
+    "Proposed grades are not adjudicated qrels and must not be used to publish backend quality metrics.",
+    "Review every target against the pinned source snapshot and the exact query intent.",
+    "Pool and judge actual result snippets from all systems, plus source-found answers; file-path or symbol-name matches alone are insufficient.",
+    "Some prompts may conflate investigator validation with the separate interactive select_workflow discovery guard; see per-query ambiguity notes."
+  ],
+  "queries": [
+    {
+      "id": "reject-undiscovered-catalog-workflow",
+      "query": "How does workflow selection reject a catalog-valid workflow that was never discovered by list_workflows?",
+      "category": "policy-check / semantic behavior",
+      "proposed_targets": [
+        {
+          "unit_id": "internal/kubernautagent/parser/validator.go::Validator.IsAllowed",
+          "proposed_grade": 3,
+          "reason": "Checks catalog membership and, when discovery state is attached, list_workflows membership."
+        },
+        {
+          "unit_id": "internal/kubernautagent/parser/validator.go::Validator.Validate",
+          "proposed_grade": 3,
+          "reason": "Applies the check to the selected workflow and returns a validation error."
+        },
+        {
+          "unit_id": "pkg/kubernautagent/types/context.go::DiscoveredWorkflowState.Contains",
+          "proposed_grade": 2,
+          "reason": "Implements the discovered-ID membership predicate used by the validator."
+        },
+        {
+          "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::Investigator.selfCorrectWorkflowSelection",
+          "proposed_grade": 2,
+          "reason": "Shows how validation is wired into the investigator selection flow."
+        }
+      ],
+      "ambiguities": [
+        "The wording could also mean the interactive select_workflow path, which rejects IDs absent from the session DiscoveryResult. Decide whether that is an alternate relevant answer or split it into a separate query."
+      ]
+    },
+    {
+      "id": "discovered-state-flow-to-validation",
+      "query": "Where is discovered workflow state created, attached to context, and passed to result validation?",
+      "category": "multi-symbol data flow",
+      "proposed_targets": [
+        {
+          "unit_id": "pkg/kubernautagent/types/context.go::NewDiscoveredWorkflowState",
+          "proposed_grade": 3,
+          "reason": "Creates the state object."
+        },
+        {
+          "unit_id": "pkg/kubernautagent/types/context.go::WithDiscoveredWorkflowState",
+          "proposed_grade": 3,
+          "reason": "Attaches the state to context."
+        },
+        {
+          "unit_id": "pkg/kubernautagent/types/context.go::DiscoveredWorkflowStateFromContext",
+          "proposed_grade": 3,
+          "reason": "Retrieves the state from context."
+        },
+        {
+          "unit_id": "internal/kubernautagent/parser/validator.go::Validator.SetDiscoveredWorkflowState",
+          "proposed_grade": 3,
+          "reason": "Passes the state into the validator."
+        },
+        {
+          "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::Investigator.runWorkflowSelection",
+          "proposed_grade": 3,
+          "reason": "Shows where selection creates and attaches the state."
+        },
+        {
+          "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::Investigator.selfCorrectWorkflowSelection",
+          "proposed_grade": 2,
+          "reason": "Shows where the context state is attached to the fetched validator."
+        }
+      ],
+      "ambiguities": []
+    },
+    {
+      "id": "record-listed-workflow-ids",
+      "query": "How does list_workflows record workflow IDs for later selection validation?",
+      "category": "implementation / data flow",
+      "proposed_targets": [
+        {
+          "unit_id": "internal/kubernautagent/tools/custom/tools.go::listWorkflowsTool.Execute",
+          "proposed_grade": 3,
+          "reason": "Reads discovered workflows and adds their IDs to the context state."
+        },
+        {
+          "unit_id": "pkg/kubernautagent/types/context.go::DiscoveredWorkflowState.Add",
+          "proposed_grade": 3,
+          "reason": "Stores each non-empty workflow ID."
+        },
+        {
+          "unit_id": "internal/kubernautagent/workflowcatalog/discovery.go::Catalog.ListWorkflowsByActionType",
+          "proposed_grade": 1,
+          "reason": "Provides the discovered workflow records that Execute adds; it does not itself record selection membership."
+        }
+      ],
+      "ambiguities": []
+    },
+    {
+      "id": "restrict-selection-to-discovered-workflows",
+      "query": "Only allow the model to select remediation workflows discovered in this investigation context",
+      "category": "policy constraint / paraphrase",
+      "proposed_targets": [
+        {
+          "unit_id": "internal/kubernautagent/parser/validator.go::Validator.IsAllowed",
+          "proposed_grade": 3,
+          "reason": "Combines catalog allowlisting with current-session discovery membership."
+        },
+        {
+          "unit_id": "internal/kubernautagent/parser/validator.go::Validator.Validate",
+          "proposed_grade": 3,
+          "reason": "Rejects a workflow ID that fails IsAllowed."
+        },
+        {
+          "unit_id": "pkg/kubernautagent/types/context.go::DiscoveredWorkflowState.Contains",
+          "proposed_grade": 2,
+          "reason": "Supplies the list_workflows membership check."
+        },
+        {
+          "unit_id": "internal/kubernautagent/parser/validator.go::Validator.SetDiscoveredWorkflowState",
+          "proposed_grade": 2,
+          "reason": "Connects the current discovery state to validation."
+        }
+      ],
+      "ambiguities": [
+        "Could refer to internal LLM result validation or interactive select_workflow authorization; confirm the intended surface."
+      ]
+    },
+    {
+      "id": "outcome-for-undiscovered-selection",
+      "query": "What happens when the model selects a workflow that exists in the catalog but was not returned by workflow discovery?",
+      "category": "behavior / outcome",
+      "proposed_targets": [
+        {
+          "unit_id": "internal/kubernautagent/parser/validator.go::Validator.IsAllowed",
+          "proposed_grade": 3,
+          "reason": "Produces the false membership result for a catalog-allowed but undiscovered workflow."
+        },
+        {
+          "unit_id": "internal/kubernautagent/parser/validator.go::Validator.Validate",
+          "proposed_grade": 3,
+          "reason": "Returns a workflow validation error with a discovery-specific message."
+        },
+        {
+          "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::Investigator.selfCorrectWorkflowSelection",
+          "proposed_grade": 2,
+          "reason": "Shows the validation error entering the self-correction path."
+        },
+        {
+          "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::Investigator.runSelfCorrectionAttempt",
+          "proposed_grade": 2,
+          "reason": "Shows how the LLM is asked to correct a validation failure."
+        }
+      ],
+      "ambiguities": [
+        "The interactive select_workflow path returns ErrCodeInvalidWorkflow rather than entering the investigator's self-correction flow; decide whether the query intends one or both behaviors."
+      ]
+    },
+    {
+      "id": "detected-labels-to-discovery-filters",
+      "query": "How are detected signal labels applied before workflow discovery filters available actions?",
+      "category": "data flow / semantic behavior",
+      "proposed_targets": [
+        {
+          "unit_id": "internal/kubernautagent/tools/custom/tools.go::filtersFromSignal",
+          "proposed_grade": 3,
+          "reason": "Copies signal fields and parses DetectedLabelsJSON into discovery filters."
+        },
+        {
+          "unit_id": "internal/kubernautagent/tools/custom/tools.go::listActionsTool.Execute",
+          "proposed_grade": 3,
+          "reason": "Builds and forwards signal-derived filters on list_available_actions."
+        },
+        {
+          "unit_id": "internal/kubernautagent/workflowcatalog/discovery.go::Catalog.ListActions",
+          "proposed_grade": 2,
+          "reason": "Receives the filters for action-type discovery."
+        },
+        {
+          "unit_id": "internal/kubernautagent/workflowcatalog/discovery_cache.go::Catalog.listActionsFromCache",
+          "proposed_grade": 2,
+          "reason": "Applies filter and scoring logic to cached actions."
+        },
+        {
+          "unit_id": "internal/kubernautagent/workflowcatalog/cache_filter.go::matchesDetectedLabelsFilter",
+          "proposed_grade": 2,
+          "reason": "Checks detected-label compatibility for discovery results."
+        }
+      ],
+      "ambiguities": []
+    },
+    {
+      "id": "membership-across-self-correction-retries",
+      "query": "How does workflow discovery membership persist across self-correction and retry attempts?",
+      "category": "multi-hop state / retry flow",
+      "proposed_targets": [
+        {
+          "unit_id": "pkg/kubernautagent/types/context.go::DiscoveredWorkflowState.Add",
+          "proposed_grade": 3,
+          "reason": "Mutates the shared membership set as more workflows are discovered."
+        },
+        {
+          "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::Investigator.runWorkflowSelection",
+          "proposed_grade": 3,
+          "reason": "Creates one state and puts it on the context for the selection run."
+        },
+        {
+          "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::Investigator.selfCorrectWorkflowSelection",
+          "proposed_grade": 3,
+          "reason": "Attaches the context's shared state to the validator before correction attempts."
+        },
+        {
+          "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::Investigator.runSelfCorrectionAttempt",
+          "proposed_grade": 3,
+          "reason": "Re-runs the LLM loop using the same context during a validation correction."
+        },
+        {
+          "unit_id": "internal/kubernautagent/parser/validator.go::Validator.SetDiscoveredWorkflowState",
+          "proposed_grade": 2,
+          "reason": "Keeps the shared state pointer on the validator."
+        },
+        {
+          "unit_id": "internal/kubernautagent/tools/custom/tools.go::listWorkflowsTool.Execute",
+          "proposed_grade": 2,
+          "reason": "Adds newly returned workflow IDs to the shared set, including later calls."
+        }
+      ],
+      "ambiguities": []
+    },
+    {
+      "id": "validator-identifier-anchor",
+      "query": "Validator.IsAllowed discoveredWorkflows list_workflows catalog allowlist",
+      "category": "exact symbol / identifier anchor",
+      "proposed_targets": [
+        {
+          "unit_id": "internal/kubernautagent/parser/validator.go::Validator.IsAllowed",
+          "proposed_grade": 3,
+          "reason": "The named method is the exact target."
+        }
+      ],
+      "ambiguities": []
+    },
+    {
+      "id": "catalog-valid-undiscovered-validator-check",
+      "query": "Which check prevents selecting a workflow present in the catalog but absent from workflows returned by list_workflows?",
+      "category": "specific check / semantic paraphrase",
+      "proposed_targets": [
+        {
+          "unit_id": "internal/kubernautagent/parser/validator.go::Validator.IsAllowed",
+          "proposed_grade": 3,
+          "reason": "Tests current discovery membership in addition to catalog allowlisting."
+        },
+        {
+          "unit_id": "internal/kubernautagent/parser/validator.go::Validator.Validate",
+          "proposed_grade": 3,
+          "reason": "Invokes the check and returns the validation error."
+        },
+        {
+          "unit_id": "pkg/kubernautagent/types/context.go::DiscoveredWorkflowState.Contains",
+          "proposed_grade": 2,
+          "reason": "Implements the workflow-ID membership lookup."
+        }
+      ],
+      "ambiguities": []
+    },
+    {
+      "id": "discovery-membership-through-retry",
+      "query": "How is workflow discovery membership carried into Validator during self-correction retries, and what happens if another list_workflows call adds workflows?",
+      "category": "multi-hop state / retry flow",
+      "proposed_targets": [
+        {
+          "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::Investigator.selfCorrectWorkflowSelection",
+          "proposed_grade": 3,
+          "reason": "Retrieves state from context and attaches it to the fetched Validator."
+        },
+        {
+          "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::Investigator.runSelfCorrectionAttempt",
+          "proposed_grade": 3,
+          "reason": "Shows retry execution under the shared context."
+        },
+        {
+          "unit_id": "internal/kubernautagent/tools/custom/tools.go::listWorkflowsTool.Execute",
+          "proposed_grade": 3,
+          "reason": "Adds IDs returned by each list_workflows call to the shared state."
+        },
+        {
+          "unit_id": "pkg/kubernautagent/types/context.go::DiscoveredWorkflowState.Add",
+          "proposed_grade": 2,
+          "reason": "Explains how later calls expand membership."
+        },
+        {
+          "unit_id": "internal/kubernautagent/parser/validator.go::Validator.IsAllowed",
+          "proposed_grade": 2,
+          "reason": "Explains the membership effect on later validation."
+        }
+      ],
+      "ambiguities": []
+    },
+    {
+      "id": "selection-result-discovery-guard",
+      "query": "Where does select_workflow validate the chosen workflow against the current discovery result before returning the final result?",
+      "category": "exact implementation / interactive guard",
+      "proposed_targets": [
+        {
+          "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::SelectWorkflowTool.authorizeSelectionDriver",
+          "proposed_grade": 3,
+          "reason": "Calls the membership helper before selection proceeds."
+        },
+        {
+          "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::isWorkflowInDiscoveryResult",
+          "proposed_grade": 3,
+          "reason": "Checks the recommended and alternative discovery results."
+        }
+      ],
+      "ambiguities": []
+    }
+  ]
+}

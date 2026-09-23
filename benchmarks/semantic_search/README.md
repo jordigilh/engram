@@ -1,5 +1,11 @@
 # Semantic search query suites
 
+Use [`QUALITY_EVALUATION.md`](./QUALITY_EVALUATION.md) for the relevance
+judging protocol, ingestion-versus-retrieval failure taxonomy, and metrics.
+The source-grounded targets for the current feature-branch suite are in
+[`kubernaut_fix-2442_8f3bc5a2_2026-09-23.relevance-draft.json`](./kubernaut_fix-2442_8f3bc5a2_2026-09-23.relevance-draft.json);
+they are explicitly unadjudicated and must not be treated as gold labels.
+
 `kubernaut_workflow_discovery.json` is the versioned prompt set used for the
 Kubernaut CocoIndex vs. zvec-grep comparison. It preserves the exact query text
 and the one test-only probe that was excluded from production-code scoring.

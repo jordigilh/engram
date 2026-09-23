@@ -76,6 +76,7 @@ import logging
 import math
 import os
 import pathlib
+import re
 import sys
 from datetime import datetime, timezone
 from typing import Any, Protocol
@@ -104,6 +105,10 @@ RECALL_SCHEMA_VERSION = "engram-recall.v1"
 MAX_RECALL_RESULTS = 8
 MAX_RECALL_SUMMARY_CHARS = 800
 MAX_RECALL_METADATA_VALUE_CHARS = 240
+SERENA_PATTERN_SCHEMA_VERSION = "engram-serena-pattern-search.v1"
+MAX_SERENA_PATTERN_MATCHES = 100
+MAX_SERENA_PATTERN_LINE_CHARS = 300
+MAX_SERENA_PATTERN_RESULT_CHARS = 6000
 
 # Gateway-owned call log, distinct from the Cursor-hook-authored
 # ~/.engram/logs/mcp-calls.jsonl (cursor/hooks/log-mcp-calls.sh). That
@@ -296,6 +301,140 @@ def _normalize_recall_result(result: dict) -> dict:
         "content": [{"type": "text", "text": _format_recall_text(records, len(raw_records))}],
         "structuredContent": normalized_payload,
     }
+
+
+def _serena_overflow_matches(text: str) -> dict | None:
+    """Extract Serena's per-file match list from its max-answer diagnostic."""
+    marker = "Matched lines per file; use read_file with the line numbers for surrounding context:"
+    marker_index = text.find(marker)
+    if marker_index < 0 or not re.search(r"answer is too long", text, re.IGNORECASE):
+        return None
+
+    serialized_matches = text[marker_index + len(marker):].lstrip()
+    try:
+        payload, _end = json.JSONDecoder().raw_decode(serialized_matches)
+    except (TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _serena_diagnostic_field(text: str, label: str) -> str | None:
+    match = re.search(rf"^{re.escape(label)}\s*(.*?)\s*$", text, re.MULTILINE)
+    return match.group(1) if match else None
+
+
+def _serena_pattern_result(result: dict) -> dict:
+    """Turn Serena's oversized-pattern diagnostic into bounded partial results.
+
+    Serena includes useful matched file/line data even when surrounding context
+    exceeds ``max_answer_chars``. Extract that list and return it grouped by
+    file, rather than passing through an unusable error containing a JSON blob.
+    Unknown or malformed responses remain untouched for diagnosis.
+    """
+    original_text = _extract_result_text(result)
+    matches_by_path = _serena_overflow_matches(original_text)
+    if matches_by_path is None:
+        return result
+
+    collected: dict[str, list[dict[str, Any]]] = {}
+    seen: set[tuple[str, int, str]] = set()
+    matched_paths: set[str] = set()
+    total_matches = 0
+    for path, raw_matches in matches_by_path.items():
+        if not isinstance(path, str) or not isinstance(raw_matches, list):
+            continue
+        for raw_match in raw_matches:
+            if not isinstance(raw_match, dict) or not isinstance(raw_match.get("text"), str):
+                continue
+            try:
+                line_number = int(raw_match.get("line"))
+            except (TypeError, ValueError):
+                continue
+            match_text = raw_match["text"].replace("\r", "").replace("\n", "\\n").strip()
+            key = (path, line_number, match_text)
+            if key in seen:
+                continue
+            seen.add(key)
+            matched_paths.add(path)
+            total_matches += 1
+            if total_matches > MAX_SERENA_PATTERN_MATCHES:
+                continue
+            collected.setdefault(path, []).append({
+                "line": line_number,
+                "text": _bounded_text(match_text, MAX_SERENA_PATTERN_LINE_CHARS),
+            })
+
+    if not collected:
+        return result
+
+    limit_match = re.search(r"^Max answer chars:\s*(\d+)\s*$", original_text, re.MULTILINE)
+    answer_match = re.search(r"answer is too long\s*\(([\d,]+) characters\)", original_text, re.IGNORECASE)
+    answer_chars = int(answer_match.group(1).replace(",", "")) if answer_match else None
+    max_answer_chars = int(limit_match.group(1)) if limit_match else None
+    pattern = _serena_diagnostic_field(original_text, "Substring pattern:")
+    path_glob = _serena_diagnostic_field(original_text, "Paths include glob:")
+    truncated = total_matches > MAX_SERENA_PATTERN_MATCHES
+    structured = {
+        "schema_version": SERENA_PATTERN_SCHEMA_VERSION,
+        "status": "partial",
+        "reason": "upstream_answer_too_long",
+        "pattern": pattern,
+        "path_glob": path_glob,
+        "answer_chars": answer_chars,
+        "max_answer_chars": max_answer_chars,
+        "matched_file_count": len(matched_paths),
+        "matched_line_count": total_matches,
+        "returned_match_count": sum(len(matches) for matches in collected.values()),
+        "truncated": truncated,
+        "matches_by_file": [
+            {"path": path, "matches": matches}
+            for path, matches in collected.items()
+        ],
+    }
+
+    lines = [
+        f"Serena pattern search: {structured['matched_line_count']} matches in "
+        f"{structured['matched_file_count']} files (partial results).",
+    ]
+    if answer_chars is not None and max_answer_chars is not None:
+        lines.append(
+            f"The full answer ({answer_chars:,} chars) exceeded the {max_answer_chars:,}-character limit; "
+            "surrounding context was omitted."
+        )
+    if pattern:
+        lines.append(f"Pattern: {pattern}")
+    if path_glob:
+        lines.append(f"Path scope: {path_glob}")
+    lines.append("Matches are grouped by file; use read_file at a listed line for surrounding context.")
+
+    display_truncated = False
+    displayed_match_count = 0
+    for path, matches in collected.items():
+        group_lines = [f"\n- {path}"]
+        group_lines.extend(f"  - L{match['line']}: {match['text']}" for match in matches)
+        candidate = "\n".join(lines + group_lines)
+        if len(candidate) > MAX_SERENA_PATTERN_RESULT_CHARS:
+            display_truncated = True
+            break
+        lines.extend(group_lines)
+        displayed_match_count += len(matches)
+    omitted_matches = max(0, total_matches - displayed_match_count)
+    if omitted_matches:
+        suffix = f"\n... {omitted_matches} additional matches omitted from the compact display."
+        while lines and len("\n".join(lines)) + len(suffix) > MAX_SERENA_PATTERN_RESULT_CHARS:
+            lines.pop()
+        lines.append(suffix.lstrip("\n"))
+    structured["truncated"] = truncated or display_truncated
+
+    normalized = {
+        **result,
+        "content": [{"type": "text", "text": "\n".join(lines)}],
+        "structuredContent": structured,
+        "isError": False,
+    }
+    if "is_error" in result:
+        normalized["is_error"] = False
+    return normalized
 
 
 def _log_gateway_call(
@@ -501,7 +640,8 @@ SERENA_PATTERN_SEARCH_GUIDANCE = (
     "Prefer `find_symbol` for symbol definitions and `find_referencing_symbols` for callers/references. "
     "Use this tool for literal or regex text searches. `substring_pattern` is a regex; with multiline matching, "
     "`.` can cross lines and `|` needs grouping. Prefer anchored patterns and narrow path/context filters; "
-    "reduce scope or context before raising `max_answer_chars`."
+    "split broad alternatives into focused searches and reduce scope or context before raising `max_answer_chars`. "
+    "If the answer limit is exceeded, Engram returns the available matches grouped by file and line."
 )
 
 # Backends with no entry here (code/cocoindex, and any future family) pass
@@ -648,6 +788,8 @@ async def handle_tools_call(
     # per-backend registries strip that prefix before reaching this point.
     if raw_name == "recall" or raw_name.endswith("_recall"):
         result = _normalize_recall_result(result)
+    elif backend_key == "serena" and raw_name == "search_for_pattern":
+        result = _serena_pattern_result(result)
     result_text = _extract_result_text(result)
     _log_gateway_call(
         project=project, backend=backend_key, tool=tool_name,

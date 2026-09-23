@@ -47,8 +47,15 @@ PG_URL = os.environ.get(
     "COCOINDEX_PG_URL",
     "postgresql://hindsight:hindsight@localhost:5432/hindsight",
 )
+COCOINDEX_CODE_TABLE = os.environ.get("COCOINDEX_CODE_TABLE", "code_embeddings")
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 RRF_K = 60  # RRF constant — standard value from the original paper
+
+
+def _code_table_name(value: str) -> str:
+    if not re.fullmatch(r"[a-z_][a-z0-9_]*", value):
+        raise ValueError(f"unsafe CocoIndex table name: {value!r}")
+    return value
 
 # Same env vars (and defaults) as cocoindex-flows.py, so a launchd plist or
 # .env that already configures the ingestion flow's source directories also
@@ -338,8 +345,9 @@ def search_code(
     mode: str = "hybrid",
     repo: str | None = None,
     branch: str | None = None,
+    table: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Search the code_embeddings table using hybrid dense + BM25 retrieval.
+    """Search a CocoIndex code table using hybrid dense + BM25 retrieval.
 
     filepath is stored as "{repo_tag}/{rel_path}" (see cocoindex-flows.py's
     process_code_file), so passing repo narrows results to one repo (e.g.
@@ -355,6 +363,7 @@ def search_code(
     import psycopg2
 
     candidate_pool = limit * 3
+    table_name = _code_table_name(table or COCOINDEX_CODE_TABLE)
     release_line = _resolve_release_line(branch)
     branch_where, branch_params = _branch_where(repo, release_line)
 
@@ -371,7 +380,7 @@ def search_code(
                     f"""
                     SELECT id, filepath, chunk_index, code,
                            1 - (embedding <=> %s::vector) AS score
-                    FROM cocoindex.code_embeddings
+                    FROM cocoindex.{table_name}
                     WHERE TRUE{branch_where}
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
@@ -393,7 +402,7 @@ def search_code(
                         f"""
                         SELECT id, filepath, chunk_index, code,
                                ts_rank_cd(search_vector, to_tsquery('simple', %s)) AS score
-                        FROM cocoindex.code_embeddings
+                        FROM cocoindex.{table_name}
                         WHERE search_vector @@ to_tsquery('simple', %s){branch_where}
                         ORDER BY score DESC
                         LIMIT %s

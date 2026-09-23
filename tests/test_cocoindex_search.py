@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import subprocess
 
+import pytest
+
 
 class TestDetectCurrentReleaseLine:
     def test_returns_none_when_live_clone_dir_unset(self, cocoindex_search, monkeypatch):
@@ -301,6 +303,21 @@ class TestSearchCodeBranchWiring:
         assert len(capture) == 1
         sql, params = capture[0]
         assert "kubernaut-operator@release-v1.5/%" in params
+
+    def test_overlay_table_is_selected_and_validated(self, cocoindex_search, monkeypatch):
+        capture = self._capture_queries(cocoindex_search, monkeypatch)
+
+        cocoindex_search.search_code("ParseConfig", mode="dense", table="overlay_abc123")
+
+        assert len(capture) == 1
+        assert "cocoindex.overlay_abc123" in capture[0][0]
+
+    def test_unsafe_table_name_is_rejected_before_connecting(self, cocoindex_search, monkeypatch):
+        import psycopg2
+
+        monkeypatch.setattr(psycopg2, "connect", lambda _: pytest.fail("should not connect"))
+        with pytest.raises(ValueError, match="unsafe CocoIndex table name"):
+            cocoindex_search.search_code("ParseConfig", table="overlay;drop_table")
 
 
 class TestPatternSearchCodeRepoScoping:

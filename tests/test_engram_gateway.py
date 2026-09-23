@@ -542,6 +542,87 @@ class TestRecallResponseNormalization:
         assert engram_gateway._normalize_recall_result(malformed) is malformed
 
 
+class TestSerenaPatternResponseNormalization:
+    def test_oversized_search_returns_compact_grouped_partial_matches(self, engram_gateway):
+        matches = {
+            "test/services/mock-llm/scenarios/scenario_default_fallback.go": [
+                {
+                    "line": 21,
+                    "text": 'ScenarioName: "default", SignalName: "Unknown", Severity: "warning",',
+                },
+                {
+                    "line": 21,
+                    "text": 'ScenarioName: "default", SignalName: "Unknown", Severity: "warning",',
+                },
+                {
+                    "line": 22,
+                    "text": 'WorkflowName: "generic-restart-v1", WorkflowID: uuid.DeterministicUUID("generic-restart-v1"),',
+                },
+            ],
+            "test/services/mock-llm/scenarios/scenario_oomkilled.go": [
+                {"line": 26, "text": 'WorkflowName: "oomkill-increase-memory-v1",'},
+            ],
+        }
+        diagnostic = (
+            'Substring pattern: WorkflowName:.*generic-restart|"Unknown"|ScenarioName: "default"\n'
+            "Paths include glob: test/services/mock-llm/scenarios/**/*.go\n"
+            "Restrict search to code files: Yes\n"
+            "Context lines before: 1\n"
+            "Context lines after: 3\n"
+            "Max answer chars: 7000\n"
+            "The answer is too long (20109 characters).\n"
+            "Matched lines per file; use read_file with the line numbers for surrounding context:\n"
+            + json.dumps(matches)
+        )
+        serena = FakeAdapter(
+            call_results={
+                "search_for_pattern": {
+                    "content": [{"type": "text", "text": diagnostic}],
+                    "isError": True,
+                }
+            }
+        )
+        message = {
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": {
+                "name": "search_for_pattern",
+                "arguments": {"substring_pattern": "WorkflowName"},
+            },
+        }
+
+        response = asyncio.run(
+            engram_gateway.handle_tools_call(
+                message,
+                {"search_for_pattern": ("serena", "search_for_pattern")},
+                {"serena": serena},
+            )
+        )["result"]
+
+        structured = response["structuredContent"]
+        assert response["isError"] is False
+        assert structured["schema_version"] == "engram-serena-pattern-search.v1"
+        assert structured["status"] == "partial"
+        assert structured["answer_chars"] == 20109
+        assert structured["max_answer_chars"] == 7000
+        assert structured["matched_file_count"] == 2
+        assert structured["matched_line_count"] == 3
+        assert structured["matches_by_file"][0]["matches"][0]["line"] == 21
+        assert len(response["content"][0]["text"]) < 7000
+        assert "20,109" in response["content"][0]["text"]
+        assert "scenario_default_fallback.go" in response["content"][0]["text"]
+        assert "L22" in response["content"][0]["text"]
+
+    def test_unrecognized_serena_errors_are_preserved(self, engram_gateway):
+        original = {
+            "content": [{"type": "text", "text": "backend unavailable"}],
+            "isError": True,
+        }
+
+        assert engram_gateway._serena_pattern_result(original) is original
+
+
 class TestEstimateTokens:
     """2026-08-30: user asked whether MCP call token consumption could be
     calculated. Cursor's own hooks (afterMCPExecution etc.) don't carry any

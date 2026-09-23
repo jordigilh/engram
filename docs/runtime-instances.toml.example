@@ -19,6 +19,8 @@ url = "http://host.containers.internal:8888/mcp/my-project-issues/"
 [instances."my-project".backends.code]
 kind = "http"
 url = "http://host.containers.internal:8891/mcp"
+# Set above the default 60s when this backend performs cold graph builds.
+timeout_seconds = 180
 
 [instances."my-project".backends.serena]
 kind = "http"

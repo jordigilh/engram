@@ -15,7 +15,9 @@ stdio alternative for backends that run inside the container.
 Each configured backend is queried concurrently for `tools/list`; the gateway
 merges catalogs, prefixes colliding docs/issues tools, and degrades one dead
 backend without taking down the route. HTTP `headers` are optional and are
-useful for host adapters that reject the container bridge hostname. `stdio`
+useful for host adapters that reject the container bridge hostname. HTTP
+backends may set `timeout_seconds` (1–600; default 60) for long-running calls;
+for example, cold code-graph builds can take longer than the default. `stdio`
 backends are also supported when their command and required workspace are
 available inside the container.
 

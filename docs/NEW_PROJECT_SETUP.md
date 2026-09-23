@@ -448,34 +448,18 @@ podman build -t localhost/engram-runtime:local -f /path/to/engram/Dockerfile.eng
 # Or use: quay.io/jordigilh/engram:runtime-latest
 ```
 
-Create a runtime registry file. Each instance name is an exact public gateway
-route, and each backend is either an HTTP MCP endpoint or a stdio command that
-is available inside the container:
+Start with the generic
+[`runtime-instances.toml.example`](runtime-instances.toml.example):
 
-```toml
-[instances."<project>".backends.docs]
-kind = "http"
-url = "http://host.containers.internal:8888/mcp/<project>-docs/"
-
-[instances."<project>".backends.issues]
-kind = "http"
-url = "http://host.containers.internal:8888/mcp/<project>-issues/"
-
-[instances."<project>".backends.code]
-kind = "http"
-url = "http://host.containers.internal:<code-port>/mcp"
-
-[instances."<project>".backends.serena]
-kind = "http"
-url = "http://host.containers.internal:<serena-port>/mcp/<project>"
-
-# Or use a command that exists inside the image:
-# [instances."<project>".backends.code]
-# kind = "stdio"
-# command = "/opt/engram/bin/engram-search-<project>"
-# args = []
-# env = { COCOINDEX_PG_URL = "postgresql://hindsight:hindsight@host.containers.internal:5432/hindsight" }
+```bash
+mkdir -p ~/.engram/runtime
+cp /path/to/engram/docs/runtime-instances.toml.example ~/.engram/runtime/instances.toml
 ```
+
+Replace `my-project` and the backend URLs with the exact public route and MCP
+endpoints for this deployment. Each backend can be an HTTP MCP endpoint or a
+stdio command available inside the container. Remove backend tables the project
+does not use; the example includes an optional stdio code-backend form.
 
 Include only the backend tables that the project actually uses. HTTP backends
 accept optional string-to-string `headers`; stdio backends accept `args`,
@@ -484,8 +468,8 @@ Do not define both `endpoint` and `backends` for one instance.
 
 The tracked [`docs/runtime-kubernaut.toml.example`](runtime-kubernaut.toml.example)
 is a Kubernaut-specific example, including the optional Kubernaut RCA backend
-and its `kubernaut-v1.5` release route. Do not copy those Kubernaut-specific
-routes or RCA settings into an unrelated project.
+and its `kubernaut-v1.5` release route. Use the generic example for unrelated
+projects.
 
 Mount the registry read-only and expose the gateway port:
 
@@ -507,13 +491,18 @@ keeps one unavailable backend from taking down the whole project route.
 #### OpenCode configuration
 
 Engram no longer ships or supports per-repository `.cursor/mcp.json` files.
-Configure the OpenCode plugin in `opencode.json` and let it derive the project
-route from the current checkout. See [OpenCode Integration](OPENCODE.md) for
-explicit project and branch-route options.
+Use the hybrid OpenCode setup: keep one explicit `mcp.engram` gateway route in
+the project configuration, and load the global Engram plugin for methodology,
+compaction, and MCP-over-CLI hooks. The plugin preserves an explicit route and
+falls back to its repository identity mapping only when one is not configured.
+See [OpenCode Integration](OPENCODE.md) for directory/remote mappings and
+branch-route options.
 
 The gateway owns the Hindsight, CocoIndex, Serena, and project-specific backend
 connections. Do not register those backends separately, or the client will see
-duplicate tools and bypass the gateway's isolation and routing.
+duplicate tools and bypass the gateway's isolation and routing. OpenChamber
+should connect to the OpenCode server's resolved configuration rather than
+adding a second Engram entry in its MCP settings.
 
 > **Legacy native-backend note**: the shared-daemon notes below apply only
 > when deliberately running individual backend processes instead of the

@@ -495,6 +495,13 @@ RELEVANT_SERENA_TOOLS = frozenset(
     }
 )
 
+SERENA_PATTERN_SEARCH_GUIDANCE = (
+    "Prefer `find_symbol` for symbol definitions and `find_referencing_symbols` for callers/references. "
+    "Use this tool for literal or regex text searches. `substring_pattern` is a regex; with multiline matching, "
+    "`.` can cross lines and `|` needs grouping. Prefer anchored patterns and narrow path/context filters; "
+    "reduce scope or context before raising `max_answer_chars`."
+)
+
 # Backends with no entry here (code/cocoindex, and any future family) pass
 # through unfiltered -- their catalogs are already small (2 tools today).
 RELEVANT_TOOLS_BY_BACKEND: dict[str, frozenset[str]] = {
@@ -521,12 +528,25 @@ RELEVANT_TOOLS_BY_BACKEND: dict[str, frozenset[str]] = {
 
 def filter_relevant_tools(backend_key: str, tools: list[dict]) -> list[dict]:
     """Drop rarely-used administrative tools for backends known to expose an
-    oversized catalog. See `RELEVANT_TOOLS_BY_BACKEND`'s module-level comment
-    for why this exists."""
+    oversized catalog. Add usage guidance to selected tools where the
+    upstream description needs project-specific routing advice. See
+    `RELEVANT_TOOLS_BY_BACKEND`'s module-level comment for why this exists."""
     allowed = RELEVANT_TOOLS_BY_BACKEND.get(backend_key)
     if allowed is None:
         return tools
-    return [tool for tool in tools if tool["name"] in allowed]
+
+    filtered = []
+    for tool in tools:
+        if tool["name"] not in allowed:
+            continue
+        if backend_key == "serena" and tool["name"] == "search_for_pattern":
+            description = (tool.get("description") or "").rstrip()
+            tool = {
+                **tool,
+                "description": f"{description}\n\n{SERENA_PATTERN_SEARCH_GUIDANCE}".strip(),
+            }
+        filtered.append(tool)
+    return filtered
 
 
 async def _fetch_backend_tools(backend_key: str, adapter: BackendAdapter) -> tuple[str, list[dict] | Exception]:
@@ -1165,12 +1185,11 @@ def build_app(projects: dict[str, dict[str, BackendAdapter]]):
 # capabilities a repo never had. See docs/findings/2026-08.md's 2026-08-21
 # rollout entry for the full survey this was built from.
 #
-# Explicitly excluded (see that entry for why): kubernaut-demo-scenarios (no
-# .cursor/mcp.json today -- nothing to consolidate) and the two
-# kubernaut-fix-1995-* scratch worktrees (serena still points directly at
-# the raw upstream daemon on :8892 rather than through the :8893 multiplex,
-# a stale/pre-multiplex config on what look like abandoned one-off
-# branch-fix clones -- not guessed at here).
+# Explicitly excluded (see that entry for why): the two kubernaut-fix-1995-*
+# scratch worktrees (serena still points directly at the raw upstream daemon
+# on :8892 rather than through the :8893 multiplex, a stale/pre-multiplex
+# config on what look like abandoned one-off branch-fix clones -- not guessed
+# at here).
 # ---------------------------------------------------------------------------
 
 _HINDSIGHT_BASE = "http://localhost:8888"
@@ -1256,9 +1275,17 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
     def kubernaut_serena(project: str) -> dict:
         return _http(f"http://127.0.0.1:8893/mcp/{project}")
 
-    # `kubernaut` is the current main/v1.6 line. Keep only the v1.5 release
-    # route until v1.6 is GA; do not create a redundant kubernaut-v1.6 mount.
-    for name in ("kubernaut", "kubernaut-operator", "kubernaut-v1.5"):
+    # `kubernaut` is the current main/v1.6 line. Codanna is the primary code
+    # backend for that workspace; its local MCP relay performs the optional
+    # CocoIndex shadow comparison. Keep CocoIndex on the other family routes
+    # until their clients are migrated too.
+    registry["kubernaut"] = {
+        "docs": _hindsight("kubernaut-docs"),
+        "issues": _hindsight("kubernaut-issues"),
+        "rca": kubernaut_rca,
+        "serena": kubernaut_serena("kubernaut"),
+    }
+    for name in ("kubernaut-operator", "kubernaut-v1.5"):
         registry[name] = {
             "docs": _hindsight("kubernaut-docs"),
             "issues": _hindsight("kubernaut-issues"),
@@ -1266,6 +1293,12 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
             "rca": kubernaut_rca,
             "serena": kubernaut_serena(name),
         }
+    registry["kubernaut-demo-scenarios"] = {
+        "docs": _hindsight("kubernaut-docs"),
+        "issues": _hindsight("kubernaut-issues"),
+        "code": kubernaut_http_code,
+        "serena": kubernaut_serena("kubernaut-demo-scenarios"),
+    }
     registry["kubernaut-console"] = {
         "docs": _hindsight("kubernaut-docs"),
         "issues": _hindsight("kubernaut-issues"),

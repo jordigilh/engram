@@ -1,36 +1,77 @@
 # OpenCode and OpenChamber Integration
 
 Engram integrates with OpenCode and OpenChamber through one MCP entry. The
-OpenCode plugin derives the current project identity and injects a single
-remote MCP server pointing at `engram-gateway`. The gateway owns Hindsight,
-CocoIndex, Serena, and optional project-specific backends.
+OpenCode plugin supplies project-aware recall, compaction context, and
+MCP-over-CLI guidance. The gateway owns Hindsight, CocoIndex, Serena, and
+optional project-specific backends.
+
+The recommended setup is **hybrid**:
+
+- Keep one explicit `mcp.engram` entry for the exact registered gateway route.
+- Load the global Engram plugin for behavioral hooks and identity-aware
+  methodology.
+- The plugin adds its generated route only when no explicit `mcp.engram` entry
+  exists; it never overwrites an explicit route.
 
 ## Configuration
 
-Add the plugin to `opencode.json`, `opencode.jsonc`, or
-`.opencode/opencode.json`:
+Load the plugin globally from `opencode.jsonc` or configure it per repository.
+The global configuration is preferred when OpenCode and OpenChamber share one
+host:
 
 ```json
 {
   "plugin": [
     [
       "/path/to/engram/opencode-plugin/index.ts",
-      { "project": "<project-route>", "family": "<shared-family>" }
+      {
+        "repositories": {
+          "directories": {
+            "<workspace-directory>": {
+              "project": "<project-route>",
+              "family": "<shared-family>"
+            }
+          },
+          "remotes": {
+            "https://github.com/<org>/<repo>": {
+              "project": "<project-route>",
+              "family": "<shared-family>"
+            }
+          }
+        }
+      }
     ]
-  ]
+  ],
+  "mcp": {
+    "engram": {
+      "type": "remote",
+      "url": "http://127.0.0.1:8896/mcp/<project-route>",
+      "enabled": true
+    }
+  }
 }
 ```
 
-For a repository whose directory name matches a registered gateway route, the
-plugin can be used with zero options:
+For a standalone repository whose directory name matches a registered gateway
+route, the plugin can be used with zero repository mappings. Keep the explicit
+gateway entry when the route is an alias, the checkout is an umbrella
+directory, or the route differs from the directory name:
 
 ```json
 {
-  "plugin": ["/path/to/engram/opencode-plugin/index.ts"]
+  "plugin": ["/path/to/engram/opencode-plugin/index.ts"],
+  "mcp": {
+    "engram": {
+      "type": "remote",
+      "url": "http://127.0.0.1:8896/mcp/<project-route>",
+      "enabled": true
+    }
+  }
 }
 ```
 
-The plugin injects one MCP server:
+The direct `mcp.engram` entry is the route authority. The plugin's generated
+entry is only a fallback:
 
 ```json
 {
@@ -44,7 +85,9 @@ The plugin injects one MCP server:
 }
 ```
 
-Users do not register Hindsight, CocoIndex, or Serena separately.
+Users do not register Hindsight, CocoIndex, or Serena separately. Do not add a
+second gateway entry through OpenChamber's Settings -> MCP; OpenChamber should
+use the OpenCode server's resolved configuration.
 
 ## Project Identity
 
@@ -55,6 +98,16 @@ has issues or Serena; the route's configured backend set is authoritative.
 
 `family` identifies the shared docs/issues family. The gateway owns the actual
 bank mapping; it is not used to construct direct backend URLs in the plugin.
+
+Repository mappings are resolved in this order:
+
+1. Explicit `project`, `family`, or `branchRoutes` plugin options.
+2. A matching `directories` entry.
+3. A matching normalized Git remote in `remotes`.
+4. The checkout directory name and its base name.
+
+SSH remotes and `.git` suffixes are normalized before matching. Use a
+directory mapping for a non-Git workspace containing multiple repositories.
 
 Release-line routes must be explicitly registered. Configure exact branch
 routes when one checkout switches between release lines:
@@ -85,65 +138,6 @@ route and never invents a route the gateway may not expose. Codex users can use
 `-c` override. Set `ENGRAM_CODEX_BRANCH_ROUTES` to a comma-separated mapping
 such as `main=project,release/vX.Y=project-vX.Y`; see [Runtime Image](RUNTIME_IMAGE.md#branch-aware-codex).
 
-### Global Repository Routing
-
-A shared global plugin configuration can select repository-specific routes by
-canonical directory or Git remote. Directory matches take precedence over
-remote matches, and remote matches take precedence over the top-level options:
-
-```json
-{
-  "plugin": [[
-    "/path/to/engram/opencode-plugin/index.ts",
-    {
-      "project": "default-project",
-      "repositories": {
-        "remotes": {
-          "https://github.com/acme/service-api": {
-            "project": "service-api",
-            "family": "platform",
-            "branchRoutes": {
-              "main": "service-api",
-              "release/vX.Y": "service-api-vX.Y"
-            }
-          }
-        },
-        "directories": {
-          "/workspaces/service-api": {
-            "project": "service-api-local"
-          }
-        }
-      }
-    }
-  ]]
-}
-```
-
-Remote keys normalize HTTPS and SSH/scp forms, including a trailing `.git`.
-Branch routes nested under a repository route are considered only after that
-repository matches; they cannot leak into another checkout.
-
-## Subagent Enforcement
-
-OpenCode creates a subagent session with the current session's ID as
-`parentID`. The plugin uses that persisted ancestry field rather than agent
-names, so native and custom agents are handled identically. Root sessions have
-no `parentID` and are not gated.
-
-For child sessions, the plugin fails closed at both enforcement points:
-
-1. `permission.ask` changes non-Engram requests to `deny`.
-2. `tool.execute.before` throws before execution, including when a saved
-   permission would otherwise bypass `permission.ask`.
-
-Engram MCP tools are allowed before initialization. A child unlocks only when
-`tool.execute.after` runs for an Engram tool, which means the MCP call returned
-successfully. Denied or failed Engram calls do not unlock the session. Gate
-state is isolated per session and removed when the session is deleted.
-
-Forked sessions are not treated as subagents because OpenCode does not assign
-them a `parentID`.
-
 ## Gateway
 
 The gateway normally runs on `127.0.0.1:8896` under the
@@ -170,12 +164,28 @@ through `get_mental_model`. Malformed or non-Hindsight tool output passes
 through unchanged for diagnosis. Use a narrower query when the response
 reports omitted results.
 
+## Hybrid Examples
+
+These are the intended patterns for the currently onboarded families:
+
+| Workspace | Explicit gateway route | Plugin identity |
+| --- | --- | --- |
+| Kubernaut | `/mcp/kubernaut` | `family: kubernaut`; release branches map to registered aliases |
+| Praxis | `/mcp/praxis` or the repository-specific `/mcp/praxis-*` route | `family: praxis`; repository mappings handle route-name exceptions |
+| DCM | `/mcp/dcm` | `family: dcm`; the `dcm-project` umbrella directory maps to `project: dcm` |
+
+The explicit route remains in each workspace's `opencode.json` or `.mcp.json`.
+The global plugin supplies the hooks and uses the repository mapping to keep
+the system-recall identity aligned with the route.
+
 ## Migration
 
 Remove old direct MCP entries for `hindsight-docs`, `hindsight-issues`,
-`cocoindex-code`, and `serena` after enabling the plugin. Leaving them in place
-causes duplicate tools and bypasses the gateway's backend isolation.
+`cocoindex-code`, and `serena` after enabling the plugin. Keep one explicit
+`mcp.engram` gateway entry when using the hybrid setup. Leaving the old backend
+entries in place causes duplicate tools and bypasses the gateway's backend
+isolation.
 
-OpenChamber can also create or inspect the resulting remote MCP entry through
-Settings -> MCP, but the plugin configuration remains the source of truth for
-automatic project identity.
+OpenChamber can inspect the resulting gateway entry through Settings -> MCP,
+but the OpenCode configuration remains the source of truth for the route and
+the plugin mappings.

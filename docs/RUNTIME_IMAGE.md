@@ -6,28 +6,11 @@ multiple MCP backends directly in the image.
 
 ## Direct Aggregation
 
-Use the `backends` table when the image should own aggregation:
-
-```toml
-[instances."<project>".backends.docs]
-kind = "http"
-url = "http://host.containers.internal:<docs-port>/mcp/<project>-docs/"
-
-[instances."<project>".backends.issues]
-kind = "http"
-url = "http://host.containers.internal:<issues-port>/mcp/<project>-issues/"
-
-[instances."<project>".backends.code]
-kind = "http"
-url = "http://host.containers.internal:<code-port>/mcp"
-
-[instances."<project>".backends.serena]
-kind = "http"
-url = "http://host.containers.internal:<serena-port>/mcp/<project>"
-
-# Optional Kubernaut RCA is not part of the generic runtime shape. Add it only
-# in a project-specific configuration when that backend is intentionally used.
-```
+Use the [`runtime-instances.toml.example`](runtime-instances.toml.example) as
+the generic, copyable configuration when the image should own aggregation.
+Replace the example route and backend URLs, and remove backend tables that the
+deployment does not use. The example includes the HTTP form and a commented
+stdio alternative for backends that run inside the container.
 
 Each configured backend is queried concurrently for `tools/list`; the gateway
 merges catalogs, prefixes colliding docs/issues tools, and degrades one dead
@@ -37,8 +20,7 @@ backends are also supported when their command and required workspace are
 available inside the container.
 
 The complete Kubernaut example, including its optional RCA backend and the
-`kubernaut-v1.5` route, is in `docs/runtime-kubernaut.toml.example`. It is an
-exception-specific example, not the generic template.
+`kubernaut-v1.5` route, is in `docs/runtime-kubernaut.toml.example`.
 
 Projects without separate release-line backends need only one `[instances]`
 entry. Projects with release-specific backends should add an explicit route

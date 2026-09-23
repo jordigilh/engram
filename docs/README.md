@@ -9,6 +9,8 @@ does and why, see the [root README](../README.md).
 - [Key Design Decisions](#key-design-decisions)
 - [Architecture](#architecture)
 - [Hindsight vs. CocoIndex vs. Serena: Division of Labor](#hindsight-vs-cocoindex-vs-serena-division-of-labor)
+- [Red Hat Chai Bot and Fullsend Research](REDHAT_CHAI_BOT_RESEARCH.md)
+- [Semantic Code Intelligence: Findings and Pilot Decision](SEMANTIC_CODE_INTELLIGENCE.md)
 - [Knowledge Graph and Mental Models](#knowledge-graph-and-mental-models)
 - [How Correction Detection Works](#how-correction-detection-works)
 - [Backup and Restore](#backup-and-restore)
@@ -489,3 +491,4 @@ relevant. See [Metrics — Memory Triage](METRICS.md#memory-triage) for details.
 - **[Metrics and Monitoring](METRICS.md)** — observability, effectiveness tracking, report interpretation
 - **[Effectiveness Dashboard](DASHBOARD.md)** — daily metrics trend, auto-updated by nightly pipeline
 - **[Research Findings](FINDINGS.md)** — index of empirical results, incidents, and lessons learned; entries live in per-month files under `findings/` as of 2026-08-03
+- **[Red Hat Chai Bot and Fullsend Research](REDHAT_CHAI_BOT_RESEARCH.md)** — public research on Chai Bot, Fullsend memory, and the deterministic agent harness

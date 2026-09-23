@@ -1,0 +1,41 @@
+# Generic Engram runtime registry.
+# Copy this file to ~/.engram/runtime/instances.toml and replace the example
+# route and backend URLs with endpoints reachable from the Engram container.
+# For Podman, host.containers.internal reaches the host; other container
+# environments may use a different hostname or service DNS name.
+#
+# The route name becomes the public path /mcp/my-project. Keep one instance
+# per project/workspace or separately routed release line. Remove backend
+# tables that this deployment does not use.
+
+[instances."my-project".backends.docs]
+kind = "http"
+url = "http://host.containers.internal:8888/mcp/my-project-docs/"
+
+[instances."my-project".backends.issues]
+kind = "http"
+url = "http://host.containers.internal:8888/mcp/my-project-issues/"
+
+[instances."my-project".backends.code]
+kind = "http"
+url = "http://host.containers.internal:8891/mcp"
+
+[instances."my-project".backends.serena]
+kind = "http"
+url = "http://host.containers.internal:8893/mcp/my-project"
+
+# Optional HTTP headers for backends that require them. Keep actual secrets in
+# deployment-local configuration; do not commit populated credentials.
+# headers = { Authorization = "Bearer <deployment-secret>" }
+
+# Alternative for a code backend that runs as a process inside the container:
+# remove the HTTP `code` table above before enabling this stdio table.
+# The command must exist inside the container (mount it or include it in the
+# image); a host-only executable path will not be available automatically.
+#
+# [instances."my-project".backends.code]
+# kind = "stdio"
+# command = "/opt/engram/bin/my-code-server"
+# args = []
+# env = { CODE_SERVER_MODE = "mcp" }
+# shared_key = "my-code-server" # optional; reuse the process for identical specs

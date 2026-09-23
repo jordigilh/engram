@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import {
-  buildMcpConfig,
   deriveIdentity,
-  normalizeRemote,
+  buildMcpConfig,
+  mergeMcpConfig,
+  normalizeRepositoryRemote,
   resolveRepositoryOptions,
 } from "./identity"
 
@@ -80,57 +81,32 @@ describe("deriveIdentity", () => {
     expect(id.branchSuffix).toBe("main")
     expect(id.project).toBe("engram")
   })
+})
 
-  test("directory routes override remote routes and top-level options", () => {
-    const options = resolveRepositoryOptions({
-      directory: "/workspace/service-api",
-      remote: "git@github.com:acme/service-api.git",
-      options: {
-        project: "default-project",
-        family: "default-family",
-        repositories: {
-          remotes: {
-            "https://github.com/acme/service-api": {
-              project: "remote-project",
-              family: "remote-family",
-            },
-          },
-          directories: {
-            "/workspace/service-api": {
-              project: "directory-project",
-              family: "directory-family",
-            },
-          },
-        },
-      },
-    })
-
-    expect(options.project).toBe("directory-project")
-    expect(options.family).toBe("directory-family")
+describe("repository mappings", () => {
+  test("normalizes SSH and .git remote forms", () => {
+    expect(normalizeRepositoryRemote("git@github.com:dcm-project/dcm.git")).toBe("https://github.com/dcm-project/dcm")
+    expect(normalizeRepositoryRemote("ssh://git@github.com/dcm-project/dcm.git")).toBe("https://github.com/dcm-project/dcm")
   })
 
-  test("remote route keys normalize SSH and HTTPS forms", () => {
-    expect(normalizeRemote("git@github.com:Acme/Service-API.git")).toBe("https://github.com/acme/service-api")
-    expect(normalizeRemote("https://github.com/acme/service-api/")).toBe("https://github.com/acme/service-api")
+  test("resolves an identity from a matching remote", () => {
+    const options = resolveRepositoryOptions(
+      "dcm",
+      ["https://github.com/dcm-project/dcm.git"],
+      { repositories: { remotes: { "https://github.com/dcm-project/dcm": { family: "dcm" } } } },
+    )
+
+    expect(options).toEqual({ family: "dcm" })
   })
 
-  test("unmatched repository does not inherit another repository's branch routes", () => {
-    const options = resolveRepositoryOptions({
-      directory: "/workspace/service-api",
-      remote: "https://github.com/acme/service-api",
-      options: {
-        repositories: {
-          remotes: {
-            "https://github.com/acme/other": {
-              branchRoutes: { "release/v1.5": "other-v1.5" },
-            },
-          },
-        },
-      },
-    })
+  test("directory mappings take precedence for non-Git workspaces", () => {
+    const options = resolveRepositoryOptions(
+      "dcm-project",
+      [],
+      { repositories: { directories: { "dcm-project": { project: "dcm", family: "dcm" } } } },
+    )
 
-    const id = deriveIdentity({ directoryBasename: "service-api", branch: "release/v1.5", options })
-    expect(id.project).toBe("service-api")
+    expect(options).toEqual({ project: "dcm", family: "dcm" })
   })
 })
 
@@ -156,4 +132,30 @@ describe("buildMcpConfig", () => {
     expect(cfg.engram.url).toBe("http://localhost:9999/mcp/myrepo")
   })
 
+})
+
+describe("mergeMcpConfig", () => {
+  test("preserves an explicit project-level Engram route", () => {
+    const config: { mcp?: Record<string, unknown> } = {
+      mcp: { engram: { type: "remote", url: "http://127.0.0.1:8896/mcp/dcm", enabled: true } },
+    }
+    const generated = buildMcpConfig({ project: "dcm-project", family: "dcm-project", branchSuffix: "main" })
+
+    mergeMcpConfig(config, generated)
+
+    expect(config.mcp?.engram).toEqual({
+      type: "remote",
+      url: "http://127.0.0.1:8896/mcp/dcm",
+      enabled: true,
+    })
+  })
+
+  test("adds the generated route when no explicit route exists", () => {
+    const config: { mcp?: Record<string, unknown> } = {}
+    const generated = buildMcpConfig({ project: "engram", family: "engram", branchSuffix: "main" })
+
+    mergeMcpConfig(config, generated)
+
+    expect(config.mcp?.engram).toEqual(generated.engram)
+  })
 })

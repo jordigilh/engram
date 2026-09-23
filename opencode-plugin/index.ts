@@ -21,6 +21,7 @@ import type { Plugin } from "@opencode-ai/plugin"
 import {
   buildMcpConfig,
   deriveIdentity,
+  mergeMcpConfig,
   resolveRepositoryOptions,
   type EngramPluginOptions,
 } from "./identity"
@@ -42,7 +43,6 @@ import {
   isEngramTool,
   type MetricEvent,
 } from "./metrics"
-import { SubagentGate } from "./subagent-gate"
 
 async function detectBranch(directory: string, $: any): Promise<string | undefined> {
   try {
@@ -54,12 +54,16 @@ async function detectBranch(directory: string, $: any): Promise<string | undefin
   }
 }
 
-async function detectRemote(directory: string, $: any): Promise<string | undefined> {
+async function detectRemotes(directory: string, $: any): Promise<string[]> {
   try {
-    const out = await $`git config --get remote.origin.url`.cwd(directory).quiet().text()
-    return out.trim() || undefined
+    const out = await $`git remote -v`.cwd(directory).quiet().text()
+    return out
+      .split(/\r?\n/)
+      .filter((line: string) => /\(fetch\)$/.test(line.trim()))
+      .map((line: string) => line.trim().split(/\s+/)[1])
+      .filter(Boolean)
   } catch {
-    return undefined
+    return []
   }
 }
 
@@ -67,13 +71,12 @@ export const EngramPlugin: Plugin = async (ctx, rawOptions) => {
   const options = (rawOptions || {}) as EngramPluginOptions
   const directoryBasename = (ctx.directory || "").split("/").filter(Boolean).pop() || "unknown-project"
   const branch = await detectBranch(ctx.directory, ctx.$)
-  const remote = await detectRemote(ctx.directory, ctx.$)
-  const resolvedOptions = resolveRepositoryOptions({ directory: ctx.directory, remote, options })
+  const remotes = await detectRemotes(ctx.directory, ctx.$)
+  const identityOptions = resolveRepositoryOptions(directoryBasename, remotes, options)
 
-  const identity = deriveIdentity({ directoryBasename, branch, options: resolvedOptions })
-  const mcp = buildMcpConfig(identity, resolvedOptions)
+  const identity = deriveIdentity({ directoryBasename, branch, options: identityOptions })
+  const mcp = buildMcpConfig(identity, options)
   const gatewayUrl = mcp.engram.url
-  const gate = new SubagentGate(ctx.client)
   // Option A state: per-process probe cache + per-session dedupe so a
   // repeated grep can't re-trigger the gateway or spam the model.
   const dedupe = new NudgeDedupe()
@@ -110,8 +113,7 @@ export const EngramPlugin: Plugin = async (ctx, rawOptions) => {
 
   return {
     config: async (config) => {
-      config.mcp = config.mcp || {}
-      Object.assign(config.mcp, mcp)
+      mergeMcpConfig(config, mcp)
     },
     // Survive context compression. Fires before the LLM builds the
     // continuation summary on both `/compact` and auto-overflow.
@@ -127,27 +129,16 @@ export const EngramPlugin: Plugin = async (ctx, rawOptions) => {
     // Post-compaction observer: low-risk, never blocks.
     event: async ({ event }) => {
       const props = (event as unknown as { properties?: Record<string, unknown> }).properties || {}
-      const info = props["info"] as { id?: string } | undefined
       const sessionID =
         (props["sessionID"] as string) ||
-        info?.id ||
         ((event as unknown as { sessionID?: string }).sessionID ?? "")
-      if (event.type === "session.deleted" && sessionID) gate.clear(sessionID)
       const line = buildCompactedLog(event.type, sessionID)
       if (line) console.error(line)
     },
-    dispose: async () => gate.clearAll(),
-    "permission.ask": async (input, output) => {
-      if (await gate.shouldBlock(input.sessionID, input.type)) output.status = "deny"
-    },
+    // MCP-over-CLI nudge: warn-only, never blocks. Allowlist-based.
+    // Code-search is NOT logged here — it only nudges after a successful
+    // gateway probe in `tool.execute.after`, so we never respond regardless.
     "tool.execute.before": async (input, output) => {
-      if (await gate.shouldBlock(input.sessionID, input.tool)) {
-        throw new Error(
-          `[engram-plugin] child session ${input.sessionID} must call an Engram MCP tool before ${input.tool}`,
-        )
-      }
-
-      // MCP-over-CLI nudge: warn-only after the Engram-first gate. Allowlist-based.
       const hit = shouldNudgeMcp(input.tool, output.args?.command)
       if (hit) console.error(`[engram-plugin] ${buildMcpNudgeMessage(hit)}`)
       if (isEngramTool(input.tool)) {
@@ -158,7 +149,6 @@ export const EngramPlugin: Plugin = async (ctx, rawOptions) => {
     // Flow: detect → dedupe claim → cached probe or live probe (2.5s) →
     // append only when Engram actually has hits.
     "tool.execute.after": async (input, output) => {
-      gate.markSuccessfulEngramCall(input.sessionID, input.tool)
       const search = detectCodeSearch(input.tool, input.args)
       if (!search) return
       if (typeof output.output !== "string" || output.output.includes("[engram-plugin]")) return

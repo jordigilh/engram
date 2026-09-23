@@ -47,9 +47,9 @@ EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 RRF_K = 60
 
 # Same env var (and default) as praxis-cocoindex-flows.py, so pattern search
-# walks the exact same checkouts the ingestion flow indexes.
+# walks the exact same branch-scoped mirrors the ingestion flow indexes.
 PRAXIS_ORG_DIR = pathlib.Path(os.environ.get(
-    "PRAXIS_ORG_DIR", os.path.expanduser("~/go/src/github.com/praxis-proxy"),
+    "PRAXIS_ORG_DIR", os.path.expanduser("~/.engram/watch/praxis-proxy"),
 ))
 
 # (repo_tag, root, included_patterns, excluded_patterns) -- mirrors
@@ -196,7 +196,7 @@ def _format_results(query: str, results: list[dict], mode: str = "hybrid") -> st
 
 def pattern_search_code(pattern: str, language: str, limit: int = 10) -> list[dict[str, Any]]:
     """Structural ("by-example") code search via CocoIndex's CodePattern --
-    tree-sitter AST matching against the live praxis-proxy checkouts.
+    tree-sitter AST matching against the branch-scoped praxis-proxy mirrors.
 
     Complements, not replaces, search_code() (semantic/BM25 "what does X
     do") and Serena (type-aware find-references/diagnostics): this is

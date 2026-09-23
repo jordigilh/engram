@@ -221,6 +221,11 @@ the full schema under CocoIndex's control.
 
 ## Graphify-Inspired Call-Graph Queries
 
+The external semantic-code-intelligence pilot decision and the boundary between
+this implementation, Serena, `open-codebase-index`, Codanna, and SCIP are
+documented in
+[`SEMANTIC_CODE_INTELLIGENCE.md`](SEMANTIC_CODE_INTELLIGENCE.md).
+
 **Status: rolled out to all six onboarded projects (engram, koku,
 rhdh-plugins, praxis-proxy, dcm, kubernaut).** See
 [`docs/CALL_GRAPH_DESIGN.md`](CALL_GRAPH_DESIGN.md) for how the extraction/

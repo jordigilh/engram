@@ -45,6 +45,10 @@ WorkingDirectory=%h/go/src/github.com/jordigilh/kubernaut
 EnvironmentFile=%h/.engram/config.env
 Environment=GOOGLE_APPLICATION_CREDENTIALS=%h/.config/gcloud/application_default_credentials.json
 Environment=COCOINDEX_PG_URL=postgresql://hindsight:hindsight@localhost:5432/hindsight
+Environment=ENGRAM_CODE_DIR=%h/go/src/github.com/jordigilh/kubernaut
+Environment=ENGRAM_OPERATOR_DIR=%h/go/src/github.com/jordigilh/kubernaut-operator
+Environment=ENGRAM_CONSOLE_DIR=%h/go/src/github.com/jordigilh/kubernaut-console
+Environment=ENGRAM_SCENARIOS_DIR=%h/go/src/github.com/jordigilh/kubernaut-demo-scenarios
 Environment=KUBERNAUT_LIVE_CLONE_DIR=%h/go/src/github.com/jordigilh/kubernaut
 Environment=HF_HUB_OFFLINE=1
 ExecStart=%h/.engram/venv/bin/engram-search-kubernaut --transport streamable-http --host 127.0.0.1 --port 8891

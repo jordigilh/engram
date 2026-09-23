@@ -29,6 +29,14 @@
         <string>__HOME__/.engram/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>COCOINDEX_PG_URL</key>
         <string>postgresql://hindsight:hindsight@localhost:5432/hindsight</string>
+        <key>ENGRAM_CODE_DIR</key>
+        <string>__HOME__/go/src/github.com/jordigilh/kubernaut</string>
+        <key>ENGRAM_OPERATOR_DIR</key>
+        <string>__HOME__/go/src/github.com/jordigilh/kubernaut-operator</string>
+        <key>ENGRAM_CONSOLE_DIR</key>
+        <string>__HOME__/go/src/github.com/jordigilh/kubernaut-console</string>
+        <key>ENGRAM_SCENARIOS_DIR</key>
+        <string>__HOME__/go/src/github.com/jordigilh/kubernaut-demo-scenarios</string>
         <key>KUBERNAUT_LIVE_CLONE_DIR</key>
         <string>__HOME__/go/src/github.com/jordigilh/kubernaut</string>
         <key>HF_HUB_OFFLINE</key>

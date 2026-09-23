@@ -17,6 +17,7 @@ Runs as a single long-lived process via launchd. Supports backfill and live mode
 import argparse
 import asyncio
 import dataclasses
+import fnmatch
 import hashlib
 import json
 import logging
@@ -43,6 +44,7 @@ from cocoindex.resources.file import PatternFilePathMatcher
 # be run via `-m`/an installed console script (not yet true in this repo).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 from engram import chunking  # noqa: E402
+from engram.configured_sources import ConfiguredSource, load_configured_sources  # noqa: E402
 from engram import correction_gate  # noqa: E402
 from engram import contradiction_resolution  # noqa: E402
 from engram import project_scope  # noqa: E402
@@ -55,35 +57,34 @@ logging.basicConfig(
 log = logging.getLogger("cocoindex-flows")
 
 HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
-# Defaults point at the branch-scoped read-only mirrors (see
-# watch-mirrors-config.sh), NOT the live dev clones under
-# ~/go/src/github.com/jordigilh/ -- see docs/FINDINGS.md 2026-08-03. Watching
-# the live clones meant every branch checkout during routine PR work was
-# misread as a real content delta, triggering a full hindsight_retain() +
-# Sonnet consolidation pass per touched file. These are only defaults (the
-# launchd plist sets the same values explicitly); kept in sync so a manual
-# `python3 cocoindex-flows.py` invocation without env vars is also safe.
+# Docs and issues continue to use branch-stable mirrors because those flows
+# write to Hindsight. Code is different: embeddings must describe the live
+# worktree used by the current session, including uncommitted changes and the
+# currently checked-out feature/fix branch. Code ingestion has no Hindsight
+# retain/consolidation cost, so it deliberately defaults to the live clones;
+# release-line mirrors are mounted separately below.
 ENGRAM_DOCS_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_DOCS_DIR",
     os.path.expanduser("~/.engram/watch/kubernaut-docs/docs"),
 ))
 ENGRAM_CODE_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_CODE_DIR",
-    os.path.expanduser("~/.engram/watch/kubernaut"),
+    os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut"),
 ))
 ENGRAM_CODE_DOCS_DIR = ENGRAM_CODE_DIR / "docs"
 ENGRAM_OPERATOR_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_OPERATOR_DIR",
-    os.path.expanduser("~/.engram/watch/kubernaut-operator"),
+    os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-operator"),
 ))
 ENGRAM_CONSOLE_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_CONSOLE_DIR",
-    os.path.expanduser("~/.engram/watch/kubernaut-console"),
+    os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-console"),
 ))
 ENGRAM_SCENARIOS_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_SCENARIOS_DIR",
-    os.path.expanduser("~/.engram/watch/kubernaut-demo-scenarios"),
+    os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-demo-scenarios"),
 ))
+EXTRA_SOURCES: tuple[ConfiguredSource, ...] = load_configured_sources()
 ENGRAM_TRANSCRIPTS_DIR = pathlib.Path(os.environ.get(
     "ENGRAM_TRANSCRIPTS_DIR",
     os.path.expanduser("~/.cursor/projects"),
@@ -326,8 +327,7 @@ async def coco_lifespan(builder: coco.EnvironmentBuilder) -> AsyncIterator[None]
 # App 1: docs-app — Markdown docs → Hindsight kubernaut-docs bank
 # ---------------------------------------------------------------------------
 
-@coco.fn(memo=True)
-async def process_doc_file(
+async def _process_doc_file(
     file: localfs.File,
     base_dir: pathlib.Path,
     source_tag: str,
@@ -372,6 +372,15 @@ async def process_doc_file(
             metadata={"source": "cocoindex", "repo": source_tag, **synth_meta},
             tags=[section, source_tag],
         )
+
+
+@coco.fn(memo=True)
+async def process_doc_file(
+    file: localfs.File,
+    base_dir: pathlib.Path,
+    source_tag: str,
+) -> None:
+    await _process_doc_file(file, base_dir, source_tag)
 
 
 @coco.fn
@@ -476,7 +485,6 @@ async def docs_main(
         process_doc_file, scenarios_docs.items(),
         scenarios_dir, "kubernaut-demo-scenarios",
     )
-
 
 docs_app = coco.App(
     "engram-docs", docs_main,
@@ -651,8 +659,7 @@ class CodeEmbedding:
     search_text: str  # concatenated text for BM25 full-text search
 
 
-@coco.fn(memo=True)
-async def process_code_file(
+async def _process_code_file(
     file: localfs.File,
     table: "Any",
     base_dir: pathlib.Path,
@@ -686,6 +693,52 @@ async def process_code_file(
             search_text=f"{filepath} {chunk}",
         )
         table.declare_row(row=row)
+
+
+@coco.fn(memo=True)
+async def process_code_file(
+    file: localfs.File,
+    table: "Any",
+    base_dir: pathlib.Path,
+    repo_tag: str,
+) -> None:
+    await _process_code_file(file, table, base_dir, repo_tag)
+
+
+def _matches_extra_source_patterns(
+    relative_path: pathlib.Path,
+    includes: tuple[str, ...],
+    excludes: tuple[str, ...],
+) -> bool:
+    """Match a configured source path with root-level ``**/`` support."""
+    path = relative_path.as_posix()
+
+    def matches(pattern: str) -> bool:
+        return fnmatch.fnmatch(path, pattern) or (
+            pattern.startswith("**/") and fnmatch.fnmatch(path, pattern[3:])
+        )
+
+    return bool(includes) and any(matches(pattern) for pattern in includes) and not any(
+        matches(pattern) for pattern in excludes
+    )
+
+
+@coco.fn(memo=True)
+async def process_extra_source_file(
+    file: localfs.File,
+    table: "Any",
+    base_dir: pathlib.Path,
+    source_tag: str,
+    docs_include: tuple[str, ...],
+    docs_exclude: tuple[str, ...],
+    code_include: tuple[str, ...],
+    code_exclude: tuple[str, ...],
+) -> None:
+    relative_path = pathlib.Path(file.file_path.path)
+    if _matches_extra_source_patterns(relative_path, docs_include, docs_exclude):
+        await _process_doc_file(file, base_dir, source_tag)
+    if _matches_extra_source_patterns(relative_path, code_include, code_exclude):
+        await _process_code_file(file, table, base_dir, source_tag)
 
 
 @coco.fn
@@ -798,6 +851,31 @@ async def code_main(
         process_code_file, console_files.items(),
         table, console_dir, "kubernaut-console",
     )
+
+    for source in EXTRA_SOURCES:
+        includes = list(dict.fromkeys((*source.docs_include, *source.code_include)))
+        excludes = list(dict.fromkeys((*source.docs_exclude, *source.code_exclude)))
+        if not includes:
+            continue
+        if not source.root.is_dir():
+            log.warning("code_main: skipping extra source %s -- root not found: %s", source.tag, source.root)
+            continue
+        extra_files = localfs.walk_dir(
+            source.root,
+            recursive=True,
+            path_matcher=PatternFilePathMatcher(
+                included_patterns=includes,
+                excluded_patterns=excludes,
+            ),
+            live=True,
+        )
+        await coco.mount_each(
+            coco.component_subpath(f"extra-{source.tag}"),
+            process_extra_source_file, extra_files.items(),
+            table, source.root, source.tag,
+            source.docs_include, source.docs_exclude,
+            source.code_include, source.code_exclude,
+        )
 
     scenarios_files = localfs.walk_dir(
         scenarios_dir,

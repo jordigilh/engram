@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "base_commit": "5f2c5e490c93652619b3661faa42a439981517fb",
+  "candidate_commit": "5f2c5e490c93652619b3661faa42a439981517fb",
+  "candidate_branch": "spike/proposal-3-gated-relationship-tiebreak",
+  "candidate_binary": "/var/folders/r7/gktmmltd1zq7wqhsjjslwsm80000gn/T/opencode/zvec-proposal3-gated-relationship-candidate-target/debug/zg",
+  "candidate_binary_sha256": "aa4ed96ff39c28fb07e2f8d32f72fb708e5f693406feca7d8711f2bab4c1cef3",
+  "baseline_rust_binary": "/var/folders/r7/gktmmltd1zq7wqhsjjslwsm80000gn/T/opencode/zvec-proposal-matrix-base-target/debug/zg",
+  "baseline_rust_binary_sha256": "17c0718e312e250a66cb84434f3db2ce0df5220b28a5832c7b0b9c2bab59cca2",
+  "unchanged_typescript_binary": "/Users/jgil/go/src/github.com/jordigilh/zvec-grep-lexical-baseline/dist/cli/index.js",
+  "unchanged_typescript_binary_sha256": "817ff1c4ff0b57b0c27eb9c3d8869f9a4db32d1765267798e77c3be6d1b49f6f",
+  "candidate_rust_build": {
+    "command": "cargo build --manifest-path rust/Cargo.toml --locked -p zg --bin zg",
+    "cargo_target_dir": "/var/folders/r7/gktmmltd1zq7wqhsjjslwsm80000gn/T/opencode/zvec-proposal3-gated-relationship-candidate-target",
+    "cxxflags": "-isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1"
+  },
+  "source_bundle_hash": {
+    "algorithm": "SHA-256 over sorted relative-path UTF-8 bytes, NUL, file bytes, NUL for each changed source file",
+    "sha256": "b0eaa9748952f4fb5d7adffe96fc06c5ec963f61c7cdf5c05cfe36e54c495b91",
+    "files": {
+      "rust/crates/zg-engine/src/api/context.rs": "abbadab0f8d6c2c2f662388c6cc15fdc0947899ce21f7b4e695b10fa5f242f2f",
+      "rust/crates/zg-engine/src/pipelines/indexed_search/mod.rs": "f3f3d8654c13cf62385a7b392a7b15123dd2c930b3ca1e44d73abec1b986dfa6",
+      "rust/crates/zg-engine/src/pipelines/indexed_search/pipeline.rs": "a0d10e9e9d570f2df051bfed0a6323c6ccc41066aff8d38a01574243fde7c2ad",
+      "rust/crates/zg-engine/src/pipelines/indexed_search/relationship.rs": "476ee4439053dc409fe2220081434f92704f3ddc96bbec03fb4ea116aef9287c"
+    }
+  },
+  "index_version": {
+    "effective_baseline_rust": 2,
+    "effective_candidate_rust": 2,
+    "current_index_version_in_both_source_trees": 2,
+    "initial_matrix_runner_records_candidate_rust_as": 3,
+    "final_run_manifests_reconciled_to": 2,
+    "note": "Both supplied worktrees are the same base commit and Rust CURRENT_INDEX_VERSION is 2; candidate --graph writes a sidecar after indexing and does not change the index schema."
+  },
+  "matrix_runner_diff_digest_note": "The initial matrix run omitted indexed-search ranking files from its source digest. Its final per-run manifests were reconciled with the exact worktree and now include the full Rust engine diff; source_bundle_hash above independently lists the proposal files.",
+  "evaluation": {
+    "matrix_runner": "/Users/jgil/go/src/github.com/jordigilh/engram/scripts/replay_multilanguage_zvec.py",
+    "candidate_rust_graph": true,
+    "embedding_model": "local/potion-code-16m-v2",
+    "embedding_model_snapshot": "e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b",
+    "device": "cpu",
+    "source_lanes": ["go", "python", "rust", "typescript"],
+    "qrels": "each lane's fixture-specific locked qrels",
+    "queries_per_lane": 8,
+    "metrics": ["ndcg@10", "mrr@10", "recall@10", "precision@10"]
+  },
+  "artifact_integrity": {
+    "verified_arms": 16,
+    "artifact_hash_failures": []
+  }
+}

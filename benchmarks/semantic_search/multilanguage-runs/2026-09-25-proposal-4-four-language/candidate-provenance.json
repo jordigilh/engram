@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "run_id": "2026-09-25-proposal-4-four-language",
+  "candidate_worktree": "/Users/jgil/go/src/github.com/jordigilh/zvec-grep-proposal-4-graph-assisted-recall",
+  "candidate_commit": "5f2c5e490c93652619b3661faa42a439981517fb",
+  "candidate_source_diff": {
+    "paths": [
+      "rust/crates/zg-engine/src/pipelines/indexed_search/pipeline.rs"
+    ],
+    "sha256": "df651ccd4652a82f15caf32332888c063c2feec9e20e40f6eb59530229c6fc53"
+  },
+  "rust_binaries": {
+    "baseline_sha256": "17c0718e312e250a66cb84434f3db2ce0df5220b28a5832c7b0b9c2bab59cca2",
+    "candidate_sha256": "ef9417d409e6f6e6b69b294de4ce3d423183c6ff4001e72d3f8826e629569126"
+  },
+  "typescript_arm_policy": "The unchanged baseline TypeScript CLI binary was used for both TypeScript arms.",
+  "runner_manifest_note": "The initial matrix runner implementation_diff_sha256 scope omitted the indexed_search source path above. Final per-arm run-manifests were reconciled against the exact proposal worktree and include the Rust engine diff. This file retains the independent proposal source-diff digest; each arm manifest records its Rust binary digest."
+}

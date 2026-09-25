@@ -1,0 +1,507 @@
+{
+  "schema_version": 1,
+  "suite_id": "synthetic-python-workflow-discovery",
+  "fixture_id": "python-workflow-discovery-v1",
+  "source": {
+    "repository": "synthetic/python-workflow-discovery",
+    "revision": "fixture-v1",
+    "root": ".",
+    "include": [
+      "**/*.py"
+    ],
+    "exclude": [
+      "**/test_*.py"
+    ],
+    "snapshot_sha256": "0b77b06131e0a0e8ffbafa258c54e8900b7c32c2ea6f156ea75e8c6a181e076b",
+    "files": 8,
+    "bytes": 6179
+  },
+  "result_limit": 10,
+  "runs": [
+    {
+      "backend": "rust-candidate",
+      "queries": [
+        {
+          "id": "record-discovered-membership",
+          "results": [
+            {
+              "unit_id": "tools/workflows.py::record_discovered_workflows",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "tools/workflows.py::list_workflows",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "discovery/state.py::WorkflowState",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "discovery/state.py::WorkflowState.add",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog.list_workflows",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog.__init__",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog.list_actions",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog.get_workflow",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "discovery/state.py::WorkflowState.contains",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "tools/workflows.py::authorize_selection_driver",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "discovery/filters.py::apply_label_filters",
+              "backend_rank": 9
+            }
+          ]
+        },
+        {
+          "id": "reject-undiscovered-workflow",
+          "results": [
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog.list_workflows",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog.__init__",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog.list_actions",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog.get_workflow",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "selection/validator.py::Validator",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.__init__",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.set_workflow_state",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.is_allowed",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.validate",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "tools/workflows.py::is_workflow_in_discovery_result",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "tools/workflows.py::authorize_selection_driver",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "discovery/state.py::WorkflowState",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "discovery/state.py::WorkflowState.add",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "discovery/state.py::WorkflowState.contains",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "tools/workflows.py::handle_select_workflow",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "tools/workflows.py::list_workflows",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "forward-labels-to-discovery",
+          "results": [
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog.list_actions",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "discovery/filters.py::filters_from_signal",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog.__init__",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog.list_workflows",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog.get_workflow",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "tools/workflows.py::is_workflow_in_discovery_result",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "discovery/filters.py::apply_label_filters",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "discovery/filters.py::Signal",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "tools/workflows.py::authorize_selection_driver",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "selection/retry.py::self_correct_selection",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "selection/validator.py::Validator",
+              "backend_rank": 10
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.validate",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "preserve-membership-on-retry",
+          "results": [
+            {
+              "unit_id": "tools/workflows.py::apply_selected_workflow",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "tools/workflows.py::list_workflows",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "tools/workflows.py::record_discovered_workflows",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "tools/workflows.py::lookup_discovered_parameters",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "discovery/state.py::WorkflowState",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "discovery/state.py::WorkflowState.contains",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog.get_workflow",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "tools/workflows.py::is_workflow_in_discovery_result",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "selection/validator.py::Validator",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.set_workflow_state",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.is_allowed",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.__init__",
+              "backend_rank": 10
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.validate",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "interactive-selection-guard",
+          "results": [
+            {
+              "unit_id": "tools/workflows.py::authorize_selection_driver",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "tools/workflows.py::is_workflow_in_discovery_result",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "tools/workflows.py::handle_select_workflow",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "tools/workflows.py::lookup_discovered_parameters",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "selection/validator.py::Validator",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.validate",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.__init__",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.set_workflow_state",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.is_allowed",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "discovery/state.py::state_from_context",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "discovery/filters.py::filters_from_signal",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "tools/workflows.py::apply_selected_workflow",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "selection/retry.py::self_correct_selection",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "validate-workflow-parameters",
+          "results": [
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog.get_workflow",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "tools/workflows.py::handle_select_workflow",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog.__init__",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "tools/workflows.py::lookup_discovered_parameters",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "execution/runner.py::validate_workflow_parameters",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "tools/workflows.py::WorkflowResult",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "tools/workflows.py::apply_selected_workflow",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "discovery/catalog.py::Workflow",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "selection/validator.py::Validator",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.validate",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "discovery/state.py::WorkflowState",
+              "backend_rank": 10
+            },
+            {
+              "unit_id": "discovery/state.py::WorkflowState.add",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "empty-discovery-fails-closed",
+          "results": [
+            {
+              "unit_id": "tools/workflows.py::authorize_selection_driver",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "tools/workflows.py::is_workflow_in_discovery_result",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "discovery/state.py::WorkflowState",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "discovery/state.py::WorkflowState.add",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "discovery/state.py::WorkflowState.contains",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "tools/workflows.py::handle_select_workflow",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "selection/validator.py::Validator",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.__init__",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.set_workflow_state",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.is_allowed",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.validate",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "selection/retry.py::self_correct_selection",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "discovery/catalog.py::Workflow",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "copy-selected-workflow-details",
+          "results": [
+            {
+              "unit_id": "tools/workflows.py::apply_selected_workflow",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "tools/workflows.py::handle_select_workflow",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "tools/workflows.py::is_workflow_in_discovery_result",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "tools/workflows.py::authorize_selection_driver",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "tools/workflows.py::lookup_discovered_parameters",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "discovery/catalog.py::WorkflowCatalog.get_workflow",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "selection/validator.py::Validator",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.validate",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.__init__",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.set_workflow_state",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "selection/validator.py::Validator.is_allowed",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "discovery/state.py::WorkflowState",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "discovery/state.py::WorkflowState.add",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "execution/runner.py::validate_workflow_parameters",
+              "backend_rank": 10
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -2,9 +2,41 @@
 
 Use [`QUALITY_EVALUATION.md`](./QUALITY_EVALUATION.md) for the relevance
 judging protocol, ingestion-versus-retrieval failure taxonomy, and metrics.
-The source-grounded targets for the current feature-branch suite are in
+The source-grounded draft targets for the historical feature-branch suite are in
 [`kubernaut_fix-2442_8f3bc5a2_2026-09-23.relevance-draft.json`](./kubernaut_fix-2442_8f3bc5a2_2026-09-23.relevance-draft.json);
-they are explicitly unadjudicated and must not be treated as gold labels.
+those targets are not gold labels. The synthetic fixture below is the primary
+regression lane for zvec-grep retrieval experiments; the Kubernaut artifacts
+later on this page are exploratory real-repository context, not a quality gate.
+
+## Golden synthetic fixtures
+
+The end-to-end fixture construction, index/replay commands, normalization,
+metric formulas, and per-run provenance requirements are in
+[`SYNTHETIC_EVALUATION.md`](./SYNTHETIC_EVALUATION.md).
+
+Use the small, source-authored fixture suite for repeatable regression checks:
+
+- [`fixtures/go-workflow-discovery-v1/`](./fixtures/go-workflow-discovery-v1/): 38 qualified Go source units, realistic distractors, and eight query intents.
+- [`fixtures/go-workflow-discovery-v1/truth.json`](./fixtures/go-workflow-discovery-v1/truth.json): source-authored relevant targets; it is independent of every search backend.
+- [`fixtures/go-workflow-discovery-v1/qrels.json`](./fixtures/go-workflow-discovery-v1/qrels.json): complete adjudicated qrels covering the full 38-unit fixture universe.
+- [`fixtures/go-workflow-discovery-v1/QEVAL_RESULTS.md`](./fixtures/go-workflow-discovery-v1/QEVAL_RESULTS.md): measured synthetic qevals, run artifacts, and the zvec-grep issue tracking decisions.
+
+Verify the fixture source digest and source-authored qrels with
+`python3 -m pytest -q tests/test_synthetic_semantic_search.py`. Capture ranked
+results against the same fixture and normalize to its qualified symbol IDs
+before scoring. The [protocol](./SYNTHETIC_EVALUATION.md) gives the full
+index, replay, and evaluation commands.
+
+The replay adapter is [`scripts/replay_synthetic_semantic_search.py`](../../scripts/replay_synthetic_semantic_search.py).
+It records raw responses and maps each result to every manifest symbol whose
+source span intersects the returned chunk or line range. `backend_rank` keeps
+the original backend rank; consequently, the evaluator's `@10` cutoff is over
+normalized source units, while the raw replay remains limited to ten backend
+results. The manifest covers all 38 source declarations so backend distractors
+remain explicit grade-0 candidates rather than becoming unjudged failures.
+
+The completed 2026-09-23 replay is under
+`fixtures/go-workflow-discovery-v1/replays/2026-09-23/`.
 
 `kubernaut_workflow_discovery.json` is the versioned prompt set used for the
 Kubernaut CocoIndex vs. zvec-grep comparison. It preserves the exact query text
@@ -125,18 +157,35 @@ are kept separately in
 [`kubernaut_workflow_discovery_followups_v1.json`](./kubernaut_workflow_discovery_followups_v1.json)
 so they remain distinguishable from the original prompt set.
 
-The current iteration is focused on the live `fix/2442-workflow-discovery-membership`
-checkout at `8f3bc5a2d7da5262553a0919f9faecb83d61a09a`; its branch-specific
-comparison is recorded in
-[`kubernaut_fix-2442_8f3bc5a2_2026-09-23.json`](./kubernaut_fix-2442_8f3bc5a2_2026-09-23.json).
-The source inventory matched the live CocoIndex Kubernaut path set at 1,072 Go
-files. The main snapshot above is retained as a separate historical run and is
-not part of this branch-focused iteration.
-
-The current iteration is focused on the live `fix/2442-workflow-discovery-membership`
-checkout at `8f3bc5a2d7da5262553a0919f9faecb83d61a09a`; its branch-specific
+The historical branch-specific run used `fix/2442-workflow-discovery-membership`
+at `8f3bc5a2d7da5262553a0919f9faecb83d61a09a`; its
 comparison is recorded in
 [`kubernaut_fix-2442_8f3bc5a2_2026-09-23.json`](./kubernaut_fix-2442_8f3bc5a2_2026-09-23.json).
 The production-Go path inventory matched the live CocoIndex table at 1,072
-distinct files. The main snapshot is retained as a separate historical run and
-is not used for this branch-focused iteration.
+distinct files. The main snapshot is a separate run, not part of this comparison.
+
+The pinned three-backend replay status is recorded in
+[`kubernaut_fix-2442_8f3bc5a2_2026-09-23.reproduction-blocker.md`](./kubernaut_fix-2442_8f3bc5a2_2026-09-23.reproduction-blocker.md).
+Full ranked output for Sense v1.15.1, the disposable CocoIndex table, and the
+rebuilt zvec index is preserved separately. The pooled candidates have now been
+normalized and adjudicated.
+
+The normalized, backend-separated candidate artifacts are:
+
+- [`kubernaut_fix-2442_8f3bc5a2_2026-09-23.normalized-runs.json`](./kubernaut_fix-2442_8f3bc5a2_2026-09-23.normalized-runs.json): evaluator-shaped runs with stable source-span IDs.
+- [`kubernaut_fix-2442_8f3bc5a2_2026-09-23.backend-mapping.json`](./kubernaut_fix-2442_8f3bc5a2_2026-09-23.backend-mapping.json): rank and backend provenance for each normalized result.
+- [`kubernaut_fix-2442_8f3bc5a2_2026-09-23.blinded-pool.json`](./kubernaut_fix-2442_8f3bc5a2_2026-09-23.blinded-pool.json): 300 source-grounded candidates used for adjudication; it contains no backend labels or draft grades.
+- [`kubernaut_fix-2442_8f3bc5a2_2026-09-23.qrels-first-pass.json`](./kubernaut_fix-2442_8f3bc5a2_2026-09-23.qrels-first-pass.json): agent-assigned grades for all 300 candidates, explicitly pending human review.
+- [`kubernaut_fix-2442_8f3bc5a2_2026-09-23.human-review-decisions.json`](./kubernaut_fix-2442_8f3bc5a2_2026-09-23.human-review-decisions.json): complete interactive review log covering all 300 candidates.
+- [`kubernaut_fix-2442_8f3bc5a2_2026-09-23.qrels-adjudicated.json`](./kubernaut_fix-2442_8f3bc5a2_2026-09-23.qrels-adjudicated.json): final qrels with `judgment_status=adjudicated`.
+- [`kubernaut_fix-2442_8f3bc5a2_2026-09-23.metrics-k10.json`](./kubernaut_fix-2442_8f3bc5a2_2026-09-23.metrics-k10.json): historical nDCG, MRR, recall, and precision at 10; do not use these as the zvec-grep qeval quality gate.
+
+Rebuild those artifacts with `scripts/normalize_semantic_search.py` after
+replaying the raw runs. The script intentionally emits
+`judgment_status=pending-adjudication` and never assigns relevance grades.
+The first-pass qrels are also evaluator-ineligible by design; review the
+ambiguous query surfaces and change both `judgment_status` and
+`candidate_pool_complete` only after human adjudication.
+
+The adjudicated run was produced with `scripts/finalize_semantic_qrels.py` and
+scored with `scripts/evaluate_semantic_search.py --k 10`.

@@ -1,0 +1,1244 @@
+{
+  "backend": "sense",
+  "version": "1.15.1",
+  "limit": 10,
+  "source": {
+    "repository": "jordigilh/kubernaut",
+    "branch": "fix/2442-workflow-discovery-membership",
+    "head": "8f3bc5a2d7da5262553a0919f9faecb83d61a09a",
+    "root": "/var/folders/r7/gktmmltd1zq7wqhsjjslwsm80000gn/T/opencode/kubernaut-fix-2442-8f3bc-zvec",
+    "selected_go_snapshot_sha256": "1eb2a57192e0af48c80741d7d732a13028f93c2614d194e3ce278234cc859dd8",
+    "selected_go_snapshot_digest_verified": true,
+    "files": 1072,
+    "bytes": 13611586
+  },
+  "index": {
+    "files_scanned": 1072,
+    "files_indexed": 1053,
+    "symbols": 12215,
+    "edges": 18934,
+    "embeddings": 12215,
+    "embedding_model": "all-MiniLM-L6-v2-ctx1",
+    "result_mode": "hybrid"
+  },
+  "queries": [
+    {
+      "id": "reject-undiscovered-catalog-workflow",
+      "query": "How does workflow selection reject a catalog-valid workflow that was never discovered by list_workflows?",
+      "results": {
+        "results": [
+          {
+            "symbol": "workflowcatalog.Catalog.ListWorkflowsByActionType",
+            "file": "internal/kubernautagent/workflowcatalog/discovery.go",
+            "line": 54,
+            "kind": "method",
+            "score": 1.0,
+            "snippet": "func (c *Catalog) ListWorkflowsByActionType(ctx context.Context, actionType string, filters *models.WorkflowDiscoveryFilters, offset, limit int) ([]models.RemediationWorkflow, int, error) {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.WithWorkflowCatalog",
+            "file": "internal/kubernautagent/mcp/tools/investigate.go",
+            "line": 406,
+            "kind": "function",
+            "score": 0.96,
+            "snippet": "func WithWorkflowCatalog(catalog WorkflowCatalog) InvestigateOption {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.ListWorkflowsRegistration",
+            "file": "internal/kubernautagent/mcp/tools/registration.go",
+            "line": 208,
+            "kind": "function",
+            "score": 0.92,
+            "snippet": "func ListWorkflowsRegistration(tool *ListWorkflowsTool, logger logr.Logger) mcpinternal.ToolRegistration {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.ListWorkflowsTool.Handle",
+            "file": "internal/kubernautagent/mcp/tools/list_workflows.go",
+            "line": 86,
+            "kind": "method",
+            "score": 0.77,
+            "snippet": "func (t *ListWorkflowsTool) Handle(ctx context.Context, input ListWorkflowsInput) (ListWorkflowsOutput, error) {",
+            "references": 1,
+            "source": "vector"
+          },
+          {
+            "symbol": "types.DiscoveredWorkflowState.Contains",
+            "file": "pkg/kubernautagent/types/context.go",
+            "line": 70,
+            "kind": "method",
+            "score": 0.77,
+            "snippet": "func (s *DiscoveredWorkflowState) Contains(workflowID string) bool {",
+            "references": 110,
+            "source": "keyword"
+          },
+          {
+            "symbol": "workflowcatalog.LazyCatalog.ListWorkflowsByActionType",
+            "file": "internal/kubernautagent/workflowcatalog/lazy_catalog.go",
+            "line": 224,
+            "kind": "method",
+            "score": 0.76,
+            "snippet": "func (l *LazyCatalog) ListWorkflowsByActionType(ctx context.Context, actionType string, filters *models.WorkflowDiscoveryFilters, offset, limit int) ([]models.RemediationWorkflow, int, error) {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "creator.validateSelectedWorkflow",
+            "file": "pkg/remediationorchestrator/creator/workflowexecution.go",
+            "line": 71,
+            "kind": "function",
+            "score": 0.75,
+            "snippet": "func validateSelectedWorkflow(ai *aianalysisv1.AIAnalysis) error {",
+            "references": 1,
+            "source": "vector"
+          },
+          {
+            "symbol": "parser.Validator.IsAllowed",
+            "file": "internal/kubernautagent/parser/validator.go",
+            "line": 227,
+            "kind": "method",
+            "score": 0.72,
+            "snippet": "func (v *Validator) IsAllowed(workflowID string) bool {",
+            "references": 2,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.CatalogWorkflow",
+            "file": "internal/kubernautagent/mcp/tools/select_workflow.go",
+            "line": 47,
+            "kind": "class",
+            "score": 0.68,
+            "snippet": "type CatalogWorkflow struct {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.ListWorkflowsTool",
+            "file": "internal/kubernautagent/mcp/tools/list_workflows.go",
+            "line": 72,
+            "kind": "class",
+            "score": 0.65,
+            "snippet": "type ListWorkflowsTool struct {",
+            "source": "hybrid"
+          }
+        ],
+        "search_mode": "hybrid",
+        "fusion_weights": {
+          "keyword": 0.5,
+          "vector": 0.5
+        },
+        "next_steps": []
+      }
+    },
+    {
+      "id": "discovered-state-flow-to-validation",
+      "query": "Where is discovered workflow state created, attached to context, and passed to result validation?",
+      "results": {
+        "results": [
+          {
+            "symbol": "types.NewDiscoveredWorkflowState",
+            "file": "pkg/kubernautagent/types/context.go",
+            "line": 48,
+            "kind": "function",
+            "score": 1.05,
+            "snippet": "func NewDiscoveredWorkflowState() *DiscoveredWorkflowState {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "types.DiscoveredWorkflowStateFromContext",
+            "file": "pkg/kubernautagent/types/context.go",
+            "line": 86,
+            "kind": "function",
+            "score": 1.01,
+            "snippet": "func DiscoveredWorkflowStateFromContext(ctx context.Context) (*DiscoveredWorkflowState, bool) {",
+            "references": 2,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "ka.DiscoveredWorkflow",
+            "file": "pkg/apifrontend/ka/config.go",
+            "line": 120,
+            "kind": "class",
+            "score": 0.98,
+            "snippet": "type DiscoveredWorkflow struct {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "parser.Validator.SetDiscoveredWorkflowState",
+            "file": "internal/kubernautagent/parser/validator.go",
+            "line": 184,
+            "kind": "method",
+            "score": 0.95,
+            "snippet": "func (v *Validator) SetDiscoveredWorkflowState(state *katypes.DiscoveredWorkflowState) {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "types.WithDiscoveredWorkflowState",
+            "file": "pkg/kubernautagent/types/context.go",
+            "line": 81,
+            "kind": "function",
+            "score": 0.95,
+            "snippet": "func WithDiscoveredWorkflowState(ctx context.Context, state *DiscoveredWorkflowState) context.Context {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "types.DiscoveredWorkflowState",
+            "file": "pkg/kubernautagent/types/context.go",
+            "line": 42,
+            "kind": "class",
+            "score": 0.95,
+            "snippet": "type DiscoveredWorkflowState struct {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "types.discoveredWorkflowStateKey",
+            "file": "pkg/kubernautagent/types/context.go",
+            "line": 25,
+            "kind": "class",
+            "score": 0.91,
+            "snippet": "type discoveredWorkflowStateKey struct{}",
+            "source": "keyword"
+          },
+          {
+            "symbol": "types.DiscoveredWorkflowState.Contains",
+            "file": "pkg/kubernautagent/types/context.go",
+            "line": 70,
+            "kind": "method",
+            "score": 0.89,
+            "snippet": "func (s *DiscoveredWorkflowState) Contains(workflowID string) bool {",
+            "references": 110,
+            "source": "keyword"
+          },
+          {
+            "symbol": "mcp.DiscoveredWorkflow",
+            "file": "internal/kubernautagent/mcp/interfaces.go",
+            "line": 118,
+            "kind": "class",
+            "score": 0.83,
+            "snippet": "type DiscoveredWorkflow struct {",
+            "references": 1,
+            "source": "keyword"
+          },
+          {
+            "symbol": "ka.kaDiscoveredWorkflow",
+            "file": "pkg/apifrontend/ka/config.go",
+            "line": 169,
+            "kind": "class",
+            "score": 0.78,
+            "snippet": "type kaDiscoveredWorkflow struct {",
+            "references": 1,
+            "source": "keyword"
+          }
+        ],
+        "search_mode": "hybrid",
+        "fusion_weights": {
+          "keyword": 0.5,
+          "vector": 0.5
+        },
+        "next_steps": []
+      }
+    },
+    {
+      "id": "record-listed-workflow-ids",
+      "query": "How does list_workflows record workflow IDs for later selection validation?",
+      "results": {
+        "results": [
+          {
+            "symbol": "workflowcatalog.Catalog.ListWorkflowsByActionType",
+            "file": "internal/kubernautagent/workflowcatalog/discovery.go",
+            "line": 54,
+            "kind": "method",
+            "score": 1.0,
+            "snippet": "func (c *Catalog) ListWorkflowsByActionType(ctx context.Context, actionType string, filters *models.WorkflowDiscoveryFilters, offset, limit int) ([]models.RemediationWorkflow, int, error) {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.ListWorkflowsTool",
+            "file": "internal/kubernautagent/mcp/tools/list_workflows.go",
+            "line": 72,
+            "kind": "class",
+            "score": 0.99,
+            "snippet": "type ListWorkflowsTool struct {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.ListWorkflowsRegistration",
+            "file": "internal/kubernautagent/mcp/tools/registration.go",
+            "line": 208,
+            "kind": "function",
+            "score": 0.99,
+            "snippet": "func ListWorkflowsRegistration(tool *ListWorkflowsTool, logger logr.Logger) mcpinternal.ToolRegistration {",
+            "references": 1,
+            "source": "keyword"
+          },
+          {
+            "symbol": "tools.HandleListWorkflowsKA",
+            "file": "pkg/apifrontend/tools/ka_tools.go",
+            "line": 355,
+            "kind": "function",
+            "score": 0.94,
+            "snippet": "func HandleListWorkflowsKA(ctx context.Context, mcpClient ka.MCPClient, args ListWorkflowsArgs) (ListWorkflowsResult, error) {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.ListWorkflowsInput",
+            "file": "internal/kubernautagent/mcp/tools/list_workflows.go",
+            "line": 37,
+            "kind": "class",
+            "score": 0.91,
+            "snippet": "type ListWorkflowsInput struct {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "handler.selectedWorkflowID",
+            "file": "pkg/apifrontend/handler/status_handler.go",
+            "line": 345,
+            "kind": "function",
+            "score": 0.88,
+            "snippet": "func selectedWorkflowID(rr *remediationv1.RemediationRequest) string {",
+            "references": 2,
+            "source": "vector"
+          },
+          {
+            "symbol": "tools.ListWorkflowsArgs",
+            "file": "pkg/apifrontend/tools/ds_tools.go",
+            "line": 17,
+            "kind": "class",
+            "score": 0.81,
+            "snippet": "type ListWorkflowsArgs struct {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.defaultListWorkflowsLimit",
+            "file": "internal/kubernautagent/mcp/tools/list_workflows.go",
+            "line": 32,
+            "kind": "constant",
+            "score": 0.81,
+            "snippet": "const defaultListWorkflowsLimit = 50",
+            "references": 1,
+            "source": "keyword"
+          },
+          {
+            "symbol": "reconstruction.parseWorkflowSelectionCompleted",
+            "file": "pkg/datastorage/reconstruction/parser.go",
+            "line": 314,
+            "kind": "function",
+            "score": 0.79,
+            "snippet": "func parseWorkflowSelectionCompleted(event ogenclient.AuditEvent) (*ParsedAuditData, error) {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "models.WorkflowDiscoveryResponse",
+            "file": "pkg/datastorage/models/workflow_discovery.go",
+            "line": 83,
+            "kind": "class",
+            "score": 0.78,
+            "snippet": "type WorkflowDiscoveryResponse struct {",
+            "source": "hybrid"
+          }
+        ],
+        "search_mode": "hybrid",
+        "fusion_weights": {
+          "keyword": 0.5,
+          "vector": 0.5
+        },
+        "next_steps": []
+      }
+    },
+    {
+      "id": "restrict-selection-to-discovered-workflows",
+      "query": "Only allow the model to select remediation workflows discovered in this investigation context",
+      "results": {
+        "results": [
+          {
+            "symbol": "ratelimit.IPLimiter.Allow",
+            "file": "pkg/apifrontend/ratelimit/ratelimit.go",
+            "line": 51,
+            "kind": "method",
+            "score": 1.27,
+            "snippet": "func (l *IPLimiter) Allow(ip string) bool {",
+            "references": 4,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "middleware.IPLimiter.Allow",
+            "file": "pkg/datastorage/server/middleware/ratelimit.go",
+            "line": 81,
+            "kind": "method",
+            "score": 1.19,
+            "snippet": "func (l *IPLimiter) Allow(ip string) bool {",
+            "references": 2,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.MessageRateLimiter.Allow",
+            "file": "internal/kubernautagent/mcp/tools/investigate.go",
+            "line": 198,
+            "kind": "method",
+            "score": 0.98,
+            "snippet": "Allow(sessionID string, messageSize int) error",
+            "source": "keyword"
+          },
+          {
+            "symbol": "main.FilterAllowlisted",
+            "file": "hack/check-helm-coverage/main.go",
+            "line": 235,
+            "kind": "function",
+            "score": 0.84,
+            "snippet": "func FilterAllowlisted(gaps []Leaf, allow map[string]bool) []Leaf {",
+            "references": 1,
+            "source": "keyword"
+          },
+          {
+            "symbol": "handlers.ResponseProcessor",
+            "file": "pkg/aianalysis/handlers/response_processor.go",
+            "line": 57,
+            "kind": "class",
+            "score": 0.7,
+            "snippet": "type ResponseProcessor struct {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "auth.FetchLimiter.AllowFetch",
+            "file": "pkg/apifrontend/auth/jwks_cache.go",
+            "line": 31,
+            "kind": "method",
+            "score": 0.69,
+            "snippet": "AllowFetch(provider string) bool",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "agent.recordDiscoverWorkflowsCheckpoint",
+            "file": "pkg/apifrontend/agent/phase_guard.go",
+            "line": 470,
+            "kind": "function",
+            "score": 0.68,
+            "snippet": "func recordDiscoverWorkflowsCheckpoint(ctx agent.Context, resp map[string]any) {",
+            "references": 1,
+            "source": "keyword"
+          },
+          {
+            "symbol": "ratelimit.ProviderLimiter.AllowFetch",
+            "file": "pkg/apifrontend/ratelimit/ratelimit.go",
+            "line": 296,
+            "kind": "method",
+            "score": 0.67,
+            "snippet": "func (l *ProviderLimiter) AllowFetch(provider string) bool {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "handler.AIAnalysisHandler.handleFailed",
+            "file": "pkg/remediationorchestrator/handler/aianalysis.go",
+            "line": 293,
+            "kind": "method",
+            "score": 0.67,
+            "snippet": "func (h *AIAnalysisHandler) handleFailed(",
+            "references": 1,
+            "source": "vector"
+          },
+          {
+            "symbol": "sql.Builder.Limit",
+            "file": "pkg/datastorage/repository/sql/builder.go",
+            "line": 176,
+            "kind": "method",
+            "score": 0.66,
+            "snippet": "func (b *Builder) Limit(limit int) *Builder {",
+            "references": 10,
+            "source": "vector"
+          }
+        ],
+        "search_mode": "hybrid",
+        "fusion_weights": {
+          "keyword": 0.5,
+          "vector": 0.5
+        },
+        "next_steps": []
+      }
+    },
+    {
+      "id": "outcome-for-undiscovered-selection",
+      "query": "What happens when the model selects a workflow that exists in the catalog but was not returned by workflow discovery?",
+      "results": {
+        "results": [
+          {
+            "symbol": "tools.InvestigateTool",
+            "file": "internal/kubernautagent/mcp/tools/investigate.go",
+            "line": 288,
+            "kind": "class",
+            "score": 1.09,
+            "snippet": "type InvestigateTool struct {",
+            "source": "vector"
+          },
+          {
+            "symbol": "remediationapprovalrequest.SetApprovalExpired",
+            "file": "pkg/remediationapprovalrequest/conditions.go",
+            "line": 155,
+            "kind": "function",
+            "score": 1.06,
+            "snippet": "func SetApprovalExpired(rar *remediationv1.RemediationApprovalRequest, expired bool, message string, m *rometrics.Metrics) {",
+            "references": 2,
+            "source": "vector"
+          },
+          {
+            "symbol": "workflowcatalog.Catalog.getWorkflowWithContextFiltersFromCache",
+            "file": "internal/kubernautagent/workflowcatalog/discovery_cache.go",
+            "line": 120,
+            "kind": "method",
+            "score": 1.03,
+            "snippet": "func (c *Catalog) getWorkflowWithContextFiltersFromCache(ctx context.Context, workflowID string, filters *models.WorkflowDiscoveryFilters) (*models.RemediationWorkflow, error) {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "mcp.WorkflowDiscoveryResult",
+            "file": "internal/kubernautagent/mcp/interfaces.go",
+            "line": 102,
+            "kind": "class",
+            "score": 1.01,
+            "snippet": "type WorkflowDiscoveryResult struct {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "workflowcatalog.Catalog.GetByID",
+            "file": "internal/kubernautagent/workflowcatalog/catalog.go",
+            "line": 62,
+            "kind": "method",
+            "score": 1.0,
+            "snippet": "func (c *Catalog) GetByID(ctx context.Context, workflowID string) (*models.RemediationWorkflow, error) {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.buildFinalResult",
+            "file": "internal/kubernautagent/mcp/tools/select_workflow.go",
+            "line": 514,
+            "kind": "function",
+            "score": 0.97,
+            "snippet": "func buildFinalResult(rca *katypes.InvestigationResult, workflow *CatalogWorkflow, discovery *mcpinternal.WorkflowDiscoveryResult) *katypes.InvestigationResult {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "events.EventReasonRemediationTimeout",
+            "file": "pkg/shared/events/reasons.go",
+            "line": 160,
+            "kind": "constant",
+            "score": 0.95,
+            "snippet": "EventReasonRemediationTimeout = \"RemediationTimeout\"",
+            "source": "vector"
+          },
+          {
+            "symbol": "workflowcatalog.Catalog.GetWorkflowWithContextFilters",
+            "file": "internal/kubernautagent/workflowcatalog/discovery.go",
+            "line": 64,
+            "kind": "method",
+            "score": 0.93,
+            "snippet": "func (c *Catalog) GetWorkflowWithContextFilters(ctx context.Context, workflowID string, filters *models.WorkflowDiscoveryFilters) (*models.RemediationWorkflow, error) {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "controller.Reconciler.logConsecutiveFailureThresholdReached",
+            "file": "internal/controller/remediationorchestrator/terminal_transitions.go",
+            "line": 566,
+            "kind": "method",
+            "score": 0.92,
+            "snippet": "func (r *Reconciler) logConsecutiveFailureThresholdReached(ctx context.Context, rr *remediationv1.RemediationRequest, failurePhase remediationv1.FailurePhase, logger logr.Logger) {",
+            "references": 1,
+            "source": "vector"
+          },
+          {
+            "symbol": "events.EventReasonRemediationCreated",
+            "file": "pkg/shared/events/reasons.go",
+            "line": 147,
+            "kind": "constant",
+            "score": 0.92,
+            "snippet": "EventReasonRemediationCreated = \"RemediationCreated\"",
+            "source": "vector"
+          }
+        ],
+        "search_mode": "hybrid",
+        "fusion_weights": {
+          "keyword": 0.5,
+          "vector": 0.5
+        },
+        "next_steps": []
+      }
+    },
+    {
+      "id": "detected-labels-to-discovery-filters",
+      "query": "How are detected signal labels applied before workflow discovery filters available actions?",
+      "results": {
+        "results": [
+          {
+            "symbol": "investigator.attachDetectedLabels",
+            "file": "internal/kubernautagent/investigator/investigator_phases.go",
+            "line": 401,
+            "kind": "function",
+            "score": 1.11,
+            "snippet": "func attachDetectedLabels(result *katypes.InvestigationResult, enrichData *enrichment.EnrichmentResult) {",
+            "references": 4,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "handlers.AnalyzingHandler",
+            "file": "pkg/aianalysis/handlers/analyzing.go",
+            "line": 44,
+            "kind": "class",
+            "score": 1.05,
+            "snippet": "type AnalyzingHandler struct {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "investigator.Investigator.attachRCADetectedLabelsJSON",
+            "file": "internal/kubernautagent/investigator/investigator_discovery.go",
+            "line": 238,
+            "kind": "method",
+            "score": 1.02,
+            "snippet": "func (inv *Investigator) attachRCADetectedLabelsJSON(signal *katypes.SignalContext, rawEnrichData *enrichment.EnrichmentResult, correlationID string) {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "audit.detectedLabelsFromJSON",
+            "file": "internal/kubernautagent/audit/ds_workflow_catalog_payloads.go",
+            "line": 98,
+            "kind": "function",
+            "score": 1.0,
+            "snippet": "func detectedLabelsFromJSON(data map[string]interface{}) (ogenclient.DetectedLabels, bool) {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "investigator.detectedLabelsToResult",
+            "file": "internal/kubernautagent/investigator/investigator_phases.go",
+            "line": 374,
+            "kind": "function",
+            "score": 0.99,
+            "snippet": "func detectedLabelsToResult(dl *enrichment.DetectedLabels) map[string]interface{} {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "audit.ActionDetected",
+            "file": "pkg/effectivenessmonitor/audit/manager.go",
+            "line": 44,
+            "kind": "constant",
+            "score": 0.9,
+            "snippet": "ActionDetected  = \"detected\"",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "models.DetectedLabelsSchema",
+            "file": "pkg/datastorage/models/workflow_schema.go",
+            "line": 408,
+            "kind": "class",
+            "score": 0.86,
+            "snippet": "type DetectedLabelsSchema struct {",
+            "references": 1,
+            "source": "keyword"
+          },
+          {
+            "symbol": "v1alpha1.DetectedLabels",
+            "file": "api/aianalysis/v1alpha1/aianalysis_types.go",
+            "line": 237,
+            "kind": "type",
+            "score": 0.84,
+            "snippet": "type DetectedLabels = sharedtypes.DetectedLabels",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "audit.detectedLabelsFromJSONText",
+            "file": "internal/kubernautagent/audit/ds_response_mapping.go",
+            "line": 164,
+            "kind": "function",
+            "score": 0.82,
+            "snippet": "func detectedLabelsFromJSONText(raw string) (ogenclient.DetectedLabels, bool) {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "investigator.promptContainsDetectedLabels",
+            "file": "internal/kubernautagent/investigator/investigator_workflow_selection.go",
+            "line": 152,
+            "kind": "function",
+            "score": 0.8,
+            "snippet": "func promptContainsDetectedLabels(renderedPrompt string, labels map[string]string) bool {",
+            "references": 1,
+            "source": "hybrid"
+          }
+        ],
+        "search_mode": "hybrid",
+        "fusion_weights": {
+          "keyword": 0.5,
+          "vector": 0.5
+        },
+        "next_steps": []
+      }
+    },
+    {
+      "id": "membership-across-self-correction-retries",
+      "query": "How does workflow discovery membership persist across self-correction and retry attempts?",
+      "results": {
+        "results": [
+          {
+            "symbol": "tools.InvestigateTool.persistPendingDecision",
+            "file": "internal/kubernautagent/mcp/tools/investigate_discovery.go",
+            "line": 201,
+            "kind": "method",
+            "score": 1.04,
+            "snippet": "func (t *InvestigateTool) persistPendingDecision(rrID string, workflowResult *katypes.InvestigationResult) {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "workflowcatalog.Catalog.ListWorkflowsByActionType",
+            "file": "internal/kubernautagent/workflowcatalog/discovery.go",
+            "line": 54,
+            "kind": "method",
+            "score": 1.0,
+            "snippet": "func (c *Catalog) ListWorkflowsByActionType(ctx context.Context, actionType string, filters *models.WorkflowDiscoveryFilters, offset, limit int) ([]models.RemediationWorkflow, int, error) {",
+            "source": "vector"
+          },
+          {
+            "symbol": "audit.buildWorkflowDiscoveryPayload",
+            "file": "internal/kubernautagent/audit/ds_workflow_catalog_payloads.go",
+            "line": 65,
+            "kind": "function",
+            "score": 0.96,
+            "snippet": "func buildWorkflowDiscoveryPayload(event *AuditEvent, eventType ogenclient.WorkflowDiscoveryAuditPayloadEventType) ogenclient.WorkflowDiscoveryAuditPayload {",
+            "references": 4,
+            "source": "keyword"
+          },
+          {
+            "symbol": "notification.countSuccessfulAttempts",
+            "file": "internal/controller/notification/notificationrequest_controller.go",
+            "line": 688,
+            "kind": "function",
+            "score": 0.94,
+            "snippet": "func countSuccessfulAttempts(attempts []notificationv1alpha1.DeliveryAttempt) int {",
+            "references": 2,
+            "source": "keyword"
+          },
+          {
+            "symbol": "authwebhook.RemediationWorkflowHandler.updateATWorkflowCountWithRetry",
+            "file": "pkg/authwebhook/remediationworkflow_handler.go",
+            "line": 560,
+            "kind": "method",
+            "score": 0.86,
+            "snippet": "func (h *RemediationWorkflowHandler) updateATWorkflowCountWithRetry(ctx context.Context, name, namespace string, count int) error {",
+            "references": 1,
+            "source": "vector"
+          },
+          {
+            "symbol": "override.ResolveWorkflow",
+            "file": "pkg/remediationorchestrator/override/merge.go",
+            "line": 77,
+            "kind": "function",
+            "score": 0.83,
+            "snippet": "func ResolveWorkflow(",
+            "references": 2,
+            "source": "vector"
+          },
+          {
+            "symbol": "investigator.Investigator.runWorkflowDiscoveryPhase",
+            "file": "internal/kubernautagent/investigator/investigator.go",
+            "line": 593,
+            "kind": "method",
+            "score": 0.81,
+            "snippet": "func (inv *Investigator) runWorkflowDiscoveryPhase(ctx context.Context, p workflowDiscoveryPhaseParams) (*katypes.InvestigationResult, error) {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "audit.EventWorkflowDiscovery",
+            "file": "pkg/apifrontend/audit/audit.go",
+            "line": 45,
+            "kind": "constant",
+            "score": 0.81,
+            "snippet": "EventWorkflowDiscovery EventType = \"workflow.discovery\"",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.HandleDiscoverWorkflows",
+            "file": "pkg/apifrontend/tools/ka_tools.go",
+            "line": 103,
+            "kind": "function",
+            "score": 0.8,
+            "snippet": "func HandleDiscoverWorkflows(ctx context.Context, mcpClient ka.MCPClient, args DiscoverWorkflowsArgs) (DiscoverWorkflowsResult, error) {",
+            "references": 2,
+            "source": "vector"
+          },
+          {
+            "symbol": "controller.ExecutingHandler.setWorkflowConditions",
+            "file": "internal/controller/remediationorchestrator/executing_handler.go",
+            "line": 289,
+            "kind": "method",
+            "score": 0.8,
+            "snippet": "func (h *ExecutingHandler) setWorkflowConditions(ctx context.Context, rr *remediationv1.RemediationRequest, we *workflowexecutionv1.WorkflowExecution) {",
+            "references": 1,
+            "source": "vector"
+          }
+        ],
+        "search_mode": "hybrid",
+        "fusion_weights": {
+          "keyword": 0.5,
+          "vector": 0.5
+        },
+        "next_steps": []
+      }
+    },
+    {
+      "id": "validator-identifier-anchor",
+      "query": "Validator.IsAllowed discoveredWorkflows list_workflows catalog allowlist",
+      "results": {
+        "results": [
+          {
+            "symbol": "parser.Validator.IsAllowed",
+            "file": "internal/kubernautagent/parser/validator.go",
+            "line": 227,
+            "kind": "method",
+            "score": 1.08,
+            "snippet": "func (v *Validator) IsAllowed(workflowID string) bool {",
+            "references": 2,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.HandleListWorkflowsKA",
+            "file": "pkg/apifrontend/tools/ka_tools.go",
+            "line": 355,
+            "kind": "function",
+            "score": 0.96,
+            "snippet": "func HandleListWorkflowsKA(ctx context.Context, mcpClient ka.MCPClient, args ListWorkflowsArgs) (ListWorkflowsResult, error) {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "workflowcatalog.Cache.ListWorkflows",
+            "file": "internal/kubernautagent/workflowcatalog/cache.go",
+            "line": 285,
+            "kind": "method",
+            "score": 0.96,
+            "snippet": "func (c *Cache) ListWorkflows(ctx context.Context) ([]rwv1alpha1.RemediationWorkflow, error) {",
+            "references": 3,
+            "source": "keyword"
+          },
+          {
+            "symbol": "workflowexecution.WorkflowExecutionReconciler.validateExecutionEngineResolved",
+            "file": "internal/controller/workflowexecution/workflowexecution_catalog.go",
+            "line": 74,
+            "kind": "method",
+            "score": 0.95,
+            "snippet": "func (r *WorkflowExecutionReconciler) validateExecutionEngineResolved(wfe *workflowexecutionv1alpha1.WorkflowExecution) error {",
+            "references": 4,
+            "source": "vector"
+          },
+          {
+            "symbol": "workflowcatalog.Catalog.ListWorkflowsByActionType",
+            "file": "internal/kubernautagent/workflowcatalog/discovery.go",
+            "line": 54,
+            "kind": "method",
+            "score": 0.92,
+            "snippet": "func (c *Catalog) ListWorkflowsByActionType(ctx context.Context, actionType string, filters *models.WorkflowDiscoveryFilters, offset, limit int) ([]models.RemediationWorkflow, int, error) {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.NewListWorkflowsTool",
+            "file": "internal/kubernautagent/mcp/tools/list_workflows.go",
+            "line": 77,
+            "kind": "function",
+            "score": 0.91,
+            "snippet": "func NewListWorkflowsTool(catalog WorkflowLister) *ListWorkflowsTool {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "parser.NewValidator",
+            "file": "internal/kubernautagent/parser/validator.go",
+            "line": 160,
+            "kind": "function",
+            "score": 0.9,
+            "snippet": "func NewValidator(allowedWorkflows []string) *Validator {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "parser.Validator.SetDiscoveredWorkflowState",
+            "file": "internal/kubernautagent/parser/validator.go",
+            "line": 184,
+            "kind": "method",
+            "score": 0.87,
+            "snippet": "func (v *Validator) SetDiscoveredWorkflowState(state *katypes.DiscoveredWorkflowState) {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.ListWorkflowsResult",
+            "file": "pkg/apifrontend/tools/ds_tools.go",
+            "line": 22,
+            "kind": "class",
+            "score": 0.87,
+            "snippet": "type ListWorkflowsResult struct {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.ListWorkflowsTool",
+            "file": "internal/kubernautagent/mcp/tools/list_workflows.go",
+            "line": 72,
+            "kind": "class",
+            "score": 0.85,
+            "snippet": "type ListWorkflowsTool struct {",
+            "source": "hybrid"
+          }
+        ],
+        "search_mode": "hybrid",
+        "fusion_weights": {
+          "keyword": 0.5,
+          "vector": 0.5
+        },
+        "next_steps": []
+      }
+    },
+    {
+      "id": "catalog-valid-undiscovered-validator-check",
+      "query": "Which check prevents selecting a workflow present in the catalog but absent from workflows returned by list_workflows?",
+      "results": {
+        "results": [
+          {
+            "symbol": "workflowcatalog.Catalog",
+            "file": "internal/kubernautagent/workflowcatalog/catalog.go",
+            "line": 47,
+            "kind": "class",
+            "score": 1.19,
+            "snippet": "type Catalog struct {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "workflowcatalog.LazyCatalog.ListWorkflowsByActionType",
+            "file": "internal/kubernautagent/workflowcatalog/lazy_catalog.go",
+            "line": 224,
+            "kind": "method",
+            "score": 1.19,
+            "snippet": "func (l *LazyCatalog) ListWorkflowsByActionType(ctx context.Context, actionType string, filters *models.WorkflowDiscoveryFilters, offset, limit int) ([]models.RemediationWorkflow, int, error) {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "custom.WorkflowCatalog.ListWorkflowsByActionType",
+            "file": "internal/kubernautagent/tools/custom/tools.go",
+            "line": 76,
+            "kind": "method",
+            "score": 1.08,
+            "snippet": "ListWorkflowsByActionType(ctx context.Context, actionType string, filters *models.WorkflowDiscoveryFilters, offset, limit int) ([]models.RemediationWorkflow, int, error)",
+            "references": 3,
+            "source": "keyword"
+          },
+          {
+            "symbol": "tools.HandleListWorkflowsKA",
+            "file": "pkg/apifrontend/tools/ka_tools.go",
+            "line": 355,
+            "kind": "function",
+            "score": 1.0,
+            "snippet": "func HandleListWorkflowsKA(ctx context.Context, mcpClient ka.MCPClient, args ListWorkflowsArgs) (ListWorkflowsResult, error) {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "parser.Validator.IsAllowed",
+            "file": "internal/kubernautagent/parser/validator.go",
+            "line": 227,
+            "kind": "method",
+            "score": 1.0,
+            "snippet": "func (v *Validator) IsAllowed(workflowID string) bool {",
+            "references": 2,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.NewListWorkflowsTool",
+            "file": "internal/kubernautagent/mcp/tools/list_workflows.go",
+            "line": 77,
+            "kind": "function",
+            "score": 0.98,
+            "snippet": "func NewListWorkflowsTool(catalog WorkflowLister) *ListWorkflowsTool {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "audit.EventTypeWorkflowsListed",
+            "file": "internal/kubernautagent/audit/emitter.go",
+            "line": 159,
+            "kind": "constant",
+            "score": 0.93,
+            "snippet": "EventTypeWorkflowsListed    = \"workflow.catalog.workflows_listed\"",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.ListWorkflowsTool.Handle",
+            "file": "internal/kubernautagent/mcp/tools/list_workflows.go",
+            "line": 86,
+            "kind": "method",
+            "score": 0.9,
+            "snippet": "func (t *ListWorkflowsTool) Handle(ctx context.Context, input ListWorkflowsInput) (ListWorkflowsOutput, error) {",
+            "references": 1,
+            "source": "vector"
+          },
+          {
+            "symbol": "investigator.AnomalyDetector.CheckToolCall",
+            "file": "internal/kubernautagent/investigator/anomaly.go",
+            "line": 83,
+            "kind": "method",
+            "score": 0.88,
+            "snippet": "func (d *AnomalyDetector) CheckToolCall(name string, args json.RawMessage) AnomalyResult {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "creator.validateSelectedWorkflow",
+            "file": "pkg/remediationorchestrator/creator/workflowexecution.go",
+            "line": 71,
+            "kind": "function",
+            "score": 0.87,
+            "snippet": "func validateSelectedWorkflow(ai *aianalysisv1.AIAnalysis) error {",
+            "references": 1,
+            "source": "vector"
+          }
+        ],
+        "search_mode": "hybrid",
+        "fusion_weights": {
+          "keyword": 0.5,
+          "vector": 0.5
+        },
+        "next_steps": []
+      }
+    },
+    {
+      "id": "discovery-membership-through-retry",
+      "query": "How is workflow discovery membership carried into Validator during self-correction retries, and what happens if another list_workflows call adds workflows?",
+      "results": {
+        "results": [
+          {
+            "symbol": "workflowcatalog.Catalog.ListWorkflowsByActionType",
+            "file": "internal/kubernautagent/workflowcatalog/discovery.go",
+            "line": 54,
+            "kind": "method",
+            "score": 1.0,
+            "snippet": "func (c *Catalog) ListWorkflowsByActionType(ctx context.Context, actionType string, filters *models.WorkflowDiscoveryFilters, offset, limit int) ([]models.RemediationWorkflow, int, error) {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "authwebhook.RemediationWorkflowReconciler",
+            "file": "pkg/authwebhook/rw_reconciler.go",
+            "line": 49,
+            "kind": "class",
+            "score": 0.81,
+            "snippet": "type RemediationWorkflowReconciler struct {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "override.ResolveWorkflow",
+            "file": "pkg/remediationorchestrator/override/merge.go",
+            "line": 77,
+            "kind": "function",
+            "score": 0.78,
+            "snippet": "func ResolveWorkflow(",
+            "references": 2,
+            "source": "vector"
+          },
+          {
+            "symbol": "models.WorkflowDiscoveryResponse",
+            "file": "pkg/datastorage/models/workflow_discovery.go",
+            "line": 83,
+            "kind": "class",
+            "score": 0.75,
+            "snippet": "type WorkflowDiscoveryResponse struct {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "parser.Validator",
+            "file": "internal/kubernautagent/parser/validator.go",
+            "line": 153,
+            "kind": "class",
+            "score": 0.75,
+            "snippet": "type Validator struct {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.ListWorkflowsTool",
+            "file": "internal/kubernautagent/mcp/tools/list_workflows.go",
+            "line": 72,
+            "kind": "class",
+            "score": 0.72,
+            "snippet": "type ListWorkflowsTool struct {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "main.workflowCatalogFetcher.FetchValidator",
+            "file": "cmd/kubernautagent/toolregistry.go",
+            "line": 546,
+            "kind": "method",
+            "score": 0.68,
+            "snippet": "func (f *workflowCatalogFetcher) FetchValidator(ctx context.Context) (*parser.Validator, error) {",
+            "references": 1,
+            "source": "vector"
+          },
+          {
+            "symbol": "creator.validateSelectedWorkflow",
+            "file": "pkg/remediationorchestrator/creator/workflowexecution.go",
+            "line": 71,
+            "kind": "function",
+            "score": 0.68,
+            "snippet": "func validateSelectedWorkflow(ai *aianalysisv1.AIAnalysis) error {",
+            "references": 1,
+            "source": "vector"
+          },
+          {
+            "symbol": "tools.ListWorkflowsResult",
+            "file": "pkg/apifrontend/tools/ds_tools.go",
+            "line": 22,
+            "kind": "class",
+            "score": 0.66,
+            "snippet": "type ListWorkflowsResult struct {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.ListWorkflowsInput",
+            "file": "internal/kubernautagent/mcp/tools/list_workflows.go",
+            "line": 37,
+            "kind": "class",
+            "score": 0.65,
+            "snippet": "type ListWorkflowsInput struct {",
+            "source": "hybrid"
+          }
+        ],
+        "search_mode": "hybrid",
+        "fusion_weights": {
+          "keyword": 0.5,
+          "vector": 0.5
+        },
+        "next_steps": []
+      }
+    },
+    {
+      "id": "selection-result-discovery-guard",
+      "query": "Where does select_workflow validate the chosen workflow against the current discovery result before returning the final result?",
+      "results": {
+        "results": [
+          {
+            "symbol": "tools.validateSelectWorkflowInput",
+            "file": "internal/kubernautagent/mcp/tools/select_workflow.go",
+            "line": 647,
+            "kind": "function",
+            "score": 1.05,
+            "snippet": "func validateSelectWorkflowInput(input SelectWorkflowInput) error {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.isWorkflowInDiscoveryResult",
+            "file": "internal/kubernautagent/mcp/tools/select_workflow.go",
+            "line": 499,
+            "kind": "function",
+            "score": 1.05,
+            "snippet": "func isWorkflowInDiscoveryResult(workflowID string, dr *mcpinternal.WorkflowDiscoveryResult) bool {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "handler.selectedWorkflowID",
+            "file": "pkg/apifrontend/handler/status_handler.go",
+            "line": 345,
+            "kind": "function",
+            "score": 1.0,
+            "snippet": "func selectedWorkflowID(rr *remediationv1.RemediationRequest) string {",
+            "references": 2,
+            "source": "vector"
+          },
+          {
+            "symbol": "tools.SelectWorkflowResult",
+            "file": "pkg/apifrontend/tools/ka_tools.go",
+            "line": 283,
+            "kind": "class",
+            "score": 0.99,
+            "snippet": "type SelectWorkflowResult struct {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "ka.SelectWorkflowResult",
+            "file": "pkg/apifrontend/ka/config.go",
+            "line": 256,
+            "kind": "class",
+            "score": 0.95,
+            "snippet": "type SelectWorkflowResult struct {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.applySelectedWorkflow",
+            "file": "internal/kubernautagent/mcp/tools/select_workflow.go",
+            "line": 576,
+            "kind": "function",
+            "score": 0.93,
+            "snippet": "func applySelectedWorkflow(result *katypes.InvestigationResult, workflow *CatalogWorkflow) {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.SelectWorkflowOutput",
+            "file": "internal/kubernautagent/mcp/tools/select_workflow.go",
+            "line": 120,
+            "kind": "class",
+            "score": 0.9,
+            "snippet": "type SelectWorkflowOutput struct {",
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.InvestigateTool.persistPendingDecision",
+            "file": "internal/kubernautagent/mcp/tools/investigate_discovery.go",
+            "line": 201,
+            "kind": "method",
+            "score": 0.9,
+            "snippet": "func (t *InvestigateTool) persistPendingDecision(rrID string, workflowResult *katypes.InvestigationResult) {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "tools.SelectWorkflowTool.completeSelectionAsync",
+            "file": "internal/kubernautagent/mcp/tools/select_workflow.go",
+            "line": 463,
+            "kind": "method",
+            "score": 0.89,
+            "snippet": "func (t *SelectWorkflowTool) completeSelectionAsync(input SelectWorkflowInput, driver *mcpinternal.InteractiveSession, workflow *CatalogWorkflow) {",
+            "references": 1,
+            "source": "hybrid"
+          },
+          {
+            "symbol": "mcp.WorkflowDiscoveryResult",
+            "file": "internal/kubernautagent/mcp/interfaces.go",
+            "line": 102,
+            "kind": "class",
+            "score": 0.89,
+            "snippet": "type WorkflowDiscoveryResult struct {",
+            "references": 1,
+            "source": "keyword"
+          }
+        ],
+        "search_mode": "hybrid",
+        "fusion_weights": {
+          "keyword": 0.5,
+          "vector": 0.5
+        },
+        "next_steps": []
+      }
+    }
+  ]
+}

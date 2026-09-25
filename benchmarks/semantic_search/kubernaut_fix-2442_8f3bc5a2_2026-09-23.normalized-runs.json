@@ -1,0 +1,2748 @@
+{
+  "schema_version": 1,
+  "source": {
+    "repository": "jordigilh/kubernaut",
+    "branch": "fix/2442-workflow-discovery-membership",
+    "head": "8f3bc5a2d7da5262553a0919f9faecb83d61a09a",
+    "root": "/private/var/folders/r7/gktmmltd1zq7wqhsjjslwsm80000gn/T/opencode/kubernaut-fix-2442-cocoindex-source",
+    "selected_go_snapshot_sha256": "1eb2a57192e0af48c80741d7d732a13028f93c2614d194e3ce278234cc859dd8",
+    "selected_go_snapshot_digest_verified": true,
+    "files": 1072,
+    "bytes": 13611586
+  },
+  "result_limit": 10,
+  "runs": [
+    {
+      "backend": "cocoindex",
+      "queries": [
+        {
+          "id": "reject-undiscovered-catalog-workflow",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L213-L232",
+              "rank": 1,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 213,
+              "end_line": 232,
+              "detail": "11"
+            },
+            {
+              "unit_id": "cmd/kubernautagent/bootstrap.go::L144-L160",
+              "rank": 2,
+              "path": "cmd/kubernautagent/bootstrap.go",
+              "start_line": 144,
+              "end_line": 160,
+              "detail": "9"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/discovery.go::L60-L71",
+              "rank": 3,
+              "path": "internal/kubernautagent/workflowcatalog/discovery.go",
+              "start_line": 60,
+              "end_line": 71,
+              "detail": "5"
+            },
+            {
+              "unit_id": "internal/kubernautagent/tools/custom/tools.go::L297-L324",
+              "rank": 4,
+              "path": "internal/kubernautagent/tools/custom/tools.go",
+              "start_line": 297,
+              "end_line": 324,
+              "detail": "17"
+            },
+            {
+              "unit_id": "pkg/kubernautagent/types/types.go::L91-L106",
+              "rank": 5,
+              "path": "pkg/kubernautagent/types/types.go",
+              "start_line": 91,
+              "end_line": 106,
+              "detail": "6"
+            },
+            {
+              "unit_id": "pkg/shared/types/workflow_snapshot.go::L91-L105",
+              "rank": 6,
+              "path": "pkg/shared/types/workflow_snapshot.go",
+              "start_line": 91,
+              "end_line": 105,
+              "detail": "7"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_gates.go::L644-L663",
+              "rank": 7,
+              "path": "internal/kubernautagent/investigator/investigator_gates.go",
+              "start_line": 644,
+              "end_line": 663,
+              "detail": "44"
+            },
+            {
+              "unit_id": "internal/kubernautagent/tools/custom/tools.go::L65-L73",
+              "rank": 8,
+              "path": "internal/kubernautagent/tools/custom/tools.go",
+              "start_line": 65,
+              "end_line": 73,
+              "detail": "3"
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L160-L182",
+              "rank": 9,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 160,
+              "end_line": 182,
+              "detail": "8"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/list_workflows.go::L54-L71",
+              "rank": 10,
+              "path": "internal/kubernautagent/mcp/tools/list_workflows.go",
+              "start_line": 54,
+              "end_line": 71,
+              "detail": "3"
+            }
+          ]
+        },
+        {
+          "id": "discovered-state-flow-to-validation",
+          "results": [
+            {
+              "unit_id": "pkg/kubernautagent/types/context.go::L70-L89",
+              "rank": 1,
+              "path": "pkg/kubernautagent/types/context.go",
+              "start_line": 70,
+              "end_line": 89,
+              "detail": "3"
+            },
+            {
+              "unit_id": "pkg/kubernautagent/types/context.go::L28-L50",
+              "rank": 2,
+              "path": "pkg/kubernautagent/types/context.go",
+              "start_line": 28,
+              "end_line": 50,
+              "detail": "1"
+            },
+            {
+              "unit_id": "pkg/datastorage/models/workflow_schema.go::L131-L149",
+              "rank": 3,
+              "path": "pkg/datastorage/models/workflow_schema.go",
+              "start_line": 131,
+              "end_line": 149,
+              "detail": "9"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/discovery.go::L60-L71",
+              "rank": 4,
+              "path": "internal/kubernautagent/workflowcatalog/discovery.go",
+              "start_line": 60,
+              "end_line": 71,
+              "detail": "5"
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L213-L232",
+              "rank": 5,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 213,
+              "end_line": 232,
+              "detail": "11"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::L32-L134",
+              "rank": 6,
+              "path": "internal/kubernautagent/investigator/investigator_workflow_selection.go",
+              "start_line": 32,
+              "end_line": 38,
+              "detail": "1"
+            },
+            {
+              "unit_id": "api/remediation/v1alpha1/remediationrequest_types.go::L929-L954",
+              "rank": 7,
+              "path": "api/remediation/v1alpha1/remediationrequest_types.go",
+              "start_line": 929,
+              "end_line": 954,
+              "detail": "67"
+            },
+            {
+              "unit_id": "pkg/datastorage/ogen-client/oas_schemas_gen.go::L21528-L21544",
+              "rank": 8,
+              "path": "pkg/datastorage/ogen-client/oas_schemas_gen.go",
+              "start_line": 21528,
+              "end_line": 21544,
+              "detail": "1251"
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L56-L69",
+              "rank": 9,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 56,
+              "end_line": 69,
+              "detail": "2"
+            },
+            {
+              "unit_id": "pkg/workflowexecution/client/schema_metadata.go::L35-L45",
+              "rank": 10,
+              "path": "pkg/workflowexecution/client/schema_metadata.go",
+              "start_line": 35,
+              "end_line": 45,
+              "detail": "2"
+            }
+          ]
+        },
+        {
+          "id": "record-listed-workflow-ids",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L213-L232",
+              "rank": 1,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 213,
+              "end_line": 232,
+              "detail": "11"
+            },
+            {
+              "unit_id": "pkg/workflowexecution/audit/manager.go::L296-L313",
+              "rank": 2,
+              "path": "pkg/workflowexecution/audit/manager.go",
+              "start_line": 296,
+              "end_line": 313,
+              "detail": "21"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/cache.go::L63-L78",
+              "rank": 3,
+              "path": "internal/kubernautagent/workflowcatalog/cache.go",
+              "start_line": 63,
+              "end_line": 78,
+              "detail": "4"
+            },
+            {
+              "unit_id": "pkg/kubernautagent/types/context.go::L47-L78",
+              "rank": 4,
+              "path": "pkg/kubernautagent/types/context.go",
+              "start_line": 47,
+              "end_line": 78,
+              "detail": "2"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/catalog.go::L53-L70",
+              "rank": 5,
+              "path": "internal/kubernautagent/workflowcatalog/catalog.go",
+              "start_line": 53,
+              "end_line": 70,
+              "detail": "3"
+            },
+            {
+              "unit_id": "pkg/notification/enrichment/enricher.go::L77-L100",
+              "rank": 6,
+              "path": "pkg/notification/enrichment/enricher.go",
+              "start_line": 77,
+              "end_line": 100,
+              "detail": "4"
+            },
+            {
+              "unit_id": "api/aianalysis/v1alpha1/aianalysis_types.go::L469-L488",
+              "rank": 7,
+              "path": "api/aianalysis/v1alpha1/aianalysis_types.go",
+              "start_line": 469,
+              "end_line": 488,
+              "detail": "33"
+            },
+            {
+              "unit_id": "pkg/remediationorchestrator/creator/workflowexecution.go::L61-L70",
+              "rank": 8,
+              "path": "pkg/remediationorchestrator/creator/workflowexecution.go",
+              "start_line": 61,
+              "end_line": 70,
+              "detail": "3"
+            },
+            {
+              "unit_id": "pkg/datastorage/ogen-client/oas_schemas_gen.go::L33558-L33581",
+              "rank": 9,
+              "path": "pkg/datastorage/ogen-client/oas_schemas_gen.go",
+              "start_line": 33558,
+              "end_line": 33581,
+              "detail": "1828"
+            },
+            {
+              "unit_id": "internal/controller/workflowexecution/workflowexecution_catalog.go::L58-L73",
+              "rank": 10,
+              "path": "internal/controller/workflowexecution/workflowexecution_catalog.go",
+              "start_line": 58,
+              "end_line": 73,
+              "detail": "5"
+            }
+          ]
+        },
+        {
+          "id": "restrict-selection-to-discovered-workflows",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/tools/custom/tools.go::L297-L324",
+              "rank": 1,
+              "path": "internal/kubernautagent/tools/custom/tools.go",
+              "start_line": 297,
+              "end_line": 324,
+              "detail": "17"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_phases.go::L202-L210",
+              "rank": 2,
+              "path": "internal/kubernautagent/investigator/investigator_phases.go",
+              "start_line": 202,
+              "end_line": 210,
+              "detail": "10"
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L56-L69",
+              "rank": 3,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 56,
+              "end_line": 69,
+              "detail": "2"
+            },
+            {
+              "unit_id": "pkg/shared/types/workflow_snapshot.go::L91-L105",
+              "rank": 4,
+              "path": "pkg/shared/types/workflow_snapshot.go",
+              "start_line": 91,
+              "end_line": 105,
+              "detail": "7"
+            },
+            {
+              "unit_id": "cmd/kubernautagent/bootstrap.go::L144-L160",
+              "rank": 5,
+              "path": "cmd/kubernautagent/bootstrap.go",
+              "start_line": 144,
+              "end_line": 160,
+              "detail": "9"
+            },
+            {
+              "unit_id": "cmd/kubernautagent/routes.go::L844-L862",
+              "rank": 6,
+              "path": "cmd/kubernautagent/routes.go",
+              "start_line": 844,
+              "end_line": 862,
+              "detail": "58"
+            },
+            {
+              "unit_id": "pkg/datastorage/ogen-client/oas_schemas_gen.go::L20937-L20949",
+              "rank": 7,
+              "path": "pkg/datastorage/ogen-client/oas_schemas_gen.go",
+              "start_line": 20937,
+              "end_line": 20949,
+              "detail": "1217"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_discovery.go::L29-L37",
+              "rank": 8,
+              "path": "internal/kubernautagent/investigator/investigator_discovery.go",
+              "start_line": 29,
+              "end_line": 37,
+              "detail": "1"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/cache.go::L282-L296",
+              "rank": 9,
+              "path": "internal/kubernautagent/workflowcatalog/cache.go",
+              "start_line": 282,
+              "end_line": 296,
+              "detail": "18"
+            },
+            {
+              "unit_id": "pkg/workflowschema/converter.go::L185-L197",
+              "rank": 10,
+              "path": "pkg/workflowschema/converter.go",
+              "start_line": 185,
+              "end_line": 197,
+              "detail": "8"
+            }
+          ]
+        },
+        {
+          "id": "outcome-for-undiscovered-selection",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/tools/custom/tools.go::L287-L324",
+              "rank": 1,
+              "path": "internal/kubernautagent/tools/custom/tools.go",
+              "start_line": 297,
+              "end_line": 324,
+              "detail": "17"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L497-L542",
+              "rank": 2,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 497,
+              "end_line": 520,
+              "detail": "30"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/discovery.go::L60-L71",
+              "rank": 3,
+              "path": "internal/kubernautagent/workflowcatalog/discovery.go",
+              "start_line": 60,
+              "end_line": 71,
+              "detail": "5"
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L213-L232",
+              "rank": 4,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 213,
+              "end_line": 232,
+              "detail": "11"
+            },
+            {
+              "unit_id": "pkg/kubernautagent/types/context.go::L47-L89",
+              "rank": 5,
+              "path": "pkg/kubernautagent/types/context.go",
+              "start_line": 70,
+              "end_line": 89,
+              "detail": "3"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L599-L621",
+              "rank": 7,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 599,
+              "end_line": 621,
+              "detail": "36"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_discovery.go::L29-L37",
+              "rank": 8,
+              "path": "internal/kubernautagent/investigator/investigator_discovery.go",
+              "start_line": 29,
+              "end_line": 37,
+              "detail": "1"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_phases.go::L202-L210",
+              "rank": 10,
+              "path": "internal/kubernautagent/investigator/investigator_phases.go",
+              "start_line": 202,
+              "end_line": 210,
+              "detail": "10"
+            }
+          ]
+        },
+        {
+          "id": "detected-labels-to-discovery-filters",
+          "results": [
+            {
+              "unit_id": "pkg/datastorage/ogen-client/oas_schemas_gen.go::L33578-L33595",
+              "rank": 1,
+              "path": "pkg/datastorage/ogen-client/oas_schemas_gen.go",
+              "start_line": 33578,
+              "end_line": 33595,
+              "detail": "1829"
+            },
+            {
+              "unit_id": "pkg/datastorage/ogen-client/oas_schemas_gen.go::L33613-L33636",
+              "rank": 2,
+              "path": "pkg/datastorage/ogen-client/oas_schemas_gen.go",
+              "start_line": 33613,
+              "end_line": 33636,
+              "detail": "1831"
+            },
+            {
+              "unit_id": "internal/kubernautagent/audit/ds_workflow_catalog_payloads.go::L98-L115",
+              "rank": 3,
+              "path": "internal/kubernautagent/audit/ds_workflow_catalog_payloads.go",
+              "start_line": 98,
+              "end_line": 115,
+              "detail": "7"
+            },
+            {
+              "unit_id": "pkg/datastorage/models/workflow_schema.go::L105-L118",
+              "rank": 4,
+              "path": "pkg/datastorage/models/workflow_schema.go",
+              "start_line": 105,
+              "end_line": 118,
+              "detail": "7"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_discovery.go::L233-L256",
+              "rank": 5,
+              "path": "internal/kubernautagent/investigator/investigator_discovery.go",
+              "start_line": 233,
+              "end_line": 238,
+              "detail": "17"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::L136-L164",
+              "rank": 6,
+              "path": "internal/kubernautagent/investigator/investigator_workflow_selection.go",
+              "start_line": 136,
+              "end_line": 164,
+              "detail": "9"
+            },
+            {
+              "unit_id": "internal/kubernautagent/audit/ds_payloads.go::L86-L126",
+              "rank": 7,
+              "path": "internal/kubernautagent/audit/ds_payloads.go",
+              "start_line": 95,
+              "end_line": 112,
+              "detail": "6"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/discovery_cache.go::L181-L211",
+              "rank": 8,
+              "path": "internal/kubernautagent/workflowcatalog/discovery_cache.go",
+              "start_line": 181,
+              "end_line": 211,
+              "detail": "10"
+            },
+            {
+              "unit_id": "pkg/datastorage/models/workflow_schema.go::L364-L377",
+              "rank": 9,
+              "path": "pkg/datastorage/models/workflow_schema.go",
+              "start_line": 364,
+              "end_line": 377,
+              "detail": "24"
+            },
+            {
+              "unit_id": "pkg/shared/types/enrichment.go::L119-L137",
+              "rank": 10,
+              "path": "pkg/shared/types/enrichment.go",
+              "start_line": 119,
+              "end_line": 137,
+              "detail": "7"
+            }
+          ]
+        },
+        {
+          "id": "membership-across-self-correction-retries",
+          "results": [
+            {
+              "unit_id": "test/shared/scenarios/crashloop_config_fix.go::L83-L98",
+              "rank": 1,
+              "path": "test/shared/scenarios/crashloop_config_fix.go",
+              "start_line": 83,
+              "end_line": 98,
+              "detail": "5"
+            },
+            {
+              "unit_id": "pkg/authwebhook/startup_reconciler.go::L37-L78",
+              "rank": 2,
+              "path": "pkg/authwebhook/startup_reconciler.go",
+              "start_line": 55,
+              "end_line": 78,
+              "detail": "4"
+            },
+            {
+              "unit_id": "pkg/authwebhook/remediationworkflow_handler.go::L60-L84",
+              "rank": 4,
+              "path": "pkg/authwebhook/remediationworkflow_handler.go",
+              "start_line": 60,
+              "end_line": 70,
+              "detail": "4"
+            },
+            {
+              "unit_id": "pkg/authwebhook/rw_reconciler.go::L115-L128",
+              "rank": 6,
+              "path": "pkg/authwebhook/rw_reconciler.go",
+              "start_line": 115,
+              "end_line": 128,
+              "detail": "5"
+            },
+            {
+              "unit_id": "pkg/authwebhook/workflow_dependents.go::L49-L61",
+              "rank": 7,
+              "path": "pkg/authwebhook/workflow_dependents.go",
+              "start_line": 49,
+              "end_line": 61,
+              "detail": "3"
+            },
+            {
+              "unit_id": "internal/kubernautagent/session/manager_query.go::L294-L304",
+              "rank": 8,
+              "path": "internal/kubernautagent/session/manager_query.go",
+              "start_line": 294,
+              "end_line": 304,
+              "detail": "14"
+            },
+            {
+              "unit_id": "internal/controller/effectivenessmonitor/target_resources.go::L221-L245",
+              "rank": 10,
+              "path": "internal/controller/effectivenessmonitor/target_resources.go",
+              "start_line": 221,
+              "end_line": 245,
+              "detail": "11"
+            }
+          ]
+        },
+        {
+          "id": "validator-identifier-anchor",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L213-L232",
+              "rank": 1,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 213,
+              "end_line": 232,
+              "detail": "11"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_gates.go::L644-L707",
+              "rank": 2,
+              "path": "internal/kubernautagent/investigator/investigator_gates.go",
+              "start_line": 644,
+              "end_line": 663,
+              "detail": "44"
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L160-L182",
+              "rank": 3,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 160,
+              "end_line": 182,
+              "detail": "8"
+            },
+            {
+              "unit_id": "cmd/kubernautagent/bootstrap.go::L144-L160",
+              "rank": 4,
+              "path": "cmd/kubernautagent/bootstrap.go",
+              "start_line": 144,
+              "end_line": 160,
+              "detail": "9"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/metadata.go::L28-L50",
+              "rank": 6,
+              "path": "internal/kubernautagent/workflowcatalog/metadata.go",
+              "start_line": 28,
+              "end_line": 50,
+              "detail": "1"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/list_workflows.go::L54-L71",
+              "rank": 7,
+              "path": "internal/kubernautagent/mcp/tools/list_workflows.go",
+              "start_line": 54,
+              "end_line": 71,
+              "detail": "3"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/adapters/adapters.go::L167-L204",
+              "rank": 8,
+              "path": "internal/kubernautagent/mcp/adapters/adapters.go",
+              "start_line": 167,
+              "end_line": 188,
+              "detail": "11"
+            },
+            {
+              "unit_id": "pkg/datastorage/schema/parser.go::L120-L149",
+              "rank": 9,
+              "path": "pkg/datastorage/schema/parser.go",
+              "start_line": 120,
+              "end_line": 149,
+              "detail": "6"
+            }
+          ]
+        },
+        {
+          "id": "catalog-valid-undiscovered-validator-check",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L213-L232",
+              "rank": 1,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 213,
+              "end_line": 232,
+              "detail": "11"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/discovery.go::L60-L71",
+              "rank": 2,
+              "path": "internal/kubernautagent/workflowcatalog/discovery.go",
+              "start_line": 60,
+              "end_line": 71,
+              "detail": "5"
+            },
+            {
+              "unit_id": "cmd/kubernautagent/bootstrap.go::L144-L160",
+              "rank": 3,
+              "path": "cmd/kubernautagent/bootstrap.go",
+              "start_line": 144,
+              "end_line": 160,
+              "detail": "9"
+            },
+            {
+              "unit_id": "pkg/kubernautagent/types/context.go::L47-L78",
+              "rank": 4,
+              "path": "pkg/kubernautagent/types/context.go",
+              "start_line": 47,
+              "end_line": 78,
+              "detail": "2"
+            },
+            {
+              "unit_id": "internal/kubernautagent/tools/custom/tools.go::L297-L324",
+              "rank": 5,
+              "path": "internal/kubernautagent/tools/custom/tools.go",
+              "start_line": 297,
+              "end_line": 324,
+              "detail": "17"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/cache.go::L282-L296",
+              "rank": 6,
+              "path": "internal/kubernautagent/workflowcatalog/cache.go",
+              "start_line": 282,
+              "end_line": 296,
+              "detail": "18"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/lazy_catalog.go::L222-L240",
+              "rank": 7,
+              "path": "internal/kubernautagent/workflowcatalog/lazy_catalog.go",
+              "start_line": 222,
+              "end_line": 240,
+              "detail": "13"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/cache.go::L240-L256",
+              "rank": 8,
+              "path": "internal/kubernautagent/workflowcatalog/cache.go",
+              "start_line": 240,
+              "end_line": 256,
+              "detail": "15"
+            },
+            {
+              "unit_id": "pkg/shared/types/workflow_snapshot.go::L91-L105",
+              "rank": 9,
+              "path": "pkg/shared/types/workflow_snapshot.go",
+              "start_line": 91,
+              "end_line": 105,
+              "detail": "7"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/list_workflows.go::L54-L71",
+              "rank": 10,
+              "path": "internal/kubernautagent/mcp/tools/list_workflows.go",
+              "start_line": 54,
+              "end_line": 71,
+              "detail": "3"
+            }
+          ]
+        },
+        {
+          "id": "discovery-membership-through-retry",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L213-L232",
+              "rank": 1,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 213,
+              "end_line": 232,
+              "detail": "11"
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L180-L195",
+              "rank": 2,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 180,
+              "end_line": 195,
+              "detail": "9"
+            },
+            {
+              "unit_id": "pkg/shared/types/workflow_snapshot.go::L91-L105",
+              "rank": 3,
+              "path": "pkg/shared/types/workflow_snapshot.go",
+              "start_line": 91,
+              "end_line": 105,
+              "detail": "7"
+            },
+            {
+              "unit_id": "api/remediationworkflow/v1alpha1/remediationworkflow_types.go::L233-L250",
+              "rank": 4,
+              "path": "api/remediationworkflow/v1alpha1/remediationworkflow_types.go",
+              "start_line": 233,
+              "end_line": 250,
+              "detail": "14"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/cache.go::L256-L273",
+              "rank": 5,
+              "path": "internal/kubernautagent/workflowcatalog/cache.go",
+              "start_line": 256,
+              "end_line": 273,
+              "detail": "16"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::L281-L308",
+              "rank": 6,
+              "path": "internal/kubernautagent/investigator/investigator_workflow_selection.go",
+              "start_line": 281,
+              "end_line": 293,
+              "detail": "18"
+            },
+            {
+              "unit_id": "pkg/kubernautagent/types/context.go::L28-L50",
+              "rank": 7,
+              "path": "pkg/kubernautagent/types/context.go",
+              "start_line": 28,
+              "end_line": 50,
+              "detail": "1"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/discovery.go::L60-L71",
+              "rank": 8,
+              "path": "internal/kubernautagent/workflowcatalog/discovery.go",
+              "start_line": 60,
+              "end_line": 71,
+              "detail": "5"
+            },
+            {
+              "unit_id": "pkg/shared/types/workflow_snapshot.go::L128-L141",
+              "rank": 9,
+              "path": "pkg/shared/types/workflow_snapshot.go",
+              "start_line": 128,
+              "end_line": 141,
+              "detail": "10"
+            },
+            {
+              "unit_id": "test/services/mock-llm/conversation/discovery.go::L75-L126",
+              "rank": 10,
+              "path": "test/services/mock-llm/conversation/discovery.go",
+              "start_line": 75,
+              "end_line": 85,
+              "detail": "4"
+            }
+          ]
+        },
+        {
+          "id": "selection-result-discovery-guard",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L497-L542",
+              "rank": 1,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 497,
+              "end_line": 520,
+              "detail": "30"
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L213-L232",
+              "rank": 2,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 213,
+              "end_line": 232,
+              "detail": "11"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L599-L621",
+              "rank": 3,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 599,
+              "end_line": 621,
+              "detail": "36"
+            },
+            {
+              "unit_id": "internal/kubernautagent/tools/custom/tools.go::L297-L324",
+              "rank": 4,
+              "path": "internal/kubernautagent/tools/custom/tools.go",
+              "start_line": 297,
+              "end_line": 324,
+              "detail": "17"
+            },
+            {
+              "unit_id": "pkg/kubernautagent/types/context.go::L47-L89",
+              "rank": 5,
+              "path": "pkg/kubernautagent/types/context.go",
+              "start_line": 47,
+              "end_line": 78,
+              "detail": "2"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_phases.go::L202-L210",
+              "rank": 7,
+              "path": "internal/kubernautagent/investigator/investigator_phases.go",
+              "start_line": 202,
+              "end_line": 210,
+              "detail": "10"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/discovery.go::L60-L71",
+              "rank": 8,
+              "path": "internal/kubernautagent/workflowcatalog/discovery.go",
+              "start_line": 60,
+              "end_line": 71,
+              "detail": "5"
+            },
+            {
+              "unit_id": "pkg/notification/enrichment/enricher.go::L77-L100",
+              "rank": 9,
+              "path": "pkg/notification/enrichment/enricher.go",
+              "start_line": 77,
+              "end_line": 100,
+              "detail": "4"
+            },
+            {
+              "unit_id": "test/services/mock-llm/conversation/discovery.go::L75-L85",
+              "rank": 10,
+              "path": "test/services/mock-llm/conversation/discovery.go",
+              "start_line": 75,
+              "end_line": 85,
+              "detail": "4"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "backend": "zvec-git",
+      "queries": [
+        {
+          "id": "reject-undiscovered-catalog-workflow",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L213-L232",
+              "rank": 1,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 227,
+              "end_line": 232,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::L32-L134",
+              "rank": 2,
+              "path": "internal/kubernautagent/investigator/investigator_workflow_selection.go",
+              "start_line": 32,
+              "end_line": 134,
+              "detail": "function runWorkflowSelection scope: Investigator"
+            },
+            {
+              "unit_id": "pkg/apifrontend/handler/mcp_bridge.go::L265-L316",
+              "rank": 3,
+              "path": "pkg/apifrontend/handler/mcp_bridge.go",
+              "start_line": 265,
+              "end_line": 316,
+              "detail": "function registerKAMCPTools"
+            },
+            {
+              "unit_id": "cmd/kubernautagent/toolregistry.go::L546-L581",
+              "rank": 4,
+              "path": "cmd/kubernautagent/toolregistry.go",
+              "start_line": 546,
+              "end_line": 581,
+              "detail": ""
+            },
+            {
+              "unit_id": "test/services/mock-llm/conversation/discovery.go::L78-L126",
+              "rank": 5,
+              "path": "test/services/mock-llm/conversation/discovery.go",
+              "start_line": 78,
+              "end_line": 126,
+              "detail": "function PlanDiscovery"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/registration.go::L208-L218",
+              "rank": 6,
+              "path": "internal/kubernautagent/mcp/tools/registration.go",
+              "start_line": 208,
+              "end_line": 218,
+              "detail": ""
+            },
+            {
+              "unit_id": "pkg/datastorage/ogen-client/oas_validators_gen.go::L10078-L10091",
+              "rank": 7,
+              "path": "pkg/datastorage/ogen-client/oas_validators_gen.go",
+              "start_line": 10078,
+              "end_line": 10091,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/list_workflows.go::L86-L109",
+              "rank": 8,
+              "path": "internal/kubernautagent/mcp/tools/list_workflows.go",
+              "start_line": 86,
+              "end_line": 109,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L576-L597",
+              "rank": 9,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 576,
+              "end_line": 597,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::L249-L279",
+              "rank": 10,
+              "path": "internal/kubernautagent/investigator/investigator_workflow_selection.go",
+              "start_line": 249,
+              "end_line": 279,
+              "detail": ""
+            }
+          ]
+        },
+        {
+          "id": "discovered-state-flow-to-validation",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L213-L232",
+              "rank": 1,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 227,
+              "end_line": 232,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/tools/custom/discovery_audit.go::L114-L142",
+              "rank": 2,
+              "path": "internal/kubernautagent/tools/custom/discovery_audit.go",
+              "start_line": 114,
+              "end_line": 142,
+              "detail": "function emitAuditEvents scope: getWorkflowTool"
+            },
+            {
+              "unit_id": "internal/controller/workflowexecution/workflowexecution_pending.go::L431-L494",
+              "rank": 3,
+              "path": "internal/controller/workflowexecution/workflowexecution_pending.go",
+              "start_line": 431,
+              "end_line": 494,
+              "detail": "function finalizePendingToRunning scope: WorkflowExecutionReconciler"
+            },
+            {
+              "unit_id": "test/infrastructure/must_gather_image.go::L45-L81",
+              "rank": 4,
+              "path": "test/infrastructure/must_gather_image.go",
+              "start_line": 45,
+              "end_line": 81,
+              "detail": ""
+            },
+            {
+              "unit_id": "pkg/authwebhook/startup_reconciler.go::L200-L216",
+              "rank": 5,
+              "path": "pkg/authwebhook/startup_reconciler.go",
+              "start_line": 200,
+              "end_line": 216,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_rca.go::L35-L123",
+              "rank": 6,
+              "path": "internal/kubernautagent/investigator/investigator_rca.go",
+              "start_line": 35,
+              "end_line": 123,
+              "detail": "function runRCA scope: Investigator"
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L184-L186",
+              "rank": 7,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 184,
+              "end_line": 186,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/investigate_discovery.go::L201-L216",
+              "rank": 8,
+              "path": "internal/kubernautagent/mcp/tools/investigate_discovery.go",
+              "start_line": 201,
+              "end_line": 216,
+              "detail": ""
+            },
+            {
+              "unit_id": "pkg/kubernautagent/types/context.go::L70-L89",
+              "rank": 9,
+              "path": "pkg/kubernautagent/types/context.go",
+              "start_line": 81,
+              "end_line": 83,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::L326-L356",
+              "rank": 10,
+              "path": "internal/kubernautagent/investigator/investigator_workflow_selection.go",
+              "start_line": 326,
+              "end_line": 356,
+              "detail": ""
+            }
+          ]
+        },
+        {
+          "id": "record-listed-workflow-ids",
+          "results": [
+            {
+              "unit_id": "cmd/kubernautagent/toolregistry.go::L546-L581",
+              "rank": 1,
+              "path": "cmd/kubernautagent/toolregistry.go",
+              "start_line": 546,
+              "end_line": 581,
+              "detail": ""
+            },
+            {
+              "unit_id": "pkg/kubernautagent/types/context.go::L47-L78",
+              "rank": 2,
+              "path": "pkg/kubernautagent/types/context.go",
+              "start_line": 53,
+              "end_line": 67,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L351-L402",
+              "rank": 3,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 351,
+              "end_line": 402,
+              "detail": "function Handle scope: SelectWorkflowTool"
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L184-L186",
+              "rank": 4,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 184,
+              "end_line": 186,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::L32-L134",
+              "rank": 5,
+              "path": "internal/kubernautagent/investigator/investigator_workflow_selection.go",
+              "start_line": 32,
+              "end_line": 134,
+              "detail": "function runWorkflowSelection scope: Investigator"
+            },
+            {
+              "unit_id": "pkg/apifrontend/handler/mcp_bridge.go::L265-L316",
+              "rank": 6,
+              "path": "pkg/apifrontend/handler/mcp_bridge.go",
+              "start_line": 265,
+              "end_line": 316,
+              "detail": "function registerKAMCPTools"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/registration.go::L208-L218",
+              "rank": 7,
+              "path": "internal/kubernautagent/mcp/tools/registration.go",
+              "start_line": 208,
+              "end_line": 218,
+              "detail": ""
+            },
+            {
+              "unit_id": "api/remediation/v1alpha1/remediationrequest_types.go::L922-L927",
+              "rank": 8,
+              "path": "api/remediation/v1alpha1/remediationrequest_types.go",
+              "start_line": 922,
+              "end_line": 927,
+              "detail": ""
+            },
+            {
+              "unit_id": "api/aianalysis/v1alpha1/aianalysis_types.go::L795-L830",
+              "rank": 9,
+              "path": "api/aianalysis/v1alpha1/aianalysis_types.go",
+              "start_line": 795,
+              "end_line": 830,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::L249-L279",
+              "rank": 10,
+              "path": "internal/kubernautagent/investigator/investigator_workflow_selection.go",
+              "start_line": 249,
+              "end_line": 279,
+              "detail": ""
+            }
+          ]
+        },
+        {
+          "id": "restrict-selection-to-discovered-workflows",
+          "results": [
+            {
+              "unit_id": "pkg/apifrontend/handler/mcptools.go::L1-L23",
+              "rank": 1,
+              "path": "pkg/apifrontend/handler/mcptools.go",
+              "start_line": 1,
+              "end_line": 23,
+              "detail": ""
+            },
+            {
+              "unit_id": "test/infrastructure/shared_e2e.go::L706-L1097",
+              "rank": 2,
+              "path": "test/infrastructure/shared_e2e.go",
+              "start_line": 706,
+              "end_line": 1097,
+              "detail": "function DeployMockLLMInNamespace"
+            },
+            {
+              "unit_id": "pkg/apifrontend/agent/prompt.go::L58-L107",
+              "rank": 3,
+              "path": "pkg/apifrontend/agent/prompt.go",
+              "start_line": 58,
+              "end_line": 107,
+              "detail": ""
+            },
+            {
+              "unit_id": "pkg/apifrontend/tools/ka_investigate_mcp.go::L194-L230",
+              "rank": 4,
+              "path": "pkg/apifrontend/tools/ka_investigate_mcp.go",
+              "start_line": 194,
+              "end_line": 230,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/investigate_discovery.go::L338-L358",
+              "rank": 5,
+              "path": "internal/kubernautagent/mcp/tools/investigate_discovery.go",
+              "start_line": 338,
+              "end_line": 358,
+              "detail": ""
+            },
+            {
+              "unit_id": "pkg/apifrontend/agent/checkpoint_tool_filter.go::L41-L66",
+              "rank": 6,
+              "path": "pkg/apifrontend/agent/checkpoint_tool_filter.go",
+              "start_line": 41,
+              "end_line": 66,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/registration.go::L164-L172",
+              "rank": 7,
+              "path": "internal/kubernautagent/mcp/tools/registration.go",
+              "start_line": 164,
+              "end_line": 172,
+              "detail": ""
+            },
+            {
+              "unit_id": "api/remediation/v1alpha1/remediationrequest_types.go::L913-L918",
+              "rank": 8,
+              "path": "api/remediation/v1alpha1/remediationrequest_types.go",
+              "start_line": 913,
+              "end_line": 918,
+              "detail": ""
+            },
+            {
+              "unit_id": "api/remediation/v1alpha1/remediationrequest_types.go::L922-L927",
+              "rank": 9,
+              "path": "api/remediation/v1alpha1/remediationrequest_types.go",
+              "start_line": 922,
+              "end_line": 927,
+              "detail": ""
+            },
+            {
+              "unit_id": "test/infrastructure/shared_e2e.go::L488-L508",
+              "rank": 10,
+              "path": "test/infrastructure/shared_e2e.go",
+              "start_line": 488,
+              "end_line": 508,
+              "detail": ""
+            }
+          ]
+        },
+        {
+          "id": "outcome-for-undiscovered-selection",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/discovery.go::L60-L71",
+              "rank": 1,
+              "path": "internal/kubernautagent/workflowcatalog/discovery.go",
+              "start_line": 64,
+              "end_line": 71,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L213-L232",
+              "rank": 2,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 227,
+              "end_line": 232,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L497-L542",
+              "rank": 3,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 514,
+              "end_line": 542,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::L32-L134",
+              "rank": 4,
+              "path": "internal/kubernautagent/investigator/investigator_workflow_selection.go",
+              "start_line": 32,
+              "end_line": 134,
+              "detail": "function runWorkflowSelection scope: Investigator"
+            },
+            {
+              "unit_id": "pkg/workflowexecution/client/schema_metadata.go::L35-L59",
+              "rank": 5,
+              "path": "pkg/workflowexecution/client/schema_metadata.go",
+              "start_line": 35,
+              "end_line": 59,
+              "detail": ""
+            },
+            {
+              "unit_id": "cmd/kubernautagent/bootstrap.go::L188-L208",
+              "rank": 6,
+              "path": "cmd/kubernautagent/bootstrap.go",
+              "start_line": 188,
+              "end_line": 208,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/schema.go::L43-L45",
+              "rank": 7,
+              "path": "internal/kubernautagent/parser/schema.go",
+              "start_line": 43,
+              "end_line": 45,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L576-L597",
+              "rank": 8,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 576,
+              "end_line": 597,
+              "detail": ""
+            },
+            {
+              "unit_id": "pkg/apifrontend/handler/mcp_bridge.go::L265-L316",
+              "rank": 9,
+              "path": "pkg/apifrontend/handler/mcp_bridge.go",
+              "start_line": 265,
+              "end_line": 316,
+              "detail": "function registerKAMCPTools"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/discovery_cache.go::L120-L150",
+              "rank": 10,
+              "path": "internal/kubernautagent/workflowcatalog/discovery_cache.go",
+              "start_line": 120,
+              "end_line": 150,
+              "detail": ""
+            }
+          ]
+        },
+        {
+          "id": "detected-labels-to-discovery-filters",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/tools/custom/discovery_audit.go::L43-L60",
+              "rank": 1,
+              "path": "internal/kubernautagent/tools/custom/discovery_audit.go",
+              "start_line": 43,
+              "end_line": 60,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/tools/custom/tools.go::L137-L153",
+              "rank": 2,
+              "path": "internal/kubernautagent/tools/custom/tools.go",
+              "start_line": 137,
+              "end_line": 153,
+              "detail": ""
+            },
+            {
+              "unit_id": "pkg/datastorage/ogen-client/oas_schemas_gen.go::L33578-L33595",
+              "rank": 3,
+              "path": "pkg/datastorage/ogen-client/oas_schemas_gen.go",
+              "start_line": 33582,
+              "end_line": 33590,
+              "detail": ""
+            },
+            {
+              "unit_id": "pkg/datastorage/models/workflow.go::L255-L321",
+              "rank": 4,
+              "path": "pkg/datastorage/models/workflow.go",
+              "start_line": 255,
+              "end_line": 321,
+              "detail": "class WorkflowSearchFilters"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/cache_filter.go::L296-L314",
+              "rank": 5,
+              "path": "internal/kubernautagent/workflowcatalog/cache_filter.go",
+              "start_line": 296,
+              "end_line": 314,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/discovery.go::L54-L56",
+              "rank": 6,
+              "path": "internal/kubernautagent/workflowcatalog/discovery.go",
+              "start_line": 54,
+              "end_line": 56,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_discovery.go::L233-L256",
+              "rank": 7,
+              "path": "internal/kubernautagent/investigator/investigator_discovery.go",
+              "start_line": 238,
+              "end_line": 256,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_loop.go::L263-L280",
+              "rank": 8,
+              "path": "internal/kubernautagent/investigator/investigator_loop.go",
+              "start_line": 263,
+              "end_line": 280,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/audit/ds_workflow_catalog_payloads.go::L98-L115",
+              "rank": 9,
+              "path": "internal/kubernautagent/audit/ds_workflow_catalog_payloads.go",
+              "start_line": 109,
+              "end_line": 115,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/audit/ds_payloads.go::L86-L126",
+              "rank": 10,
+              "path": "internal/kubernautagent/audit/ds_payloads.go",
+              "start_line": 86,
+              "end_line": 126,
+              "detail": ""
+            }
+          ]
+        },
+        {
+          "id": "membership-across-self-correction-retries",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L184-L186",
+              "rank": 1,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 184,
+              "end_line": 186,
+              "detail": ""
+            },
+            {
+              "unit_id": "pkg/kubernautagent/types/types.go::L72-L207",
+              "rank": 2,
+              "path": "pkg/kubernautagent/types/types.go",
+              "start_line": 72,
+              "end_line": 207,
+              "detail": "class InvestigationResult"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::L32-L134",
+              "rank": 3,
+              "path": "internal/kubernautagent/investigator/investigator_workflow_selection.go",
+              "start_line": 32,
+              "end_line": 134,
+              "detail": "function runWorkflowSelection scope: Investigator"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::L361-L384",
+              "rank": 4,
+              "path": "internal/kubernautagent/investigator/investigator_workflow_selection.go",
+              "start_line": 361,
+              "end_line": 384,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_gates.go::L509-L609",
+              "rank": 5,
+              "path": "internal/kubernautagent/investigator/investigator_gates.go",
+              "start_line": 509,
+              "end_line": 609,
+              "detail": "function retryForAPIVersion scope: Investigator"
+            },
+            {
+              "unit_id": "pkg/gateway/processing/crd_creator_retry.go::L67-L115",
+              "rank": 6,
+              "path": "pkg/gateway/processing/crd_creator_retry.go",
+              "start_line": 67,
+              "end_line": 115,
+              "detail": ""
+            },
+            {
+              "unit_id": "test/shared/mocks/agentclient.go::L450-L462",
+              "rank": 7,
+              "path": "test/shared/mocks/agentclient.go",
+              "start_line": 450,
+              "end_line": 462,
+              "detail": ""
+            },
+            {
+              "unit_id": "pkg/apifrontend/agent/phase_guard.go::L470-L507",
+              "rank": 8,
+              "path": "pkg/apifrontend/agent/phase_guard.go",
+              "start_line": 470,
+              "end_line": 507,
+              "detail": "function recordDiscoverWorkflowsCheckpoint"
+            },
+            {
+              "unit_id": "pkg/audit/errors.go::L82-L84",
+              "rank": 9,
+              "path": "pkg/audit/errors.go",
+              "start_line": 82,
+              "end_line": 84,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L509-L563",
+              "rank": 10,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 509,
+              "end_line": 563,
+              "detail": "function SelfCorrect scope: Validator"
+            }
+          ]
+        },
+        {
+          "id": "validator-identifier-anchor",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L213-L232",
+              "rank": 1,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 227,
+              "end_line": 232,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L238-L273",
+              "rank": 2,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 238,
+              "end_line": 273,
+              "detail": ""
+            },
+            {
+              "unit_id": "cmd/kubernautagent/toolregistry.go::L546-L581",
+              "rank": 3,
+              "path": "cmd/kubernautagent/toolregistry.go",
+              "start_line": 546,
+              "end_line": 581,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L153-L157",
+              "rank": 4,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 153,
+              "end_line": 157,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/list_cache.go::L40-L62",
+              "rank": 5,
+              "path": "internal/kubernautagent/workflowcatalog/list_cache.go",
+              "start_line": 40,
+              "end_line": 62,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L184-L186",
+              "rank": 6,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 184,
+              "end_line": 186,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_gates.go::L644-L707",
+              "rank": 7,
+              "path": "internal/kubernautagent/investigator/investigator_gates.go",
+              "start_line": 644,
+              "end_line": 707,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L160-L182",
+              "rank": 8,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 160,
+              "end_line": 169,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/catalog.go::L68-L70",
+              "rank": 9,
+              "path": "internal/kubernautagent/workflowcatalog/catalog.go",
+              "start_line": 68,
+              "end_line": 70,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::L285-L308",
+              "rank": 10,
+              "path": "internal/kubernautagent/investigator/investigator_workflow_selection.go",
+              "start_line": 285,
+              "end_line": 308,
+              "detail": ""
+            }
+          ]
+        },
+        {
+          "id": "catalog-valid-undiscovered-validator-check",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L213-L232",
+              "rank": 1,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 227,
+              "end_line": 232,
+              "detail": ""
+            },
+            {
+              "unit_id": "cmd/kubernautagent/toolregistry.go::L546-L581",
+              "rank": 2,
+              "path": "cmd/kubernautagent/toolregistry.go",
+              "start_line": 546,
+              "end_line": 581,
+              "detail": ""
+            },
+            {
+              "unit_id": "pkg/apifrontend/handler/mcp_bridge.go::L265-L316",
+              "rank": 3,
+              "path": "pkg/apifrontend/handler/mcp_bridge.go",
+              "start_line": 265,
+              "end_line": 316,
+              "detail": "function registerKAMCPTools"
+            },
+            {
+              "unit_id": "test/services/mock-llm/conversation/discovery.go::L78-L126",
+              "rank": 4,
+              "path": "test/services/mock-llm/conversation/discovery.go",
+              "start_line": 78,
+              "end_line": 126,
+              "detail": "function PlanDiscovery"
+            },
+            {
+              "unit_id": "pkg/notification/enrichment/enricher.go::L61-L75",
+              "rank": 5,
+              "path": "pkg/notification/enrichment/enricher.go",
+              "start_line": 61,
+              "end_line": 75,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/list_cache.go::L40-L62",
+              "rank": 6,
+              "path": "internal/kubernautagent/workflowcatalog/list_cache.go",
+              "start_line": 40,
+              "end_line": 62,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/list_cache.go::L67-L74",
+              "rank": 7,
+              "path": "internal/kubernautagent/workflowcatalog/list_cache.go",
+              "start_line": 67,
+              "end_line": 74,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/list_workflows.go::L86-L109",
+              "rank": 8,
+              "path": "internal/kubernautagent/mcp/tools/list_workflows.go",
+              "start_line": 86,
+              "end_line": 109,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/registration.go::L208-L218",
+              "rank": 9,
+              "path": "internal/kubernautagent/mcp/tools/registration.go",
+              "start_line": 208,
+              "end_line": 218,
+              "detail": ""
+            },
+            {
+              "unit_id": "test/services/mock-llm/response/gemini.go::L215-L233",
+              "rank": 10,
+              "path": "test/services/mock-llm/response/gemini.go",
+              "start_line": 215,
+              "end_line": 233,
+              "detail": ""
+            }
+          ]
+        },
+        {
+          "id": "discovery-membership-through-retry",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L180-L195",
+              "rank": 1,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 184,
+              "end_line": 186,
+              "detail": ""
+            },
+            {
+              "unit_id": "cmd/kubernautagent/toolregistry.go::L546-L581",
+              "rank": 2,
+              "path": "cmd/kubernautagent/toolregistry.go",
+              "start_line": 546,
+              "end_line": 581,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L213-L232",
+              "rank": 3,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 227,
+              "end_line": 232,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::L326-L356",
+              "rank": 4,
+              "path": "internal/kubernautagent/investigator/investigator_workflow_selection.go",
+              "start_line": 326,
+              "end_line": 356,
+              "detail": "function runSelfCorrectionAttempt scope: Investigator"
+            },
+            {
+              "unit_id": "internal/kubernautagent/tools/custom/tools.go::L299-L322",
+              "rank": 5,
+              "path": "internal/kubernautagent/tools/custom/tools.go",
+              "start_line": 299,
+              "end_line": 322,
+              "detail": ""
+            },
+            {
+              "unit_id": "test/services/mock-llm/conversation/discovery.go::L75-L126",
+              "rank": 6,
+              "path": "test/services/mock-llm/conversation/discovery.go",
+              "start_line": 78,
+              "end_line": 126,
+              "detail": ""
+            },
+            {
+              "unit_id": "pkg/kubernautagent/types/types.go::L72-L207",
+              "rank": 7,
+              "path": "pkg/kubernautagent/types/types.go",
+              "start_line": 72,
+              "end_line": 207,
+              "detail": "class InvestigationResult"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::L32-L134",
+              "rank": 8,
+              "path": "internal/kubernautagent/investigator/investigator_workflow_selection.go",
+              "start_line": 32,
+              "end_line": 134,
+              "detail": "function runWorkflowSelection scope: Investigator"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/list_workflows.go::L86-L109",
+              "rank": 9,
+              "path": "internal/kubernautagent/mcp/tools/list_workflows.go",
+              "start_line": 86,
+              "end_line": 109,
+              "detail": ""
+            },
+            {
+              "unit_id": "test/services/mock-llm/response/gemini.go::L215-L233",
+              "rank": 10,
+              "path": "test/services/mock-llm/response/gemini.go",
+              "start_line": 215,
+              "end_line": 233,
+              "detail": ""
+            }
+          ]
+        },
+        {
+          "id": "selection-result-discovery-guard",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L351-L402",
+              "rank": 1,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 351,
+              "end_line": 402,
+              "detail": "function Handle scope: SelectWorkflowTool"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L497-L542",
+              "rank": 2,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 514,
+              "end_line": 542,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L238-L273",
+              "rank": 3,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 238,
+              "end_line": 273,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/interfaces.go::L102-L115",
+              "rank": 4,
+              "path": "internal/kubernautagent/mcp/interfaces.go",
+              "start_line": 102,
+              "end_line": 115,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/complete_no_action.go::L55-L68",
+              "rank": 5,
+              "path": "internal/kubernautagent/mcp/tools/complete_no_action.go",
+              "start_line": 55,
+              "end_line": 68,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/schema.go::L43-L45",
+              "rank": 6,
+              "path": "internal/kubernautagent/parser/schema.go",
+              "start_line": 43,
+              "end_line": 45,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L576-L597",
+              "rank": 7,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 576,
+              "end_line": 597,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L292-L298",
+              "rank": 8,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 292,
+              "end_line": 298,
+              "detail": ""
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/registration.go::L191-L201",
+              "rank": 9,
+              "path": "internal/kubernautagent/mcp/tools/registration.go",
+              "start_line": 191,
+              "end_line": 201,
+              "detail": ""
+            },
+            {
+              "unit_id": "pkg/remediationorchestrator/creator/workflowexecution.go::L71-L100",
+              "rank": 10,
+              "path": "pkg/remediationorchestrator/creator/workflowexecution.go",
+              "start_line": 71,
+              "end_line": 100,
+              "detail": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "backend": "sense",
+      "queries": [
+        {
+          "id": "reject-undiscovered-catalog-workflow",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/discovery.go::L54-L56",
+              "rank": 1,
+              "path": "internal/kubernautagent/workflowcatalog/discovery.go",
+              "start_line": 54,
+              "end_line": 56,
+              "detail": "workflowcatalog.Catalog.ListWorkflowsByActionType"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/investigate.go::L406-L410",
+              "rank": 2,
+              "path": "internal/kubernautagent/mcp/tools/investigate.go",
+              "start_line": 406,
+              "end_line": 410,
+              "detail": "tools.WithWorkflowCatalog"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/registration.go::L208-L218",
+              "rank": 3,
+              "path": "internal/kubernautagent/mcp/tools/registration.go",
+              "start_line": 208,
+              "end_line": 218,
+              "detail": "tools.ListWorkflowsRegistration"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/list_workflows.go::L86-L109",
+              "rank": 4,
+              "path": "internal/kubernautagent/mcp/tools/list_workflows.go",
+              "start_line": 86,
+              "end_line": 109,
+              "detail": "tools.ListWorkflowsTool.Handle"
+            },
+            {
+              "unit_id": "pkg/kubernautagent/types/context.go::L70-L78",
+              "rank": 5,
+              "path": "pkg/kubernautagent/types/context.go",
+              "start_line": 70,
+              "end_line": 78,
+              "detail": "types.DiscoveredWorkflowState.Contains"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/lazy_catalog.go::L224-L230",
+              "rank": 6,
+              "path": "internal/kubernautagent/workflowcatalog/lazy_catalog.go",
+              "start_line": 224,
+              "end_line": 230,
+              "detail": "workflowcatalog.LazyCatalog.ListWorkflowsByActionType"
+            },
+            {
+              "unit_id": "pkg/remediationorchestrator/creator/workflowexecution.go::L71-L100",
+              "rank": 7,
+              "path": "pkg/remediationorchestrator/creator/workflowexecution.go",
+              "start_line": 71,
+              "end_line": 100,
+              "detail": "creator.validateSelectedWorkflow"
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L213-L232",
+              "rank": 8,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 227,
+              "end_line": 232,
+              "detail": "parser.Validator.IsAllowed"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L47-L61",
+              "rank": 9,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 47,
+              "end_line": 61,
+              "detail": "tools.CatalogWorkflow"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/list_workflows.go::L72-L74",
+              "rank": 10,
+              "path": "internal/kubernautagent/mcp/tools/list_workflows.go",
+              "start_line": 72,
+              "end_line": 74,
+              "detail": "tools.ListWorkflowsTool"
+            }
+          ]
+        },
+        {
+          "id": "discovered-state-flow-to-validation",
+          "results": [
+            {
+              "unit_id": "pkg/kubernautagent/types/context.go::L28-L50",
+              "rank": 1,
+              "path": "pkg/kubernautagent/types/context.go",
+              "start_line": 48,
+              "end_line": 50,
+              "detail": "types.NewDiscoveredWorkflowState"
+            },
+            {
+              "unit_id": "pkg/kubernautagent/types/context.go::L70-L89",
+              "rank": 2,
+              "path": "pkg/kubernautagent/types/context.go",
+              "start_line": 86,
+              "end_line": 89,
+              "detail": "types.DiscoveredWorkflowStateFromContext"
+            },
+            {
+              "unit_id": "pkg/apifrontend/ka/config.go::L120-L127",
+              "rank": 3,
+              "path": "pkg/apifrontend/ka/config.go",
+              "start_line": 120,
+              "end_line": 127,
+              "detail": "ka.DiscoveredWorkflow"
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L184-L186",
+              "rank": 4,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 184,
+              "end_line": 186,
+              "detail": "parser.Validator.SetDiscoveredWorkflowState"
+            },
+            {
+              "unit_id": "pkg/kubernautagent/types/context.go::L25-L25",
+              "rank": 7,
+              "path": "pkg/kubernautagent/types/context.go",
+              "start_line": 25,
+              "end_line": 25,
+              "detail": "types.discoveredWorkflowStateKey"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/interfaces.go::L118-L125",
+              "rank": 9,
+              "path": "internal/kubernautagent/mcp/interfaces.go",
+              "start_line": 118,
+              "end_line": 125,
+              "detail": "mcp.DiscoveredWorkflow"
+            },
+            {
+              "unit_id": "pkg/apifrontend/ka/config.go::L169-L176",
+              "rank": 10,
+              "path": "pkg/apifrontend/ka/config.go",
+              "start_line": 169,
+              "end_line": 176,
+              "detail": "ka.kaDiscoveredWorkflow"
+            }
+          ]
+        },
+        {
+          "id": "record-listed-workflow-ids",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/discovery.go::L54-L56",
+              "rank": 1,
+              "path": "internal/kubernautagent/workflowcatalog/discovery.go",
+              "start_line": 54,
+              "end_line": 56,
+              "detail": "workflowcatalog.Catalog.ListWorkflowsByActionType"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/list_workflows.go::L72-L74",
+              "rank": 2,
+              "path": "internal/kubernautagent/mcp/tools/list_workflows.go",
+              "start_line": 72,
+              "end_line": 74,
+              "detail": "tools.ListWorkflowsTool"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/registration.go::L208-L218",
+              "rank": 3,
+              "path": "internal/kubernautagent/mcp/tools/registration.go",
+              "start_line": 208,
+              "end_line": 218,
+              "detail": "tools.ListWorkflowsRegistration"
+            },
+            {
+              "unit_id": "pkg/apifrontend/tools/ka_tools.go::L355-L373",
+              "rank": 4,
+              "path": "pkg/apifrontend/tools/ka_tools.go",
+              "start_line": 355,
+              "end_line": 373,
+              "detail": "tools.HandleListWorkflowsKA"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/list_workflows.go::L37-L41",
+              "rank": 5,
+              "path": "internal/kubernautagent/mcp/tools/list_workflows.go",
+              "start_line": 37,
+              "end_line": 41,
+              "detail": "tools.ListWorkflowsInput"
+            },
+            {
+              "unit_id": "pkg/apifrontend/handler/status_handler.go::L345-L351",
+              "rank": 6,
+              "path": "pkg/apifrontend/handler/status_handler.go",
+              "start_line": 345,
+              "end_line": 351,
+              "detail": "handler.selectedWorkflowID"
+            },
+            {
+              "unit_id": "pkg/apifrontend/tools/ds_tools.go::L17-L19",
+              "rank": 7,
+              "path": "pkg/apifrontend/tools/ds_tools.go",
+              "start_line": 17,
+              "end_line": 19,
+              "detail": "tools.ListWorkflowsArgs"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/list_workflows.go::L32-L32",
+              "rank": 8,
+              "path": "internal/kubernautagent/mcp/tools/list_workflows.go",
+              "start_line": 32,
+              "end_line": 32,
+              "detail": "tools.defaultListWorkflowsLimit"
+            },
+            {
+              "unit_id": "pkg/datastorage/reconstruction/parser.go::L314-L330",
+              "rank": 9,
+              "path": "pkg/datastorage/reconstruction/parser.go",
+              "start_line": 314,
+              "end_line": 330,
+              "detail": "reconstruction.parseWorkflowSelectionCompleted"
+            },
+            {
+              "unit_id": "pkg/datastorage/models/workflow_discovery.go::L83-L87",
+              "rank": 10,
+              "path": "pkg/datastorage/models/workflow_discovery.go",
+              "start_line": 83,
+              "end_line": 87,
+              "detail": "models.WorkflowDiscoveryResponse"
+            }
+          ]
+        },
+        {
+          "id": "restrict-selection-to-discovered-workflows",
+          "results": [
+            {
+              "unit_id": "pkg/apifrontend/ratelimit/ratelimit.go::L51-L64",
+              "rank": 1,
+              "path": "pkg/apifrontend/ratelimit/ratelimit.go",
+              "start_line": 51,
+              "end_line": 64,
+              "detail": "ratelimit.IPLimiter.Allow"
+            },
+            {
+              "unit_id": "pkg/datastorage/server/middleware/ratelimit.go::L81-L94",
+              "rank": 2,
+              "path": "pkg/datastorage/server/middleware/ratelimit.go",
+              "start_line": 81,
+              "end_line": 94,
+              "detail": "middleware.IPLimiter.Allow"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/investigate.go::L198-L213",
+              "rank": 3,
+              "path": "internal/kubernautagent/mcp/tools/investigate.go",
+              "start_line": 198,
+              "end_line": 213,
+              "detail": "tools.MessageRateLimiter.Allow"
+            },
+            {
+              "unit_id": "hack/check-helm-coverage/main.go::L235-L243",
+              "rank": 4,
+              "path": "hack/check-helm-coverage/main.go",
+              "start_line": 235,
+              "end_line": 243,
+              "detail": "main.FilterAllowlisted"
+            },
+            {
+              "unit_id": "pkg/aianalysis/handlers/response_processor.go::L57-L62",
+              "rank": 5,
+              "path": "pkg/aianalysis/handlers/response_processor.go",
+              "start_line": 57,
+              "end_line": 62,
+              "detail": "handlers.ResponseProcessor"
+            },
+            {
+              "unit_id": "pkg/apifrontend/auth/jwks_cache.go::L31-L59",
+              "rank": 6,
+              "path": "pkg/apifrontend/auth/jwks_cache.go",
+              "start_line": 31,
+              "end_line": 59,
+              "detail": "auth.FetchLimiter.AllowFetch"
+            },
+            {
+              "unit_id": "pkg/apifrontend/agent/phase_guard.go::L470-L507",
+              "rank": 7,
+              "path": "pkg/apifrontend/agent/phase_guard.go",
+              "start_line": 470,
+              "end_line": 507,
+              "detail": "agent.recordDiscoverWorkflowsCheckpoint"
+            },
+            {
+              "unit_id": "pkg/apifrontend/ratelimit/ratelimit.go::L296-L306",
+              "rank": 8,
+              "path": "pkg/apifrontend/ratelimit/ratelimit.go",
+              "start_line": 296,
+              "end_line": 306,
+              "detail": "ratelimit.ProviderLimiter.AllowFetch"
+            },
+            {
+              "unit_id": "pkg/remediationorchestrator/handler/aianalysis.go::L293-L312",
+              "rank": 9,
+              "path": "pkg/remediationorchestrator/handler/aianalysis.go",
+              "start_line": 293,
+              "end_line": 312,
+              "detail": "handler.AIAnalysisHandler.handleFailed"
+            },
+            {
+              "unit_id": "pkg/datastorage/repository/sql/builder.go::L176-L179",
+              "rank": 10,
+              "path": "pkg/datastorage/repository/sql/builder.go",
+              "start_line": 176,
+              "end_line": 179,
+              "detail": "sql.Builder.Limit"
+            }
+          ]
+        },
+        {
+          "id": "outcome-for-undiscovered-selection",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/investigate.go::L288-L307",
+              "rank": 1,
+              "path": "internal/kubernautagent/mcp/tools/investigate.go",
+              "start_line": 288,
+              "end_line": 307,
+              "detail": "tools.InvestigateTool"
+            },
+            {
+              "unit_id": "pkg/remediationapprovalrequest/conditions.go::L155-L163",
+              "rank": 2,
+              "path": "pkg/remediationapprovalrequest/conditions.go",
+              "start_line": 155,
+              "end_line": 163,
+              "detail": "remediationapprovalrequest.SetApprovalExpired"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/discovery_cache.go::L120-L150",
+              "rank": 3,
+              "path": "internal/kubernautagent/workflowcatalog/discovery_cache.go",
+              "start_line": 120,
+              "end_line": 150,
+              "detail": "workflowcatalog.Catalog.getWorkflowWithContextFiltersFromCache"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/interfaces.go::L102-L115",
+              "rank": 4,
+              "path": "internal/kubernautagent/mcp/interfaces.go",
+              "start_line": 102,
+              "end_line": 115,
+              "detail": "mcp.WorkflowDiscoveryResult"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/catalog.go::L62-L64",
+              "rank": 5,
+              "path": "internal/kubernautagent/workflowcatalog/catalog.go",
+              "start_line": 62,
+              "end_line": 64,
+              "detail": "workflowcatalog.Catalog.GetByID"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L497-L542",
+              "rank": 6,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 514,
+              "end_line": 542,
+              "detail": "tools.buildFinalResult"
+            },
+            {
+              "unit_id": "pkg/shared/events/reasons.go::L160-L160",
+              "rank": 7,
+              "path": "pkg/shared/events/reasons.go",
+              "start_line": 160,
+              "end_line": 160,
+              "detail": "events.EventReasonRemediationTimeout"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/discovery.go::L60-L71",
+              "rank": 8,
+              "path": "internal/kubernautagent/workflowcatalog/discovery.go",
+              "start_line": 64,
+              "end_line": 71,
+              "detail": "workflowcatalog.Catalog.GetWorkflowWithContextFilters"
+            },
+            {
+              "unit_id": "internal/controller/remediationorchestrator/terminal_transitions.go::L566-L580",
+              "rank": 9,
+              "path": "internal/controller/remediationorchestrator/terminal_transitions.go",
+              "start_line": 566,
+              "end_line": 580,
+              "detail": "controller.Reconciler.logConsecutiveFailureThresholdReached"
+            },
+            {
+              "unit_id": "pkg/shared/events/reasons.go::L147-L147",
+              "rank": 10,
+              "path": "pkg/shared/events/reasons.go",
+              "start_line": 147,
+              "end_line": 147,
+              "detail": "events.EventReasonRemediationCreated"
+            }
+          ]
+        },
+        {
+          "id": "detected-labels-to-discovery-filters",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_phases.go::L401-L406",
+              "rank": 1,
+              "path": "internal/kubernautagent/investigator/investigator_phases.go",
+              "start_line": 401,
+              "end_line": 406,
+              "detail": "investigator.attachDetectedLabels"
+            },
+            {
+              "unit_id": "pkg/aianalysis/handlers/analyzing.go::L44-L50",
+              "rank": 2,
+              "path": "pkg/aianalysis/handlers/analyzing.go",
+              "start_line": 44,
+              "end_line": 50,
+              "detail": "handlers.AnalyzingHandler"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_discovery.go::L233-L256",
+              "rank": 3,
+              "path": "internal/kubernautagent/investigator/investigator_discovery.go",
+              "start_line": 238,
+              "end_line": 256,
+              "detail": "investigator.Investigator.attachRCADetectedLabelsJSON"
+            },
+            {
+              "unit_id": "internal/kubernautagent/audit/ds_workflow_catalog_payloads.go::L98-L115",
+              "rank": 4,
+              "path": "internal/kubernautagent/audit/ds_workflow_catalog_payloads.go",
+              "start_line": 98,
+              "end_line": 98,
+              "detail": "audit.detectedLabelsFromJSON"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_phases.go::L374-L374",
+              "rank": 5,
+              "path": "internal/kubernautagent/investigator/investigator_phases.go",
+              "start_line": 374,
+              "end_line": 374,
+              "detail": "investigator.detectedLabelsToResult"
+            },
+            {
+              "unit_id": "pkg/effectivenessmonitor/audit/manager.go::L44-L44",
+              "rank": 6,
+              "path": "pkg/effectivenessmonitor/audit/manager.go",
+              "start_line": 44,
+              "end_line": 44,
+              "detail": "audit.ActionDetected"
+            },
+            {
+              "unit_id": "pkg/datastorage/models/workflow_schema.go::L408-L426",
+              "rank": 7,
+              "path": "pkg/datastorage/models/workflow_schema.go",
+              "start_line": 408,
+              "end_line": 426,
+              "detail": "models.DetectedLabelsSchema"
+            },
+            {
+              "unit_id": "api/aianalysis/v1alpha1/aianalysis_types.go::L237-L278",
+              "rank": 8,
+              "path": "api/aianalysis/v1alpha1/aianalysis_types.go",
+              "start_line": 237,
+              "end_line": 278,
+              "detail": "v1alpha1.DetectedLabels"
+            },
+            {
+              "unit_id": "internal/kubernautagent/audit/ds_response_mapping.go::L164-L173",
+              "rank": 9,
+              "path": "internal/kubernautagent/audit/ds_response_mapping.go",
+              "start_line": 164,
+              "end_line": 173,
+              "detail": "audit.detectedLabelsFromJSONText"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator_workflow_selection.go::L136-L164",
+              "rank": 10,
+              "path": "internal/kubernautagent/investigator/investigator_workflow_selection.go",
+              "start_line": 152,
+              "end_line": 162,
+              "detail": "investigator.promptContainsDetectedLabels"
+            }
+          ]
+        },
+        {
+          "id": "membership-across-self-correction-retries",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/investigate_discovery.go::L201-L216",
+              "rank": 1,
+              "path": "internal/kubernautagent/mcp/tools/investigate_discovery.go",
+              "start_line": 201,
+              "end_line": 216,
+              "detail": "tools.InvestigateTool.persistPendingDecision"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/discovery.go::L54-L56",
+              "rank": 2,
+              "path": "internal/kubernautagent/workflowcatalog/discovery.go",
+              "start_line": 54,
+              "end_line": 56,
+              "detail": "workflowcatalog.Catalog.ListWorkflowsByActionType"
+            },
+            {
+              "unit_id": "internal/kubernautagent/audit/ds_workflow_catalog_payloads.go::L65-L96",
+              "rank": 3,
+              "path": "internal/kubernautagent/audit/ds_workflow_catalog_payloads.go",
+              "start_line": 65,
+              "end_line": 96,
+              "detail": "audit.buildWorkflowDiscoveryPayload"
+            },
+            {
+              "unit_id": "internal/controller/notification/notificationrequest_controller.go::L688-L696",
+              "rank": 4,
+              "path": "internal/controller/notification/notificationrequest_controller.go",
+              "start_line": 688,
+              "end_line": 696,
+              "detail": "notification.countSuccessfulAttempts"
+            },
+            {
+              "unit_id": "pkg/authwebhook/remediationworkflow_handler.go::L560-L577",
+              "rank": 5,
+              "path": "pkg/authwebhook/remediationworkflow_handler.go",
+              "start_line": 560,
+              "end_line": 577,
+              "detail": "authwebhook.RemediationWorkflowHandler.updateATWorkflowCountWithRetry"
+            },
+            {
+              "unit_id": "pkg/remediationorchestrator/override/merge.go::L77-L150",
+              "rank": 6,
+              "path": "pkg/remediationorchestrator/override/merge.go",
+              "start_line": 77,
+              "end_line": 150,
+              "detail": "override.ResolveWorkflow"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/investigator.go::L593-L635",
+              "rank": 7,
+              "path": "internal/kubernautagent/investigator/investigator.go",
+              "start_line": 593,
+              "end_line": 635,
+              "detail": "investigator.Investigator.runWorkflowDiscoveryPhase"
+            },
+            {
+              "unit_id": "pkg/apifrontend/audit/audit.go::L45-L45",
+              "rank": 8,
+              "path": "pkg/apifrontend/audit/audit.go",
+              "start_line": 45,
+              "end_line": 45,
+              "detail": "audit.EventWorkflowDiscovery"
+            },
+            {
+              "unit_id": "pkg/apifrontend/tools/ka_tools.go::L103-L173",
+              "rank": 9,
+              "path": "pkg/apifrontend/tools/ka_tools.go",
+              "start_line": 103,
+              "end_line": 173,
+              "detail": "tools.HandleDiscoverWorkflows"
+            },
+            {
+              "unit_id": "internal/controller/remediationorchestrator/executing_handler.go::L289-L312",
+              "rank": 10,
+              "path": "internal/controller/remediationorchestrator/executing_handler.go",
+              "start_line": 289,
+              "end_line": 312,
+              "detail": "controller.ExecutingHandler.setWorkflowConditions"
+            }
+          ]
+        },
+        {
+          "id": "validator-identifier-anchor",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L213-L232",
+              "rank": 1,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 227,
+              "end_line": 232,
+              "detail": "parser.Validator.IsAllowed"
+            },
+            {
+              "unit_id": "pkg/apifrontend/tools/ka_tools.go::L355-L373",
+              "rank": 2,
+              "path": "pkg/apifrontend/tools/ka_tools.go",
+              "start_line": 355,
+              "end_line": 373,
+              "detail": "tools.HandleListWorkflowsKA"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/cache.go::L285-L291",
+              "rank": 3,
+              "path": "internal/kubernautagent/workflowcatalog/cache.go",
+              "start_line": 285,
+              "end_line": 291,
+              "detail": "workflowcatalog.Cache.ListWorkflows"
+            },
+            {
+              "unit_id": "internal/controller/workflowexecution/workflowexecution_catalog.go::L74-L79",
+              "rank": 4,
+              "path": "internal/controller/workflowexecution/workflowexecution_catalog.go",
+              "start_line": 74,
+              "end_line": 79,
+              "detail": "workflowexecution.WorkflowExecutionReconciler.validateExecutionEngineResolved"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/discovery.go::L54-L56",
+              "rank": 5,
+              "path": "internal/kubernautagent/workflowcatalog/discovery.go",
+              "start_line": 54,
+              "end_line": 56,
+              "detail": "workflowcatalog.Catalog.ListWorkflowsByActionType"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/list_workflows.go::L77-L79",
+              "rank": 6,
+              "path": "internal/kubernautagent/mcp/tools/list_workflows.go",
+              "start_line": 77,
+              "end_line": 79,
+              "detail": "tools.NewListWorkflowsTool"
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L160-L182",
+              "rank": 7,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 160,
+              "end_line": 169,
+              "detail": "parser.NewValidator"
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L184-L186",
+              "rank": 8,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 184,
+              "end_line": 186,
+              "detail": "parser.Validator.SetDiscoveredWorkflowState"
+            },
+            {
+              "unit_id": "pkg/apifrontend/tools/ds_tools.go::L22-L25",
+              "rank": 9,
+              "path": "pkg/apifrontend/tools/ds_tools.go",
+              "start_line": 22,
+              "end_line": 25,
+              "detail": "tools.ListWorkflowsResult"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/list_workflows.go::L72-L74",
+              "rank": 10,
+              "path": "internal/kubernautagent/mcp/tools/list_workflows.go",
+              "start_line": 72,
+              "end_line": 74,
+              "detail": "tools.ListWorkflowsTool"
+            }
+          ]
+        },
+        {
+          "id": "catalog-valid-undiscovered-validator-check",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/catalog.go::L47-L50",
+              "rank": 1,
+              "path": "internal/kubernautagent/workflowcatalog/catalog.go",
+              "start_line": 47,
+              "end_line": 50,
+              "detail": "workflowcatalog.Catalog"
+            },
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/lazy_catalog.go::L222-L240",
+              "rank": 2,
+              "path": "internal/kubernautagent/workflowcatalog/lazy_catalog.go",
+              "start_line": 224,
+              "end_line": 230,
+              "detail": "workflowcatalog.LazyCatalog.ListWorkflowsByActionType"
+            },
+            {
+              "unit_id": "internal/kubernautagent/tools/custom/tools.go::L76-L87",
+              "rank": 3,
+              "path": "internal/kubernautagent/tools/custom/tools.go",
+              "start_line": 76,
+              "end_line": 87,
+              "detail": "custom.WorkflowCatalog.ListWorkflowsByActionType"
+            },
+            {
+              "unit_id": "pkg/apifrontend/tools/ka_tools.go::L355-L373",
+              "rank": 4,
+              "path": "pkg/apifrontend/tools/ka_tools.go",
+              "start_line": 355,
+              "end_line": 373,
+              "detail": "tools.HandleListWorkflowsKA"
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L213-L232",
+              "rank": 5,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 227,
+              "end_line": 232,
+              "detail": "parser.Validator.IsAllowed"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/list_workflows.go::L77-L79",
+              "rank": 6,
+              "path": "internal/kubernautagent/mcp/tools/list_workflows.go",
+              "start_line": 77,
+              "end_line": 79,
+              "detail": "tools.NewListWorkflowsTool"
+            },
+            {
+              "unit_id": "internal/kubernautagent/audit/emitter.go::L159-L159",
+              "rank": 7,
+              "path": "internal/kubernautagent/audit/emitter.go",
+              "start_line": 159,
+              "end_line": 159,
+              "detail": "audit.EventTypeWorkflowsListed"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/list_workflows.go::L86-L109",
+              "rank": 8,
+              "path": "internal/kubernautagent/mcp/tools/list_workflows.go",
+              "start_line": 86,
+              "end_line": 109,
+              "detail": "tools.ListWorkflowsTool.Handle"
+            },
+            {
+              "unit_id": "internal/kubernautagent/investigator/anomaly.go::L83-L116",
+              "rank": 9,
+              "path": "internal/kubernautagent/investigator/anomaly.go",
+              "start_line": 83,
+              "end_line": 116,
+              "detail": "investigator.AnomalyDetector.CheckToolCall"
+            },
+            {
+              "unit_id": "pkg/remediationorchestrator/creator/workflowexecution.go::L71-L100",
+              "rank": 10,
+              "path": "pkg/remediationorchestrator/creator/workflowexecution.go",
+              "start_line": 71,
+              "end_line": 100,
+              "detail": "creator.validateSelectedWorkflow"
+            }
+          ]
+        },
+        {
+          "id": "discovery-membership-through-retry",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/workflowcatalog/discovery.go::L54-L56",
+              "rank": 1,
+              "path": "internal/kubernautagent/workflowcatalog/discovery.go",
+              "start_line": 54,
+              "end_line": 56,
+              "detail": "workflowcatalog.Catalog.ListWorkflowsByActionType"
+            },
+            {
+              "unit_id": "pkg/authwebhook/rw_reconciler.go::L49-L54",
+              "rank": 2,
+              "path": "pkg/authwebhook/rw_reconciler.go",
+              "start_line": 49,
+              "end_line": 54,
+              "detail": "authwebhook.RemediationWorkflowReconciler"
+            },
+            {
+              "unit_id": "pkg/remediationorchestrator/override/merge.go::L77-L150",
+              "rank": 3,
+              "path": "pkg/remediationorchestrator/override/merge.go",
+              "start_line": 77,
+              "end_line": 150,
+              "detail": "override.ResolveWorkflow"
+            },
+            {
+              "unit_id": "pkg/datastorage/models/workflow_discovery.go::L83-L87",
+              "rank": 4,
+              "path": "pkg/datastorage/models/workflow_discovery.go",
+              "start_line": 83,
+              "end_line": 87,
+              "detail": "models.WorkflowDiscoveryResponse"
+            },
+            {
+              "unit_id": "internal/kubernautagent/parser/validator.go::L153-L157",
+              "rank": 5,
+              "path": "internal/kubernautagent/parser/validator.go",
+              "start_line": 153,
+              "end_line": 157,
+              "detail": "parser.Validator"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/list_workflows.go::L72-L74",
+              "rank": 6,
+              "path": "internal/kubernautagent/mcp/tools/list_workflows.go",
+              "start_line": 72,
+              "end_line": 74,
+              "detail": "tools.ListWorkflowsTool"
+            },
+            {
+              "unit_id": "cmd/kubernautagent/toolregistry.go::L546-L581",
+              "rank": 7,
+              "path": "cmd/kubernautagent/toolregistry.go",
+              "start_line": 546,
+              "end_line": 581,
+              "detail": "main.workflowCatalogFetcher.FetchValidator"
+            },
+            {
+              "unit_id": "pkg/remediationorchestrator/creator/workflowexecution.go::L71-L100",
+              "rank": 8,
+              "path": "pkg/remediationorchestrator/creator/workflowexecution.go",
+              "start_line": 71,
+              "end_line": 100,
+              "detail": "creator.validateSelectedWorkflow"
+            },
+            {
+              "unit_id": "pkg/apifrontend/tools/ds_tools.go::L22-L25",
+              "rank": 9,
+              "path": "pkg/apifrontend/tools/ds_tools.go",
+              "start_line": 22,
+              "end_line": 25,
+              "detail": "tools.ListWorkflowsResult"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/list_workflows.go::L37-L41",
+              "rank": 10,
+              "path": "internal/kubernautagent/mcp/tools/list_workflows.go",
+              "start_line": 37,
+              "end_line": 41,
+              "detail": "tools.ListWorkflowsInput"
+            }
+          ]
+        },
+        {
+          "id": "selection-result-discovery-guard",
+          "results": [
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L647-L655",
+              "rank": 1,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 647,
+              "end_line": 655,
+              "detail": "tools.validateSelectWorkflowInput"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L497-L542",
+              "rank": 2,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 499,
+              "end_line": 509,
+              "detail": "tools.isWorkflowInDiscoveryResult"
+            },
+            {
+              "unit_id": "pkg/apifrontend/handler/status_handler.go::L345-L351",
+              "rank": 3,
+              "path": "pkg/apifrontend/handler/status_handler.go",
+              "start_line": 345,
+              "end_line": 351,
+              "detail": "handler.selectedWorkflowID"
+            },
+            {
+              "unit_id": "pkg/apifrontend/tools/ka_tools.go::L283-L286",
+              "rank": 4,
+              "path": "pkg/apifrontend/tools/ka_tools.go",
+              "start_line": 283,
+              "end_line": 286,
+              "detail": "tools.SelectWorkflowResult"
+            },
+            {
+              "unit_id": "pkg/apifrontend/ka/config.go::L256-L259",
+              "rank": 5,
+              "path": "pkg/apifrontend/ka/config.go",
+              "start_line": 256,
+              "end_line": 259,
+              "detail": "ka.SelectWorkflowResult"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L576-L597",
+              "rank": 6,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 576,
+              "end_line": 597,
+              "detail": "tools.applySelectedWorkflow"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L120-L126",
+              "rank": 7,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 120,
+              "end_line": 126,
+              "detail": "tools.SelectWorkflowOutput"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/investigate_discovery.go::L201-L216",
+              "rank": 8,
+              "path": "internal/kubernautagent/mcp/tools/investigate_discovery.go",
+              "start_line": 201,
+              "end_line": 216,
+              "detail": "tools.InvestigateTool.persistPendingDecision"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/tools/select_workflow.go::L463-L495",
+              "rank": 9,
+              "path": "internal/kubernautagent/mcp/tools/select_workflow.go",
+              "start_line": 463,
+              "end_line": 495,
+              "detail": "tools.SelectWorkflowTool.completeSelectionAsync"
+            },
+            {
+              "unit_id": "internal/kubernautagent/mcp/interfaces.go::L102-L115",
+              "rank": 10,
+              "path": "internal/kubernautagent/mcp/interfaces.go",
+              "start_line": 102,
+              "end_line": 115,
+              "detail": "mcp.WorkflowDiscoveryResult"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

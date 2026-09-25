@@ -6,7 +6,12 @@ rankings against those judgments. CocoIndex, zvec-git, and Sense are candidate
 generators, not relevance oracles. Backend agreement, file overlap, and raw
 scores are not quality labels.
 
-## Current evaluation scope
+## Exploratory real-repository scope
+
+The [synthetic fixture protocol](./SYNTHETIC_EVALUATION.md) is the repeatable
+regression lane for zvec-grep retrieval changes. The Kubernaut run below is a
+separate, narrow repository-specific investigation; its scores are not the
+quality gate for the synthetic qeval work.
 
 The initial corpus is the Kubernaut feature snapshot recorded in
 [`kubernaut_fix-2442_8f3bc5a2_2026-09-23.json`](./kubernaut_fix-2442_8f3bc5a2_2026-09-23.json):
@@ -23,6 +28,19 @@ The first batch is narrow and workflow-discovery-heavy. Add representative
 queries from other code areas before using it to make a general backend
 decision. Keep queries grouped by intent so a win on exact identifiers cannot
 hide a loss on conceptual or multi-step questions.
+
+## Golden fixture lane
+
+For fast regression checks, use a small fixture whose source is fully
+controlled and whose relevant units are authored from that source before any
+backend is run. The current fixture is
+[`fixtures/go-workflow-discovery-v1`](./fixtures/go-workflow-discovery-v1/).
+Its qrels are complete because the fixture's source truth defines the entire
+unit universe; this is different from real-repository pooling, where qrels must
+be adjudicated from candidate snippets. Fixture results are objective for that
+fixture but must not be treated as evidence that a backend generalizes to all
+repositories or languages. See [the protocol](./SYNTHETIC_EVALUATION.md) for
+exact source, normalization, scoring, and rerun settings.
 
 ## Relevance unit and labels
 
@@ -57,9 +75,9 @@ returned result that is still unjudged; extend the pooled judgments first
 rather than silently treating an unknown result as irrelevant. Example:
 
 ```sh
-python scripts/evaluate_semantic_search.py \
-  --qrels benchmarks/semantic_search/kubernaut_qrels_adjudicated.json \
-  --runs benchmarks/semantic_search/kubernaut_runs_normalized.json \
+python3 scripts/evaluate_semantic_search.py \
+  --qrels benchmarks/semantic_search/kubernaut_fix-2442_8f3bc5a2_2026-09-23.qrels-adjudicated.json \
+  --runs benchmarks/semantic_search/kubernaut_fix-2442_8f3bc5a2_2026-09-23.normalized-runs.json \
   --k 10
 ```
 

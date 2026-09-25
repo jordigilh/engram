@@ -124,8 +124,21 @@ The adapter issues **exactly the eight `truth.json` queries** in order, with
 provided); Sense `search --language go --json`. It saves full backend responses
 as `raw-runs.json` and source-unit rankings as `normalized-runs.json`.
 It runs **all three backends**; a zvec-only ablation is not an option in this
-script, so retain the exact query, source, and baseline configuration when
-preparing separately captured ablation runs.
+script. For a zvec-only ablation, use `scripts/replay_synthetic_zvec.py` with
+the same fixture, a separate freshly built zvec root, and an explicit backend
+label. It validates the root's source digest before querying and preserves raw
+responses, normalized units, and scored metrics in a new output directory:
+
+```sh
+python3 -m scripts.replay_synthetic_zvec \
+  --fixture "$FIXTURE" --root "$ZVEC_ROOT" --binary "$ZG_BIN" \
+  --model-cache "$MODEL_CACHE" --backend rust-lexical-projection \
+  --output-dir "$WORK/zvec-only-replay"
+```
+
+Keep a same-implementation control run with a different backend label; scoring
+against the archived Rust control is only comparable when its source, model,
+search path, and query settings have been checked against the current run.
 
 ## Result mapping and score contract
 

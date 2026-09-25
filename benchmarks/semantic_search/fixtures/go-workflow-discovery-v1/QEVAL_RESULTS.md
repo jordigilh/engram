@@ -76,6 +76,31 @@ and [raw baseline](./replays/2026-09-24-zvec-proposal3-relationship-tiebreak/rus
 and [Proposal 3](./replays/2026-09-24-zvec-proposal3-relationship-tiebreak/rust-proposal3-raw-runs.json)
 responses are preserved separately from Proposal 2.
 
+## Isolated Rust lexical evidence projection
+
+The [dedicated zvec-grep worktree](./replays/2026-09-24-zvec-rust-lexical-projection/run-manifest.json)
+starts at `196a730` with the existing Sense-inspired TypeScript lexical base
+copied in. A Rust-only indexing change adds qualified symbol identity and
+decomposed name parts to the **combined FTS text**, retaining existing source
+and embedding inputs. No codegraph sidecar was present in either fixture index.
+The [zvec-only replay](./replays/2026-09-24-zvec-rust-lexical-projection/) has
+raw responses, normalized units, binary and source hashes, and
+[scored metrics](./replays/2026-09-24-zvec-rust-lexical-projection/metrics-k10.json).
+
+| Rust fixture run | nDCG@10 | MRR@10 | Recall@10 | Precision@10 |
+| --- | ---: | ---: | ---: | ---: |
+| No-relationship baseline (index v2) | 0.471013 | 0.667857 | 0.620833 | 0.225000 |
+| Lexical projection (index v3) | 0.594156 | 0.743750 | 0.677083 | 0.250000 |
+
+The baseline was also replayed fresh from the unchanged Rust source before
+the projection change and matched the saved baseline exactly. This paired
+development result improves all four aggregate metrics on the frozen Go
+fixture. It still has query-level losses: `copy-selected-workflow-details`
+loses one useful unit at @10 (nDCG `0.852701 → 0.774621`, recall `1 → 0.667`),
+and `empty-discovery-fails-closed` drops slightly in nDCG (`0.441502 → 0.436458`).
+It is not evidence of cross-language or LLM-answer quality; retain the
+per-query diagnostics and validate a second language before promotion.
+
 ## Recompute and interpret
 
 From the Engram repo root, for a normalized run such as the lexical-only revert:

@@ -1,8 +1,11 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts.build_synthetic_qrels import build_qrels
 from scripts.evaluate_semantic_search import evaluate
+from scripts.replay_synthetic_zvec import replay
 
 
 FIXTURE = (
@@ -64,3 +67,8 @@ def test_source_ordered_fixture_oracle_scores_perfectly():
     assert all(score["ndcg@10"] == 1.0 for score in scores)
     assert all(score["mrr@10"] == 1.0 for score in scores)
     assert all(score["recall@10"] == 1.0 for score in scores)
+
+
+def test_zvec_replay_refuses_a_different_source_root_before_search(tmp_path):
+    with pytest.raises(ValueError, match="indexed source root differs"):
+        replay(FIXTURE, tmp_path, tmp_path / "zg", tmp_path / "model", "zvec-test")

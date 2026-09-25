@@ -62,6 +62,20 @@ contain **both** Rust runs; the paired off run also has
 The reranker failed the Go fixture gate. **Do not compare these paired Rust
 values to the TypeScript lexical-only champion as though they share a baseline.**
 
+## Rust-only gated relationship tie-breaker
+
+The subsequent [Proposal 3 paired run](https://github.com/jordigilh/zvec-grep/issues/6#issuecomment-5824644286)
+kept the same Rust baseline and restricted structural influence to near ties.
+Both the no-relationship control and Proposal 3 score **0.471013 nDCG@10**,
+**0.667857 MRR@10**, **0.620833 recall@10**, and **0.225000 precision@10**;
+none of the eight top-10 orders changed. This avoids Proposal 2's regression
+but is neutral on this fixture, so it does not meet the improvement gate.
+The [normalized paired rankings](./replays/2026-09-24-zvec-proposal3-relationship-tiebreak/normalized-runs.json),
+[metrics](./replays/2026-09-24-zvec-proposal3-relationship-tiebreak/metrics-k10.json),
+and [raw baseline](./replays/2026-09-24-zvec-proposal3-relationship-tiebreak/rust-no-relationship-baseline.json)
+and [Proposal 3](./replays/2026-09-24-zvec-proposal3-relationship-tiebreak/rust-proposal3-raw-runs.json)
+responses are preserved separately from Proposal 2.
+
 ## Recompute and interpret
 
 From the Engram repo root, for a normalized run such as the lexical-only revert:
@@ -73,7 +87,7 @@ python3 scripts/evaluate_semantic_search.py \
   --k 10
 ```
 
-Issue #6 proposes a separate **deep-candidate rescue** ablation next: measure
+Issue #6 also proposes a separate **deep-candidate rescue** ablation: measure
 relevant-unit recall at depth 50 before changing the top-10 set. Report per-query
 and category changes alongside all four aggregate metrics, and compare each
 experiment against its **same-implementation** control. Retrieval contracts

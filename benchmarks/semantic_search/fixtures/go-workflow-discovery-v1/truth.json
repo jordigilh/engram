@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "suite_id": "synthetic-go-workflow-discovery",
+  "description": "Source-authored relevance truth for a small Go workflow-discovery fixture.",
+  "queries": [
+    {
+      "id": "record-discovered-membership",
+      "query": "Where are workflow IDs returned by list_workflows recorded for later validation?",
+      "category": "exact implementation / data flow",
+      "judgments": [
+        {"unit_id": "internal/tools/list_workflows.go::RecordDiscovered", "grade": 3, "rationale": "Records each returned workflow ID in the shared discovery state."},
+        {"unit_id": "internal/discovery/state.go::WorkflowState.Add", "grade": 3, "rationale": "Stores returned IDs in the state set."},
+        {"unit_id": "internal/tools/list_workflows.go::ListWorkflows", "grade": 2, "rationale": "Obtains the list result and calls the recording path."},
+        {"unit_id": "internal/discovery/state.go::WorkflowState", "grade": 2, "rationale": "Defines the shared state that holds discovered IDs."}
+      ]
+    },
+    {
+      "id": "reject-undiscovered-workflow",
+      "query": "How is a catalog-valid workflow rejected when it was not returned by workflow discovery?",
+      "category": "policy check / semantic behavior",
+      "judgments": [
+        {"unit_id": "internal/selection/validator.go::Validator.IsAllowed", "grade": 3, "rationale": "Combines catalog membership with the current discovery-state membership check."},
+        {"unit_id": "internal/selection/validator.go::Validator.Validate", "grade": 3, "rationale": "Calls IsAllowed and returns the validation error for an undiscovered ID."},
+        {"unit_id": "internal/discovery/state.go::WorkflowState.Contains", "grade": 2, "rationale": "Provides the discovery-state membership predicate."},
+        {"unit_id": "internal/selection/validator.go::ValidationError", "grade": 2, "rationale": "Represents the fail-closed validation error returned to the caller."}
+      ]
+    },
+    {
+      "id": "forward-labels-to-discovery",
+      "query": "How are signal labels converted into filters before workflow discovery lists actions?",
+      "category": "data flow / semantic behavior",
+      "judgments": [
+        {"unit_id": "internal/discovery/filters.go::FiltersFromSignal", "grade": 3, "rationale": "Converts signal labels into the discovery filter structure."},
+        {"unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListActions", "grade": 3, "rationale": "Uses discovery filters when listing available actions."},
+        {"unit_id": "internal/discovery/filters.go::ApplyLabelFilters", "grade": 2, "rationale": "Applies label constraints to candidate workflows."},
+        {"unit_id": "internal/discovery/filters.go::DiscoveryFilters", "grade": 1, "rationale": "Defines the filter shape but not the runtime conversion path."}
+      ]
+    },
+    {
+      "id": "preserve-membership-on-retry",
+      "query": "How does discovered workflow membership survive self-correction retries?",
+      "category": "multi-hop state / retry flow",
+      "judgments": [
+        {"unit_id": "internal/selection/retry.go::SelfCorrectSelection", "grade": 3, "rationale": "Reuses the shared state while validating corrected selections."},
+        {"unit_id": "internal/selection/validator.go::Validator.SetWorkflowState", "grade": 3, "rationale": "Attaches the live discovery state to the validator before retries."},
+        {"unit_id": "internal/discovery/state.go::WorkflowStateFromContext", "grade": 2, "rationale": "Retrieves the shared state from the selection context."},
+        {"unit_id": "internal/discovery/state.go::WorkflowState.Add", "grade": 2, "rationale": "Allows later discovery calls to extend the same set."},
+        {"unit_id": "internal/selection/retry.go::SelectWithRetry", "grade": 2, "rationale": "Coordinates validation and retry attempts."}
+      ]
+    },
+    {
+      "id": "interactive-selection-guard",
+      "query": "Where does interactive selection reject a workflow absent from the current discovery result?",
+      "category": "exact implementation / interactive guard",
+      "judgments": [
+        {"unit_id": "internal/tools/select_workflow.go::authorizeSelectionDriver", "grade": 3, "rationale": "Rejects IDs that are not in the current discovery result before catalog lookup."},
+        {"unit_id": "internal/tools/select_workflow.go::isWorkflowInDiscoveryResult", "grade": 3, "rationale": "Checks the recommended and alternative workflow IDs."},
+        {"unit_id": "internal/tools/select_workflow.go::HandleSelectWorkflow", "grade": 2, "rationale": "Calls authorization before returning the selected workflow."},
+        {"unit_id": "internal/tools/select_workflow.go::DiscoveryResult", "grade": 2, "rationale": "Defines the recommended and alternative IDs checked by the guard."}
+      ]
+    },
+    {
+      "id": "validate-workflow-parameters",
+      "query": "Where are remediation workflow parameters validated before execution?",
+      "category": "exact implementation / validation",
+      "judgments": [
+        {"unit_id": "internal/execution/runner.go::ValidateWorkflowParameters", "grade": 3, "rationale": "Directly validates required and unknown workflow parameters."},
+        {"unit_id": "internal/selection/validator.go::Validator.Validate", "grade": 2, "rationale": "Validates the selected workflow before the execution path."},
+        {"unit_id": "internal/discovery/catalog.go::WorkflowCatalog.GetWorkflow", "grade": 2, "rationale": "Retrieves the catalog schema used by parameter validation."},
+        {"unit_id": "internal/api/types.go::WorkflowSummary", "grade": 1, "rationale": "Carries workflow metadata but does not validate parameters."}
+      ]
+    },
+    {
+      "id": "empty-discovery-fails-closed",
+      "query": "What happens when workflow discovery returns no IDs and a selection is attempted?",
+      "category": "behavior / failure mode",
+      "judgments": [
+        {"unit_id": "internal/selection/validator.go::Validator.IsAllowed", "grade": 3, "rationale": "An empty discovery state makes a catalog ID fail the membership predicate."},
+        {"unit_id": "internal/selection/validator.go::Validator.Validate", "grade": 3, "rationale": "Turns the failed membership check into a rejected selection."},
+        {"unit_id": "internal/tools/list_workflows.go::ListWorkflows", "grade": 2, "rationale": "Defines the discovery call that leaves the state empty."},
+        {"unit_id": "internal/tools/list_workflows.go::RecordDiscovered", "grade": 2, "rationale": "Shows that no IDs are added when the discovery result is empty."},
+        {"unit_id": "internal/selection/retry.go::SelfCorrectSelection", "grade": 2, "rationale": "Provides the correction path after validation rejects the selection."}
+      ]
+    },
+    {
+      "id": "copy-selected-workflow-details",
+      "query": "How are selected workflow details copied into the final investigation result?",
+      "category": "multi-symbol data flow",
+      "judgments": [
+        {"unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow", "grade": 3, "rationale": "Copies catalog-resolved workflow fields into the final result."},
+        {"unit_id": "internal/tools/select_workflow.go::lookupDiscoveredParameters", "grade": 2, "rationale": "Finds per-workflow parameters from the discovery result."},
+        {"unit_id": "internal/discovery/catalog.go::WorkflowCatalog.GetWorkflow", "grade": 2, "rationale": "Supplies the catalog workflow details used by final assembly."},
+        {"unit_id": "internal/tools/select_workflow.go::DiscoveryResult", "grade": 1, "rationale": "Defines source data for the final result but does not perform copying."}
+      ]
+    }
+  ]
+}

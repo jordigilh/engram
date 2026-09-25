@@ -86,6 +86,9 @@ The runner writes `raw-runs.json`, `normalized-runs.json`, `metrics-k10.json`,
 and `run-manifest.json` for every arm plus a top-level `comparison.json` with
 per-language aggregate and per-query deltas. It refuses to reuse output and
 index roots so stale generations cannot silently enter a paired comparison.
+For a graph-dependent Rust proposal, add `--candidate-rust-graph`: the runner
+builds a fresh codegraph sidecar only for the candidate Rust arm and records
+the artifact-generation output; its Rust baseline remains graph-free.
 
 ## Acceptance and interpretation
 

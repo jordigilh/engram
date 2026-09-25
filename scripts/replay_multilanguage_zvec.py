@@ -8,6 +8,7 @@ import hashlib
 import json
 import pathlib
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -53,14 +54,41 @@ def _git(root: pathlib.Path, *args: str) -> str:
     return _run(["git", *args], cwd=root).strip()
 
 
-def _diff_digest(root: pathlib.Path, paths: list[str]) -> str:
+def _diff_digest(root: pathlib.Path, engine: str) -> str:
+    paths = (
+        ["src", "test"]
+        if engine == "typescript"
+        else ["rust/crates/zg-engine", "rust/crates/zg-codegraph"]
+    )
     encoded = subprocess.run(
         ["git", "diff", "--binary", "HEAD", "--", *paths],
         cwd=root,
         capture_output=True,
         check=True,
     ).stdout
-    return hashlib.sha256(encoded).hexdigest()
+    digest = hashlib.sha256(encoded)
+    untracked = _run(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=root
+    ).split("\0")
+    for relative in sorted(path for path in untracked if path and any(path.startswith(prefix + "/") for prefix in paths)):
+        digest.update(relative.encode())
+        digest.update(b"\0")
+        digest.update((root / relative).read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _current_index_version(root: pathlib.Path, engine: str) -> int:
+    relative = (
+        pathlib.Path("src/engine/types.ts")
+        if engine == "typescript"
+        else pathlib.Path("rust/crates/zg-engine/src/workspace/mod.rs")
+    )
+    text = (root / relative).read_text()
+    match = re.search(r"CURRENT_INDEX_VERSION\s*(?::\s*u32)?\s*=\s*(\d+)", text)
+    if not match:
+        raise MatrixReplayError(f"could not detect {engine} index version in {root / relative}")
+    return int(match.group(1))
 
 
 def _selected_source_paths(fixture: pathlib.Path, manifest: dict[str, Any]) -> tuple[str, list[str], int]:
@@ -97,6 +125,8 @@ def _capture_arm(
     model_snapshot: str,
     implementation_commit: str,
     implementation_diff_sha256: str,
+    implementation_index_version: int,
+    candidate_rust_graph: bool,
 ) -> dict[str, Any]:
     manifest = json.loads((fixture / "manifest.json").read_text())
     truth = json.loads((fixture / "truth.json").read_text())
@@ -112,6 +142,9 @@ def _capture_arm(
     index_command = [str(binary), "--index", str(workspace_root), *INDEX_FLAGS,
                      "--model-cache", str(model_cache)]
     index_output = _run(index_command)
+    graph_output = None
+    if engine == "rust" and arm == "candidate" and candidate_rust_graph:
+        graph_output = _run([str(binary), "--graph", str(workspace_root)])
     verified_digest, verified_paths, verified_bytes = _snapshot(workspace_root, manifest)
     if (verified_digest, verified_paths, verified_bytes) != (digest, paths, total_bytes):
         raise MatrixReplayError(f"staged workspace differs from fixture: {workspace_root}")
@@ -164,8 +197,7 @@ def _capture_arm(
         "implementation_diff_sha256": implementation_diff_sha256,
         "binary_path": str(binary),
         "binary_sha256": raw["binary_sha256"],
-        "index_version": {"typescript": 1 if arm == "baseline" else 2,
-                           "rust": 2 if arm == "baseline" else 3}[engine],
+        "index_version": implementation_index_version,
         "embedding_model": MODEL_ID,
         "embedding_model_snapshot": model_snapshot,
         "device": "cpu",
@@ -177,7 +209,8 @@ def _capture_arm(
         "raw_result_limit": 10,
         "normalized_cutoff": 10,
         "normalization": "source declaration spans from fixture manifest",
-        "graph_sidecar": "absent",
+        "graph_sidecar": "present" if graph_output is not None else "absent",
+        "graph_generation_output": graph_output,
         "os": platform.platform(),
         "index_output": index_output,
     }
@@ -210,27 +243,14 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
         ("rust", "baseline"): args.baseline_rust.resolve(),
         ("rust", "candidate"): args.candidate_rust.resolve(),
     }
-    paths = {
-        "typescript": [
-            "src/engine/extraction/index.ts", "src/engine/extraction/vector-content.ts",
-            "src/engine/storage/zvec.ts", "src/engine/types.ts",
-        ],
-        "rust": [
-            "rust/crates/zg-engine/src/pipelines/indexing/pipeline.rs",
-            "rust/crates/zg-engine/src/pipelines/indexing/service.rs",
-            "rust/crates/zg-engine/src/workspace/manifest.rs",
-            "rust/crates/zg-engine/src/workspace/mod.rs",
-        ],
-    }
     revisions = {
         "baseline": _git(baseline_root, "rev-parse", "HEAD"),
         "candidate": _git(candidate_root, "rev-parse", "HEAD"),
     }
     diff_hashes = {
-        ("typescript", "baseline"): _diff_digest(baseline_root, paths["typescript"]),
-        ("typescript", "candidate"): _diff_digest(candidate_root, paths["typescript"]),
-        ("rust", "baseline"): _diff_digest(baseline_root, paths["rust"]),
-        ("rust", "candidate"): _diff_digest(candidate_root, paths["rust"]),
+        (engine, arm): _diff_digest(baseline_root if arm == "baseline" else candidate_root, engine)
+        for engine in ("typescript", "rust")
+        for arm in ("baseline", "candidate")
     }
     model_cache = args.model_cache.resolve()
     summaries: dict[str, Any] = {language: {} for language in LANGUAGES}
@@ -242,14 +262,19 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                     fixture=fixture,
                     language=language,
                     engine=engine,
-                    arm=arm,
-                    binary=binaries[(engine, arm)],
+                arm=arm,
+                binary=binaries[(engine, arm)],
                     work_parent=work_parent,
                     output_parent=output_parent,
                     model_cache=model_cache,
                     model_snapshot=args.model_snapshot,
-                    implementation_commit=revisions[arm],
-                    implementation_diff_sha256=diff_hashes[(engine, arm)],
+                implementation_commit=revisions[arm],
+                implementation_diff_sha256=diff_hashes[(engine, arm)],
+                implementation_index_version=_current_index_version(
+                    baseline_root if arm == "baseline" else candidate_root,
+                    engine,
+                ),
+                candidate_rust_graph=args.candidate_rust_graph,
                 )
     comparison = {"schema_version": 1, "languages": {}}
     for language in LANGUAGES:
@@ -297,6 +322,11 @@ def main() -> None:
     parser.add_argument("--candidate-rust", type=pathlib.Path, required=True)
     parser.add_argument("--model-cache", type=pathlib.Path, required=True)
     parser.add_argument("--model-snapshot", default=MODEL_SNAPSHOT)
+    parser.add_argument(
+        "--candidate-rust-graph",
+        action="store_true",
+        help="build a fresh Rust codegraph sidecar for the Rust candidate arm",
+    )
     args = parser.parse_args()
     try:
         comparison = run_matrix(args)

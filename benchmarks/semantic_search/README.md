@@ -7,6 +7,8 @@ The source-grounded draft targets for the historical feature-branch suite are in
 those targets are not gold labels. The synthetic fixture below is the primary
 regression lane for zvec-grep retrieval experiments; the Kubernaut artifacts
 later on this page are exploratory real-repository context, not a quality gate.
+The four issue-#6 proposal qevals and current per-language enablement evidence
+are consolidated in [`PROPOSAL_QEVAL_REPORT.md`](./PROPOSAL_QEVAL_REPORT.md).
 
 ## Golden synthetic fixtures
 

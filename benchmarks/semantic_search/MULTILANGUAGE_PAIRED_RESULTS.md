@@ -8,6 +8,9 @@ language**, independently. Evaluation procedure and fixtures are described in
 own source-authored truth, complete qrels, digest, and eight-query run. Scores
 are never pooled across source languages.
 
+The four additional Sense-inspired/reranking proposal experiments are
+consolidated in [`PROPOSAL_QEVAL_REPORT.md`](./PROPOSAL_QEVAL_REPORT.md).
+
 ## Same-engine paired results
 
 The baseline and candidate for each engine/language pair used the same source

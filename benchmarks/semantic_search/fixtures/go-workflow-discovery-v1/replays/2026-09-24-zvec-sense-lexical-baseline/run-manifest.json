@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "run_id": "2026-09-24-zvec-sense-lexical-baseline",
+  "fixture_id": "go-workflow-discovery-v1",
+  "language": "go",
+  "source": {
+    "repository": "synthetic/go-workflow-discovery",
+    "revision": "fixture-v1",
+    "root": ".",
+    "include": [
+      "**/*.go"
+    ],
+    "exclude": [
+      "**/*_test.go"
+    ],
+    "snapshot_sha256": "94183663d9e5f81b753dde7c460428c2414c46867b936b5cc42f9827dab0827f",
+    "files": 10,
+    "bytes": 7872
+  },
+  "queries": 8,
+  "units": 38,
+  "qrels_status": "adjudicated",
+  "candidate_pool_complete": true,
+  "implementation": {
+    "backend": "zvec-grep TypeScript",
+    "source_commit": "196a73015bf4ca42b1bb0adae56338d9ab156af7",
+    "working_tree_dirty": true,
+    "working_tree_patch_sha256": "f5d233e328639f5720cd997fd5f181e0a8f928fbcfff0e983e8491669424a869",
+    "binary": "/Users/jgil/go/src/github.com/jordigilh/zvec-grep-fork/dist/cli/index.js",
+    "binary_sha256": "817ff1c4ff0b57b0c27eb9c3d8869f9a4db32d1765267798e77c3be6d1b49f6f"
+  },
+  "index": {
+    "index_version": 2,
+    "embedding_model": "local/potion-code-16m-v2",
+    "device": "cpu",
+    "root": "/private/var/folders/r7/gktmmltd1zq7wqhsjjslwsm80000gn/T/opencode/zvec-sense-baseline-go",
+    "files_indexed": 10,
+    "entities_indexed": 38,
+    "selection": {
+      "repository": "synthetic/go-workflow-discovery",
+      "revision": "fixture-v1",
+      "root": ".",
+      "include": [
+        "**/*.go"
+      ],
+      "exclude": [
+        "**/*_test.go"
+      ]
+    },
+    "model_cache": "/var/folders/r7/gktmmltd1zq7wqhsjjslwsm80000gn/T/opencode/zvec-sense-baseline-model-cache"
+  },
+  "search": {
+    "route": "hybrid",
+    "mode": "direct",
+    "refresh": "off",
+    "limit": 10,
+    "normalized_cutoff": 10,
+    "normalization": "source-unit@10"
+  },
+  "metrics_at_10": {
+    "ndcg@10": 0.5887735493745122,
+    "mrr@10": 0.7333333333333333,
+    "recall@10": 0.6770833333333334,
+    "precision@10": 0.25
+  }
+}

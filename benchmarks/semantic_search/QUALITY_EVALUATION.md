@@ -35,12 +35,16 @@ For fast regression checks, use a small fixture whose source is fully
 controlled and whose relevant units are authored from that source before any
 backend is run. The current fixture is
 [`fixtures/go-workflow-discovery-v1`](./fixtures/go-workflow-discovery-v1/).
+It is one of four independent source-language lanes; see
+[`MULTILANGUAGE_PAIRED_RESULTS.md`](./MULTILANGUAGE_PAIRED_RESULTS.md) and its
+[protocol](./MULTILANGUAGE_PROTOCOL.md) for Go, Python, Rust, and TypeScript
+paired runs.
 Its qrels are complete because the fixture's source truth defines the entire
 unit universe; this is different from real-repository pooling, where qrels must
 be adjudicated from candidate snippets. Fixture results are objective for that
 fixture but must not be treated as evidence that a backend generalizes to all
-repositories or languages. See [the protocol](./SYNTHETIC_EVALUATION.md) for
-exact source, normalization, scoring, and rerun settings.
+repositories or additional languages. See [the protocol](./SYNTHETIC_EVALUATION.md)
+for exact source, normalization, scoring, and rerun settings.
 
 ## Relevance unit and labels
 

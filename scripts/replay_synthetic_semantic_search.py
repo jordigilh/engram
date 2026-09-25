@@ -94,6 +94,19 @@ def _unit_spans(fixture: pathlib.Path, manifest: dict[str, Any]) -> list[UnitSpa
         path = unit["path"]
         symbol = unit["symbol"]
         lines = (fixture / path).read_text().splitlines()
+        if "start_line" in unit or "end_line" in unit:
+            start = unit.get("start_line")
+            end = unit.get("end_line")
+            if (
+                not isinstance(start, int)
+                or not isinstance(end, int)
+                or start < 1
+                or end < start
+                or end > len(lines)
+            ):
+                raise ReplayError(f"invalid manifest source span for {path}::{symbol}")
+            spans.append(UnitSpan(unit["unit_id"], path, symbol, start, end))
+            continue
         name = re.escape(symbol.rsplit(".", 1)[-1])
         patterns = (
             re.compile(rf"^\s*func\s+(?:\([^)]*\)\s*)?{name}\b"),
@@ -159,11 +172,23 @@ def _map_chunk(
 def _map_sense_result(units: list[UnitSpan], result: dict[str, Any]) -> list[str]:
     path = result["file"]
     symbol = result["symbol"]
+    normalized_symbol = re.sub(r"[^\w]", "", symbol, flags=re.UNICODE).casefold()
+    line = result.get("line")
     matches = [
         unit
         for unit in units
         if unit.path == path
-        and (symbol == unit.symbol or symbol.endswith("." + unit.symbol))
+        and (
+            normalized_symbol
+            in {
+                re.sub(r"[^\w]", "", unit.symbol, flags=re.UNICODE).casefold(),
+                re.sub(r"[^\w]", "", unit.symbol.rsplit(".", 1)[-1], flags=re.UNICODE).casefold(),
+            }
+            or normalized_symbol.endswith(
+                re.sub(r"[^\w]", "", unit.symbol, flags=re.UNICODE).casefold()
+            )
+        )
+        and (not isinstance(line, int) or unit.start <= line <= unit.end)
     ]
     if len(matches) != 1:
         raise ReplayError(f"Sense symbol did not map uniquely: {path}::{symbol}")
@@ -244,7 +269,10 @@ def _zvec_results(
 
 
 def _run_sense(
-    binary: pathlib.Path, root: pathlib.Path, queries: list[dict[str, Any]]
+    binary: pathlib.Path,
+    root: pathlib.Path,
+    queries: list[dict[str, Any]],
+    language: str = "go",
 ) -> list[dict[str, Any]]:
     rows = []
     for query in queries:
@@ -256,7 +284,7 @@ def _run_sense(
                 "--limit",
                 "10",
                 "--language",
-                "go",
+                language,
                 "--json",
             ],
             cwd=root,
@@ -332,7 +360,9 @@ def replay(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
 
     coco_rows = _run_cocoindex(queries, args.coco_pg_url, args.coco_table, args.coco_repo_tag)
     zvec_rows = _run_zvec(args.zvec_binary, args.zvec_root, queries, args.model_cache)
-    sense_rows = _run_sense(args.sense_binary, args.sense_root, queries)
+    sense_rows = _run_sense(
+        args.sense_binary, args.sense_root, queries, manifest["language"]
+    )
     by_backend = {
         "cocoindex": {row["id"]: row for row in coco_rows},
         "zvec-git": {row["id"]: row for row in zvec_rows},

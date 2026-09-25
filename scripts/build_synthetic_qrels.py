@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import pathlib
@@ -14,13 +15,22 @@ class FixtureError(ValueError):
 
 
 def _snapshot(root: pathlib.Path, manifest: dict[str, Any]) -> tuple[str, list[str], int]:
+    source = manifest.get("source", {})
+    includes = source.get("include", ["**/*"])
+    excludes = source.get("exclude", [])
     files = []
-    for path in root.rglob("*.go"):
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
         relative = path.relative_to(root).as_posix()
-        if relative.endswith("_test.go"):
+        if not any(fnmatch.fnmatchcase(relative, pattern) for pattern in includes):
+            continue
+        if any(fnmatch.fnmatchcase(relative, pattern) for pattern in excludes):
             continue
         files.append(relative)
     files.sort()
+    if not files:
+        raise FixtureError("manifest source selection matched no files")
 
     digest = hashlib.sha256()
     total_bytes = 0

@@ -13,6 +13,11 @@ later on this page are exploratory real-repository context, not a quality gate.
 The end-to-end fixture construction, index/replay commands, normalization,
 metric formulas, and per-run provenance requirements are in
 [`SYNTHETIC_EVALUATION.md`](./SYNTHETIC_EVALUATION.md).
+The independent Go, Python, Rust, and TypeScript qeval lanes and measured
+baseline/candidate comparison are in
+[`MULTILANGUAGE_PAIRED_RESULTS.md`](./MULTILANGUAGE_PAIRED_RESULTS.md), with
+the reproducible fixture/paired-run protocol in
+[`MULTILANGUAGE_PROTOCOL.md`](./MULTILANGUAGE_PROTOCOL.md).
 
 Use the small, source-authored fixture suite for repeatable regression checks:
 

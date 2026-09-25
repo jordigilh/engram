@@ -4,6 +4,10 @@ This is the reproducible **retrieval** evaluation used for zvec-grep experiments
 tracked in [zvec-grep issue #6](https://github.com/jordigilh/zvec-grep/issues/6).
 The fixed example is [`go-workflow-discovery-v1`](./fixtures/go-workflow-discovery-v1/),
 with its [measured runs](./fixtures/go-workflow-discovery-v1/QEVAL_RESULTS.md).
+The four independent source-language lanes and their paired results are in
+[`MULTILANGUAGE_PAIRED_RESULTS.md`](./MULTILANGUAGE_PAIRED_RESULTS.md); see
+[`MULTILANGUAGE_PROTOCOL.md`](./MULTILANGUAGE_PROTOCOL.md) for exact fixture,
+baseline/candidate, and replay rules.
 [`QUALITY_EVALUATION.md`](./QUALITY_EVALUATION.md) describes the separate
 real-repository judging process. The Go fixture is an evaluation corpus, **not**
 a Go-only retrieval-design requirement.

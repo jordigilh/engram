@@ -110,27 +110,39 @@ export function deriveIdentity(input: DeriveIdentityInput): ResolvedIdentity {
   return { project, family, branchSuffix }
 }
 
-export interface McpServerEntry {
+/** Native V2 (OpenCode 2.x) remote server shape. V2 enables OAuth by default,
+ *  so the LAN gateway entry must opt out explicitly; `disabled: false` is the
+ *  explicit enabled state for the server. */
+export interface McpServerEntryV2 {
   type: "remote"
   url: string
-  enabled: true
+  oauth: false
+  disabled: false
 }
-
-export type McpConfig = Record<"engram", McpServerEntry>
 
 const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8896"
 
-export function mergeMcpConfig(config: { mcp?: Record<string, unknown> }, generated: McpConfig): void {
-  config.mcp = config.mcp || {}
-  if (!config.mcp.engram) config.mcp.engram = generated.engram
-}
-
-export function buildMcpConfig(
+/** Native V2 server entry for `ctx.mcp.transform(editor => editor.set(...))`.
+ *  The gateway is a plain-LAN endpoint with no OAuth issuer, so `oauth: false`
+ *  keeps V2 from attempting OAuth discovery against it. */
+export function buildMcpServerConfigV2(
   identity: Pick<ResolvedIdentity, "project">,
   options: Pick<EngramPluginOptions, "gatewayUrl"> = {},
-): McpConfig {
+): McpServerEntryV2 {
   const gatewayUrl = (options.gatewayUrl || DEFAULT_GATEWAY_URL).replace(/\/$/, "")
   return {
-    engram: { type: "remote", url: `${gatewayUrl}/mcp/${identity.project}`, enabled: true },
+    type: "remote",
+    url: `${gatewayUrl}/mcp/${identity.project}`,
+    oauth: false,
+    disabled: false,
   }
+}
+
+/** Adds the generated route only when no explicit `engram` entry exists;
+ *  never overwrites the configured route. */
+export function mergeMcpEditor(
+  editor: { get(name: string): unknown; set(name: string, config: McpServerEntryV2): void },
+  generated: McpServerEntryV2,
+): void {
+  if (!editor.get("engram")) editor.set("engram", generated)
 }

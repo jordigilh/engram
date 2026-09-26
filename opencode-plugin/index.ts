@@ -1,4 +1,4 @@
-// Engram plugin for OpenCode (https://opencode.ai).
+// Engram plugin for OpenCode 2 (https://opencode.ai).
 //
 // Gives OpenCode/OpenChamber recall/retain/code-search capabilities through
 // one Engram gateway MCP entry, so users never register backend servers
@@ -7,23 +7,23 @@
 // docs/findings/2026-08.md (2026-08-13, 13th-16th follow-ups) for the spikes
 // this implements.
 //
-// Usage, in a repo's opencode.json:
-//   Single repo, zero config:
-//     { "plugin": ["<path-or-package>/index.ts"] }
-//   Org sharing one memory bank across sibling repos (set identically in
-//   each repo's opencode.json):
-//     { "plugin": [["<path-or-package>/index.ts", { "family": "<family>" }]] }
+// OpenCode V2 registers MCP configuration and behavior through Plugin.define
+// and its MCP, session, tool, and event APIs. Configure the plugin under
+// `plugins`; V1 plugin implementations are not loaded by OpenCode V2.
 //
 // `project` defaults to the directory name. Set it explicitly for a registered
 // gateway alias such as a release-line route whose name differs from the
 // checkout directory.
-import type { Plugin } from "@opencode-ai/plugin"
+import { Plugin } from "@opencode/plugin"
+import { execFile } from "node:child_process"
 import {
-  buildMcpConfig,
+  buildMcpServerConfigV2,
   deriveIdentity,
-  mergeMcpConfig,
+  mergeMcpEditor,
   resolveRepositoryOptions,
   type EngramPluginOptions,
+  type McpServerEntryV2,
+  type ResolvedIdentity,
 } from "./identity"
 import { buildCompactionContext } from "./compaction"
 import { buildSystemRecall } from "./system-recall"
@@ -44,19 +44,29 @@ import {
   type MetricEvent,
 } from "./metrics"
 
-async function detectBranch(directory: string, $: any): Promise<string | undefined> {
+function runGit(args: string[], directory: string, timeoutMs = 5000): Promise<string> {
+  return new Promise((resolve) => {
+    execFile("git", args, { cwd: directory, timeout: timeoutMs }, (error, stdout) => {
+      if (error) resolve("")
+      else resolve(String(stdout || ""))
+    })
+  })
+}
+
+async function detectBranch(directory: string): Promise<string | undefined> {
   try {
-    const out = await $`git rev-parse --abbrev-ref HEAD`.cwd(directory).quiet().text()
+    const out = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], directory)
     const branch = out.trim()
+    if (!branch) return undefined
     return branch === "HEAD" ? undefined : branch // detached HEAD: treat as unknown, not a branch name
   } catch {
     return undefined
   }
 }
 
-async function detectRemotes(directory: string, $: any): Promise<string[]> {
+async function detectRemotes(directory: string): Promise<string[]> {
   try {
-    const out = await $`git remote -v`.cwd(directory).quiet().text()
+    const out = await runGit(["remote", "-v"], directory)
     return out
       .split(/\r?\n/)
       .filter((line: string) => /\(fetch\)$/.test(line.trim()))
@@ -67,38 +77,48 @@ async function detectRemotes(directory: string, $: any): Promise<string[]> {
   }
 }
 
-export const EngramPlugin: Plugin = async (ctx, rawOptions) => {
+interface EngramState {
+  identity: ResolvedIdentity
+  gatewayUrl: string
+  mcpV2: McpServerEntryV2
+}
+
+async function resolveEngramState(directory: string, rawOptions: unknown): Promise<EngramState> {
   const options = (rawOptions || {}) as EngramPluginOptions
-  const directoryBasename = (ctx.directory || "").split("/").filter(Boolean).pop() || "unknown-project"
-  const branch = await detectBranch(ctx.directory, ctx.$)
-  const remotes = await detectRemotes(ctx.directory, ctx.$)
+  const directoryBasename = (directory || "").split("/").filter(Boolean).pop() || "unknown-project"
+  const branch = await detectBranch(directory)
+  const remotes = await detectRemotes(directory)
   const identityOptions = resolveRepositoryOptions(directoryBasename, remotes, options)
 
   const identity = deriveIdentity({ directoryBasename, branch, options: identityOptions })
-  const mcp = buildMcpConfig(identity, options)
-  const gatewayUrl = mcp.engram.url
-  // Option A state: per-process probe cache + per-session dedupe so a
-  // repeated grep can't re-trigger the gateway or spam the model.
-  const dedupe = new NudgeDedupe()
-  const probeCache = new ProbeCache()
-  const pendingProbe = new Set<string>()
+  const mcpV2 = buildMcpServerConfigV2(identity, options)
+  return {
+    identity,
+    gatewayUrl: mcpV2.url,
+    mcpV2,
+  }
+}
 
-  // Steering metric: append-only jsonl, never throws. Read with
-  // `bun opencode-plugin/metrics-report.ts` for nudge→MCP conversion.
-  const metricsPath =
+function metricsPath(): string {
+  return (
     process.env["ENGRAM_METRICS_PATH"] ||
     `${process.env["HOME"] || "~"}/.engram/logs/opencode-nudges.jsonl`
-  const logMetric = (event: MetricEvent): void => {
+  )
+}
+
+function makeLogMetric(): (event: MetricEvent) => void {
+  const path = metricsPath()
+  return (event: MetricEvent): void => {
     import("node:fs/promises")
       .then(async (fs) => {
         const line = `${JSON.stringify(event)}\n`
         try {
-          await fs.appendFile(metricsPath, line, "utf-8")
+          await fs.appendFile(path, line, "utf-8")
         } catch {
-          const dir = metricsPath.split("/").slice(0, -1).join("/") || "."
+          const dir = path.split("/").slice(0, -1).join("/") || "."
           try {
             await fs.mkdir(dir, { recursive: true })
-            await fs.appendFile(metricsPath, line, "utf-8")
+            await fs.appendFile(path, line, "utf-8")
           } catch {
             /* metrics must never break the session */
           }
@@ -106,79 +126,158 @@ export const EngramPlugin: Plugin = async (ctx, rawOptions) => {
       })
       .catch(() => {})
   }
-
-  console.error(
-    `[engram-plugin] project=${identity.project} family=${identity.family} branch=${identity.branchSuffix} directory=${ctx.directory}`,
-  )
-
-  return {
-    config: async (config) => {
-      mergeMcpConfig(config, mcp)
-    },
-    // Survive context compression. Fires before the LLM builds the
-    // continuation summary on both `/compact` and auto-overflow.
-    "experimental.session.compacting": async (_input, output) => {
-      output.context.push(buildCompactionContext(identity))
-    },
-    // Every-prompt fallback: re-applies methodology recall even if a
-    // compaction summary drops it. TUI-only `tui.prompt.append` is not used
-    // so CLI/`serve`/web get the same guarantee.
-    "experimental.chat.system.transform": async (_input, output) => {
-      output.system.push(buildSystemRecall(identity))
-    },
-    // Post-compaction observer: low-risk, never blocks.
-    event: async ({ event }) => {
-      const props = (event as unknown as { properties?: Record<string, unknown> }).properties || {}
-      const sessionID =
-        (props["sessionID"] as string) ||
-        ((event as unknown as { sessionID?: string }).sessionID ?? "")
-      const line = buildCompactedLog(event.type, sessionID)
-      if (line) console.error(line)
-    },
-    // MCP-over-CLI nudge: warn-only, never blocks. Allowlist-based.
-    // Code-search is NOT logged here — it only nudges after a successful
-    // gateway probe in `tool.execute.after`, so we never respond regardless.
-    "tool.execute.before": async (input, output) => {
-      const hit = shouldNudgeMcp(input.tool, output.args?.command)
-      if (hit) console.error(`[engram-plugin] ${buildMcpNudgeMessage(hit)}`)
-      if (isEngramTool(input.tool)) {
-        logMetric(buildEngramToolUseEvent(input.sessionID || "", input.tool))
-      }
-    },
-    // Probe-once code-search hint for the LLM: append-only, tool succeeds.
-    // Flow: detect → dedupe claim → cached probe or live probe (2.5s) →
-    // append only when Engram actually has hits.
-    "tool.execute.after": async (input, output) => {
-      const search = detectCodeSearch(input.tool, input.args)
-      if (!search) return
-      if (typeof output.output !== "string" || output.output.includes("[engram-plugin]")) return
-      const key = normalizeSearchKey(search.cli, search.query || search.cli)
-      const sessionID = input.sessionID || ""
-      const cached = probeCache.get(key)
-      if (cached) {
-        if (!cached.ok) return
-        if (!dedupe.claim(sessionID, key)) return
-        output.output += `\n\n${buildProbedNudge(search.cli, search.query, cached.hits)}`
-        logMetric(buildNudgeEvent(sessionID, search.cli, search.query, cached.hits))
-        return
-      }
-      if (pendingProbe.has(key)) return
-      pendingProbe.add(key)
-      try {
-        const query = search.query || search.cli
-        const result = await probeGateway(gatewayUrl, query, fetch as never, 2500)
-        probeCache.set(key, result)
-        if (!result.ok) return
-        if (!dedupe.claim(sessionID, key)) return
-        output.output += `\n\n${buildProbedNudge(search.cli, search.query, result.hits)}`
-        logMetric(buildNudgeEvent(sessionID, search.cli, search.query, result.hits))
-      } catch {
-        return
-      } finally {
-        pendingProbe.delete(key)
-      }
-    },
-  }
 }
 
-export default EngramPlugin
+function logProjectLine(identity: ResolvedIdentity, directory: string): void {
+  console.error(
+    `[engram-plugin] project=${identity.project} family=${identity.family} branch=${identity.branchSuffix} directory=${directory}`,
+  )
+}
+
+// Append a probe nudge to a V2 Tool.Result without changing its shape:
+// string content stays a string, array content gains a text part, and
+// missing content becomes the nudge text. Never duplicates.
+export function appendV2Nudge<T extends { content?: unknown }>(result: T, text: string): T
+export function appendV2Nudge(result: undefined, text: string): undefined
+export function appendV2Nudge<T extends { content?: unknown }>(result: T | undefined, text: string): T | undefined {
+  if (!result) return result
+  const content = result.content
+  if (typeof content === "string") {
+    if (content.includes("[engram-plugin]")) return result
+    return { ...result, content: `${content}\n\n${text}` } as T
+  }
+  if (Array.isArray(content)) {
+    if (
+      content.some(
+        (part) =>
+          part &&
+          typeof part === "object" &&
+          "text" in part &&
+          typeof part.text === "string" &&
+          part.text.includes("[engram-plugin]"),
+      )
+    ) {
+      return result
+    }
+    return { ...result, content: [...content, { type: "text", text }] } as T
+  }
+  if (content == null) {
+    return { ...result, content: text } as T
+  }
+  return result
+}
+
+function readV2SessionID(event: unknown): string {
+  const e = event as {
+    sessionID?: unknown
+    properties?: Record<string, unknown>
+    data?: Record<string, unknown>
+  }
+  const direct = typeof e.sessionID === "string" ? e.sessionID : ""
+  if (direct) return direct
+  for (const bag of [e.properties, e.data]) {
+    const v = bag?.["sessionID"]
+    if (typeof v === "string" && v) return v
+  }
+  return ""
+}
+
+// ---------------------------------------------------------------------------
+// Register behavior through the V2 domain APIs.
+// ---------------------------------------------------------------------------
+type PluginContext = Parameters<Parameters<typeof Plugin.define>[0]["setup"]>[0]
+
+async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | void> {
+  const directory = ctx.location.directory || ""
+  const { identity, mcpV2, gatewayUrl } = await resolveEngramState(directory, ctx.options)
+  const dedupe = new NudgeDedupe()
+  const probeCache = new ProbeCache()
+  const pendingProbe = new Set<string>()
+  const logMetric = makeLogMetric()
+
+  logProjectLine(identity, directory)
+
+  // The direct config entry (mcp.servers.engram) is the route authority; the
+  // generated entry is only a fallback and never overwrites an explicit one.
+  await ctx.mcp.transform((editor) => {
+    mergeMcpEditor(editor, mcpV2)
+  })
+
+  // Every agent-loop model request: re-apply methodology recall even if a
+  // compaction summary dropped it.
+  await ctx.session.hook("context", (event) => {
+    event.system.push({ type: "text", text: buildSystemRecall(identity) })
+  })
+
+  // Compaction summaries: steer the summarizer so the methodology recall
+  // survives `/compact` and auto-overflow.
+  await ctx.session.hook("compaction", (event) => {
+    event.system.push({ type: "text", text: buildCompactionContext(identity) })
+  })
+
+  // MCP-over-CLI nudge: warn-only, never blocks. Allowlist-based.
+  await ctx.tool.hook("execute.before", (event) => {
+    const input = event.input as { command?: unknown } | undefined
+    const hit = shouldNudgeMcp(event.tool, input?.command)
+    if (hit) console.error(`[engram-plugin] ${buildMcpNudgeMessage(hit)}`)
+    if (isEngramTool(event.tool)) {
+      logMetric(buildEngramToolUseEvent(event.sessionID, event.tool))
+    }
+  })
+
+  // Probe-once code-search hint for the LLM: append-only on success.
+  // Flow: detect → dedupe claim → cached probe or live probe (2.5s) →
+  // append only when Engram actually has hits.
+  await ctx.tool.hook("execute.after", async (event) => {
+    if (event.status !== "completed") return
+    const search = detectCodeSearch(event.tool, event.input)
+    if (!search) return
+    const key = normalizeSearchKey(search.cli, search.query || search.cli)
+    const sessionID = event.sessionID
+    const cached = probeCache.get(key)
+    if (cached) {
+      if (!cached.ok) return
+      if (!dedupe.claim(sessionID, key)) return
+      event.result = appendV2Nudge(event.result, buildProbedNudge(search.cli, search.query, cached.hits))
+      logMetric(buildNudgeEvent(sessionID, search.cli, search.query, cached.hits))
+      return
+    }
+    if (pendingProbe.has(key)) return
+    pendingProbe.add(key)
+    try {
+      const query = search.query || search.cli
+      const result = await probeGateway(gatewayUrl, query, fetch as never, 2500)
+      probeCache.set(key, result)
+      if (!result.ok) return
+      if (!dedupe.claim(sessionID, key)) return
+      event.result = appendV2Nudge(event.result, buildProbedNudge(search.cli, search.query, result.hits))
+      logMetric(buildNudgeEvent(sessionID, search.cli, search.query, result.hits))
+    } catch {
+      return
+    } finally {
+      pendingProbe.delete(key)
+    }
+  })
+
+  // Post-compaction observer: low-risk, never blocks.
+  const controller = new AbortController()
+  void (async () => {
+    try {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        const type = (event as { type?: unknown }).type
+        if (typeof type !== "string") continue
+        const line = buildCompactedLog(type, readV2SessionID(event))
+        if (line) console.error(line)
+      }
+    } catch {
+      /* subscription aborted on unload */
+    }
+  })()
+
+  return () => controller.abort()
+}
+
+export default Plugin.define({
+  id: "engram",
+  setup: setupEngramPlugin,
+})

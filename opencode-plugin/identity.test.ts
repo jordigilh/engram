@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import {
   deriveIdentity,
-  buildMcpConfig,
-  mergeMcpConfig,
+  buildMcpServerConfigV2,
+  mergeMcpEditor,
   normalizeRepositoryRemote,
   resolveRepositoryOptions,
 } from "./identity"
@@ -110,52 +110,63 @@ describe("repository mappings", () => {
   })
 })
 
-describe("buildMcpConfig", () => {
+describe("buildMcpServerConfigV2", () => {
   test("produces one gateway entry", () => {
-    const cfg = buildMcpConfig({ project: "service-api-v1.5", family: "platform", branchSuffix: "v1.5" })
-    expect(Object.keys(cfg)).toEqual(["engram"])
-    expect(cfg.engram).toEqual({ type: "remote", url: "http://127.0.0.1:8896/mcp/service-api-v1.5", enabled: true })
-  })
-
-  test("builds an exact gateway route without using family to construct backend URLs", () => {
-    const cfg = buildMcpConfig(
-      { project: "service-api-v1.5", family: "platform", branchSuffix: "v1.5" },
-    )
-    expect(cfg.engram).toEqual({ type: "remote", url: "http://127.0.0.1:8896/mcp/service-api-v1.5", enabled: true })
-  })
-
-  test("allows overriding only the gateway URL", () => {
-    const cfg = buildMcpConfig(
-      { project: "myrepo", family: "myrepo", branchSuffix: "main" },
-      { gatewayUrl: "http://localhost:9999/" },
-    )
-    expect(cfg.engram.url).toBe("http://localhost:9999/mcp/myrepo")
-  })
-
-})
-
-describe("mergeMcpConfig", () => {
-  test("preserves an explicit project-level Engram route", () => {
-    const config: { mcp?: Record<string, unknown> } = {
-      mcp: { engram: { type: "remote", url: "http://127.0.0.1:8896/mcp/dcm", enabled: true } },
-    }
-    const generated = buildMcpConfig({ project: "dcm-project", family: "dcm-project", branchSuffix: "main" })
-
-    mergeMcpConfig(config, generated)
-
-    expect(config.mcp?.engram).toEqual({
+    const cfg = buildMcpServerConfigV2({ project: "service-api-v1.5", family: "platform", branchSuffix: "v1.5" })
+    expect(cfg).toEqual({
       type: "remote",
-      url: "http://127.0.0.1:8896/mcp/dcm",
-      enabled: true,
+      url: "http://127.0.0.1:8896/mcp/service-api-v1.5",
+      oauth: false,
+      disabled: false,
     })
   })
 
+  test("builds an exact gateway route without using family to construct backend URLs", () => {
+    const cfg = buildMcpServerConfigV2(
+      { project: "service-api-v1.5", family: "platform", branchSuffix: "v1.5" },
+    )
+    expect(cfg.url).toBe("http://127.0.0.1:8896/mcp/service-api-v1.5")
+  })
+
+  test("allows overriding only the gateway URL", () => {
+    const cfg = buildMcpServerConfigV2(
+      { project: "myrepo", family: "myrepo", branchSuffix: "main" },
+      { gatewayUrl: "http://localhost:9999/" },
+    )
+    expect(cfg.url).toBe("http://localhost:9999/mcp/myrepo")
+  })
+})
+
+describe("mergeMcpEditor", () => {
+  function editor(initial: Record<string, unknown> = {}) {
+    const entries = new Map(Object.entries(initial))
+    return {
+      entries,
+      get: (name: string) => entries.get(name),
+      set: (name: string, config: unknown) => entries.set(name, config),
+    }
+  }
+
+  test("preserves an explicit project-level Engram route", () => {
+    const explicit = {
+      type: "remote",
+      url: "http://127.0.0.1:8896/mcp/dcm",
+      oauth: false,
+      disabled: false,
+    }
+    const config = editor({ engram: explicit })
+
+    mergeMcpEditor(config as never, buildMcpServerConfigV2({ project: "dcm-project" }))
+
+    expect(config.entries.get("engram")).toEqual(explicit)
+  })
+
   test("adds the generated route when no explicit route exists", () => {
-    const config: { mcp?: Record<string, unknown> } = {}
-    const generated = buildMcpConfig({ project: "engram", family: "engram", branchSuffix: "main" })
+    const config = editor()
+    const generated = buildMcpServerConfigV2({ project: "engram" })
 
-    mergeMcpConfig(config, generated)
+    mergeMcpEditor(config as never, generated)
 
-    expect(config.mcp?.engram).toEqual(generated.engram)
+    expect(config.entries.get("engram")).toEqual(generated)
   })
 })

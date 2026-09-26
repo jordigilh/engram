@@ -7,7 +7,7 @@
   "scripts": {
     "test": "bun test ./"
   },
-  "devDependencies": {
-    "@opencode-ai/plugin": "1.18.31"
+  "dependencies": {
+    "@opencode/plugin": "2.0.18"
   }
 }

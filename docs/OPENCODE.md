@@ -7,24 +7,32 @@ optional project-specific backends.
 
 The recommended setup is **hybrid**:
 
-- Keep one explicit `mcp.engram` entry for the exact registered gateway route.
+- Keep one explicit `mcp.servers.engram` entry for the exact registered
+  gateway route.
 - Load the global Engram plugin for behavioral hooks and identity-aware
   methodology.
-- The plugin adds its generated route only when no explicit `mcp.engram` entry
-  exists; it never overwrites an explicit route.
+- The plugin adds its generated route only when no explicit
+  `mcp.servers.engram` entry exists; it never overwrites an explicit route.
 
 ## Configuration
 
+> **OpenCode V2:** V2 does not run V1 plugin implementations. Engram now uses
+> the V2 `Plugin.define` API to register MCP configuration, session hooks, tool
+> hooks, and its event subscription. Configure it with the native `plugins`
+> shape below. Point the plugin entry at the **directory**
+> (`.../opencode-plugin`), not `index.ts`; OpenCode V2 requires a directory for
+> this local plugin.
+
 Load the plugin globally from `opencode.jsonc` or configure it per repository.
 The global configuration is preferred when OpenCode and OpenChamber share one
-host:
+host. Native V2 form:
 
 ```json
 {
-  "plugin": [
-    [
-      "/path/to/engram/opencode-plugin/index.ts",
-      {
+  "plugins": [
+    {
+      "package": "/path/to/engram/opencode-plugin",
+      "options": {
         "repositories": {
           "directories": {
             "<workspace-directory>": {
@@ -40,17 +48,25 @@ host:
           }
         }
       }
-    ]
+    }
   ],
   "mcp": {
-    "engram": {
-      "type": "remote",
-      "url": "http://127.0.0.1:8896/mcp/<project-route>",
-      "enabled": true
+    "servers": {
+      "engram": {
+        "type": "remote",
+        "url": "http://127.0.0.1:8896/mcp/<project-route>",
+        "oauth": false,
+        "disabled": false
+      }
     }
   }
 }
 ```
+
+`oauth: false` is required: V2 attempts OAuth discovery on remote servers by
+default, and the gateway is a plain-LAN endpoint with no OAuth issuer. The
+plugin's generated fallback entry sets this automatically, but an explicit
+config entry must include it.
 
 For a standalone repository whose directory name matches a registered gateway
 route, the plugin can be used with zero repository mappings. Keep the explicit
@@ -59,27 +75,33 @@ directory, or the route differs from the directory name:
 
 ```json
 {
-  "plugin": ["/path/to/engram/opencode-plugin/index.ts"],
+  "plugins": ["/path/to/engram/opencode-plugin"],
   "mcp": {
-    "engram": {
-      "type": "remote",
-      "url": "http://127.0.0.1:8896/mcp/<project-route>",
-      "enabled": true
+    "servers": {
+      "engram": {
+        "type": "remote",
+        "url": "http://127.0.0.1:8896/mcp/<project-route>",
+        "oauth": false,
+        "disabled": false
+      }
     }
   }
 }
 ```
 
-The direct `mcp.engram` entry is the route authority. The plugin's generated
-entry is only a fallback:
+The direct `mcp.servers.engram` entry is the route authority. The plugin's
+generated entry is only a fallback:
 
 ```json
 {
   "mcp": {
-    "engram": {
-      "type": "remote",
-      "url": "http://127.0.0.1:8896/mcp/<project-route>",
-      "enabled": true
+    "servers": {
+      "engram": {
+        "type": "remote",
+        "url": "http://127.0.0.1:8896/mcp/<project-route>",
+        "oauth": false,
+        "disabled": false
+      }
     }
   }
 }
@@ -114,16 +136,16 @@ routes when one checkout switches between release lines:
 
 ```json
 {
-  "plugin": [[
-      "/path/to/engram/opencode-plugin/index.ts",
-      {
+  "plugins": [{
+      "package": "/path/to/engram/opencode-plugin",
+      "options": {
         "family": "<shared-family>",
         "branchRoutes": {
           "main": "<project-route>",
           "release/vX.Y": "<project-route>-vX.Y"
         }
       }
-  ]]
+  }]
 }
 ```
 
@@ -174,7 +196,8 @@ These are the intended patterns for the currently onboarded families:
 | Praxis | `/mcp/praxis` or the repository-specific `/mcp/praxis-*` route | `family: praxis`; repository mappings handle route-name exceptions |
 | DCM | `/mcp/dcm` | `family: dcm`; the `dcm-project` umbrella directory maps to `project: dcm` |
 
-The explicit route remains in each workspace's `opencode.json` or `.mcp.json`.
+The explicit `mcp.servers.engram` route remains in each workspace's
+`opencode.json` or `.mcp.json`.
 The global plugin supplies the hooks and uses the repository mapping to keep
 the system-recall identity aligned with the route.
 
@@ -182,9 +205,9 @@ the system-recall identity aligned with the route.
 
 Remove old direct MCP entries for `hindsight-docs`, `hindsight-issues`,
 `cocoindex-code`, and `serena` after enabling the plugin. Keep one explicit
-`mcp.engram` gateway entry when using the hybrid setup. Leaving the old backend
-entries in place causes duplicate tools and bypasses the gateway's backend
-isolation.
+`mcp.servers.engram` gateway entry when using the hybrid setup. Leaving the old
+backend entries in place causes duplicate tools and bypasses the gateway's
+backend isolation. Keep the native V2 `mcp.servers.engram` shape shown above.
 
 OpenChamber can inspect the resulting gateway entry through Settings -> MCP,
 but the OpenCode configuration remains the source of truth for the route and

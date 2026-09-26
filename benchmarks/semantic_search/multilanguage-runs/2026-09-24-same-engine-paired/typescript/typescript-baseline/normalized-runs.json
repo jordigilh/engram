@@ -1,0 +1,507 @@
+{
+  "schema_version": 1,
+  "suite_id": "synthetic-typescript-workflow-discovery",
+  "fixture_id": "typescript-workflow-discovery-v1",
+  "source": {
+    "repository": "synthetic/typescript-workflow-discovery",
+    "revision": "fixture-v1",
+    "root": ".",
+    "include": [
+      "**/*.ts"
+    ],
+    "exclude": [
+      "**/*.test.ts"
+    ],
+    "snapshot_sha256": "152a5562e1fbc0a44f8e7143fa29b9559c6a1ad4a5b85c309a092bb9814b1057",
+    "files": 8,
+    "bytes": 5670
+  },
+  "result_limit": 10,
+  "runs": [
+    {
+      "backend": "typescript-baseline",
+      "queries": [
+        {
+          "id": "record-discovered-membership",
+          "results": [
+            {
+              "unit_id": "tools/workflows.ts::listWorkflows",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.getWorkflow",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "tools/workflows.ts::authorizeSelectionDriver",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "discovery/state.ts::WorkflowState",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "discovery/state.ts::WorkflowState.add",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "discovery/state.ts::WorkflowState.contains",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "discovery/filters.ts::filtersFromSignal",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.constructor",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.listWorkflows",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.listActions",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "metrics/validator.ts::validateMetricName",
+              "backend_rank": 9
+            }
+          ]
+        },
+        {
+          "id": "reject-undiscovered-workflow",
+          "results": [
+            {
+              "unit_id": "tools/workflows.ts::listWorkflows",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator.constructor",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator.setWorkflowState",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator.isAllowed",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator.validate",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.getWorkflow",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.constructor",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.listWorkflows",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.listActions",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "tools/workflows.ts::authorizeSelectionDriver",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "metrics/validator.ts::validateMetricName",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "tools/workflows.ts::handleSelectWorkflow",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "tools/workflows.ts::applySelectedWorkflow",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "discovery/filters.ts::filtersFromSignal",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "forward-labels-to-discovery",
+          "results": [
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.listWorkflows",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "discovery/filters.ts::applyLabelFilters",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.constructor",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.listActions",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.getWorkflow",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "discovery/filters.ts::filtersFromSignal",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "discovery/filters.ts::Signal",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "tools/workflows.ts::authorizeSelectionDriver",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator.validate",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "discovery/state.ts::WorkflowState",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "discovery/state.ts::WorkflowState.add",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "discovery/catalog.ts::Workflow",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "preserve-membership-on-retry",
+          "results": [
+            {
+              "unit_id": "tools/workflows.ts::applySelectedWorkflow",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.getWorkflow",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.constructor",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.listWorkflows",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.listActions",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "tools/workflows.ts::listWorkflows",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "metrics/validator.ts::validateMetricName",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "discovery/filters.ts::filtersFromSignal",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "discovery/state.ts::stateFromContext",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "tools/workflows.ts::lookupDiscoveredParameters",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "tools/workflows.ts::isWorkflowInDiscoveryResult",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "interactive-selection-guard",
+          "results": [
+            {
+              "unit_id": "tools/workflows.ts::authorizeSelectionDriver",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "discovery/state.ts::stateFromContext",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator.validate",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator.constructor",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator.setWorkflowState",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator.isAllowed",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "metrics/validator.ts::validateMetricName",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "tools/workflows.ts::lookupDiscoveredParameters",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "tools/workflows.ts::applySelectedWorkflow",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "discovery/filters.ts::filtersFromSignal",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "tools/workflows.ts::handleSelectWorkflow",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "tools/workflows.ts::isWorkflowInDiscoveryResult",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "validate-workflow-parameters",
+          "results": [
+            {
+              "unit_id": "tools/workflows.ts::applySelectedWorkflow",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.getWorkflow",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.constructor",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.listWorkflows",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.listActions",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "tools/workflows.ts::listWorkflows",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "discovery/filters.ts::filtersFromSignal",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "discovery/catalog.ts::Workflow",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "tools/workflows.ts::WorkflowResult",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "discovery/state.ts::stateFromContext",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "tools/workflows.ts::lookupDiscoveredParameters",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator",
+              "backend_rank": 10
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator.validate",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "empty-discovery-fails-closed",
+          "results": [
+            {
+              "unit_id": "tools/workflows.ts::authorizeSelectionDriver",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "discovery/state.ts::WorkflowState",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "discovery/state.ts::WorkflowState.add",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "discovery/state.ts::WorkflowState.contains",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator.constructor",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator.setWorkflowState",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator.isAllowed",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator.validate",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "metrics/validator.ts::validateMetricName",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "discovery/filters.ts::filtersFromSignal",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "tools/workflows.ts::applySelectedWorkflow",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "discovery/state.ts::stateFromContext",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "tools/workflows.ts::lookupDiscoveredParameters",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "copy-selected-workflow-details",
+          "results": [
+            {
+              "unit_id": "tools/workflows.ts::handleSelectWorkflow",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "tools/workflows.ts::authorizeSelectionDriver",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "discovery/catalog.ts::WorkflowCatalog.getWorkflow",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator.validate",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "tools/workflows.ts::lookupDiscoveredParameters",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "tools/workflows.ts::applySelectedWorkflow",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "discovery/filters.ts::filtersFromSignal",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator.constructor",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator.setWorkflowState",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "selection/validator.ts::WorkflowValidator.isAllowed",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "tools/workflows.ts::isWorkflowInDiscoveryResult",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "discovery/state.ts::WorkflowState",
+              "backend_rank": 10
+            },
+            {
+              "unit_id": "discovery/state.ts::WorkflowState.add",
+              "backend_rank": 10
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

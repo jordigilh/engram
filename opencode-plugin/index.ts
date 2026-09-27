@@ -43,6 +43,11 @@ import {
   isEngramTool,
   type MetricEvent,
 } from "./metrics"
+import {
+  createKubernautWorktreeIndexer,
+  DEFAULT_KUBERNAUT_ZVEC_EMBEDDING,
+  shouldAutoIndexKubernautWorktrees,
+} from "./worktree-index"
 
 function runGit(args: string[], directory: string, timeoutMs = 5000): Promise<string> {
   return new Promise((resolve) => {
@@ -189,7 +194,12 @@ type PluginContext = Parameters<Parameters<typeof Plugin.define>[0]["setup"]>[0]
 
 async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | void> {
   const directory = ctx.location.directory || ""
-  const { identity, mcpV2, gatewayUrl } = await resolveEngramState(directory, ctx.options)
+  const options = (ctx.options || {}) as EngramPluginOptions
+  const { identity, mcpV2, gatewayUrl } = await resolveEngramState(directory, options)
+  const canonicalDirectory = ctx.location.project?.canonical || directory
+  const worktreeProjectIdentity = canonicalDirectory === directory
+    ? identity
+    : (await resolveEngramState(canonicalDirectory, options)).identity
   const dedupe = new NudgeDedupe()
   const probeCache = new ProbeCache()
   const pendingProbe = new Set<string>()
@@ -259,6 +269,27 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
     }
   })
 
+  // OpenCode/OpenChamber worktree operations publish worktree.updated on the
+  // canonical project. Only Kubernaut gets automatic indexing; every sibling
+  // worktree receives an independent local zvec index.
+  const worktreeIndexer = shouldAutoIndexKubernautWorktrees(
+    worktreeProjectIdentity.project,
+    options.autoIndexKubernautWorktrees,
+  )
+    ? createKubernautWorktreeIndexer({
+        projectID: ctx.location.project.id,
+        canonicalDirectory,
+        listWorktrees: () => ctx.worktree.list({ projectID: ctx.location.project.id }),
+        binary: options.zvecBinary,
+        embedding: options.zvecEmbedding || DEFAULT_KUBERNAUT_ZVEC_EMBEDDING,
+      })
+    : undefined
+
+  // Also reconcile roots that were created just before the plugin started or
+  // while OpenCode was reconnecting its event stream. This runs in the
+  // background and never delays session startup.
+  if (worktreeIndexer) void worktreeIndexer.refresh()
+
   // Post-compaction observer: low-risk, never blocks.
   const controller = new AbortController()
   void (async () => {
@@ -266,6 +297,12 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
         const type = (event as { type?: unknown }).type
         if (typeof type !== "string") continue
+        if (type === "worktree.updated" && worktreeIndexer) {
+          void worktreeIndexer.handleEvent(event).catch((error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error)
+            console.error(`[engram-plugin] Kubernaut worktree indexer event failed: ${message}`)
+          })
+        }
         const line = buildCompactedLog(type, readV2SessionID(event))
         if (line) console.error(line)
       }
@@ -274,7 +311,10 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
     }
   })()
 
-  return () => controller.abort()
+  return () => {
+    controller.abort()
+    worktreeIndexer?.dispose()
+  }
 }
 
 export default Plugin.define({

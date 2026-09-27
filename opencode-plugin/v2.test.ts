@@ -139,6 +139,48 @@ describe("v2 setup", () => {
     await toolHooks["execute.before"][0]({ tool: "bash", sessionID: "s1", input: { command: "engram recall" } })
     await toolHooks["execute.before"][0]({ tool: "read", sessionID: "s1", input: {} })
   })
+
+  test("worktree indexing uses the canonical Kubernaut route and handles worktree.updated", async () => {
+    const { ctx } = fakeV2Ctx()
+    ctx.location = {
+      directory: "/worktrees/fix-123",
+      project: { id: "project-kubernaut", canonical: "/repos/kubernaut" },
+    }
+    let listCalls = 0
+    let resolveSecondList: (() => void) | undefined
+    const secondList = new Promise<void>((resolve) => {
+      resolveSecondList = resolve
+    })
+    ctx.worktree = {
+      list: async ({ projectID }: { projectID: string }) => {
+        expect(projectID).toBe("project-kubernaut")
+        listCalls += 1
+        if (listCalls >= 2) resolveSecondList?.()
+        return []
+      },
+    }
+    ctx.event.subscribe = async function* () {
+      yield { type: "worktree.updated", data: { projectID: "project-kubernaut" } }
+    }
+
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const timeoutPromise = new Promise<void>((_resolve, reject) => {
+      timeout = setTimeout(
+        () => reject(new Error("worktree.updated did not trigger an inventory refresh")),
+        1000,
+      )
+    })
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    let cleanup: (() => void) | void = undefined
+    try {
+      cleanup = await def.setup(ctx)
+      await Promise.race([secondList, timeoutPromise])
+      expect(listCalls).toBeGreaterThanOrEqual(2)
+    } finally {
+      if (timeout) clearTimeout(timeout)
+      if (typeof cleanup === "function") cleanup()
+    }
+  })
 })
 
 describe("appendV2Nudge", () => {

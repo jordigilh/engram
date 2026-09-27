@@ -111,6 +111,39 @@ Users do not register Hindsight, CocoIndex, or Serena separately. Do not add a
 second gateway entry through OpenChamber's Settings -> MCP; OpenChamber should
 use the OpenCode server's resolved configuration.
 
+### Kubernaut worktree indexes
+
+On the `kubernaut` route, the Engram OpenCode plugin watches OpenCode's
+`worktree.updated` events and automatically runs `zg --index` for each
+unindexed sibling worktree. It also reconciles the worktree inventory when the
+plugin starts, so a worktree created while the event stream was disconnected is
+not missed. The canonical Kubernaut checkout is left unchanged. Each worktree
+gets its own `.zvec-grep` index, using the local
+`local/potion-code-16m-v2` embedding by default; no code is sent to a remote
+embedding service by this default.
+
+The default executable is `~/bin/zg` when present, otherwise `zg` from `PATH`.
+Override the executable or embedding in the plugin options when needed:
+
+```jsonc
+{
+  "plugins": [{
+    "package": "/path/to/engram/opencode-plugin",
+    "options": {
+      "zvecBinary": "/path/to/zg",
+      "zvecEmbedding": "local/potion-code-16m-v2",
+      "autoIndexKubernautWorktrees": false
+    }
+  }]
+}
+```
+
+`autoIndexKubernautWorktrees` defaults to enabled only for the exact
+`kubernaut` route; set it to `false` to opt out. OpenChamber-created worktrees
+are covered when OpenChamber delegates worktree operations to the OpenCode
+server. A client that creates Git worktrees outside OpenCode's worktree API
+does not emit this event and needs a Git-level hook instead.
+
 ## Project Identity
 
 `project` is the exact gateway route and must match a registered project. The

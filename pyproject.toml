@@ -8,16 +8,16 @@ version = "0.1.0"
 description = "Hindsight/CocoIndex ingestion and memory-management pipeline for engram and its client projects"
 requires-python = ">=3.13"
 dependencies = [
-    "cocoindex==1.0.23",
-    "anthropic==1.6.0",
-    "litellm==1.101.0",
+    "cocoindex==1.0.24",
+    "anthropic==1.8.0",
+    "litellm==1.102.1",
     # 2026-09-09: mcp 2.x removed `request_ctx`, breaking fastmcp 3.4.7's
     # server import (hindsight-api fails to start). Pin below 2.0 to match
     # the working live venv until fastmcp supports mcp 2.x.
     "mcp==2.2.0",
     "httpx==0.28.1",
-    "starlette==1.6.0",
-    "uvicorn==0.53.0",
+    "starlette==1.7.0",
+    "uvicorn==0.54.0",
     "openai==2.54.0",
     "psycopg2-binary==2.9.13",
     "pdfplumber==0.11.10",
@@ -37,7 +37,7 @@ dependencies = [
     # networkx holds the directed call graph and answers blast-radius/
     # shortest-path queries; igraph+leidenalg (not the heavier graspologic
     # stack) do Leiden community detection. ~5-6MB combined footprint.
-    "networkx==3.6.1",
+    "networkx==3.7",
     "python-igraph==1.0.0",
     "leidenalg==0.12.0",
     # engram_gateway.py's per-call token estimation (2026-08-30): was already
@@ -48,7 +48,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=9.1.1", "ruff==0.16.8"]
+dev = ["pytest>=9.1.1", "ruff==0.16.9"]
 
 [tool.pytest.ini_options]
 markers = [

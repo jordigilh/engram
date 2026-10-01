@@ -153,6 +153,25 @@ class TestRouteCall:
         assert engram_gateway.route_call("nonexistent_tool", {}) is None
 
 
+class TestExceptionFormatting:
+    def test_empty_exception_keeps_type_and_explicit_no_message_marker(self, engram_gateway):
+        detail = engram_gateway._format_exception(RuntimeError())
+
+        assert detail == "RuntimeError: <no message>"
+
+    def test_exception_chain_keeps_cause_type_and_message(self, engram_gateway):
+        try:
+            raise ValueError("upstream socket closed")
+        except ValueError:
+            try:
+                raise RuntimeError()
+            except RuntimeError as exc:
+                detail = engram_gateway._format_exception(exc)
+
+        assert "RuntimeError: <no message>" in detail
+        assert "context ValueError: upstream socket closed" in detail
+
+
 class TestFilterRelevantTools:
     """Covers the tool-count-ceiling fix (docs/findings/2026-08.md,
     2026-08-22 "MCP shows Disabled" entry): hindsight-shaped and serena
@@ -459,12 +478,171 @@ class TestHandleToolsCall:
         assert result["result"]["isError"] is True
         assert "subprocess exited" in result["result"]["content"][0]["text"]
 
+    def test_empty_backend_exception_returns_diagnostic_type(self, engram_gateway):
+        dead = FakeAdapter(call_error=RuntimeError())
+        catalog = {"docs_recall": ("host", "docs_recall")}
+        message = {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {"name": "docs_recall", "arguments": {"query": "foo"}},
+        }
+
+        result = asyncio.run(engram_gateway.handle_tools_call(message, catalog, {"host": dead}))
+
+        text = result["result"]["content"][0]["text"]
+        assert "backend 'host' failed" in text
+        assert "RuntimeError: <no message>" in text
+
     def test_non_tools_call_method_returns_none_so_caller_can_forward_generically(self, engram_gateway):
         message = {"jsonrpc": "2.0", "method": "notifications/initialized"}
 
         result = asyncio.run(engram_gateway.handle_tools_call(message, {}, {}))
 
         assert result is None
+
+
+class TestHttpRelayAdapter:
+    @staticmethod
+    def _response(payload, *, status_code=200, session_id=None):
+        import httpx
+
+        headers = {"content-type": "application/json"}
+        if session_id:
+            headers["mcp-session-id"] = session_id
+        return httpx.Response(
+            status_code,
+            headers=headers,
+            content=json.dumps(payload).encode(),
+            request=httpx.Request("POST", "http://upstream/mcp"),
+        )
+
+    def test_retries_recall_after_transient_transport_failure(self, engram_gateway, monkeypatch):
+        import httpx
+
+        monkeypatch.setattr(engram_gateway, "HTTP_RETRY_DELAY_S", 0)
+        calls = []
+        tool_call_count = 0
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, url, json, headers):
+                nonlocal tool_call_count
+                calls.append(json["method"])
+                if json["method"] == "initialize":
+                    return self._response(
+                        {"jsonrpc": "2.0", "id": 1, "result": {}},
+                        session_id=f"session-{calls.count('initialize')}",
+                    )
+                if json["method"] == "notifications/initialized":
+                    return self._response({}, status_code=202)
+                tool_call_count += 1
+                if tool_call_count == 1:
+                    raise httpx.ReadError(
+                        "upstream disconnected",
+                        request=httpx.Request("POST", url),
+                    )
+                return self._response(
+                    {"jsonrpc": "2.0", "id": 2, "result": {"content": [], "isError": False}},
+                )
+
+            async def delete(self, url, headers):
+                return self._response({}, status_code=200)
+
+            _response = staticmethod(TestHttpRelayAdapter._response)
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: FakeClient())
+        adapter = engram_gateway.HttpRelayAdapter("http://upstream/mcp")
+
+        result = asyncio.run(adapter.call_tool("docs_recall", {"query": "x"}))
+
+        assert result == {"content": [], "isError": False}
+        assert tool_call_count == 2
+        assert calls.count("initialize") == 2
+
+    def test_does_not_retry_non_idempotent_write_after_transport_failure(self, engram_gateway, monkeypatch):
+        import httpx
+
+        monkeypatch.setattr(engram_gateway, "HTTP_RETRY_DELAY_S", 0)
+        calls = []
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, url, json, headers):
+                calls.append(json["method"])
+                if json["method"] == "initialize":
+                    return httpx.Response(
+                        200,
+                        headers={"mcp-session-id": "session-1"},
+                        content=b'{"jsonrpc":"2.0","id":1,"result":{}}',
+                        request=httpx.Request("POST", url),
+                    )
+                if json["method"] == "notifications/initialized":
+                    return httpx.Response(202, request=httpx.Request("POST", url))
+                raise httpx.ReadError("upstream disconnected", request=httpx.Request("POST", url))
+
+            async def delete(self, url, headers):
+                return httpx.Response(200, request=httpx.Request("DELETE", url))
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: FakeClient())
+        adapter = engram_gateway.HttpRelayAdapter("http://upstream/mcp")
+
+        with pytest.raises(httpx.ReadError):
+            asyncio.run(adapter.call_tool("retain", {"content": "do not duplicate"}))
+
+        assert calls == ["initialize", "notifications/initialized", "tools/call"]
+
+    def test_tools_list_retries_transient_http_status(self, engram_gateway, monkeypatch):
+        import httpx
+
+        monkeypatch.setattr(engram_gateway, "HTTP_RETRY_DELAY_S", 0)
+        initialize_count = 0
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, url, json, headers):
+                nonlocal initialize_count
+                if json["method"] == "initialize":
+                    initialize_count += 1
+                    return httpx.Response(
+                        200,
+                        headers={"mcp-session-id": f"session-{initialize_count}"},
+                        content=b'{"jsonrpc":"2.0","id":1,"result":{}}',
+                        request=httpx.Request("POST", url),
+                    )
+                if json["method"] == "notifications/initialized":
+                    return httpx.Response(202, request=httpx.Request("POST", url))
+                if initialize_count == 1:
+                    return httpx.Response(503, request=httpx.Request("POST", url))
+                return httpx.Response(
+                    200,
+                    content=b'{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"recall"}]}}',
+                    request=httpx.Request("POST", url),
+                )
+
+            async def delete(self, url, headers):
+                return httpx.Response(200, request=httpx.Request("DELETE", url))
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: FakeClient())
+        adapter = engram_gateway.HttpRelayAdapter("http://upstream/mcp")
+
+        assert asyncio.run(adapter.list_tools()) == [{"name": "recall"}]
+        assert initialize_count == 2
 
 
 class TestRecallResponseNormalization:

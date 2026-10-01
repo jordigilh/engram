@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import plugin from "./index"
+import "./test-config"
 
 function fakeContext() {
   const toolHooks: Record<string, Array<(event: any) => void | Promise<void>>> = {}

@@ -1,21 +1,21 @@
 import { describe, expect, test } from "bun:test"
 import {
   buildZvecIndexArgs,
-  createKubernautWorktreeIndexer,
+  createWorktreeIndexer,
+  shouldAutoIndexWorktrees,
   type ZvecGitRevision,
   type ZvecIndexProvenance,
-  shouldAutoIndexKubernautWorktrees,
 } from "./worktree-index"
 
-describe("Kubernaut worktree indexing policy", () => {
-  test("defaults to the Kubernaut route and supports explicit project opt-in", () => {
-    expect(shouldAutoIndexKubernautWorktrees("kubernaut")).toBe(true)
-    expect(shouldAutoIndexKubernautWorktrees("kubernaut", false)).toBe(false)
-    expect(shouldAutoIndexKubernautWorktrees("kubernaut-console")).toBe(false)
-    expect(shouldAutoIndexKubernautWorktrees("kubernaut-console", true)).toBe(true)
-    expect(shouldAutoIndexKubernautWorktrees("kubernaut-v1.5")).toBe(false)
-    expect(shouldAutoIndexKubernautWorktrees("engram")).toBe(false)
-    expect(shouldAutoIndexKubernautWorktrees("engram", true)).toBe(true)
+describe("worktree indexing policy", () => {
+  test("requires explicit project configuration and supports global opt-in", () => {
+    expect(shouldAutoIndexWorktrees("service-api", { projects: ["service-api"] })).toBe(true)
+    expect(shouldAutoIndexWorktrees("service-api", { projects: ["service-api"], enabled: false })).toBe(false)
+    expect(shouldAutoIndexWorktrees("service-ui")).toBe(false)
+    expect(shouldAutoIndexWorktrees("service-ui", { enabled: true })).toBe(true)
+    expect(shouldAutoIndexWorktrees("service-api-v1.5", { projects: ["service-api"] })).toBe(false)
+    expect(shouldAutoIndexWorktrees("engram")).toBe(false)
+    expect(shouldAutoIndexWorktrees("engram", { enabled: true })).toBe(true)
   })
 
   test("uses auto mode and the configured local embedding for a new worktree", () => {
@@ -42,17 +42,17 @@ describe("Kubernaut worktree indexing policy", () => {
   })
 })
 
-describe("createKubernautWorktreeIndexer", () => {
+describe("createWorktreeIndexer", () => {
   test("indexes unindexed siblings after matching worktree updates, but not the canonical checkout", async () => {
     const indexed = new Set<string>(["/worktrees/already-indexed"])
     const calls: string[] = []
     const logs: string[] = []
     const revision: ZvecGitRevision = { branch: "main", commit: "same-commit" }
-    const indexer = createKubernautWorktreeIndexer({
-      projectID: "project-kubernaut",
-      canonicalDirectory: "/repos/kubernaut",
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
       listWorktrees: async () => [
-        { directory: "/repos/kubernaut" },
+        { directory: "/repos/service-api" },
         { directory: "/worktrees/fix-123" },
         { directory: "/worktrees/already-indexed" },
       ],
@@ -68,19 +68,19 @@ describe("createKubernautWorktreeIndexer", () => {
       log: (message) => logs.push(message),
     })
 
-    await indexer.handleEvent({ type: "worktree.updated", data: { projectID: "project-kubernaut" } })
+    await indexer.handleEvent({ type: "worktree.updated", data: { projectID: "project-service-api" } })
     await indexer.waitForIdle()
 
     expect(calls).toEqual(["/worktrees/fix-123"])
-    expect(logs).toContain("finished zg index for Kubernaut worktree /worktrees/fix-123")
+    expect(logs).toContain("finished zg index for worktree /worktrees/fix-123")
     indexer.dispose()
   })
 
   test("ignores updates from other projects", async () => {
     let listCalls = 0
-    const indexer = createKubernautWorktreeIndexer({
-      projectID: "project-kubernaut",
-      canonicalDirectory: "/repos/kubernaut",
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
       listWorktrees: async () => {
         listCalls += 1
         return []
@@ -97,9 +97,9 @@ describe("createKubernautWorktreeIndexer", () => {
   test("de-duplicates concurrent updates while one index build is running", async () => {
     const started: string[] = []
     let finishIndex: (() => void) | undefined
-    const indexer = createKubernautWorktreeIndexer({
-      projectID: "project-kubernaut",
-      canonicalDirectory: "/repos/kubernaut",
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
       listWorktrees: async () => [{ directory: "/worktrees/fix-456" }],
       hasManifest: async () => false,
       runIndex: async (directory) => {
@@ -112,8 +112,8 @@ describe("createKubernautWorktreeIndexer", () => {
     })
 
     await Promise.all([
-      indexer.handleEvent({ type: "worktree.updated", data: { projectID: "project-kubernaut" } }),
-      indexer.handleEvent({ type: "worktree.updated", data: { projectID: "project-kubernaut" } }),
+      indexer.handleEvent({ type: "worktree.updated", data: { projectID: "project-service-api" } }),
+      indexer.handleEvent({ type: "worktree.updated", data: { projectID: "project-service-api" } }),
     ])
     await Promise.resolve()
     expect(started).toEqual(["/worktrees/fix-456"])
@@ -126,9 +126,9 @@ describe("createKubernautWorktreeIndexer", () => {
   test("a later worktree update retries an index that previously failed", async () => {
     const indexed = new Set<string>()
     const calls: string[] = []
-    const indexer = createKubernautWorktreeIndexer({
-      projectID: "project-kubernaut",
-      canonicalDirectory: "/repos/kubernaut",
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
       listWorktrees: async () => [{ directory: "/worktrees/retry-me" }],
       hasManifest: async (directory) => indexed.has(directory),
       runIndex: async (directory) => {
@@ -139,7 +139,7 @@ describe("createKubernautWorktreeIndexer", () => {
       log: () => {},
     })
 
-    const event = { type: "worktree.updated", data: { projectID: "project-kubernaut" } }
+    const event = { type: "worktree.updated", data: { projectID: "project-service-api" } }
     await indexer.handleEvent(event)
     await indexer.waitForIdle()
     await indexer.handleEvent(event)
@@ -159,9 +159,9 @@ describe("createKubernautWorktreeIndexer", () => {
     }
     const calls: Array<{ directory: string; rebuild: boolean }> = []
     let saved: ZvecIndexProvenance | undefined
-    const indexer = createKubernautWorktreeIndexer({
-      projectID: "project-kubernaut",
-      canonicalDirectory: "/repos/kubernaut",
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
       listWorktrees: async () => [{ directory: "/worktrees/stale-branch" }],
       hasManifest: async () => true,
       getRevision: async () => revision,
@@ -189,9 +189,9 @@ describe("createKubernautWorktreeIndexer", () => {
       ...revision,
     }
     const calls: Array<{ directory: string; rebuild: boolean }> = []
-    const indexer = createKubernautWorktreeIndexer({
-      projectID: "project-kubernaut",
-      canonicalDirectory: "/repos/kubernaut",
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
       listWorktrees: async () => [{ directory: "/worktrees/current" }],
       hasManifest: async () => true,
       getRevision: async () => revision,
@@ -201,7 +201,7 @@ describe("createKubernautWorktreeIndexer", () => {
     })
 
     await indexer.refresh()
-    await indexer.handleEvent({ type: "worktree.updated", data: { projectID: "project-kubernaut" } })
+    await indexer.handleEvent({ type: "worktree.updated", data: { projectID: "project-service-api" } })
     await indexer.waitForIdle()
 
     expect(calls).toEqual([])
@@ -226,9 +226,9 @@ describe("createKubernautWorktreeIndexer", () => {
     const saved: ZvecIndexProvenance[] = []
     let getRevisionCall = 0
     let finishFirst: (() => void) | undefined
-    const indexer = createKubernautWorktreeIndexer({
-      projectID: "project-kubernaut",
-      canonicalDirectory: "/repos/kubernaut",
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
       listWorktrees: async () => [{ directory: "/worktrees/branch-race" }],
       hasManifest: async () => true,
       getRevision: async () => revisions[Math.min(getRevisionCall++, revisions.length - 1)],

@@ -1,0 +1,26 @@
+{
+  "gatewayUrl": "http://127.0.0.1:8896",
+  "repositories": {
+    "directories": {
+      "<checkout-directory>": {
+        "project": "<project-route>",
+        "family": "<shared-family>"
+      }
+    },
+    "remotes": {
+      "https://github.com/<org>/<repo>": {
+        "project": "<project-route>",
+        "family": "<shared-family>"
+      }
+    }
+  },
+  "branchRoutes": {
+    "main": "<project-route>",
+    "release/vX.Y": "<project-route>-vX.Y"
+  },
+  "worktreeIndex": {
+    "projects": ["<project-route>"],
+    "binary": "~/bin/zg",
+    "embedding": "local/potion-code-16m-v2"
+  }
+}

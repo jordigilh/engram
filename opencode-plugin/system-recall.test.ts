@@ -14,7 +14,7 @@ describe("buildSystemRecall", () => {
   })
 
   test("carries project identity", () => {
-    const text = buildSystemRecall({ project: "kubernaut-v1.5", family: "kubernaut", branchSuffix: "v1.5" })
-    expect(text).toContain("kubernaut-v1.5")
+    const text = buildSystemRecall({ project: "service-api-v1.5", family: "platform", branchSuffix: "v1.5" })
+    expect(text).toContain("service-api-v1.5")
   })
 })

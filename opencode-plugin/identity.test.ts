@@ -112,7 +112,10 @@ describe("repository mappings", () => {
 
 describe("buildMcpServerConfigV2", () => {
   test("produces one gateway entry", () => {
-    const cfg = buildMcpServerConfigV2({ project: "service-api-v1.5", family: "platform", branchSuffix: "v1.5" })
+    const cfg = buildMcpServerConfigV2(
+      { project: "service-api-v1.5", family: "platform", branchSuffix: "v1.5" },
+      { gatewayUrl: "http://127.0.0.1:8896" },
+    )
     expect(cfg).toEqual({
       type: "remote",
       url: "http://127.0.0.1:8896/mcp/service-api-v1.5",
@@ -124,6 +127,7 @@ describe("buildMcpServerConfigV2", () => {
   test("builds an exact gateway route without using family to construct backend URLs", () => {
     const cfg = buildMcpServerConfigV2(
       { project: "service-api-v1.5", family: "platform", branchSuffix: "v1.5" },
+      { gatewayUrl: "http://127.0.0.1:8896" },
     )
     expect(cfg.url).toBe("http://127.0.0.1:8896/mcp/service-api-v1.5")
   })
@@ -156,14 +160,17 @@ describe("mergeMcpEditor", () => {
     }
     const config = editor({ engram: explicit })
 
-    mergeMcpEditor(config as never, buildMcpServerConfigV2({ project: "dcm-project" }))
+    mergeMcpEditor(
+      config as never,
+      buildMcpServerConfigV2({ project: "dcm-project" }, { gatewayUrl: "http://127.0.0.1:8896" })!,
+    )
 
     expect(config.entries.get("engram")).toEqual(explicit)
   })
 
   test("adds the generated route when no explicit route exists", () => {
     const config = editor()
-    const generated = buildMcpServerConfigV2({ project: "engram" })
+    const generated = buildMcpServerConfigV2({ project: "engram" }, { gatewayUrl: "http://127.0.0.1:8896" })!
 
     mergeMcpEditor(config as never, generated)
 

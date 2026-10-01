@@ -44,10 +44,11 @@ import {
   type MetricEvent,
 } from "./metrics"
 import {
-  createKubernautWorktreeIndexer,
-  DEFAULT_KUBERNAUT_ZVEC_EMBEDDING,
-  shouldAutoIndexKubernautWorktrees,
+  createWorktreeIndexer,
+  DEFAULT_ZVEC_EMBEDDING,
+  shouldAutoIndexWorktrees,
 } from "./worktree-index"
+import { resolveEngramOptions } from "./user-config"
 
 function runGit(args: string[], directory: string, timeoutMs = 5000): Promise<string> {
   return new Promise((resolve) => {
@@ -84,12 +85,11 @@ async function detectRemotes(directory: string): Promise<string[]> {
 
 interface EngramState {
   identity: ResolvedIdentity
-  gatewayUrl: string
-  mcpV2: McpServerEntryV2
+  gatewayUrl?: string
+  mcpV2?: McpServerEntryV2
 }
 
-async function resolveEngramState(directory: string, rawOptions: unknown): Promise<EngramState> {
-  const options = (rawOptions || {}) as EngramPluginOptions
+async function resolveEngramState(directory: string, options: EngramPluginOptions): Promise<EngramState> {
   const directoryBasename = (directory || "").split("/").filter(Boolean).pop() || "unknown-project"
   const branch = await detectBranch(directory)
   const remotes = await detectRemotes(directory)
@@ -99,7 +99,7 @@ async function resolveEngramState(directory: string, rawOptions: unknown): Promi
   const mcpV2 = buildMcpServerConfigV2(identity, options)
   return {
     identity,
-    gatewayUrl: mcpV2.url,
+    gatewayUrl: mcpV2?.url,
     mcpV2,
   }
 }
@@ -194,8 +194,9 @@ type PluginContext = Parameters<Parameters<typeof Plugin.define>[0]["setup"]>[0]
 
 async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | void> {
   const directory = ctx.location.directory || ""
-  const options = (ctx.options || {}) as EngramPluginOptions
-  const { identity, mcpV2, gatewayUrl } = await resolveEngramState(directory, options)
+  const options = await resolveEngramOptions(ctx.options)
+  const { identity, mcpV2, gatewayUrl: configuredGatewayUrl } = await resolveEngramState(directory, options)
+  let gatewayUrl = configuredGatewayUrl
   const canonicalDirectory = ctx.location.project?.canonical || directory
   const worktreeProjectIdentity = canonicalDirectory === directory
     ? identity
@@ -210,7 +211,11 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
   // The direct config entry (mcp.servers.engram) is the route authority; the
   // generated entry is only a fallback and never overwrites an explicit one.
   await ctx.mcp.transform((editor) => {
-    mergeMcpEditor(editor, mcpV2)
+    const explicit = editor.get("engram") as { url?: unknown } | undefined
+    if (!gatewayUrl && typeof explicit?.url === "string" && explicit.url.trim()) {
+      gatewayUrl = explicit.url
+    }
+    if (mcpV2) mergeMcpEditor(editor, mcpV2)
   })
 
   // Every agent-loop model request: re-apply methodology recall even if a
@@ -242,6 +247,7 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
     if (event.status !== "completed") return
     const search = detectCodeSearch(event.tool, event.input)
     if (!search) return
+    if (!gatewayUrl) return
     const key = normalizeSearchKey(search.cli, search.query || search.cli)
     const sessionID = event.sessionID
     const cached = probeCache.get(key)
@@ -270,18 +276,19 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
   })
 
   // OpenCode/OpenChamber worktree operations publish worktree.updated on the
-  // canonical project. Only Kubernaut gets automatic indexing; every sibling
-  // worktree receives an independent local zvec index.
-  const worktreeIndexer = shouldAutoIndexKubernautWorktrees(
+  // canonical project. Indexing is opt-in per deployment-configured route;
+  // every sibling worktree receives an independent local zvec index.
+  const worktreePolicy = options.worktreeIndex || {}
+  const worktreeIndexer = shouldAutoIndexWorktrees(
     worktreeProjectIdentity.project,
-    options.autoIndexKubernautWorktrees,
+    worktreePolicy,
   )
-    ? createKubernautWorktreeIndexer({
+    ? createWorktreeIndexer({
         projectID: ctx.location.project.id,
         canonicalDirectory,
         listWorktrees: () => ctx.worktree.list({ projectID: ctx.location.project.id }),
-        binary: options.zvecBinary,
-        embedding: options.zvecEmbedding || DEFAULT_KUBERNAUT_ZVEC_EMBEDDING,
+        binary: worktreePolicy.binary,
+        embedding: worktreePolicy.embedding || DEFAULT_ZVEC_EMBEDDING,
       })
     : undefined
 
@@ -300,7 +307,7 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
         if (type === "worktree.updated" && worktreeIndexer) {
           void worktreeIndexer.handleEvent(event).catch((error: unknown) => {
             const message = error instanceof Error ? error.message : String(error)
-            console.error(`[engram-plugin] Kubernaut worktree indexer event failed: ${message}`)
+            console.error(`[engram-plugin] worktree indexer event failed: ${message}`)
           })
         }
         const line = buildCompactedLog(type, readV2SessionID(event))

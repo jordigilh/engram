@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import pluginDefault, { appendV2Nudge } from "./index"
 import { buildMcpServerConfigV2, mergeMcpEditor } from "./identity"
+import "./test-config"
 
 function fakeEditor(initial: Record<string, unknown> = {}) {
   const store = new Map<string, unknown>(Object.entries(initial))
@@ -64,7 +65,10 @@ describe("V2 plugin export", () => {
 
 describe("buildMcpServerConfigV2", () => {
   test("emits a native V2 remote entry with OAuth disabled", () => {
-    const cfg = buildMcpServerConfigV2({ project: "service-api-v1.5" })
+    const cfg = buildMcpServerConfigV2(
+      { project: "service-api-v1.5" },
+      { gatewayUrl: "http://127.0.0.1:8896" },
+    )
     expect(cfg).toEqual({
       type: "remote",
       url: "http://127.0.0.1:8896/mcp/service-api-v1.5",
@@ -77,12 +81,16 @@ describe("buildMcpServerConfigV2", () => {
     const cfg = buildMcpServerConfigV2({ project: "myrepo" }, { gatewayUrl: "http://localhost:9999/" })
     expect(cfg.url).toBe("http://localhost:9999/mcp/myrepo")
   })
+
+  test("does not invent a gateway endpoint when deployment config is absent", () => {
+    expect(buildMcpServerConfigV2({ project: "service-api" })).toBeUndefined()
+  })
 })
 
 describe("mergeMcpEditor", () => {
   test("adds the generated route when none exists", () => {
     const editor = fakeEditor()
-    const generated = buildMcpServerConfigV2({ project: "engram" })
+    const generated = buildMcpServerConfigV2({ project: "engram" }, { gatewayUrl: "http://127.0.0.1:8896" })!
     mergeMcpEditor(editor as never, generated)
     expect(editor.store.get("engram")).toEqual(generated)
   })
@@ -90,7 +98,10 @@ describe("mergeMcpEditor", () => {
   test("never overwrites an explicit route", () => {
     const explicit = { type: "remote", url: "http://127.0.0.1:8896/mcp/dcm", oauth: false, disabled: false }
     const editor = fakeEditor({ engram: explicit })
-    mergeMcpEditor(editor as never, buildMcpServerConfigV2({ project: "other" }))
+    mergeMcpEditor(
+      editor as never,
+      buildMcpServerConfigV2({ project: "other" }, { gatewayUrl: "http://127.0.0.1:8896" })!,
+    )
     expect(editor.store.get("engram")).toEqual(explicit)
   })
 })
@@ -98,6 +109,7 @@ describe("mergeMcpEditor", () => {
 describe("v2 setup", () => {
   test("registers a fallback engram MCP entry", async () => {
     const { ctx, editor } = fakeV2Ctx()
+    ctx.options = { gatewayUrl: "http://127.0.0.1:8896" }
     const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
     const cleanup = await def.setup(ctx)
     expect(editor.store.get("engram")).toEqual({
@@ -116,6 +128,15 @@ describe("v2 setup", () => {
     const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
     await def.setup(ctx)
     expect(editor.store.get("engram")).toEqual(explicit)
+  })
+
+  test("keeps hooks active without inventing a route when gateway config is absent", async () => {
+    const { ctx, editor, sessionHooks } = fakeV2Ctx()
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    await def.setup(ctx)
+
+    expect(editor.store.has("engram")).toBe(false)
+    expect(sessionHooks["context"]?.length).toBe(1)
   })
 
   test("context hook re-applies methodology recall to every request", async () => {
@@ -140,12 +161,13 @@ describe("v2 setup", () => {
     await toolHooks["execute.before"][0]({ tool: "read", sessionID: "s1", input: {} })
   })
 
-  test("worktree indexing uses the canonical Kubernaut route and handles worktree.updated", async () => {
+  test("configured worktree indexing uses the canonical route and handles worktree.updated", async () => {
     const { ctx } = fakeV2Ctx()
     ctx.location = {
       directory: "/worktrees/fix-123",
-      project: { id: "project-kubernaut", canonical: "/repos/kubernaut" },
+      project: { id: "project-service-api", canonical: "/repos/service-api" },
     }
+    ctx.options = { worktreeIndex: { projects: ["service-api"] } }
     let listCalls = 0
     let resolveSecondList: (() => void) | undefined
     const secondList = new Promise<void>((resolve) => {
@@ -153,14 +175,14 @@ describe("v2 setup", () => {
     })
     ctx.worktree = {
       list: async ({ projectID }: { projectID: string }) => {
-        expect(projectID).toBe("project-kubernaut")
+        expect(projectID).toBe("project-service-api")
         listCalls += 1
         if (listCalls >= 2) resolveSecondList?.()
         return []
       },
     }
     ctx.event.subscribe = async function* () {
-      yield { type: "worktree.updated", data: { projectID: "project-kubernaut" } }
+      yield { type: "worktree.updated", data: { projectID: "project-service-api" } }
     }
 
     let timeout: ReturnType<typeof setTimeout> | undefined

@@ -99,6 +99,26 @@ DEFAULT_PORT = 8896
 FORWARD_TIMEOUT_S = 60.0
 MAX_FORWARD_TIMEOUT_S = 600.0
 
+# A fresh MCP session is cheap compared with losing a client request, but a
+# retry is only safe when the operation is known to be read-only.  In
+# particular, never blindly replay every `tools/call`: `retain` and the other
+# write-shaped Hindsight tools may have completed upstream before a broken
+# response reached us.
+HTTP_RETRY_ATTEMPTS = 2
+HTTP_RETRY_DELAY_S = 0.25
+HTTP_RETRYABLE_STATUS_CODES = frozenset({502, 503, 504})
+HTTP_READ_ONLY_RETRYABLE_TOOLS = frozenset(
+    {
+        "recall",
+        "docs_recall",
+        "issues_recall",
+        "kuadrant_docs_recall",
+        "kuadrant_issues_recall",
+        "list_mental_models",
+        "get_mental_model",
+    }
+)
+
 # Hindsight recall returns both a text JSON envelope and an equivalent
 # `structuredContent` object. The raw envelope is useful for debugging but is
 # too large and opaque for a model-facing MCP result, especially when a broad
@@ -152,6 +172,48 @@ def _estimate_tokens(text: str) -> int:
     except Exception:
         log.warning("tiktoken estimation failed, falling back to chars/4 heuristic", exc_info=True)
         return len(text) // 4
+
+
+def _format_exception(exc: BaseException) -> str:
+    """Render an exception without losing diagnostics when ``str(exc)`` is empty.
+
+    HTTP client exceptions are sometimes constructed without a message (and
+    chained exceptions often hold the useful transport detail in
+    ``__cause__``/``__context__``).  Returning only ``str(exc)`` turned those
+    failures into the unhelpful ``backend 'host' failed:`` seen by clients.
+    Keep the chain bounded by object identity so a malformed exception cannot
+    make error handling recursive forever.
+    """
+    parts: list[str] = []
+    current: BaseException | None = exc
+    relation: str | None = None
+    seen: set[int] = set()
+
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        exception_type = type(current)
+        type_name = exception_type.__name__
+        if exception_type.__module__ not in {"builtins", "__main__"}:
+            type_name = f"{exception_type.__module__}.{type_name}"
+        message = str(current).strip()
+        detail = f"{type_name}: {message or '<no message>'}"
+        notes = getattr(current, "__notes__", None)
+        if notes:
+            detail += f" (notes: {'; '.join(str(note) for note in notes)})"
+        parts.append(f"{relation} {detail}" if relation else detail)
+
+        if current.__cause__ is not None:
+            relation = "caused by"
+            current = current.__cause__
+        elif not current.__suppress_context__ and current.__context__ is not None:
+            relation = "context"
+            current = current.__context__
+        else:
+            current = None
+
+    if current is not None:
+        parts.append("exception chain contained a cycle")
+    return "; ".join(parts)
 
 
 def _extract_result_text(result: dict) -> str:
@@ -211,13 +273,16 @@ def _normalize_recall_record(record: object) -> dict | None:
             normalized[key] = value
 
     metadata = record.get("metadata")
-    if isinstance(metadata, dict):
-        summary = metadata.get("key_sentences")
+    summary = record.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        if isinstance(metadata, dict):
+            summary = metadata.get("key_sentences")
         if not isinstance(summary, str) or not summary.strip():
             summary = record.get("text")
-        if isinstance(summary, str):
-            normalized["summary"] = _bounded_text(summary, MAX_RECALL_SUMMARY_CHARS)
+    if isinstance(summary, str):
+        normalized["summary"] = _bounded_text(summary, MAX_RECALL_SUMMARY_CHARS)
 
+    if isinstance(metadata, dict):
         keywords = metadata.get("keywords")
         if isinstance(keywords, str):
             compact_keywords = [keyword.strip() for keyword in keywords.split(",") if keyword.strip()]
@@ -233,8 +298,6 @@ def _normalize_recall_record(record: object) -> dict | None:
         }
         if compact_metadata:
             normalized["metadata"] = compact_metadata
-    elif isinstance(record.get("text"), str):
-        normalized["summary"] = _bounded_text(record["text"], MAX_RECALL_SUMMARY_CHARS)
 
     scores = record.get("scores")
     if isinstance(scores, dict):
@@ -715,8 +778,9 @@ async def aggregate_tools_list(
     errors: dict[str, str] = {}
     for backend_key, outcome in results:
         if isinstance(outcome, Exception):
-            errors[backend_key] = str(outcome)
-            log.warning("backend %r failed to list tools: %s", backend_key, outcome)
+            detail = _format_exception(outcome)
+            errors[backend_key] = detail
+            log.warning("backend %r failed to list tools: %s", backend_key, detail)
             continue
         per_backend_tools[backend_key] = filter_relevant_tools(backend_key, outcome)
 
@@ -779,12 +843,13 @@ async def handle_tools_call(
     try:
         result = await adapter.call_tool(raw_name, arguments)
     except Exception as exc:  # noqa: BLE001 - degrade to a clean tool error, don't crash the gateway
-        log.warning("backend %r failed on tools/call(%r): %s", backend_key, raw_name, exc)
+        detail = _format_exception(exc)
+        log.warning("backend %r failed on tools/call(%r): %s", backend_key, raw_name, detail)
         _log_gateway_call(
             project=project, backend=backend_key, tool=tool_name,
             is_error=True, result_chars=0, est_tokens=0,
         )
-        return _jsonrpc_error_result(message_id, f"backend {backend_key!r} failed: {exc}")
+        return _jsonrpc_error_result(message_id, f"backend {backend_key!r} failed: {detail}")
 
     # The legacy single-endpoint runtime registry forwards already-prefixed
     # names (for example, ``docs_recall``) through a host gateway. Newer
@@ -829,7 +894,13 @@ class HttpRelayAdapter:
     hindsight-issues). Each call is a fresh one-shot MCP session
     (initialize -> notifications/initialized -> the real call -> delete),
     matching serena_multiplex.py's "POST-only, never GET/SSE" design to
-    avoid the upstream mcp/fastmcp SSE-reconnect bug documented there."""
+    avoid the upstream mcp/fastmcp SSE-reconnect bug documented there.
+
+    ``tools/list`` and the explicitly allowlisted read-only tools get one
+    fresh-session retry for transient HTTP transport/5xx failures. Writes do
+    not retry: after a dropped response it is impossible to know whether the
+    upstream applied the write, so replaying it would be worse than surfacing
+    the diagnostic error to the caller."""
 
     def __init__(
         self,
@@ -841,7 +912,27 @@ class HttpRelayAdapter:
         self.headers = dict(headers or {})
         self.timeout_seconds = timeout_seconds
 
-    async def _roundtrip(self, method: str, params: dict | None = None) -> dict:
+    @staticmethod
+    def _is_retryable_tool_call(name: str) -> bool:
+        """Return whether replaying this MCP tool call is safe.
+
+        The legacy host route passes one of the explicitly listed prefixed
+        recall names while direct per-backend routes pass the raw ``recall``
+        name.  Do not broaden this to every search-looking name: the
+        allowlist is an intentional guard against replaying a future write
+        tool whose name happens to contain ``search`` or ``recall``.
+        """
+        return name in HTTP_READ_ONLY_RETRYABLE_TOOLS
+
+    @staticmethod
+    def _is_transient_failure(exc: BaseException) -> bool:
+        import httpx
+
+        if isinstance(exc, httpx.RequestError):
+            return True
+        return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in HTTP_RETRYABLE_STATUS_CODES
+
+    async def _roundtrip_once(self, method: str, params: dict | None = None) -> dict:
         import httpx
 
         # Some local MCP adapters route by the HTTP Host header and reject the
@@ -853,51 +944,87 @@ class HttpRelayAdapter:
             "Accept": "application/json, text/event-stream",
         }
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            init_resp = await client.post(
-                self.url,
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {},
-                        "clientInfo": {"name": "engram-gateway", "version": "0.0.1"},
+            session_id = None
+            try:
+                init_resp = await client.post(
+                    self.url,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {},
+                            "clientInfo": {"name": "engram-gateway", "version": "0.0.1"},
+                        },
                     },
-                },
-                headers=headers,
-            )
-            init_resp.raise_for_status()
-            session_id = init_resp.headers.get("mcp-session-id")
-            session_headers = {**headers, "mcp-session-id": session_id} if session_id else headers
+                    headers=headers,
+                )
+                init_resp.raise_for_status()
+                session_id = init_resp.headers.get("mcp-session-id")
+                session_headers = {**headers, "mcp-session-id": session_id} if session_id else headers
 
-            await client.post(
-                self.url,
-                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
-                headers=session_headers,
-            )
+                initialized_resp = await client.post(
+                    self.url,
+                    json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                    headers=session_headers,
+                )
+                initialized_resp.raise_for_status()
 
-            call_resp = await client.post(
-                self.url,
-                json={"jsonrpc": "2.0", "id": 2, "method": method, "params": params or {}},
-                headers=session_headers,
-            )
-            call_resp.raise_for_status()
-            result = _parse_sse_json(call_resp.content)
+                call_resp = await client.post(
+                    self.url,
+                    json={"jsonrpc": "2.0", "id": 2, "method": method, "params": params or {}},
+                    headers=session_headers,
+                )
+                call_resp.raise_for_status()
+                result = _parse_sse_json(call_resp.content)
 
-            if session_id:
-                await client.delete(self.url, headers=session_headers)
+                if "error" in result:
+                    raise RuntimeError(f"{method} failed: {result['error']}")
+                return result.get("result", {})
+            finally:
+                if session_id:
+                    try:
+                        await client.delete(self.url, headers=session_headers)
+                    except Exception as exc:  # noqa: BLE001 - cleanup must not mask the request failure
+                        log.debug("could not close HTTP MCP session: %s", _format_exception(exc))
 
-        if "error" in result:
-            raise RuntimeError(f"{method} failed: {result['error']}")
-        return result.get("result", {})
+    async def _roundtrip(
+        self,
+        method: str,
+        params: dict | None = None,
+        *,
+        retryable: bool = False,
+    ) -> dict:
+        attempts = HTTP_RETRY_ATTEMPTS if retryable else 1
+        for attempt in range(attempts):
+            try:
+                return await self._roundtrip_once(method, params)
+            except Exception as exc:  # noqa: BLE001 - retry only known transient HTTP failures
+                if attempt + 1 >= attempts or not self._is_transient_failure(exc):
+                    raise
+                log.warning(
+                    "transient HTTP MCP failure for %s at %s; retrying attempt %d/%d: %s",
+                    method,
+                    self.url,
+                    attempt + 2,
+                    attempts,
+                    _format_exception(exc),
+                )
+                if HTTP_RETRY_DELAY_S > 0:
+                    await asyncio.sleep(HTTP_RETRY_DELAY_S)
+
 
     async def list_tools(self) -> list[dict]:
-        result = await self._roundtrip("tools/list")
+        result = await self._roundtrip("tools/list", retryable=True)
         return result.get("tools", [])
 
     async def call_tool(self, name: str, arguments: dict) -> dict:
-        return await self._roundtrip("tools/call", {"name": name, "arguments": arguments})
+        return await self._roundtrip(
+            "tools/call",
+            {"name": name, "arguments": arguments},
+            retryable=self._is_retryable_tool_call(name),
+        )
 
 
 ZVEC_SHADOWED_TOOLS = {
@@ -1380,13 +1507,13 @@ class ZvecShadowRelayAdapter:
                 except Exception as exc:  # noqa: BLE001 - shadow errors must not affect primary
                     entry["shadow"].update({
                         "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
-                        "error": f"{type(exc).__name__}: {exc}",
+                        "error": _format_exception(exc),
                     })
                     entry["comparison"] = {
                         "reference_engine": "cocoindex",
                         "status": "reference_call_failed",
                     }
-                    log.warning("CocoIndex shadow failed for %s: %s", name, exc)
+                    log.warning("CocoIndex shadow failed for %s: %s", name, _format_exception(exc))
 
         if "comparison" not in entry:
             entry["comparison"] = {

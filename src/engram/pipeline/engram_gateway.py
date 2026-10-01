@@ -2110,7 +2110,7 @@ def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
         registry[name] = {
             "docs": _hindsight("kubernaut-docs"),
             "issues": _hindsight("kubernaut-issues"),
-            "code": kubernaut_http_code,
+            "code": kubernaut_zvec_code if name == "kubernaut-operator" else kubernaut_http_code,
             "rca": kubernaut_rca,
             "serena": kubernaut_serena(name),
         }

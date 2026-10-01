@@ -2,21 +2,38 @@ import { describe, expect, test } from "bun:test"
 import {
   buildZvecIndexArgs,
   createKubernautWorktreeIndexer,
+  type ZvecGitRevision,
+  type ZvecIndexProvenance,
   shouldAutoIndexKubernautWorktrees,
 } from "./worktree-index"
 
 describe("Kubernaut worktree indexing policy", () => {
-  test("is enabled only for the Kubernaut route unless explicitly disabled", () => {
+  test("defaults to the Kubernaut route and supports explicit project opt-in", () => {
     expect(shouldAutoIndexKubernautWorktrees("kubernaut")).toBe(true)
     expect(shouldAutoIndexKubernautWorktrees("kubernaut", false)).toBe(false)
+    expect(shouldAutoIndexKubernautWorktrees("kubernaut-console")).toBe(false)
+    expect(shouldAutoIndexKubernautWorktrees("kubernaut-console", true)).toBe(true)
     expect(shouldAutoIndexKubernautWorktrees("kubernaut-v1.5")).toBe(false)
     expect(shouldAutoIndexKubernautWorktrees("engram")).toBe(false)
+    expect(shouldAutoIndexKubernautWorktrees("engram", true)).toBe(true)
   })
 
   test("uses auto mode and the configured local embedding for a new worktree", () => {
     expect(buildZvecIndexArgs("/worktrees/fix-123", "local/potion-code-16m-v2")).toEqual([
       "--index",
       "/worktrees/fix-123",
+      "--mode",
+      "auto",
+      "--embedding",
+      "local/potion-code-16m-v2",
+    ])
+  })
+
+  test("adds --rebuild only when a branch-aware refresh is required", () => {
+    expect(buildZvecIndexArgs("/worktrees/fix-123", "local/potion-code-16m-v2", true)).toEqual([
+      "--index",
+      "/worktrees/fix-123",
+      "--rebuild",
       "--mode",
       "auto",
       "--embedding",
@@ -30,6 +47,7 @@ describe("createKubernautWorktreeIndexer", () => {
     const indexed = new Set<string>(["/worktrees/already-indexed"])
     const calls: string[] = []
     const logs: string[] = []
+    const revision: ZvecGitRevision = { branch: "main", commit: "same-commit" }
     const indexer = createKubernautWorktreeIndexer({
       projectID: "project-kubernaut",
       canonicalDirectory: "/repos/kubernaut",
@@ -39,6 +57,10 @@ describe("createKubernautWorktreeIndexer", () => {
         { directory: "/worktrees/already-indexed" },
       ],
       hasManifest: async (directory) => indexed.has(directory),
+      getRevision: async (directory) => directory === "/worktrees/already-indexed" ? revision : undefined,
+      readProvenance: async (directory) => directory === "/worktrees/already-indexed"
+        ? { version: 1, root: directory, ...revision }
+        : undefined,
       runIndex: async (directory) => {
         calls.push(directory)
         indexed.add(directory)
@@ -124,6 +146,116 @@ describe("createKubernautWorktreeIndexer", () => {
     await indexer.waitForIdle()
 
     expect(calls).toEqual(["/worktrees/retry-me", "/worktrees/retry-me"])
+    indexer.dispose()
+  })
+
+  test("rebuilds an existing manifest when its Engram Git provenance is stale", async () => {
+    const revision: ZvecGitRevision = { branch: "fix/new-route", commit: "new-commit" }
+    const previous: ZvecIndexProvenance = {
+      version: 1,
+      root: "/worktrees/stale-branch",
+      branch: "main",
+      commit: "old-commit",
+    }
+    const calls: Array<{ directory: string; rebuild: boolean }> = []
+    let saved: ZvecIndexProvenance | undefined
+    const indexer = createKubernautWorktreeIndexer({
+      projectID: "project-kubernaut",
+      canonicalDirectory: "/repos/kubernaut",
+      listWorktrees: async () => [{ directory: "/worktrees/stale-branch" }],
+      hasManifest: async () => true,
+      getRevision: async () => revision,
+      readProvenance: async () => previous,
+      writeProvenance: async (directory, value) => {
+        saved = { version: 1, root: directory, ...value }
+      },
+      runIndex: async (directory, rebuild) => calls.push({ directory, rebuild }),
+      log: () => {},
+    })
+
+    await indexer.refresh()
+    await indexer.waitForIdle()
+
+    expect(calls).toEqual([{ directory: "/worktrees/stale-branch", rebuild: true }])
+    expect(saved).toEqual({ version: 1, root: "/worktrees/stale-branch", ...revision })
+    indexer.dispose()
+  })
+
+  test("does not rebuild again when the recorded Git provenance matches", async () => {
+    const revision: ZvecGitRevision = { branch: "main", commit: "same-commit" }
+    const provenance: ZvecIndexProvenance = {
+      version: 1,
+      root: "/worktrees/current",
+      ...revision,
+    }
+    const calls: Array<{ directory: string; rebuild: boolean }> = []
+    const indexer = createKubernautWorktreeIndexer({
+      projectID: "project-kubernaut",
+      canonicalDirectory: "/repos/kubernaut",
+      listWorktrees: async () => [{ directory: "/worktrees/current" }],
+      hasManifest: async () => true,
+      getRevision: async () => revision,
+      readProvenance: async () => provenance,
+      runIndex: async (directory, rebuild) => calls.push({ directory, rebuild }),
+      log: () => {},
+    })
+
+    await indexer.refresh()
+    await indexer.handleEvent({ type: "worktree.updated", data: { projectID: "project-kubernaut" } })
+    await indexer.waitForIdle()
+
+    expect(calls).toEqual([])
+    indexer.dispose()
+  })
+
+  test("serializes a branch refresh and preserves a follow-up when Git changes during a build", async () => {
+    const revisions: ZvecGitRevision[] = [
+      { branch: "fix/new-route", commit: "new-commit" },
+      { branch: "fix/new-route", commit: "new-commit" },
+      { branch: "fix/new-route", commit: "newer-commit" },
+      { branch: "fix/new-route", commit: "newer-commit" },
+      { branch: "fix/new-route", commit: "newer-commit" },
+    ]
+    const previous: ZvecIndexProvenance = {
+      version: 1,
+      root: "/worktrees/branch-race",
+      branch: "main",
+      commit: "old-commit",
+    }
+    const calls: Array<{ directory: string; rebuild: boolean }> = []
+    const saved: ZvecIndexProvenance[] = []
+    let getRevisionCall = 0
+    let finishFirst: (() => void) | undefined
+    const indexer = createKubernautWorktreeIndexer({
+      projectID: "project-kubernaut",
+      canonicalDirectory: "/repos/kubernaut",
+      listWorktrees: async () => [{ directory: "/worktrees/branch-race" }],
+      hasManifest: async () => true,
+      getRevision: async () => revisions[Math.min(getRevisionCall++, revisions.length - 1)],
+      readProvenance: async () => previous,
+      writeProvenance: async (directory, revision) => saved.push({ version: 1, root: directory, ...revision }),
+      runIndex: async (directory, rebuild) => {
+        calls.push({ directory, rebuild })
+        if (calls.length === 1) {
+          await new Promise<void>((resolve) => {
+            finishFirst = resolve
+          })
+        }
+      },
+      log: () => {},
+    })
+
+    const firstRefresh = indexer.refresh()
+    while (calls.length === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    finishFirst?.()
+    await firstRefresh
+    await indexer.waitForIdle()
+
+    expect(calls).toEqual([
+      { directory: "/worktrees/branch-race", rebuild: true },
+      { directory: "/worktrees/branch-race", rebuild: true },
+    ])
+    expect(saved).toEqual([{ version: 1, root: "/worktrees/branch-race", ...revisions[2] }])
     indexer.dispose()
   })
 })

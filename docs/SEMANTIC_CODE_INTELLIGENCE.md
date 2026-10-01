@@ -1,12 +1,13 @@
 # Semantic Code Intelligence: Findings and Pilot Decision
 
-**Status:** The local gateway integration now routes Kubernaut code tools to
-zvec-grep as primary and schedules CocoIndex comparisons asynchronously for
-semantic search and comparable Go core/operator graph calls. The native gateway
-route is active for Kubernaut; quality gates remain open because this pilot is
-exploratory and has no adjudicated relevance labels. Other Kubernaut-family
-routes remain on the shared CocoIndex backend. zvec-grep exposes root-scoped,
-fresh callgraph MCP tools for Go, Rust, TypeScript/TSX, and Python.
+**Status:** The local gateway integration now routes Kubernaut and
+`kubernaut-operator` code tools to zvec-grep as primary and schedules CocoIndex
+comparisons asynchronously for semantic search and comparable Go core/operator
+graph calls. The native gateway route is active for both live worktrees; quality
+gates remain open because this pilot is exploratory and has no adjudicated
+relevance labels. Other Kubernaut-family routes remain on the shared CocoIndex
+backend. zvec-grep exposes root-scoped, fresh callgraph MCP tools for Go, Rust,
+TypeScript/TSX, and Python.
 
 **Date:** 2026-09-22
 
@@ -396,8 +397,10 @@ semantic-search comparison because a stale index can look like a ranking
 failure when it is actually missing the current branch's symbols.
 
 The current deployment is still a single shared Kubernaut code-ingestion/search
-process. It follows branch changes inside the configured live checkout, but
-separate simultaneous worktrees need separate scoped processes or a future
+process. The `kubernaut` and `kubernaut-operator` routes use zvec-grep as the
+primary live-worktree backend and share its asynchronous CocoIndex shadow. zvec
+follows branch changes inside each configured live checkout, but separate
+simultaneous worktrees need separate scoped processes or a future
 worktree/commit namespace in `code_embeddings`; they must not share one
 unqualified row set. That is an explicit follow-up before claiming full
 multi-session branch isolation.
@@ -406,10 +409,11 @@ multi-session branch isolation.
 
 Codanna `0.16.0` was enabled on 2026-09-21 as a temporary semantic-search
 experiment and removed from the active Kubernaut client configuration on
-2026-09-23. The current working-tree gateway registry now configures Kubernaut's
-code route with `ZvecShadowRelayAdapter`: zvec-grep is primary, and CocoIndex
-search plus comparable graph queries run asynchronously as a shadow. Other
-Kubernaut-family routes continue using the shared CocoIndex backend.
+2026-09-23. The current working-tree gateway registry now configures the
+`kubernaut` and `kubernaut-operator` code routes with `ZvecShadowRelayAdapter`:
+zvec-grep is primary, and CocoIndex search plus comparable graph queries run
+asynchronously as a shadow. Other Kubernaut-family routes continue using the
+shared CocoIndex backend.
 
 The primary URL defaults to `http://127.0.0.1:7999/mcp` and can be overridden
 with `ZVEC_GREP_MCP_URL`; the shadow URL defaults to

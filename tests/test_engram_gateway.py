@@ -1051,9 +1051,13 @@ class TestBuildProjectRegistry:
         assert spec["docs"] == {"kind": "http", "url": "http://localhost:8888/mcp/kubernaut-docs/"}
         assert spec["issues"] == {"kind": "http", "url": "http://localhost:8888/mcp/kubernaut-issues/"}
         assert spec["code"] == {
-            "kind": "http",
-            "url": "http://127.0.0.1:8891/mcp",
-            "timeout_seconds": 180,
+            "kind": "shadow_http",
+            "url": "http://127.0.0.1:7999/mcp",
+            "shadow_url": "http://127.0.0.1:8891/mcp",
+            "timeout_seconds": 300.0,
+            "shadow_timeout_seconds": 180.0,
+            "shadow_log": "/home/u/.engram/logs/zvec-cocoindex-shadow.jsonl",
+            "shared_key": "kubernaut-zvec-shadow",
         }
         assert spec["rca"] == {"kind": "http", "url": "http://127.0.0.1:8897/mcp"}
         assert spec["serena"] == {"kind": "http", "url": "http://127.0.0.1:8893/mcp/kubernaut-operator"}
@@ -1073,7 +1077,7 @@ class TestBuildProjectRegistry:
             "shadow_log": "/home/u/.engram/logs/zvec-cocoindex-shadow.jsonl",
             "shared_key": "kubernaut-zvec-shadow",
         }
-        assert "code" in registry["kubernaut-operator"]
+        assert registry["kubernaut-operator"]["code"] == registry["kubernaut"]["code"]
 
     def test_rca_backend_is_kubernaut_only(self, engram_gateway):
         registry = engram_gateway.build_project_registry("/home/u")

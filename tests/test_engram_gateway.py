@@ -721,6 +721,19 @@ class TestRecallResponseNormalization:
         ]
         assert "kept" in result["result"]["content"][0]["text"]
 
+    def test_recall_normalization_is_idempotent_for_source_summaries(self, engram_gateway):
+        original = {
+            "content": [{"type": "text", "text": '{"results":[{"id":"memory-1","text":"source text"}]}'}],
+            "isError": False,
+        }
+
+        normalized = engram_gateway._normalize_recall_result(original)
+        normalized_again = engram_gateway._normalize_recall_result(normalized)
+
+        assert normalized_again == normalized
+        assert normalized_again["structuredContent"]["results"][0]["summary"] == "source text"
+        assert "source text" in normalized_again["content"][0]["text"]
+
     def test_non_recall_or_malformed_payload_passes_through(self, engram_gateway):
         original = {"content": [{"type": "text", "text": '{"items":[1,2]}'}], "isError": False}
         assert engram_gateway._normalize_recall_result(original) is original

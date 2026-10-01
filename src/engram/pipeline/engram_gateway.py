@@ -273,13 +273,16 @@ def _normalize_recall_record(record: object) -> dict | None:
             normalized[key] = value
 
     metadata = record.get("metadata")
-    if isinstance(metadata, dict):
-        summary = metadata.get("key_sentences")
+    summary = record.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        if isinstance(metadata, dict):
+            summary = metadata.get("key_sentences")
         if not isinstance(summary, str) or not summary.strip():
             summary = record.get("text")
-        if isinstance(summary, str):
-            normalized["summary"] = _bounded_text(summary, MAX_RECALL_SUMMARY_CHARS)
+    if isinstance(summary, str):
+        normalized["summary"] = _bounded_text(summary, MAX_RECALL_SUMMARY_CHARS)
 
+    if isinstance(metadata, dict):
         keywords = metadata.get("keywords")
         if isinstance(keywords, str):
             compact_keywords = [keyword.strip() for keyword in keywords.split(",") if keyword.strip()]
@@ -295,8 +298,6 @@ def _normalize_recall_record(record: object) -> dict | None:
         }
         if compact_metadata:
             normalized["metadata"] = compact_metadata
-    elif isinstance(record.get("text"), str):
-        normalized["summary"] = _bounded_text(record["text"], MAX_RECALL_SUMMARY_CHARS)
 
     scores = record.get("scores")
     if isinstance(scores, dict):

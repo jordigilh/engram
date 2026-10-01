@@ -29,7 +29,7 @@ export interface EngramRepositoryMappings {
 export interface EngramPluginOptions extends RepositoryIdentityOptions {
   gatewayUrl?: string
   repositories?: EngramRepositoryMappings
-  /** Enable local zvec indexes for this project's OpenCode-created worktrees. Defaults to true only on the kubernaut route. */
+  /** Automatically create local zvec indexes for OpenCode-created Kubernaut worktrees. Defaults to true on the kubernaut route. */
   autoIndexKubernautWorktrees?: boolean
   /** Optional path to the zg executable; defaults to ~/bin/zg when present, otherwise PATH lookup. */
   zvecBinary?: string

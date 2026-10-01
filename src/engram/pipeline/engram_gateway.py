@@ -1,24 +1,19 @@
 #!/usr/bin/env python3
-"""Generic MCP gateway with optional project-specific legacy configuration.
+"""Generic MCP gateway driven by deployment-local instance configuration.
 
-The config-driven runtime aggregates any configured HTTP or stdio MCP backends
-behind one client-facing HTTP mount per project. The no-config native mode
-retains the historical static registry for this installation's onboarded
-projects; that registry is compatibility configuration, not gateway behavior.
+The runtime aggregates any configured HTTP or stdio MCP backends behind one
+client-facing HTTP mount per project. Routes, backend endpoints, subprocess
+commands, and workspace paths are deployment configuration loaded from TOML;
+the gateway does not contain an installation-specific project registry.
 
 The original use case aggregated hindsight-docs, hindsight-issues,
 cocoindex-code, and serena behind ONE Cursor-facing MCP HTTP mount per repo,
 instead of the 3-4 separate `.cursor/mcp.json` server entries every onboarded
 repo had before this module existed.
 
-Graduated from a single-repo (`praxis-grid`) spike on 2026-08-21 to cover
-every onboarded repo across all families (kubernaut, koku, dcm, praxis,
-rhdh-plugins, engram itself, and -- as a single cross-mounted recall-only
-entry rather than one-mount-per-repo, see its own registry comment --
-kuadrant) after the spike found no fundamental blocker --
-see docs/findings/2026-08.md's 2026-08-21 entries for the spike results and
-the full-rollout survey/decisions. `build_project_registry()` below is the
-single source of truth for what each repo gets.
+The native host gateway and the container runtime use the same generic loader;
+the native process defaults to `~/.engram/runtime/native-instances.toml` and
+the container still receives an explicit mounted config path.
 
 Background (see the "Engram unified MCP gateway spike" plan and
 docs/findings/2026-08.md's many "MCP shows Disabled" entries): most of this
@@ -96,6 +91,7 @@ from engram import mcp_compat  # noqa: E402  (mcp 1.x/2.x Tool compat)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8896
+DEFAULT_NATIVE_CONFIG = pathlib.Path("~/.engram/runtime/native-instances.toml")
 FORWARD_TIMEOUT_S = 60.0
 MAX_FORWARD_TIMEOUT_S = 600.0
 
@@ -534,14 +530,9 @@ def _log_gateway_call(
 # passes through unprefixed -- verified empirically that their tool names
 # don't collide with each other or with docs/issues (see plan).
 #
-# kuadrant_docs/kuadrant_issues added 2026-08-27: the "kuadrant" project
-# entry is cross-mounted as a *second* MCP server into every praxis-*
-# repo's .cursor/mcp.json (see build_project_registry()'s "kuadrant" entry
-# and RELEVANT_TOOLS_BY_BACKEND below) alongside that repo's own "engram"
-# mount -- two independent MCP servers both offering a bare "recall" tool
-# would collide client-side, so these get project-qualified names
-# (kuadrant_docs_recall, kuadrant_issues_recall) instead of the usual
-# docs_recall/issues_recall.
+# A deployment may mount a second docs/issues family beside a route's primary
+# family. Those backend keys use project-qualified names so two bare `recall`
+# tools cannot collide in the client catalog.
 PREFIXED_BACKENDS = frozenset({
     "docs",
     "issues",
@@ -1036,23 +1027,6 @@ ZVEC_SHADOWED_TOOLS = {
 MAX_PENDING_ZVEC_SHADOWS = 8
 
 
-def _kubernaut_shadow_source_roots() -> dict[str, pathlib.Path]:
-    home = pathlib.Path.home()
-    configured = {
-        "kubernaut": os.environ.get("ENGRAM_CODE_DIR", str(home / "go/src/github.com/jordigilh/kubernaut")),
-        "kubernaut-operator": os.environ.get(
-            "ENGRAM_OPERATOR_DIR", str(home / "go/src/github.com/jordigilh/kubernaut-operator")
-        ),
-        "kubernaut-console": os.environ.get(
-            "ENGRAM_CONSOLE_DIR", str(home / "go/src/github.com/jordigilh/kubernaut-console")
-        ),
-        "kubernaut-demo-scenarios": os.environ.get(
-            "ENGRAM_SCENARIOS_DIR", str(home / "go/src/github.com/jordigilh/kubernaut-demo-scenarios")
-        ),
-    }
-    return {repo: pathlib.Path(root).expanduser().resolve() for repo, root in configured.items()}
-
-
 def _git_workspace_metadata(root: pathlib.Path) -> dict[str, Any]:
     metadata: dict[str, Any] = {"workspace": str(root), "branch": None, "commit": None, "dirty": None}
     for key, command in (
@@ -1401,12 +1375,14 @@ class ZvecShadowRelayAdapter:
         log_path: pathlib.Path,
         shadow_timeout_seconds: float,
         source_roots: dict[str, pathlib.Path] | None = None,
+        callgraph_repos: frozenset[str] | None = None,
     ) -> None:
         self.primary = primary
         self.shadow = shadow
         self.log_path = log_path.expanduser()
         self.shadow_timeout_seconds = shadow_timeout_seconds
-        self.source_roots = source_roots or _kubernaut_shadow_source_roots()
+        self.source_roots = source_roots or {}
+        self.callgraph_repos = callgraph_repos or frozenset()
         self._shadow_tasks: set[asyncio.Task[None]] = set()
         self._shadow_semaphore = asyncio.Semaphore(1)
         self._log_lock = asyncio.Lock()
@@ -1473,10 +1449,8 @@ class ZvecShadowRelayAdapter:
             entry["shadow"].update({"skipped": "missing_or_unavailable_absolute_root"})
         elif indexed_repo is None:
             entry["shadow"].update({"skipped": "root_is_not_a_configured_cocoindex_source"})
-        elif name.startswith("zvec_grep_callgraph_") and indexed_repo not in {
-            "kubernaut", "kubernaut-operator"
-        }:
-            entry["shadow"].update({"skipped": "cocoindex_callgraph_only_covers_go_core_and_operator"})
+        elif name.startswith("zvec_grep_callgraph_") and indexed_repo not in self.callgraph_repos:
+            entry["shadow"].update({"skipped": "cocoindex_callgraph_not_configured_for_source"})
         else:
             call = _zvec_shadow_arguments(
                 name, arguments, repo=indexed_repo, root=root, branch=metadata.get("branch")
@@ -1957,287 +1931,8 @@ def build_app(projects: dict[str, dict[str, BackendAdapter]]):
 
 
 # ---------------------------------------------------------------------------
-# Legacy native registry (2026-08-21): every onboarded repo, config only (no
-# I/O, no adapter instantiation -- see `build_backend_adapters` for that).
-# The portable runtime path uses `load_instance_registry()` instead and does
-# not depend on this installation-specific project list.
-# Deliberately preserves each repo's *existing* backend set exactly rather
-# than normalizing towards a uniform 4-backend shape: several repos are
-# missing one or more backends today (kubernaut-console has no serena,
-# kubernaut-docs has no cocoindex-code, engram itself has neither issues nor
-# serena) and this registry must keep reflecting that, not silently add
-# capabilities a repo never had. See docs/findings/2026-08.md's 2026-08-21
-# rollout entry for the full survey this was built from.
-#
-# Explicitly excluded (see that entry for why): the two kubernaut-fix-1995-*
-# scratch worktrees (serena still points directly at the raw upstream daemon
-# on :8892 rather than through the :8893 multiplex, a stale/pre-multiplex
-# config on what look like abandoned one-off branch-fix clones -- not guessed
-# at here).
+# Deployment-local registry
 # ---------------------------------------------------------------------------
-
-_HINDSIGHT_BASE = "http://localhost:8888"
-_PG_URL = "postgresql://hindsight:hindsight@localhost:5432/hindsight"
-
-DCM_REPOS = [
-    "udlm",
-    "k8s-container-service-provider",
-    "three-tier-app-demo-service-provider",
-    "quadlet-deploy",
-    "acm-cluster-service-provider",
-    "shared-workflows",
-    "kubevirt-service-provider",
-    "cli",
-    "utilities",
-    "osac-service-provider",
-    "enhancements",
-    "dcm-project.github.io",
-]
-PRAXIS_REPOS_WITH_SERENA = [
-    "praxis",
-    "praxis-ai",
-    "praxis-benchmarks",
-    "praxis-demos",
-    "praxis-experiments",
-    "praxis-forge",
-    "praxis-grid",
-    "praxis-operator",
-    "praxis-policy",
-]
-PRAXIS_REPOS_WITHOUT_SERENA = ["praxis-conventions", "praxis-enhancements", "praxis-proxy.github.io"]
-
-
-def _hindsight(bank: str) -> dict:
-    return {"kind": "http", "url": f"{_HINDSIGHT_BASE}/mcp/{bank}/"}
-
-
-def _http(
-    url: str,
-    headers: dict[str, str] | None = None,
-    timeout_seconds: float | None = None,
-) -> dict:
-    spec = {"kind": "http", "url": url}
-    if headers:
-        spec["headers"] = headers
-    if timeout_seconds is not None:
-        spec["timeout_seconds"] = timeout_seconds
-    return spec
-
-
-def _shadow_http(
-    primary_url: str,
-    shadow_url: str,
-    *,
-    log_path: str,
-    timeout_seconds: float = 300.0,
-    shadow_timeout_seconds: float = 180.0,
-    shared_key: str | None = None,
-) -> dict:
-    spec = {
-        "kind": "shadow_http",
-        "url": primary_url,
-        "shadow_url": shadow_url,
-        "timeout_seconds": timeout_seconds,
-        "shadow_timeout_seconds": shadow_timeout_seconds,
-        "shadow_log": log_path,
-    }
-    if shared_key is not None:
-        spec["shared_key"] = shared_key
-    return spec
-
-
-def _stdio(command: str, args: list[str] | None = None, env: dict | None = None, shared_key: str | None = None) -> dict:
-    spec = {"kind": "stdio", "command": command, "args": args or [], "env": env}
-    if shared_key is not None:
-        spec["shared_key"] = shared_key
-    return spec
-
-
-def _serena_stdio(home: str, workspace: str) -> dict:
-    return _stdio(
-        f"{home}/.local/bin/uvx",
-        [
-            "--from",
-            "git+https://github.com/oraios/serena@1bbe53546124c00e4238972f1599a91fbf8c6539",
-            "serena",
-            "start-mcp-server",
-            "--project",
-            workspace,
-            "--context",
-            "ide",
-            "--add-mode",
-            "no-memories",
-            "--open-web-dashboard",
-            "false",
-        ],
-    )
-
-
-def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
-    """project_name -> {backend_key: backend_spec}, pure config derived from
-    the 2026-08-21 survey of every onboarded repo's actual .cursor/mcp.json.
-    `home` is injected (rather than read from `os.path.expanduser` here) so
-    this stays a pure, easily-testable function."""
-    venv_bin = f"{home}/.engram/venv/bin"
-    registry: dict[str, dict[str, dict]] = {}
-
-    # Kubernaut's cold Go call-graph build takes around 70s on the live corpus;
-    # keep it within the single request's forwarding budget instead of
-    # timing out just before the fingerprinted cache is populated.
-    kubernaut_http_code = _http("http://127.0.0.1:8891/mcp", timeout_seconds=180)
-    kubernaut_zvec_code = _shadow_http(
-        os.environ.get("ZVEC_GREP_MCP_URL", "http://127.0.0.1:7999/mcp"),
-        os.environ.get("COCOINDEX_MCP_URL", "http://127.0.0.1:8891/mcp"),
-        log_path=f"{home}/.engram/logs/zvec-cocoindex-shadow.jsonl",
-        shared_key="kubernaut-zvec-shadow",
-    )
-    kubernaut_rca = _http("http://127.0.0.1:8897/mcp")
-
-    def kubernaut_serena(project: str) -> dict:
-        return _http(f"http://127.0.0.1:8893/mcp/{project}")
-
-    # Kubernaut's live-worktree code route is zvec-grep primary. CocoIndex runs
-    # only as an asynchronous shadow comparator; the other family workspaces
-    # continue using the shared CocoIndex route until separately migrated.
-    registry["kubernaut"] = {
-        "docs": _hindsight("kubernaut-docs"),
-        "issues": _hindsight("kubernaut-issues"),
-        "code": kubernaut_zvec_code,
-        "rca": kubernaut_rca,
-        "serena": kubernaut_serena("kubernaut"),
-    }
-    for name in ("kubernaut-operator", "kubernaut-v1.5"):
-        registry[name] = {
-            "docs": _hindsight("kubernaut-docs"),
-            "issues": _hindsight("kubernaut-issues"),
-            "code": kubernaut_zvec_code if name == "kubernaut-operator" else kubernaut_http_code,
-            "rca": kubernaut_rca,
-            "serena": kubernaut_serena(name),
-        }
-    registry["kubernaut-demo-scenarios"] = {
-        "docs": _hindsight("kubernaut-docs"),
-        "issues": _hindsight("kubernaut-issues"),
-        "code": kubernaut_http_code,
-        "serena": kubernaut_serena("kubernaut-demo-scenarios"),
-    }
-    registry["kubernaut-console"] = {
-        "docs": _hindsight("kubernaut-docs"),
-        "issues": _hindsight("kubernaut-issues"),
-        # Shared with kubernaut/kubernaut-operator, NOT a standalone stdio
-        # process (fixed 2026-08-25): this used to spawn
-        # `~/.engram/cocoindex-search.py`, a flat symlink the 2026-08-12
-        # src/engram/ package restructuring had already deleted 9 days
-        # before this registry entry was even authored, so it was dead on
-        # arrival -- kubernaut-console's `code` tools silently dropped from
-        # its aggregated catalog every time (see engram_gateway.py's
-        # per-backend degradation). Even had that path still existed, it
-        # was a bare single-repo invocation (no --repo scoping args), so it
-        # could only ever have searched kubernaut-console's own code, never
-        # kubernaut/kubernaut-operator upstream. `kubernaut_http_code`
-        # (engram-search-kubernaut / src/engram/search/kubernaut.py) already
-        # indexes all three repos into one cocoindex.code_embeddings table
-        # and defaults `cocoindex_search`/`cocoindex_pattern_search` to
-        # whole-platform results -- wiring kubernaut-console to it too is
-        # what actually restores operator + kubernaut-upstream code search.
-        "code": kubernaut_http_code,
-        # Added 2026-08-25: kubernaut-console was the only kubernaut-family
-        # repo with no serena entry at all (see this function's module-level
-        # survey comment), despite `KUBERNAUT_FAMILY_PROJECTS` in
-        # serena_multiplex.py already listing "kubernaut-console" as a
-        # registered project on the shared daemon. Wiring it up like every
-        # other family member gives it both symbol-level tools scoped to its
-        # own repo AND read-only cross-repo lookups into kubernaut/
-        # kubernaut-operator via query_project/list_queryable_projects
-        # (project-agnostic tools, forwarded untouched -- see
-        # serena_multiplex.py's PROJECT_AGNOSTIC_TOOLS), with no extra
-        # registry work needed for the "all go repos" half of the ask.
-        "serena": kubernaut_serena("kubernaut-console"),
-    }
-    registry["kubernaut-docs"] = {
-        "docs": _hindsight("kubernaut-docs"),
-        "issues": _hindsight("kubernaut-issues"),
-        "serena": kubernaut_serena("kubernaut-docs"),
-    }
-
-    koku_code_stdio = _stdio(f"{venv_bin}/engram-search-koku", env={"COCOINDEX_PG_URL": _PG_URL}, shared_key="koku-code")
-    for name in ("koku", "koku-service-operator"):
-        registry[name] = {
-            "docs": _hindsight("koku-docs"),
-            "issues": _hindsight("koku-issues"),
-            "code": koku_code_stdio,
-            "serena": _http(f"http://127.0.0.1:8895/mcp/{name}"),
-        }
-    registry["koku-insights-onprem"] = {
-        "docs": _hindsight("koku-docs"),
-        "issues": _hindsight("koku-issues"),
-        "code": koku_code_stdio,
-        "serena": _serena_stdio(home, f"{home}/go/src/github.com/insights-onprem/koku"),
-    }
-
-    dcm_code_stdio = _stdio(
-        f"{venv_bin}/engram-search-dcm", env={"COCOINDEX_PG_URL": _PG_URL, "HF_HUB_OFFLINE": "1"}, shared_key="dcm-code"
-    )
-    # The architecture and control-plane checkouts are the two DCM review
-    # workspaces whose old MCP links predate the unified gateway. Keep their
-    # exact directory names as routes so the plugin can derive them without a
-    # special alias; the remaining DCM routes retain their established
-    # dcm-<repo> names.
-    for repo in (*DCM_REPOS, "dcm", "control-plane"):
-        route = repo if repo in {"dcm", "control-plane"} else f"dcm-{repo}"
-        registry[route] = {
-            "docs": _hindsight("dcm-docs"),
-            "issues": _hindsight("dcm-issues"),
-            "code": dcm_code_stdio,
-            "serena": _serena_stdio(home, f"{home}/go/src/github.com/dcm-project/{repo}"),
-        }
-
-    praxis_code_stdio = _stdio(f"{venv_bin}/engram-search-praxis", env={"COCOINDEX_PG_URL": _PG_URL}, shared_key="praxis-code")
-    for repo in PRAXIS_REPOS_WITH_SERENA:
-        registry[repo] = {
-            "docs": _hindsight("praxis-docs"),
-            "issues": _hindsight("praxis-issues"),
-            "code": praxis_code_stdio,
-            "serena": _serena_stdio(home, f"{home}/go/src/github.com/praxis-proxy/{repo}"),
-        }
-    for repo in PRAXIS_REPOS_WITHOUT_SERENA:
-        registry[repo.replace(".", "-")] = {
-            "docs": _hindsight("praxis-docs"),
-            "issues": _hindsight("praxis-issues"),
-            "code": praxis_code_stdio,
-        }
-
-    # rhdh-plugins: DISABLED -- no longer contributing to this project
-    # (2026-09-09). Registry entry removed so the gateway no longer spawns
-    # engram-search-rhdh-plugins / serena subprocesses for it, and the
-    # launchd job io.vectorize.cocoindex.rhdh-plugins has been booted out
-    # with its installed plist removed. Source modules
-    # (flows/search rhdh_plugins) and launchd/io.vectorize.cocoindex.rhdh-plugins.plist
-    # remain in the repo for reference only.
-
-    registry["engram"] = {
-        "docs": _hindsight("engram-docs"),
-        "code": _stdio(f"{venv_bin}/engram-search-engram", env={"COCOINDEX_PG_URL": _PG_URL}),
-    }
-
-    # kuadrant: ingestion-only prior-art reference for praxis-proxy (2026-08-27
-    # onboarding, extended to 9 repos 2026-08-28 with mcp-gateway) -- no repo
-    # is ever opened as its own Cursor workspace (hence no serena, and this
-    # is the only registry entry not named after a local checkout dir), so
-    # this single entry aggregates all 9 repos' docs/issues/code and is
-    # meant to be cross-mounted as a *second* MCP server into
-    # every praxis-* repo's .cursor/mcp.json alongside its own "engram" entry.
-    # Uses "kuadrant_docs"/"kuadrant_issues"/"kuadrant_code" backend keys
-    # (not the usual "docs"/"issues"/"code") so RELEVANT_TOOLS_BY_BACKEND can
-    # apply the narrower recall-only/search-only filter without affecting any
-    # other project's own docs/issues/code backends.
-    registry["kuadrant"] = {
-        "kuadrant_docs": _hindsight("kuadrant-docs"),
-        "kuadrant_issues": _hindsight("kuadrant-issues"),
-        "kuadrant_code": _stdio(f"{venv_bin}/engram-search-kuadrant", env={"COCOINDEX_PG_URL": _PG_URL}),
-    }
-
-    return registry
-
 
 def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
     """Validate and normalize one backend from the container registry."""
@@ -2308,6 +2003,19 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
             shadow_log = settings.get("shadow_log")
             if not isinstance(shadow_log, str) or not shadow_log.strip():
                 raise ValueError(f"Backend {instance!r}/{backend!r} requires a non-empty shadow_log")
+            source_roots = settings.get("source_roots", {})
+            if not isinstance(source_roots, dict) or any(
+                not isinstance(key, str) or not key or not isinstance(value, str) or not value.strip()
+                for key, value in source_roots.items()
+            ):
+                raise ValueError(
+                    f"Backend {instance!r}/{backend!r} source_roots must be a string-to-string table"
+                )
+            callgraph_repos = settings.get("callgraph_repos", [])
+            if not isinstance(callgraph_repos, list) or any(
+                not isinstance(repo, str) or not repo.strip() for repo in callgraph_repos
+            ):
+                raise ValueError(f"Backend {instance!r}/{backend!r} callgraph_repos must be a string array")
             shared_key = settings.get("shared_key")
             if shared_key is not None and (not isinstance(shared_key, str) or not shared_key):
                 raise ValueError(f"Backend {instance!r}/{backend!r} shared_key must be a non-empty string")
@@ -2316,6 +2024,8 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
                 "shadow_url": shadow_endpoint,
                 "shadow_timeout_seconds": float(shadow_timeout),
                 "shadow_log": shadow_log,
+                "source_roots": dict(source_roots),
+                "callgraph_repos": list(callgraph_repos),
             })
             if shared_key is not None:
                 spec["shared_key"] = shared_key
@@ -2348,7 +2058,7 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
 
 
 def load_instance_registry(path: str | pathlib.Path) -> dict[str, dict[str, dict]]:
-    """Load the container runtime registry from a TOML file.
+    """Load a deployment-local gateway registry from a TOML file.
 
     The original ``endpoint`` form remains valid as a compatibility shim for
     a host adapter. New configs use ``backends`` to aggregate multiple HTTP or
@@ -2410,61 +2120,9 @@ def load_instance_registry(path: str | pathlib.Path) -> dict[str, dict[str, dict
     return registry
 
 
-def _bank_name_from_spec(spec: dict, suffix: str) -> str:
-    """Extract a Hindsight bank name from one of the registry's HTTP specs."""
-    url = spec.get("url", "")
-    marker = "/mcp/"
-    if marker not in url:
-        raise ValueError(f"Hindsight backend URL has no MCP bank path: {url!r}")
-    bank = url.split(marker, 1)[1].rstrip("/")
-    if not bank.endswith(suffix):
-        raise ValueError(f"Expected Hindsight bank suffix {suffix!r}, got {bank!r}")
-    return bank
-
-
-def build_gateway_identity_registry(
-    registry: dict[str, dict[str, dict]],
-) -> dict[str, dict[str, str | None]]:
-    """Build the legacy Hindsight project/family identity view.
-
-    The gateway route is the project key. Backend specs remain authoritative for
-    actual routing, while this derived view validates the historical native
-    registry's Hindsight bank relationship. Config-driven runtime registries
-    are intentionally not required to use Hindsight or these bank suffixes.
-    """
-    identities: dict[str, dict[str, str | None]] = {}
-    for project, backends in registry.items():
-        if not project or "/" in project:
-            raise ValueError(f"Invalid gateway project route: {project!r}")
-        docs_key = "docs" if "docs" in backends else "kuadrant_docs"
-        docs_spec = backends.get(docs_key)
-        if not docs_spec or docs_spec.get("kind") != "http":
-            raise ValueError(f"Gateway project {project!r} has no HTTP docs backend")
-
-        docs_bank = _bank_name_from_spec(docs_spec, "-docs")
-        issues_key = "issues" if "issues" in backends else "kuadrant_issues"
-        issues_spec = backends.get(issues_key)
-        issues_bank = (
-            _bank_name_from_spec(issues_spec, "-issues")
-            if issues_spec
-            else None
-        )
-        identities[project] = {
-            "project": project,
-            "family": docs_bank.removesuffix("-docs"),
-            "docs_bank": docs_bank,
-            "issues_bank": issues_bank,
-        }
-    return identities
-
-
-def validate_gateway_identity_registry(
-    registry: dict[str, dict[str, dict]],
-) -> None:
-    """Fail startup early when a gateway route has an invalid identity binding."""
-    identities = build_gateway_identity_registry(registry)
-    if set(identities) != set(registry):
-        raise ValueError("Gateway identity registry does not cover every project route")
+def default_native_config_path() -> pathlib.Path:
+    """Return the deployment-local native gateway registry path."""
+    return DEFAULT_NATIVE_CONFIG.expanduser()
 
 
 def build_backend_adapters(registry: dict[str, dict[str, dict]]) -> dict[str, dict[str, BackendAdapter]]:
@@ -2493,11 +2151,17 @@ def build_backend_adapters(registry: dict[str, dict[str, dict]]) -> dict[str, di
                 shadow = HttpRelayAdapter(
                     spec["shadow_url"], timeout_seconds=spec["shadow_timeout_seconds"]
                 )
+                source_roots = {
+                    repo: pathlib.Path(root).expanduser().resolve()
+                    for repo, root in spec.get("source_roots", {}).items()
+                }
                 adapter = ZvecShadowRelayAdapter(
                     primary,
                     shadow,
                     log_path=pathlib.Path(spec["shadow_log"]),
                     shadow_timeout_seconds=spec["shadow_timeout_seconds"],
+                    source_roots=source_roots,
+                    callgraph_repos=frozenset(spec.get("callgraph_repos", [])),
                 )
                 if shared_key is not None:
                     shared_shadow_cache[shared_key] = adapter
@@ -2535,16 +2199,12 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=pathlib.Path,
-        help="TOML instance config for container mode; without it, use the legacy static registry",
+        default=None,
+        help="TOML instance config; defaults to ~/.engram/runtime/native-instances.toml",
     )
     args = parser.parse_args()
 
-    if args.config is None:
-        home = os.path.expanduser("~")
-        registry = build_project_registry(home)
-        validate_gateway_identity_registry(registry)
-    else:
-        registry = load_instance_registry(args.config)
+    registry = load_instance_registry(args.config or default_native_config_path())
     projects = build_backend_adapters(registry)
     log.info("starting on %s:%d, %d projects: %s", args.host, args.port, len(projects), sorted(projects))
     app = build_app(projects)

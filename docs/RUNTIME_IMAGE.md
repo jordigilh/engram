@@ -73,6 +73,12 @@ The runtime image remains stateless. The TOML file contains deployment-specific
 routing only; keep it under `~/.engram/runtime/` alongside the host config,
 source trees, and backend daemons. Do not commit the populated route registry.
 
+The native host gateway follows the same rule. Its launchd template passes
+`~/.engram/runtime/native-instances.toml` to the generic gateway loader; it no
+longer contains a compiled-in list of projects, checkout paths, or backend
+endpoints. Keep the public relay registry and the native registry separate when
+the public routes forward to the native gateway.
+
 ## Branch-Aware Codex
 
 Codex MCP URLs are static. Use the tracked launcher when working from a

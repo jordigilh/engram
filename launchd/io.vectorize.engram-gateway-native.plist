@@ -27,6 +27,8 @@
         <string>127.0.0.1</string>
         <string>--port</string>
         <string>8898</string>
+        <string>--config</string>
+        <string>__HOME__/.engram/runtime/native-instances.toml</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>

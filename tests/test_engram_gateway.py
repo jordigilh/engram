@@ -994,237 +994,6 @@ class TestGatewayCallMetricsLogging:
         assert len(lines) == 2
 
 
-class TestBuildProjectRegistry:
-    """Pure config -- no I/O, no adapter instantiation -- covering the full
-    rollout across every onboarded repo (see docs/findings/2026-08.md,
-    2026-08-21 rollout entry). Backend heterogeneity is real and must be
-    preserved exactly, not normalized away: Kubernaut's main route uses the
-    zvec-primary/CocoIndex-shadow HTTP adapter while its sibling workspaces
-    remain on shared CocoIndex HTTP daemons (as of 2026-08-25, kubernaut-console
-    included -- it was the one family member missing a serena entry despite
-    already being a registered project on the shared daemon, see
-    test_kubernaut_console_has_serena_scoped_to_its_own_repo below); koku-
-    family's cocoindex-code is still stdio while its docs/issues/serena are
-    HTTP; dcm/praxis/rhdh-plugins/koku-insights-onprem run cocoindex-code and
-    serena as per-family-shared / per-repo stdio respectively; kubernaut-docs
-    has no cocoindex-code and engram itself has neither issues nor serena --
-    the registry must reflect exactly what each repo already has today, never
-    add a backend that isn't already configured for it."""
-
-    def test_covers_every_onboarded_project(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert len(registry) == 37  # includes exact routes for DCM review workspaces
-        assert "kubernaut-v1.6" not in registry
-        assert "rhdh-plugins" not in registry  # decommissioned 2026-09-09
-
-    def test_kubernaut_demo_scenarios_has_shared_code_and_scoped_serena(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert set(registry["kubernaut-demo-scenarios"]) == {"docs", "issues", "code", "serena"}
-        assert registry["kubernaut-demo-scenarios"]["code"] == {
-            "kind": "http",
-            "url": "http://127.0.0.1:8891/mcp",
-            "timeout_seconds": 180,
-        }
-        assert registry["kubernaut-demo-scenarios"]["serena"] == {
-            "kind": "http",
-            "url": "http://127.0.0.1:8893/mcp/kubernaut-demo-scenarios",
-        }
-
-    def test_dcm_review_workspaces_have_exact_routes(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert "dcm" in registry
-        assert "control-plane" in registry
-        assert registry["dcm"]["code"] == registry["dcm-cli"]["code"]
-        assert registry["control-plane"]["code"] == registry["dcm-cli"]["code"]
-        assert registry["dcm"]["serena"]["args"][-1] == "false"
-        assert registry["control-plane"]["serena"]["args"][-1] == "false"
-        assert registry["dcm"]["serena"]["args"][5].endswith("/dcm-project/dcm")
-        assert registry["control-plane"]["serena"]["args"][5].endswith("/dcm-project/control-plane")
-
-    def test_kubernaut_family_is_fully_http_already(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        spec = registry["kubernaut-operator"]
-        assert spec["docs"] == {"kind": "http", "url": "http://localhost:8888/mcp/kubernaut-docs/"}
-        assert spec["issues"] == {"kind": "http", "url": "http://localhost:8888/mcp/kubernaut-issues/"}
-        assert spec["code"] == {
-            "kind": "shadow_http",
-            "url": "http://127.0.0.1:7999/mcp",
-            "shadow_url": "http://127.0.0.1:8891/mcp",
-            "timeout_seconds": 300.0,
-            "shadow_timeout_seconds": 180.0,
-            "shadow_log": "/home/u/.engram/logs/zvec-cocoindex-shadow.jsonl",
-            "shared_key": "kubernaut-zvec-shadow",
-        }
-        assert spec["rca"] == {"kind": "http", "url": "http://127.0.0.1:8897/mcp"}
-        assert spec["serena"] == {"kind": "http", "url": "http://127.0.0.1:8893/mcp/kubernaut-operator"}
-
-    def test_current_kubernaut_route_uses_zvec_primary_and_cocoindex_shadow(self, engram_gateway):
-        """Kubernaut exposes zvec's live-worktree catalog while CocoIndex is
-        retained as a non-blocking comparison backend."""
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert set(registry["kubernaut"]) == {"docs", "issues", "code", "rca", "serena"}
-        assert registry["kubernaut"]["code"] == {
-            "kind": "shadow_http",
-            "url": "http://127.0.0.1:7999/mcp",
-            "shadow_url": "http://127.0.0.1:8891/mcp",
-            "timeout_seconds": 300.0,
-            "shadow_timeout_seconds": 180.0,
-            "shadow_log": "/home/u/.engram/logs/zvec-cocoindex-shadow.jsonl",
-            "shared_key": "kubernaut-zvec-shadow",
-        }
-        assert registry["kubernaut-operator"]["code"] == registry["kubernaut"]["code"]
-
-    def test_rca_backend_is_kubernaut_only(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert "rca" in registry["kubernaut"]
-        assert "rca" not in registry["koku"]
-
-    def test_kubernaut_console_has_serena_scoped_to_its_own_repo(self, engram_gateway):
-        """Added 2026-08-25: kubernaut-console was the only kubernaut-family
-        repo with no serena entry, even though serena_multiplex.py's
-        KUBERNAUT_FAMILY_PROJECTS already lists "kubernaut-console" as a
-        registered project on the shared daemon. Its mount pins
-        activate_project to "kubernaut-console" for scoped tool calls
-        (find_symbol, replace_symbol_body, ...), while query_project/
-        list_queryable_projects stay project-agnostic (see
-        serena_multiplex.py's PROJECT_AGNOSTIC_TOOLS) and forward untouched --
-        so this same mount also gives kubernaut-console read-only lookups
-        into kubernaut/kubernaut-operator without any extra registry entry."""
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert set(registry["kubernaut-console"]) == {"docs", "issues", "code", "serena"}
-        assert registry["kubernaut-console"]["serena"] == {
-            "kind": "http",
-            "url": "http://127.0.0.1:8893/mcp/kubernaut-console",
-        }
-
-    def test_kubernaut_console_code_backend_is_shared_kubernaut_http_daemon(self, engram_gateway):
-        """Regression guard: kubernaut-console's "code" backend previously
-        pointed at a flat `~/.engram/cocoindex-search.py` stdio script that
-        the 2026-08-12 package restructuring (src/engram/search/kubernaut.py +
-        console-script rename) had already deleted 9 days before this
-        registry entry was even authored -- so it was dead on arrival, and
-        (being single-repo/no-args, unlike engram-search-kubernaut) would only
-        ever have searched kubernaut-console's own code even if it had run,
-        never kubernaut/kubernaut-operator upstream. The shared
-        :8891 daemon (`engram-search-kubernaut` / src/engram/search/
-        kubernaut.py) already indexes all three repos into one
-        cocoindex.code_embeddings table and defaults `cocoindex_search` to
-        whole-platform results -- the same daemon kubernaut/kubernaut-operator
-        already use -- so pointing kubernaut-console at it too is what actually
-        gives it operator + kubernaut-upstream code search."""
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert registry["kubernaut-console"]["code"] == {
-            "kind": "http",
-            "url": "http://127.0.0.1:8891/mcp",
-            "timeout_seconds": 180,
-        }
-
-    def test_kubernaut_docs_has_no_cocoindex_code(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert set(registry["kubernaut-docs"]) == {"docs", "issues", "serena"}
-
-    def test_engram_itself_has_only_docs_and_code(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert set(registry["engram"]) == {"docs", "code"}
-        assert registry["engram"]["docs"]["url"] == "http://localhost:8888/mcp/engram-docs/"
-
-    def test_koku_family_code_is_stdio_but_serena_is_http(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        spec = registry["koku-service-operator"]
-        assert spec["code"]["kind"] == "stdio"
-        assert spec["code"]["shared_key"] == "koku-code"
-        assert spec["serena"] == {"kind": "http", "url": "http://127.0.0.1:8895/mcp/koku-service-operator"}
-
-    def test_koku_insights_onprem_serena_is_still_standalone_stdio(self, engram_gateway):
-        """Confirmed unmigrated (see docs/findings/2026-08.md) -- must not
-        be silently upgraded to an HTTP multiplex URL it doesn't have."""
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        spec = registry["koku-insights-onprem"]
-        assert spec["serena"]["kind"] == "stdio"
-        assert "shared_key" not in spec["serena"]
-
-    def test_dcm_repos_share_one_cocoindex_backend_but_each_has_its_own_serena(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        cli_spec = registry["dcm-cli"]
-        utilities_spec = registry["dcm-utilities"]
-        assert cli_spec["code"]["shared_key"] == "dcm-code"
-        assert utilities_spec["code"]["shared_key"] == "dcm-code"
-        assert cli_spec["code"] == utilities_spec["code"]
-        assert cli_spec["serena"]["args"][cli_spec["serena"]["args"].index("--project") + 1] == "/home/u/go/src/github.com/dcm-project/cli"
-        assert utilities_spec["serena"]["args"][utilities_spec["serena"]["args"].index("--project") + 1] == "/home/u/go/src/github.com/dcm-project/utilities"
-
-    def test_praxis_repos_share_one_cocoindex_backend(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert registry["praxis-grid"]["code"]["shared_key"] == "praxis-code"
-        assert registry["praxis-ai"]["code"]["shared_key"] == "praxis-code"
-        assert registry["praxis-benchmarks"]["code"]["shared_key"] == "praxis-code"
-
-    def test_praxis_repos_without_serena_omit_it(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert "serena" not in registry["praxis-conventions"]
-        assert "serena" not in registry["praxis-proxy-github-io"]
-        assert "serena" in registry["praxis-grid"]
-        # praxis-experiments is Rust (experimental upstream) and
-        # praxis-benchmarks is Rust -- both get serena (2026-09-11).
-        assert "serena" in registry["praxis-experiments"]
-        assert "serena" in registry["praxis-benchmarks"]
-
-    def test_rhdh_plugins_registry_only_covers_the_four_engram_backends(self, engram_gateway):
-        """rhdh-plugins decommissioned 2026-09-09: the registry must no
-        longer contain it at all (previously asserted the entry covered
-        only the four engram-owned backends, excluding the repo's own
-        jira/argocd/gitea/kubernetes entries)."""
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert "rhdh-plugins" not in registry
-
-    def test_dcm_code_backend_sets_hf_hub_offline(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert registry["dcm-cli"]["code"]["env"]["HF_HUB_OFFLINE"] == "1"
-
-    def test_kuadrant_is_one_entry_not_one_per_repo(self, engram_gateway):
-        """2026-08-27: unlike every other family, Kuadrant's repos (9 as of
-        2026-08-28's mcp-gateway addition) are ingestion-only prior-art
-        (nobody opens them as a Cursor workspace), so they collapse into a
-        single "kuadrant" registry entry meant to be cross-mounted into
-        praxis-* repos, not one per-repo entry each."""
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert "kuadrant" in registry
-        for repo in ("kuadrant-operator", "limitador", "wasm-shim", "architecture", "authorino", "mcp-gateway"):
-            assert repo not in registry
-
-    def test_kuadrant_has_no_serena(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert set(registry["kuadrant"]) == {"kuadrant_docs", "kuadrant_issues", "kuadrant_code"}
-
-    def test_kuadrant_backends_point_at_their_own_banks_and_search_server(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        spec = registry["kuadrant"]
-        assert spec["kuadrant_docs"] == {"kind": "http", "url": "http://localhost:8888/mcp/kuadrant-docs/"}
-        assert spec["kuadrant_issues"] == {"kind": "http", "url": "http://localhost:8888/mcp/kuadrant-issues/"}
-        assert spec["kuadrant_code"]["kind"] == "stdio"
-        assert spec["kuadrant_code"]["command"] == "/home/u/.engram/venv/bin/engram-search-kuadrant"
-
-
 class TestBuildBackendAdapters:
     """Real adapter instantiation from registry specs -- still no I/O
     (adapters connect lazily), but this is where shared-stdio-backend
@@ -1507,7 +1276,7 @@ class TestZvecShadowRelayAdapter:
                 shadow,
                 log_path=tmp_path / "shadow.jsonl",
                 shadow_timeout_seconds=0.1,
-                source_roots={"kubernaut-console": root},
+                source_roots={"typescript-project": root},
             )
 
             result = await adapter.call_tool(
@@ -1518,38 +1287,9 @@ class TestZvecShadowRelayAdapter:
             entry = json.loads((tmp_path / "shadow.jsonl").read_text().strip())
             assert result is primary_result
             assert shadow.call_log == []
-            assert entry["shadow"]["skipped"] == "cocoindex_callgraph_only_covers_go_core_and_operator"
+            assert entry["shadow"]["skipped"] == "cocoindex_callgraph_not_configured_for_source"
 
         asyncio.run(scenario())
-
-
-class TestGatewayIdentityRegistry:
-    def test_identity_registry_covers_every_route_and_derives_shared_banks(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        identities = engram_gateway.build_gateway_identity_registry(registry)
-
-        assert set(identities) == set(registry)
-        assert identities["kubernaut-operator"] == {
-            "project": "kubernaut-operator",
-            "family": "kubernaut",
-            "docs_bank": "kubernaut-docs",
-            "issues_bank": "kubernaut-issues",
-        }
-        assert identities["engram"]["docs_bank"] == "engram-docs"
-        assert identities["engram"]["issues_bank"] is None
-
-    def test_identity_registry_rejects_missing_docs_backend(self, engram_gateway):
-        registry = {"broken": {"code": {"kind": "stdio", "command": "x", "args": [], "env": None}}}
-
-        with pytest.raises(ValueError, match="no HTTP docs backend"):
-            engram_gateway.validate_gateway_identity_registry(registry)
-
-    def test_identity_registry_rejects_non_bank_docs_url(self, engram_gateway):
-        registry = {"broken": {"docs": {"kind": "http", "url": "http://localhost:8888/health"}}}
-
-        with pytest.raises(ValueError, match="no MCP bank path"):
-            engram_gateway.validate_gateway_identity_registry(registry)
 
 
 class TestBuildApp:
@@ -1571,6 +1311,11 @@ class TestBuildApp:
 
 
 class TestLoadInstanceRegistry:
+    def test_native_gateway_defaults_to_deployment_local_config(self, engram_gateway, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        assert engram_gateway.default_native_config_path() == tmp_path / ".engram" / "runtime" / "native-instances.toml"
+
     def test_generic_runtime_example_is_valid_for_the_registry_loader(self, engram_gateway):
         example = pathlib.Path(__file__).parents[1] / "docs" / "runtime-instances.toml.example"
 
@@ -1580,6 +1325,16 @@ class TestLoadInstanceRegistry:
         assert set(registry["my-project"]) == {"docs", "issues", "code", "serena"}
         assert all(spec["kind"] == "http" for spec in registry["my-project"].values())
         assert registry["my-project"]["code"]["timeout_seconds"] == 180
+
+    def test_native_runtime_example_is_valid_for_the_registry_loader(self, engram_gateway):
+        example = pathlib.Path(__file__).parents[1] / "docs" / "native-instances.toml.example"
+
+        registry = engram_gateway.load_instance_registry(example)
+
+        assert set(registry) == {"my-project"}
+        assert set(registry["my-project"]) == {"docs", "issues", "code", "serena"}
+        assert registry["my-project"]["code"]["kind"] == "stdio"
+        assert registry["my-project"]["serena"]["args"][-1] == "/path/to/my-project"
 
     def test_loads_http_host_adapter_instances(self, engram_gateway, tmp_path):
         config = tmp_path / "instances.toml"
@@ -1648,6 +1403,8 @@ timeout_seconds = 300
 shadow_timeout_seconds = 180
 shadow_log = "{tmp_path / 'shadow.jsonl'}"
 shared_key = "kubernaut-zvec-shadow"
+source_roots = {{ code = "{tmp_path}" }}
+callgraph_repos = ["code"]
 """
         )
 
@@ -1661,6 +1418,8 @@ shared_key = "kubernaut-zvec-shadow"
             "shadow_timeout_seconds": 180.0,
             "shadow_log": str(tmp_path / "shadow.jsonl"),
             "shared_key": "kubernaut-zvec-shadow",
+            "source_roots": {"code": str(tmp_path)},
+            "callgraph_repos": ["code"],
         }
 
     def test_loads_stdio_backend_with_environment_and_shared_key(self, engram_gateway, tmp_path):

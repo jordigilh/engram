@@ -21,6 +21,7 @@ identifiers can't contain hyphens, and packaging them isn't in scope.
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -31,6 +32,10 @@ REPO_ROOT = Path(__file__).resolve().parent
 SPIKE_DIR = REPO_ROOT / "spike"
 HOOKS_DIR = REPO_ROOT / "hooks"
 SRC_DIR = REPO_ROOT / "src"
+# Keep module-import tests hermetic. Production uses ~/.engram/projects.toml;
+# the fixture contains only synthetic paths and the repository mappings needed
+# to preserve the existing regression coverage.
+os.environ.setdefault("ENGRAM_PROJECTS_CONFIG", str(REPO_ROOT / "tests/fixtures/projects.toml"))
 for path in (REPO_ROOT, SPIKE_DIR, HOOKS_DIR, SRC_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))

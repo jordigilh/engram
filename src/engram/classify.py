@@ -16,9 +16,10 @@ import re
 import time
 from dataclasses import dataclass
 
-# Placeholders: set the real VERTEXAI_PROJECT/GOOGLE_CLOUD_PROJECT/
-# VERTEXAI_LOCATION in your shell environment -- setdefault() only applies
-# these when they're not already set, so a real exported value always wins.
+# Deployment-local Vertex settings come from ``~/.engram/projects.toml``;
+# setdefault() still lets an explicit environment value win.  Keeping the
+# project ID out of source is important because this module is imported by
+# both the live transcript flow and maintenance jobs.
 #
 # "global" (not a specific region like "us-central1"): matches
 # ~/.engram/config.env's VERTEXAI_LOCATION, hindsight-api's own working
@@ -31,13 +32,26 @@ from dataclasses import dataclass
 # had been silently hitting that error since correction_gate.py went live,
 # with failures cached as false negatives (see classify_cached() fix and
 # docs/FINDINGS.md 2026-07-27).
-os.environ.setdefault("VERTEXAI_PROJECT", "example-gcp-project")
-os.environ.setdefault("VERTEXAI_LOCATION", "global")
-os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "example-gcp-project")
+try:
+    from engram.project_config import load_default_settings
+except ModuleNotFoundError:  # flat ~/.engram symlink worker
+    from project_config import load_default_settings  # type: ignore[no-redef]
+
+_DEPLOYMENT_SETTINGS = load_default_settings()
+_GCP_PROJECT = _DEPLOYMENT_SETTINGS.text("gcp_project")
+if _GCP_PROJECT:
+    os.environ.setdefault("VERTEXAI_PROJECT", _GCP_PROJECT)
+    os.environ.setdefault("GOOGLE_CLOUD_PROJECT", _GCP_PROJECT)
 os.environ.setdefault(
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    os.path.expanduser("~/.config/gcloud/application_default_credentials.json"),
+    "VERTEXAI_LOCATION",
+    _DEPLOYMENT_SETTINGS.text("vertex_location", "global") or "global",
 )
+_ADC_PATH = _DEPLOYMENT_SETTINGS.path(
+    "google_application_credentials",
+    "~/.config/gcloud/application_default_credentials.json",
+)
+if _ADC_PATH is not None:
+    os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", str(_ADC_PATH))
 
 HAIKU_MODEL = "vertex_ai/claude-haiku-4-5@20251001"
 SONNET_MODEL = "vertex_ai/claude-sonnet-4-6"

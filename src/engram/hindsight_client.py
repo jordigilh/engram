@@ -6,11 +6,17 @@ Mirrors the request shape used in nightly-learn.py's measure_recall_quality().
 from __future__ import annotations
 
 import json
-import os
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
+try:
+    from engram.project_config import DEFAULT_HINDSIGHT_URL, load_default_settings
+except ModuleNotFoundError:  # flat ~/.engram symlink worker
+    from project_config import DEFAULT_HINDSIGHT_URL, load_default_settings  # type: ignore[no-redef]
+
+DEPLOYMENT_SETTINGS = load_default_settings()
+HINDSIGHT_URL = DEPLOYMENT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+assert HINDSIGHT_URL is not None
 
 
 def recall(bank: str, query: str, max_results: int = 5, retries: int = 2) -> list[tuple[str, str | None, str]]:

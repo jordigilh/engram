@@ -11,7 +11,19 @@ import os
 import uuid
 from datetime import datetime, timezone
 
-QUEUE_PATH = os.path.expanduser("~/.engram/logs/contradictions-pending.jsonl")
+try:
+    from engram.project_config import load_default_settings
+except ModuleNotFoundError:  # flat ~/.engram symlink worker
+    from project_config import load_default_settings  # type: ignore[no-redef]
+
+DEPLOYMENT_SETTINGS = load_default_settings()
+LOG_DIR = DEPLOYMENT_SETTINGS.path("log_dir", "~/.engram/logs")
+assert LOG_DIR is not None
+QUEUE_PATH = str(
+    DEPLOYMENT_SETTINGS.path(
+        "pending_queue", str(LOG_DIR / "contradictions-pending.jsonl")
+    )
+)
 
 
 def append_pending(

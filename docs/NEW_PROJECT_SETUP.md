@@ -314,6 +314,14 @@ else in this guide depends on the service actually being loaded.
 
 ### Deployment-local mirror configuration
 
+Before starting the flow, add the project's paths, repository mappings,
+workspace prefixes, issue scope, and optional RCA settings to
+`~/.engram/projects.toml`. The repository includes
+[`docs/projects.toml.example`](projects.toml.example); copy it once and keep
+the populated file untracked. The flow and search entry points select the
+table by project name, so no source edit or per-service environment block is
+needed when a checkout moves.
+
 If the project reads repositories through detached branch mirrors, keep the
 repository list, local checkout paths, and branch choices outside this
 repository. Copy `watch-mirrors-config.example.sh` to

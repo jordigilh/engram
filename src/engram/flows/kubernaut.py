@@ -48,6 +48,15 @@ from engram.configured_sources import ConfiguredSource, load_configured_sources 
 from engram import correction_gate  # noqa: E402
 from engram import contradiction_resolution  # noqa: E402
 from engram import project_scope  # noqa: E402
+from engram.project_config import (  # noqa: E402
+    DEFAULT_HINDSIGHT_URL,
+    DEFAULT_PG_DSN,
+    DEFAULT_POOL_MAX_SIZE,
+    DEFAULT_POOL_MIN_SIZE,
+    default_project_path,
+    load_project_settings,
+    sql_identifier,
+)
 from engram import synthesis  # noqa: E402
 
 logging.basicConfig(
@@ -56,44 +65,39 @@ logging.basicConfig(
 )
 log = logging.getLogger("cocoindex-flows")
 
-HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
+PROJECT_SETTINGS = load_project_settings("kubernaut")
+HINDSIGHT_URL = PROJECT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+CODE_TABLE = sql_identifier(
+    PROJECT_SETTINGS.text("code_table", "code_embeddings") or "code_embeddings",
+    "project 'kubernaut' code_table",
+)
 # Docs and issues continue to use branch-stable mirrors because those flows
 # write to Hindsight. Code is different: embeddings must describe the live
 # worktree used by the current session, including uncommitted changes and the
 # currently checked-out feature/fix branch. Code ingestion has no Hindsight
 # retain/consolidation cost, so it deliberately defaults to the live clones;
 # release-line mirrors are mounted separately below.
-ENGRAM_DOCS_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_DOCS_DIR",
-    os.path.expanduser("~/.engram/watch/kubernaut-docs/docs"),
-))
-ENGRAM_CODE_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_CODE_DIR",
-    os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut"),
-))
-ENGRAM_CODE_DOCS_DIR = ENGRAM_CODE_DIR / "docs"
-ENGRAM_OPERATOR_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_OPERATOR_DIR",
-    os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-operator"),
-))
-ENGRAM_CONSOLE_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_CONSOLE_DIR",
-    os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-console"),
-))
-ENGRAM_SCENARIOS_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_SCENARIOS_DIR",
-    os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-demo-scenarios"),
-))
+ENGRAM_CODE_DIR = PROJECT_SETTINGS.path("code_dir", str(default_project_path("kubernaut")))
+assert ENGRAM_CODE_DIR is not None
+ENGRAM_DOCS_DIR = PROJECT_SETTINGS.path(
+    "docs_dir", str(default_project_path("kubernaut-docs") / "docs")
+)
+assert ENGRAM_DOCS_DIR is not None
+ENGRAM_CODE_DOCS_DIR = PROJECT_SETTINGS.path("code_docs_dir", str(ENGRAM_CODE_DIR / "docs"))
+assert ENGRAM_CODE_DOCS_DIR is not None
+ENGRAM_OPERATOR_DIR = PROJECT_SETTINGS.path("operator_dir", str(default_project_path("kubernaut-operator")))
+assert ENGRAM_OPERATOR_DIR is not None
+ENGRAM_CONSOLE_DIR = PROJECT_SETTINGS.path("console_dir", str(default_project_path("kubernaut-console")))
+assert ENGRAM_CONSOLE_DIR is not None
+ENGRAM_SCENARIOS_DIR = PROJECT_SETTINGS.path(
+    "scenarios_dir", str(default_project_path("kubernaut-demo-scenarios"))
+)
+assert ENGRAM_SCENARIOS_DIR is not None
 EXTRA_SOURCES: tuple[ConfiguredSource, ...] = load_configured_sources()
-ENGRAM_TRANSCRIPTS_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_TRANSCRIPTS_DIR",
-    os.path.expanduser("~/.cursor/projects"),
-))
-ISSUES_REPOS = os.environ.get(
-    "ENGRAM_ISSUES_REPOS",
-    "jordigilh/kubernaut,jordigilh/kubernaut-operator,jordigilh/kubernaut-console,jordigilh/kubernaut-demo-scenarios,jordigilh/kubernaut-docs",
-).split(",")
-ISSUES_POLL_INTERVAL = int(os.environ.get("ENGRAM_ISSUES_POLL_SECONDS", "300"))
+ENGRAM_TRANSCRIPTS_DIR = PROJECT_SETTINGS.path("transcripts_dir", "~/.cursor/projects")
+assert ENGRAM_TRANSCRIPTS_DIR is not None
+ISSUES_REPOS = list(PROJECT_SETTINGS.strings("issues_repos"))
+ISSUES_POLL_INTERVAL = PROJECT_SETTINGS.integer("issues_poll_seconds", 300)
 
 # Manually-curated release lines for the kubernaut family's *code* index only
 # -- kept in sync by hand with watch-mirrors-config.sh's RELEASE_LINES (docs
@@ -105,9 +109,7 @@ ISSUES_POLL_INTERVAL = int(os.environ.get("ENGRAM_ISSUES_POLL_SECONDS", "300"))
 # 2026-08-03 and its 2026-08-10 refinement for why code is cheap to
 # multi-branch and docs/issues are not).
 KUBERNAUT_RELEASE_LINES = [
-    line.strip()
-    for line in os.environ.get("KUBERNAUT_RELEASE_LINES", "v1.5").split(",")
-    if line.strip()
+    line for line in PROJECT_SETTINGS.strings("release_lines") if line
 ]
 
 # demo-scenarios is an operational test/deployment repository rather than a
@@ -132,12 +134,12 @@ def _release_line_dir(repo_name: str, line: str) -> pathlib.Path:
     """Mirror path for one (repo, release line) pair, matching the
     `~/.engram/watch/<repo>-release-<line>` convention created by
     watch-mirrors-config.sh's RELEASE_WATCH_MIRRORS."""
-    return pathlib.Path(os.path.expanduser(f"~/.engram/watch/{repo_name}-release-{line}"))
+    release_root = PROJECT_SETTINGS.path("release_watch_root", "~/.engram/watch")
+    assert release_root is not None
+    return release_root / f"{repo_name}-release-{line}"
 
-PG_DSN = os.environ.get(
-    "COCOINDEX_PG_URL",
-    "postgresql://hindsight:hindsight@localhost:5432/hindsight",
-)
+PG_DSN = PROJECT_SETTINGS.text("pg_dsn", DEFAULT_PG_DSN)
+assert PG_DSN is not None
 # asyncpg.create_pool()'s own defaults are min_size=10/max_size=10 -- fine for
 # hindsight-api's request-serving pool, wasteful here: PG_POOL only backs
 # code_app's pgvector code_embeddings table, written to in occasional bursts
@@ -147,12 +149,10 @@ PG_DSN = os.environ.get(
 # shared Postgres instance, so an unsized default multiplies per project --
 # see docs/FINDINGS.md 2026-08-03. Sized down to match, not eliminated
 # (bursts during a full backfill walk do benefit from >1 connection).
-PG_POOL_MIN_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MIN_SIZE", "2"))
-PG_POOL_MAX_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MAX_SIZE", "5"))
-COCOINDEX_DB = pathlib.Path(os.environ.get(
-    "COCOINDEX_DB",
-    os.path.expanduser("~/.engram/cocoindex.db"),
-))
+PG_POOL_MIN_SIZE = PROJECT_SETTINGS.integer("pg_pool_min_size", DEFAULT_POOL_MIN_SIZE)
+PG_POOL_MAX_SIZE = PROJECT_SETTINGS.integer("pg_pool_max_size", DEFAULT_POOL_MAX_SIZE)
+COCOINDEX_DB = PROJECT_SETTINGS.path("cocoindex_db", "~/.engram/cocoindex.db")
+assert COCOINDEX_DB is not None
 
 # Per-transcript watermark (message_count already scanned) for the live
 # transcript-app flow -- see docs/FINDINGS.md 2026-07-31. CocoIndex's
@@ -169,9 +169,10 @@ COCOINDEX_DB = pathlib.Path(os.environ.get(
 # flows track independent progress (nightly-learn.py's hourly/nightly sweep
 # is a separate catch-all, not the same consumer), so sharing one file would
 # let either one silently skip content the other never actually processed.
-TRANSCRIPT_WATERMARKS_PATH = pathlib.Path(os.path.expanduser(
-    "~/.engram/logs/cocoindex-transcript-watermarks.json"
-))
+TRANSCRIPT_WATERMARKS_PATH = PROJECT_SETTINGS.path(
+    "transcript_watermarks", "~/.engram/logs/cocoindex-transcript-watermarks.json"
+)
+assert TRANSCRIPT_WATERMARKS_PATH is not None
 _transcript_watermarks_lock = asyncio.Lock()
 
 
@@ -762,18 +763,18 @@ async def code_main(
         },
     )
     table = await postgres.mount_table_target(
-        PG_POOL, "code_embeddings", schema, pg_schema_name="cocoindex",
+        PG_POOL, CODE_TABLE, schema, pg_schema_name="cocoindex",
     )
     table.declare_vector_index(column="embedding", metric="cosine")
 
     table.declare_sql_command_attachment(
         name="fts_search_vector",
-        setup_sql="""
-            ALTER TABLE cocoindex.code_embeddings
+        setup_sql=f"""
+            ALTER TABLE cocoindex.{CODE_TABLE}
                 ADD COLUMN IF NOT EXISTS search_vector tsvector;
 
-            CREATE INDEX IF NOT EXISTS idx_code_embeddings_fts
-                ON cocoindex.code_embeddings USING gin(search_vector);
+            CREATE INDEX IF NOT EXISTS idx_{CODE_TABLE}_fts
+                ON cocoindex.{CODE_TABLE} USING gin(search_vector);
 
             CREATE OR REPLACE FUNCTION cocoindex.update_code_search_vector()
             RETURNS trigger AS $$
@@ -785,24 +786,24 @@ async def code_main(
             $$ LANGUAGE plpgsql;
 
             DROP TRIGGER IF EXISTS trg_code_search_vector
-                ON cocoindex.code_embeddings;
+                ON cocoindex.{CODE_TABLE};
             CREATE TRIGGER trg_code_search_vector
                 BEFORE INSERT OR UPDATE OF search_text, filepath
-                ON cocoindex.code_embeddings
+                ON cocoindex.{CODE_TABLE}
                 FOR EACH ROW
                 EXECUTE FUNCTION cocoindex.update_code_search_vector();
 
-            UPDATE cocoindex.code_embeddings
+            UPDATE cocoindex.{CODE_TABLE}
             SET search_vector = to_tsvector('simple',
                 coalesce(search_text, code, '') || ' ' || coalesce(filepath, ''))
             WHERE search_vector IS NULL;
         """,
-        teardown_sql="""
+        teardown_sql=f"""
             DROP TRIGGER IF EXISTS trg_code_search_vector
-                ON cocoindex.code_embeddings;
+                ON cocoindex.{CODE_TABLE};
             DROP FUNCTION IF EXISTS cocoindex.update_code_search_vector();
-            DROP INDEX IF EXISTS cocoindex.idx_code_embeddings_fts;
-            ALTER TABLE cocoindex.code_embeddings
+            DROP INDEX IF EXISTS cocoindex.idx_{CODE_TABLE}_fts;
+            ALTER TABLE cocoindex.{CODE_TABLE}
                 DROP COLUMN IF EXISTS search_vector;
         """,
     )

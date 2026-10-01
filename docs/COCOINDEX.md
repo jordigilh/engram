@@ -11,6 +11,22 @@ For operational configuration of GitHub and Jira issue polling, including
 credentials, LaunchAgents, backfills, and verification, see
 [`ISSUE_INGESTION.md`](ISSUE_INGESTION.md).
 
+## Deployment-local project configuration
+
+Flows, code search, RCA, and maintenance tools read deployment-specific values
+from `~/.engram/projects.toml`. Copy
+[`projects.toml.example`](projects.toml.example) to that path and configure the
+projects used by the deployment. Repository lists, checkout roots, release
+lines, workspace prefixes, service URLs, and database paths belong there; they
+are intentionally not compiled into the package. A missing file is safe for
+library imports, but a live flow with no matching project configuration has no
+deployment sources to ingest.
+
+Use `ENGRAM_PROJECTS_CONFIG=/path/to/projects.toml` only for an explicit test or
+isolated deployment. Do not put credentials in this file: GitHub uses the
+authenticated `gh` CLI, and Jira tokens remain in the operating-system
+credential store.
+
 CocoIndex runs as a KeepAlive launchd service alongside Hindsight. It watches
 source directories and APIs for changes, processes only the delta, and writes
 results either through the Hindsight retain API (for docs, issues, transcripts)
@@ -50,9 +66,9 @@ CocoIndex declares four flows, each with a source, transform pipeline, and sink.
 
 | Flow | Source | Transforms | Sink | Frequency |
 |------|--------|-----------|------|-----------|
-| **docs** | Markdown files in `ENGRAM_DOCS_DIR` + repo docs | Split by heading → chunk → embed | Hindsight retain API (`kubernaut-docs` bank) | File-watching (instant) |
-| **issues** | GitHub issues + PRs via `gh` CLI, or Jira REST API | Serialize issue/PR/ticket + comments → chunk → embed | Hindsight retain API (`<project>-issues` bank) | Polling every 5 min (`<PROJECT>_ISSUES_POLL_SECONDS`) |
-| **code** | Go source files in `ENGRAM_CODE_DIR` | tree-sitter AST parse → dense embed + BM25 tsvector | pg0 pgvector hybrid search (`code-index`) | File-watching (instant) |
+| **docs** | Markdown files in the configured project paths | Split by heading → chunk → embed | Hindsight retain API (`<project>-docs` bank) | File-watching (instant) |
+| **issues** | Configured GitHub/Jira repositories | Serialize issue/PR/ticket + comments → chunk → embed | Hindsight retain API (`<project>-issues` bank) | Polling at the configured interval (default 5 min) |
+| **code** | Source files in the configured project paths | tree-sitter AST parse → dense embed + BM25 tsvector | pg0 pgvector hybrid search (`code-index`) | File-watching (instant) |
 | **transcripts** | `.jsonl` files in Cursor transcripts dir | Extract correction windows → embed | Hindsight retain API (`cursor-memory` bank) | File-watching (instant) |
 
 ### Transform Details
@@ -279,7 +295,7 @@ step 16 of `INSTALL.md` already configures: its own repo alone (1,000+ Go
 files) took ~55s to rebuild, too slow to pay on every call, so
 `kubernaut-search.py`'s call-graph tools go through a Postgres-backed cache
 (`cocoindex.call_graph_cache`, auto-created on first use in the same
-database `COCOINDEX_PG_URL` already points at) instead of rebuilding every
+database configured by `defaults.pg_dsn`) instead of rebuilding every
 time. No TTL: a cache entry is invalidated purely by content fingerprint
 (file count + max mtime across the exact files the build itself walks,
 recomputed on every call) -- an unchanged tree never rebuilds no matter how
@@ -294,7 +310,7 @@ needed once the invalidation policy was fingerprint-based rather than
 time-based (TTL would only add a "rebuild an unchanged tree on some
 arbitrary schedule" cost with no correctness benefit), and (2) Postgres is
 already a hard dependency of every `*_search.py` module
-(`psycopg2`/`COCOINDEX_PG_URL`) and already running for embeddings storage
+(`psycopg2`/the deployment's `defaults.pg_dsn`) and already running for embeddings storage
 -- reusing it for one small `BYTEA` table adds zero new components to
 install, run, or monitor, versus a whole new service to operate on a
 resource-constrained shared host. See `docs/CALL_GRAPH_CLUSTERING.md`'s
@@ -303,13 +319,12 @@ exploration.
 
 ### Branch scoping (kubernaut only)
 
-kubernaut is a multi-branch project: `main` plus `release/vX.Y` lines
-(currently `v1.5`; `v1.6` will activate automatically once cut -- see
-`KUBERNAUT_RELEASE_LINES`). Every kubernaut-family workspace is a dedicated
+kubernaut is a multi-branch project: `main` plus the `release/vX.Y` lines
+configured by `projects.kubernaut.release_lines`. Every kubernaut-family workspace is a dedicated
 clone targeting exactly one of these, so the call-graph tools are
 branch-aware in the same way `cocoindex_search`/`cocoindex_pattern_search`
 already are: by default they auto-detect which line the caller's checkout
-is on (via `KUBERNAUT_LIVE_CLONE_DIR`) and build/cache that line's graph;
+is on (via `projects.kubernaut.paths.live_clone_dir`, when configured) and build/cache that line's graph;
 pass `branch` (e.g. `"v1.5"`) to override, or `"main"` to force main
 regardless of checkout. The Postgres cache key folds in the *resolved*
 release line (not the raw argument), so main and each release line always
@@ -332,7 +347,7 @@ Runs all four flows concurrently using threads:
 - **docs, code, transcripts**: File-watching threads using CocoIndex live mode
   (fsevents on macOS). Changes are detected and processed within seconds.
 - **issues**: Polling thread that fetches all issues + PRs from GitHub every
-  `ENGRAM_ISSUES_POLL_SECONDS` (default: 300s / 5 min).
+  `issues_poll_seconds` in `~/.engram/projects.toml` (default: 300s / 5 min).
 
 This is the mode used by the launchd plist (currently via the
 `~/.engram/cocoindex-flows.py` symlink rather than this console script

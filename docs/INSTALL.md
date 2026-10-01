@@ -72,7 +72,7 @@ By default `hindsight-api` starts, stops, and health-checks its own embedded
 Postgres (`pg0`) as part of its own process lifecycle. This is fine for a
 quick single-user trial, but on a machine running CocoIndex too (which shares
 this same Postgres instance/database for its pgvector tables — see
-`COCOINDEX_PG_URL` in step 16) and running `hindsight-api` as an unattended
+`defaults.pg_dsn` in `~/.engram/projects.toml`) and running `hindsight-api` as an unattended
 launchd service (step 5), it couples Postgres's uptime to two independent
 failure modes that have nothing to do with Postgres itself: a `pg0` liveness
 check that can false-positive on a stale/reused PID, and any future script
@@ -122,7 +122,7 @@ For production, install as a launchd service (auto-start on login, auto-restart
 on crash). First install the shared env wrapper — **every** launchd plist that
 runs a process needing LLM config (`hindsight-api` itself, `nightly-learn.py`,
 `cocoindex-flows.py`, `prefilter-shadow-trial.py`) launches through this wrapper
-instead of having `VERTEXAI_PROJECT`/`GOOGLE_CLOUD_PROJECT`/model names baked into
+instead of having deployment-specific credentials or project IDs baked into
 the plist:
 
 ```bash
@@ -130,10 +130,11 @@ cp with-config-env.sh ~/.engram/with-config-env.sh
 chmod +x ~/.engram/with-config-env.sh
 ```
 
-> **Why not hardcode it into the plist?** `~/.engram/config.env` is the only
-> place these values should ever live — plists under `launchd/` are committed to
-> this (public) repo, so nothing project/LLM-specific gets baked in at generation
-> time. `with-config-env.sh` sources `config.env` fresh into the process
+> **Why not hardcode it into the plist?** `~/.engram/config.env` and
+> `~/.engram/projects.toml` are the only places these deployment values should
+> live — plists under `launchd/` are committed to this (public) repo, so nothing
+> project/LLM-specific gets baked in at generation time. `with-config-env.sh`
+> sources `config.env` fresh into the process
 > environment every time launchd starts the job, so it's read once, in one
 > place, always current. See [FINDINGS.md](FINDINGS.md) 2026-07-27 for the
 > production incident this replaced (launchd jobs silently running against a
@@ -320,11 +321,14 @@ This creates a `kubernaut-docs` knowledge bank and ingests the published documen
 for embedding-based recall (zero LLM cost):
 
 ```bash
-python3 -m engram.pipeline.ingest_docs --docs-dir ~/go/src/github.com/jordigilh/kubernaut-docs/docs
+python3 -m engram.pipeline.ingest_docs
 ```
 
-The script creates the bank, configures `chunks` extraction mode, and ingests all
-markdown files. This only needs to be run once (or re-run when docs are updated).
+The script reads `projects.kubernaut.paths.docs_dir` and the Hindsight URL from
+`~/.engram/projects.toml`, creates the bank, configures `chunks` extraction
+mode, and ingests all markdown files. This only needs to be run once (or
+re-run when docs are updated). Pass `--docs-dir` only for an explicit one-off
+override.
 
 ## 12. Ingest issues (Knowledge RAG)
 
@@ -450,14 +454,27 @@ of a `ModuleNotFoundError` from a forgotten shared-module symlink.
 
 ### Configure source directories
 
-Add the following to `~/.engram/config.env`:
+Copy `docs/projects.toml.example` to `~/.engram/projects.toml` and configure the
+`[projects.kubernaut.paths]` table:
 
-```bash
-ENGRAM_DOCS_DIR=~/go/src/github.com/jordigilh/kubernaut-docs/docs
-ENGRAM_CODE_DIR=~/go/src/github.com/jordigilh/kubernaut
-# Optional: issues poll interval in seconds (default: 300 = 5 min)
-# ENGRAM_ISSUES_POLL_SECONDS=300
+```toml
+[projects.kubernaut]
+issues_repos = [
+  "jordigilh/kubernaut",
+  "jordigilh/kubernaut-operator",
+  "jordigilh/kubernaut-console",
+  "jordigilh/kubernaut-demo-scenarios",
+  "jordigilh/kubernaut-docs",
+]
+issues_poll_seconds = 300
+
+[projects.kubernaut.paths]
+docs_dir = "~/.engram/watch/kubernaut-docs/docs"
+code_dir = "~/go/src/github.com/jordigilh/kubernaut"
 ```
+
+Keep `~/.engram/config.env` for service credentials and Hindsight runtime
+settings; repository paths and project routing belong in `projects.toml`.
 
 ### Run initial backfill
 
@@ -496,7 +513,7 @@ issue poll cycles completing with the full count of issues + PRs. See
 > call-graph queries) alongside `--query`/`--pattern` above -- no extra setup
 > needed, they reuse the same live checkout. kubernaut specifically caches
 > its (larger, slower-to-build) graph in Postgres rather than rebuilding on
-> every call, using the `COCOINDEX_PG_URL` connection already configured
+> every call, using the `defaults.pg_dsn` connection already configured
 > above -- no new service to install. See
 > [CocoIndex Operations](COCOINDEX.md#call-graph-queries) for why Postgres
 > was chosen over a dedicated cache service, and for kubernaut's
@@ -626,7 +643,8 @@ tail -50 ~/.engram/logs/hindsight-stderr.log
 The memory bank needs at least one retained item. Run the nightly script manually or retain a test memory.
 
 ### Retain fails with "Could not resolve project_id"
-Ensure `VERTEXAI_PROJECT` and `GOOGLE_CLOUD_PROJECT` are set in `~/.engram/config.env`.
+Ensure `defaults.gcp_project` is set in `~/.engram/projects.toml`, or set
+`VERTEXAI_PROJECT` and `GOOGLE_CLOUD_PROJECT` in `~/.engram/config.env`.
 
 ### Reflect returns 404
 Sonnet 4.6 on the global endpoint requires the model name WITHOUT a version suffix. Use `vertex_ai/claude-sonnet-4-6`, not `vertex_ai/claude-sonnet-4-6@20250929`.

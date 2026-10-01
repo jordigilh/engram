@@ -69,7 +69,6 @@ import functools
 import json
 import logging
 import math
-import os
 import pathlib
 import re
 import subprocess
@@ -88,6 +87,7 @@ logging.basicConfig(
 log = logging.getLogger("engram-gateway")
 
 from engram import mcp_compat  # noqa: E402  (mcp 1.x/2.x Tool compat)
+from engram.project_config import load_default_settings  # noqa: E402
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8896
@@ -142,7 +142,10 @@ MAX_SERENA_PATTERN_RESULT_CHARS = 6000
 # confirmed no Cursor hook or CLI surface carries real per-call token
 # counts locally (Team/Enterprise usage APIs report at turn granularity,
 # not per tool call, and require a paid plan).
-GATEWAY_CALLS_LOG = pathlib.Path(os.path.expanduser("~/.engram/logs/gateway-calls.jsonl"))
+DEPLOYMENT_SETTINGS = load_default_settings()
+GATEWAY_LOG_DIR = DEPLOYMENT_SETTINGS.path("log_dir", "~/.engram/logs")
+assert GATEWAY_LOG_DIR is not None
+GATEWAY_CALLS_LOG = GATEWAY_LOG_DIR / "gateway-calls.jsonl"
 
 
 @functools.lru_cache(maxsize=1)

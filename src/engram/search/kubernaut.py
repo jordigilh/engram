@@ -20,7 +20,6 @@ Usage:
 
 import argparse
 import logging
-import os
 import pathlib
 import re
 import subprocess
@@ -36,6 +35,12 @@ from typing import Any
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 from engram import callgraph, chunking  # noqa: E402
 from engram.configured_sources import ConfiguredSource, load_configured_sources  # noqa: E402
+from engram.project_config import (  # noqa: E402
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_PG_DSN,
+    default_project_path,
+    load_project_settings,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,12 +48,13 @@ logging.basicConfig(
 )
 log = logging.getLogger("cocoindex-search")
 
-PG_URL = os.environ.get(
-    "COCOINDEX_PG_URL",
-    "postgresql://hindsight:hindsight@localhost:5432/hindsight",
-)
-COCOINDEX_CODE_TABLE = os.environ.get("COCOINDEX_CODE_TABLE", "code_embeddings")
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+PROJECT_SETTINGS = load_project_settings("kubernaut")
+PG_URL = PROJECT_SETTINGS.text("pg_dsn", DEFAULT_PG_DSN)
+assert PG_URL is not None
+COCOINDEX_CODE_TABLE = PROJECT_SETTINGS.text("code_table", "code_embeddings")
+assert COCOINDEX_CODE_TABLE is not None
+EMBEDDING_MODEL = PROJECT_SETTINGS.text("embedding_model", DEFAULT_EMBEDDING_MODEL)
+assert EMBEDDING_MODEL is not None
 RRF_K = 60  # RRF constant — standard value from the original paper
 
 
@@ -60,18 +66,20 @@ def _code_table_name(value: str) -> str:
 # Same env vars (and defaults) as cocoindex-flows.py, so a launchd plist or
 # .env that already configures the ingestion flow's source directories also
 # configures pattern search's live file walk with no extra setup.
-KUBERNAUT_CODE_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_CODE_DIR", os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut"),
-))
-KUBERNAUT_OPERATOR_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_OPERATOR_DIR", os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-operator"),
-))
-KUBERNAUT_CONSOLE_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_CONSOLE_DIR", os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-console"),
-))
-KUBERNAUT_SCENARIOS_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_SCENARIOS_DIR", os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-demo-scenarios"),
-))
+KUBERNAUT_CODE_DIR = PROJECT_SETTINGS.path("code_dir", str(default_project_path("kubernaut")))
+assert KUBERNAUT_CODE_DIR is not None
+KUBERNAUT_OPERATOR_DIR = PROJECT_SETTINGS.path(
+    "operator_dir", str(default_project_path("kubernaut-operator"))
+)
+assert KUBERNAUT_OPERATOR_DIR is not None
+KUBERNAUT_CONSOLE_DIR = PROJECT_SETTINGS.path(
+    "console_dir", str(default_project_path("kubernaut-console"))
+)
+assert KUBERNAUT_CONSOLE_DIR is not None
+KUBERNAUT_SCENARIOS_DIR = PROJECT_SETTINGS.path(
+    "scenarios_dir", str(default_project_path("kubernaut-demo-scenarios"))
+)
+assert KUBERNAUT_SCENARIOS_DIR is not None
 EXTRA_SOURCES: tuple[ConfiguredSource, ...] = load_configured_sources()
 
 SCENARIOS_CODE_INCLUDE_PATTERNS = [
@@ -149,16 +157,15 @@ _CALL_GRAPH_ROOTS = [
 # return main's code. Kept in sync by hand with cocoindex-flows.py's
 # KUBERNAUT_RELEASE_LINES (same env var name/default).
 KUBERNAUT_RELEASE_LINES = [
-    line.strip()
-    for line in os.environ.get("KUBERNAUT_RELEASE_LINES", "v1.5").split(",")
-    if line.strip()
+    line for line in PROJECT_SETTINGS.strings("release_lines") if line
 ]
 # Set by mcp.json (per-workspace ${workspaceFolder} substitution in the
 # kubernaut-family templates) to whichever live dev clone this MCP server
 # instance was spawned alongside. The code root is the safe local fallback for
 # direct/manual launches, so branch detection and pattern search use the same
 # worktree as the embedding flow by default.
-KUBERNAUT_LIVE_CLONE_DIR = os.environ.get("KUBERNAUT_LIVE_CLONE_DIR", str(KUBERNAUT_CODE_DIR))
+_live_clone_dir = PROJECT_SETTINGS.path("live_clone_dir", str(KUBERNAUT_CODE_DIR))
+KUBERNAUT_LIVE_CLONE_DIR = str(_live_clone_dir) if _live_clone_dir is not None else None
 
 
 def _release_line_dir(repo_name: str, line: str) -> pathlib.Path:
@@ -166,7 +173,9 @@ def _release_line_dir(repo_name: str, line: str) -> pathlib.Path:
     cocoindex-flows.py's `_release_line_dir` (and, transitively,
     watch-mirrors-config.sh's RELEASE_WATCH_MIRRORS mirror_path convention)
     exactly, or pattern search will silently walk nothing."""
-    return pathlib.Path(os.path.expanduser(f"~/.engram/watch/{repo_name}-release-{line}"))
+    release_root = PROJECT_SETTINGS.path("release_watch_root", "~/.engram/watch")
+    assert release_root is not None
+    return release_root / f"{repo_name}-release-{line}"
 
 
 for _repo_name, _root, _included, _excluded in [

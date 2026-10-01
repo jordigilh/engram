@@ -19,6 +19,7 @@ from cocoindex.connectors import localfs, postgres
 from cocoindex.resources.file import PatternFilePathMatcher
 
 from engram import chunking
+from engram.project_config import DEFAULT_PG_DSN, load_default_settings
 
 
 @dataclasses.dataclass
@@ -33,6 +34,9 @@ class OverlayCodeEmbedding:
 
 PG_POOL: coco.ContextKey[Any] = coco.ContextKey("code_overlay_pg_pool")
 IDENTIFIER_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+_DEPLOYMENT_SETTINGS = load_default_settings()
+_DEFAULT_PG_URL = _DEPLOYMENT_SETTINGS.text("pg_dsn", DEFAULT_PG_DSN)
+assert _DEFAULT_PG_URL is not None
 
 
 def _identifier(value: str) -> str:
@@ -43,14 +47,13 @@ def _identifier(value: str) -> str:
 
 @coco.lifespan
 async def coco_lifespan(builder: coco.EnvironmentBuilder):
+    db_path = _DEPLOYMENT_SETTINGS.path("code_overlay_db", "~/.engram/cocoindex-overlay.db")
+    assert db_path is not None
     builder.settings.db_path = pathlib.Path(
-        os.environ.get("COCOINDEX_DB", os.path.expanduser("~/.engram/cocoindex-overlay.db"))
+        os.environ.get("COCOINDEX_DB", str(db_path))
     )
     pool = await postgres.create_pool(
-        os.environ.get(
-            "COCOINDEX_PG_URL",
-            "postgresql://hindsight:hindsight@localhost:5432/hindsight",
-        ),
+        os.environ.get("COCOINDEX_PG_URL", _DEFAULT_PG_URL),
         min_size=1,
         max_size=2,
     )

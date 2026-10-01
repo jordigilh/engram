@@ -207,7 +207,9 @@ systemctl --user list-timers 'engram-*'
 journalctl --user -u engram-cocoindex.service -f
 ```
 
-> **Add `ENGRAM_DOCS_DIR`, `ENGRAM_CODE_DIR`, etc. to `~/.engram/config.env`**
+> **Add project paths and repository lists to `~/.engram/projects.toml`**
+> using [`docs/projects.toml.example`](projects.toml.example). Keep
+> `~/.engram/config.env` for service credentials and runtime settings.
 > before starting `engram-cocoindex.service` — same as `INSTALL.md` step 16.
 > The systemd unit reads them from there, not from the unit file itself.
 
@@ -252,7 +254,7 @@ unit file's own header comments (and the direct-analog `launchd/*.plist`
 they mirror) for the full per-flag rationale.
 
 > **Postgres reachability gotcha specific to Linux (confirmed via a live
-> spike, 2026-08-13)**: the `cocoindex-code` daemon's `COCOINDEX_PG_URL`
+> spike, 2026-08-13)**: the `cocoindex-code` daemon's `defaults.pg_dsn`
 > needs `localhost:5432` reachable from a **native** host process. On
 > macOS this works because Postgres either runs natively or its embedded
 > `pg0` is otherwise reachable on the host loopback; on Linux, step 5's

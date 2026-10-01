@@ -45,6 +45,15 @@ from cocoindex.resources.file import PatternFilePathMatcher
 # be run via `-m`/an installed console script (not yet true in this repo).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 from engram import chunking  # noqa: E402
+from engram.project_config import (  # noqa: E402
+    DEFAULT_HINDSIGHT_URL,
+    DEFAULT_PG_DSN,
+    DEFAULT_POOL_MAX_SIZE,
+    DEFAULT_POOL_MIN_SIZE,
+    default_project_path,
+    load_project_settings,
+    sql_identifier,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,25 +61,27 @@ logging.basicConfig(
 )
 log = logging.getLogger("koku-cocoindex-flows")
 
-HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
+PROJECT_SETTINGS = load_project_settings("koku")
+HINDSIGHT_URL = PROJECT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+assert HINDSIGHT_URL is not None
+CODE_TABLE = sql_identifier(
+    PROJECT_SETTINGS.text("code_table", "koku_code_embeddings") or "koku_code_embeddings",
+    "project 'koku' code_table",
+)
 
-KOKU_REPO_DIR = pathlib.Path(os.environ.get(
-    "KOKU_REPO_DIR",
-    os.path.expanduser("~/go/src/github.com/project-koku/koku"),
-))
-KOKU_DOCS_DIR = pathlib.Path(os.environ.get(
-    "KOKU_DOCS_DIR",
-    str(KOKU_REPO_DIR / "docs"),
-))
+KOKU_REPO_DIR = PROJECT_SETTINGS.path("repo_dir", str(default_project_path("koku")))
+assert KOKU_REPO_DIR is not None
+KOKU_DOCS_DIR = PROJECT_SETTINGS.path("docs_dir", str(KOKU_REPO_DIR / "docs"))
+assert KOKU_DOCS_DIR is not None
 
 # koku-service-operator (Go): folded into koku's scope, see module docstring.
 # No separate *_DOCS_DIR override env var -- unlike koku itself (whose docs
 # dir historically needed to move), this repo's docs/ has always been at the
 # conventional path, so one env var is enough.
-KOKU_SERVICE_OPERATOR_REPO_DIR = pathlib.Path(os.environ.get(
-    "KOKU_SERVICE_OPERATOR_REPO_DIR",
-    os.path.expanduser("~/go/src/github.com/project-koku/koku-service-operator"),
-))
+KOKU_SERVICE_OPERATOR_REPO_DIR = PROJECT_SETTINGS.path(
+    "service_operator_dir", str(default_project_path("koku-service-operator"))
+)
+assert KOKU_SERVICE_OPERATOR_REPO_DIR is not None
 
 # Koku's real issue tracker is Jira (project COST, see
 # https://issues.redhat.com/projects/COST/ -- linked from the repo's own
@@ -78,10 +89,7 @@ KOKU_SERVICE_OPERATOR_REPO_DIR = pathlib.Path(os.environ.get(
 # happens on GitHub even though ticket tracking doesn't). koku-service-operator
 # has zero GitHub Issues of its own either (verified 2026-08-10) -- same Jira
 # COST project covers the whole product, no per-repo Jira split needed.
-PR_REPOS = os.environ.get(
-    "KOKU_PR_REPOS",
-    "project-koku/koku,project-koku/koku-service-operator",
-).split(",")
+PR_REPOS = list(PROJECT_SETTINGS.strings("pr_repos"))
 # koku is 5+ years old with ~6,300 PRs; the codebase has changed substantially
 # over that time and we're temporal (not core) contributors, so PRs from
 # years ago carry little task-relevant signal while still paying full
@@ -89,25 +97,22 @@ PR_REPOS = os.environ.get(
 # 2026-08-11), so this --limit keeps only the most recent PRs, not an
 # arbitrary sample. koku-service-operator is much younger and has nowhere
 # near this many PRs, so the cap is a no-op there in practice.
-KOKU_PR_LIMIT = int(os.environ.get("KOKU_PR_LIMIT", "2000"))
-JIRA_PROJECT = os.environ.get("KOKU_JIRA_PROJECT", "COST")
-ISSUES_POLL_INTERVAL = int(os.environ.get("KOKU_ISSUES_POLL_SECONDS", "300"))
+KOKU_PR_LIMIT = PROJECT_SETTINGS.integer("pr_limit", 2000)
+JIRA_PROJECT = PROJECT_SETTINGS.text("jira_project", "COST")
+assert JIRA_PROJECT is not None
+ISSUES_POLL_INTERVAL = PROJECT_SETTINGS.integer("issues_poll_seconds", 300)
 
-PG_DSN = os.environ.get(
-    "COCOINDEX_PG_URL",
-    "postgresql://hindsight:hindsight@localhost:5432/hindsight",
-)
+PG_DSN = PROJECT_SETTINGS.text("pg_dsn", DEFAULT_PG_DSN)
+assert PG_DSN is not None
 # See cocoindex-flows.py's PG_POOL_MIN_SIZE/MAX_SIZE comment (docs/FINDINGS.md
 # 2026-08-03) -- asyncpg's own min_size=10/max_size=10 default is oversized
 # for this pool's light, bursty pgvector-upsert-only workload, and each
 # onboarded project's own cocoindex-flows.py multiplies it against the same
 # shared Postgres instance.
-PG_POOL_MIN_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MIN_SIZE", "2"))
-PG_POOL_MAX_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MAX_SIZE", "5"))
-COCOINDEX_DB = pathlib.Path(os.environ.get(
-    "COCOINDEX_DB",
-    os.path.expanduser("~/.engram/koku-cocoindex.db"),
-))
+PG_POOL_MIN_SIZE = PROJECT_SETTINGS.integer("pg_pool_min_size", DEFAULT_POOL_MIN_SIZE)
+PG_POOL_MAX_SIZE = PROJECT_SETTINGS.integer("pg_pool_max_size", DEFAULT_POOL_MAX_SIZE)
+COCOINDEX_DB = PROJECT_SETTINGS.path("cocoindex_db", "~/.engram/koku-cocoindex.db")
+assert COCOINDEX_DB is not None
 
 # Unique per-file ContextKey name -- NEW_PROJECT_SETUP.md's "Gotcha" (see
 # engram-cocoindex-flows.py's PG_POOL for the reference example). Do NOT use
@@ -481,14 +486,17 @@ def _adf_to_text(node: Any) -> str:
     return inner
 
 
-JIRA_SERVER = os.environ.get("KOKU_JIRA_SERVER", "https://redhat.atlassian.net")
-JIRA_LOGIN_EMAIL = os.environ.get("KOKU_JIRA_EMAIL", "jgil@redhat.com")
+JIRA_SERVER = PROJECT_SETTINGS.text("jira_server", "https://redhat.atlassian.net")
+assert JIRA_SERVER is not None
+JIRA_LOGIN_EMAIL = PROJECT_SETTINGS.get("jira_email", "")
+if not isinstance(JIRA_LOGIN_EMAIL, str):
+    raise ValueError("project koku setting 'jira_email' must be a string")
 # Same recency rationale as KOKU_PR_LIMIT above, applied to Jira (COST) --
 # ~7,800 issues over 5+ years is dominated by stale, no-longer-relevant
 # history for temporal contributors. Sorted `created desc` in the JQL below
 # so this is a recency cutoff, not an arbitrary sample -- see docs/FINDINGS.md
 # 2026-08-11.
-KOKU_JIRA_LIMIT = int(os.environ.get("KOKU_JIRA_LIMIT", "2000"))
+KOKU_JIRA_LIMIT = PROJECT_SETTINGS.integer("jira_limit", 2000)
 JIRA_FIELDS = [
     "summary", "description", "status", "issuetype", "priority",
     "labels", "reporter", "created", "updated", "comment",
@@ -735,18 +743,18 @@ async def code_main(
         },
     )
     table = await postgres.mount_table_target(
-        PG_POOL, "koku_code_embeddings", schema, pg_schema_name="cocoindex",
+        PG_POOL, CODE_TABLE, schema, pg_schema_name="cocoindex",
     )
     table.declare_vector_index(column="embedding", metric="cosine")
 
     table.declare_sql_command_attachment(
         name="fts_search_vector",
-        setup_sql="""
-            ALTER TABLE cocoindex.koku_code_embeddings
+        setup_sql=f"""
+            ALTER TABLE cocoindex.{CODE_TABLE}
                 ADD COLUMN IF NOT EXISTS search_vector tsvector;
 
-            CREATE INDEX IF NOT EXISTS idx_koku_code_embeddings_fts
-                ON cocoindex.koku_code_embeddings USING gin(search_vector);
+            CREATE INDEX IF NOT EXISTS idx_{CODE_TABLE}_fts
+                ON cocoindex.{CODE_TABLE} USING gin(search_vector);
 
             CREATE OR REPLACE FUNCTION cocoindex.update_koku_code_search_vector()
             RETURNS trigger AS $$
@@ -758,24 +766,24 @@ async def code_main(
             $$ LANGUAGE plpgsql;
 
             DROP TRIGGER IF EXISTS trg_koku_code_search_vector
-                ON cocoindex.koku_code_embeddings;
+                ON cocoindex.{CODE_TABLE};
             CREATE TRIGGER trg_koku_code_search_vector
                 BEFORE INSERT OR UPDATE OF search_text, filepath
-                ON cocoindex.koku_code_embeddings
+                ON cocoindex.{CODE_TABLE}
                 FOR EACH ROW
                 EXECUTE FUNCTION cocoindex.update_koku_code_search_vector();
 
-            UPDATE cocoindex.koku_code_embeddings
+            UPDATE cocoindex.{CODE_TABLE}
             SET search_vector = to_tsvector('simple',
                 coalesce(search_text, code, '') || ' ' || coalesce(filepath, ''))
             WHERE search_vector IS NULL;
         """,
-        teardown_sql="""
+        teardown_sql=f"""
             DROP TRIGGER IF EXISTS trg_koku_code_search_vector
-                ON cocoindex.koku_code_embeddings;
+                ON cocoindex.{CODE_TABLE};
             DROP FUNCTION IF EXISTS cocoindex.update_koku_code_search_vector();
-            DROP INDEX IF EXISTS cocoindex.idx_koku_code_embeddings_fts;
-            ALTER TABLE cocoindex.koku_code_embeddings
+            DROP INDEX IF EXISTS cocoindex.idx_{CODE_TABLE}_fts;
+            ALTER TABLE cocoindex.{CODE_TABLE}
                 DROP COLUMN IF EXISTS search_vector;
         """,
     )

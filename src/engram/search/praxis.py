@@ -19,7 +19,6 @@ Usage:
 
 import argparse
 import logging
-import os
 import pathlib
 import sys
 from typing import Any
@@ -32,6 +31,13 @@ from typing import Any
 # be run via `-m`/an installed console script (not yet true in this repo).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 from engram import callgraph, chunking  # noqa: E402
+from engram.project_config import (  # noqa: E402
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_PG_DSN,
+    default_project_path,
+    load_project_settings,
+    sql_identifier,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,24 +45,31 @@ logging.basicConfig(
 )
 log = logging.getLogger("praxis-cocoindex-search")
 
-PG_URL = os.environ.get(
-    "COCOINDEX_PG_URL",
-    "postgresql://hindsight:hindsight@localhost:5432/hindsight",
+PROJECT_SETTINGS = load_project_settings("praxis")
+PG_URL = PROJECT_SETTINGS.text("pg_dsn", DEFAULT_PG_DSN)
+assert PG_URL is not None
+CODE_TABLE = sql_identifier(
+    PROJECT_SETTINGS.text("code_table", "praxis_code_embeddings") or "praxis_code_embeddings",
+    "project 'praxis' code_table",
 )
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDING_MODEL = PROJECT_SETTINGS.text("embedding_model", DEFAULT_EMBEDDING_MODEL)
+assert EMBEDDING_MODEL is not None
 RRF_K = 60
 
 # Same env var (and default) as praxis-cocoindex-flows.py, so pattern search
 # walks the exact same branch-scoped mirrors the ingestion flow indexes.
-PRAXIS_ORG_DIR = pathlib.Path(os.environ.get(
-    "PRAXIS_ORG_DIR", os.path.expanduser("~/.engram/watch/praxis-proxy"),
-))
+PRAXIS_ORG_DIR = PROJECT_SETTINGS.path("org_dir", str(default_project_path("praxis")))
+assert PRAXIS_ORG_DIR is not None
 
 # (repo_tag, root, included_patterns, excluded_patterns) -- mirrors
 # praxis-cocoindex-flows.py's localfs.walk_dir(path_matcher=
 # PatternFilePathMatcher(...)) call exactly. Only the Rust repos (those with
 # has_rust_code=True in PRAXIS_REPOS) are searchable here.
-_RUST_REPOS = ["praxis", "praxis-ai", "praxis-benchmarks", "praxis-demos", "praxis-experiments", "praxis-forge", "praxis-grid", "praxis-operator", "praxis-policy"]
+_RUST_REPOS = [
+    str(entry["name"])
+    for entry in PROJECT_SETTINGS.records("repositories")
+    if bool(entry.get("rust", False))
+]
 _PATTERN_SEARCH_ROOTS = [
     (tag, PRAXIS_ORG_DIR / tag, ["**/*.rs"], ["**/target/**"])
     for tag in _RUST_REPOS
@@ -118,10 +131,10 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                 embedding = _embed_query(query)
                 embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
                 cur.execute(
-                    """
+                    f"""
                     SELECT id, filepath, chunk_index, code,
                            1 - (embedding <=> %s::vector) AS score
-                    FROM cocoindex.praxis_code_embeddings
+                    FROM cocoindex.{CODE_TABLE}
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
                     """,
@@ -139,10 +152,10 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                 )
                 if tsquery:
                     cur.execute(
-                        """
+                        f"""
                         SELECT id, filepath, chunk_index, code,
                                ts_rank_cd(search_vector, to_tsquery('simple', %s)) AS score
-                        FROM cocoindex.praxis_code_embeddings
+                        FROM cocoindex.{CODE_TABLE}
                         WHERE search_vector @@ to_tsquery('simple', %s)
                         ORDER BY score DESC
                         LIMIT %s

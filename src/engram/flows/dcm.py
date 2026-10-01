@@ -35,6 +35,15 @@ from cocoindex.resources.file import PatternFilePathMatcher
 # be run via `-m`/an installed console script (not yet true in this repo).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 from engram import chunking  # noqa: E402
+from engram.project_config import (  # noqa: E402
+    DEFAULT_HINDSIGHT_URL,
+    DEFAULT_PG_DSN,
+    DEFAULT_POOL_MAX_SIZE,
+    DEFAULT_POOL_MIN_SIZE,
+    default_project_path,
+    load_project_settings,
+    sql_identifier,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,56 +51,33 @@ logging.basicConfig(
 )
 log = logging.getLogger("dcm-cocoindex-flows")
 
-HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
+PROJECT_SETTINGS = load_project_settings("dcm")
+HINDSIGHT_URL = PROJECT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+assert HINDSIGHT_URL is not None
+CODE_TABLE = sql_identifier(
+    PROJECT_SETTINGS.text("code_table", "dcm_code_embeddings") or "dcm_code_embeddings",
+    "project 'dcm' code_table",
+)
 
-DCM_ARCHITECTURE_DIR = pathlib.Path(os.environ.get(
-    "DCM_ARCHITECTURE_DIR",
-    os.path.expanduser("~/go/src/github.com/dcm-project/dcm"),
-))
-DCM_DOCS_DIR = pathlib.Path(os.environ.get(
-    "DCM_DOCS_DIR",
-    os.path.expanduser("~/go/src/github.com/dcm-project/dcm-project.github.io"),
-))
-DCM_ENHANCEMENTS_DIR = pathlib.Path(os.environ.get(
-    "DCM_ENHANCEMENTS_DIR",
-    os.path.expanduser("~/go/src/github.com/dcm-project/enhancements"),
-))
-DCM_CONTROL_PLANE_DIR = pathlib.Path(os.environ.get(
-    "DCM_CONTROL_PLANE_DIR",
-    os.path.expanduser("~/go/src/github.com/dcm-project/control-plane"),
-))
-DCM_CLI_DIR = pathlib.Path(os.environ.get(
-    "DCM_CLI_DIR",
-    os.path.expanduser("~/go/src/github.com/dcm-project/cli"),
-))
-DCM_KUBEVIRT_SP_DIR = pathlib.Path(os.environ.get(
-    "DCM_KUBEVIRT_SP_DIR",
-    os.path.expanduser("~/go/src/github.com/dcm-project/kubevirt-service-provider"),
-))
-DCM_K8S_CONTAINER_SP_DIR = pathlib.Path(os.environ.get(
-    "DCM_K8S_CONTAINER_SP_DIR",
-    os.path.expanduser("~/go/src/github.com/dcm-project/k8s-container-service-provider"),
-))
-DCM_ACM_CLUSTER_SP_DIR = pathlib.Path(os.environ.get(
-    "DCM_ACM_CLUSTER_SP_DIR",
-    os.path.expanduser("~/go/src/github.com/dcm-project/acm-cluster-service-provider"),
-))
-DCM_THREE_TIER_SP_DIR = pathlib.Path(os.environ.get(
-    "DCM_THREE_TIER_SP_DIR",
-    os.path.expanduser("~/go/src/github.com/dcm-project/three-tier-app-demo-service-provider"),
-))
-DCM_OSAC_SP_DIR = pathlib.Path(os.environ.get(
-    "DCM_OSAC_SP_DIR",
-    os.path.expanduser("~/go/src/github.com/dcm-project/osac-service-provider"),
-))
-DCM_UTILITIES_DIR = pathlib.Path(os.environ.get(
-    "DCM_UTILITIES_DIR",
-    os.path.expanduser("~/go/src/github.com/dcm-project/utilities"),
-))
-DCM_SHARED_WORKFLOWS_DIR = pathlib.Path(os.environ.get(
-    "DCM_SHARED_WORKFLOWS_DIR",
-    os.path.expanduser("~/go/src/github.com/dcm-project/shared-workflows"),
-))
+
+def _project_path(key: str, default_name: str) -> pathlib.Path:
+    value = PROJECT_SETTINGS.path(key, str(default_project_path(default_name)))
+    assert value is not None
+    return value
+
+
+DCM_ARCHITECTURE_DIR = _project_path("architecture_dir", "dcm")
+DCM_DOCS_DIR = _project_path("docs_dir", "dcm-docs")
+DCM_ENHANCEMENTS_DIR = _project_path("enhancements_dir", "enhancements")
+DCM_CONTROL_PLANE_DIR = _project_path("control_plane_dir", "control-plane")
+DCM_CLI_DIR = _project_path("cli_dir", "cli")
+DCM_KUBEVIRT_SP_DIR = _project_path("kubevirt_sp_dir", "kubevirt-service-provider")
+DCM_K8S_CONTAINER_SP_DIR = _project_path("k8s_container_sp_dir", "k8s-container-service-provider")
+DCM_ACM_CLUSTER_SP_DIR = _project_path("acm_cluster_sp_dir", "acm-cluster-service-provider")
+DCM_THREE_TIER_SP_DIR = _project_path("three_tier_sp_dir", "three-tier-app-demo-service-provider")
+DCM_OSAC_SP_DIR = _project_path("osac_sp_dir", "osac-service-provider")
+DCM_UTILITIES_DIR = _project_path("utilities_dir", "utilities")
+DCM_SHARED_WORKFLOWS_DIR = _project_path("shared_workflows_dir", "shared-workflows")
 # osac-project/osac (the upstream OSAC backend osac-service-provider talks
 # to -- distinct org, distinct repo, read-only for us) is folded into this
 # same dcm project rather than getting its own PROJECT_CONFIGS entry, same
@@ -101,38 +87,22 @@ DCM_SHARED_WORKFLOWS_DIR = pathlib.Path(os.environ.get(
 # of freshness is the existing 10-minute fetch+reset-hard refresh cycle
 # (refresh-watch-mirrors.sh), same convention as kubernaut.py/engram.py's
 # ~/.engram/watch/<repo> dirs.
-DCM_OSAC_DIR = pathlib.Path(os.environ.get(
-    "DCM_OSAC_DIR",
-    os.path.expanduser("~/.engram/watch/osac"),
-))
+DCM_OSAC_DIR = _project_path("osac_dir", "osac")
 
-ISSUES_REPOS = os.environ.get(
-    "DCM_ISSUES_REPOS",
-    "dcm-project/dcm,dcm-project/control-plane,dcm-project/cli,"
-    "dcm-project/kubevirt-service-provider,dcm-project/k8s-container-service-provider,"
-    "dcm-project/acm-cluster-service-provider,dcm-project/three-tier-app-demo-service-provider,"
-    "dcm-project/osac-service-provider,"
-    "dcm-project/utilities,dcm-project/dcm-project.github.io,dcm-project/enhancements,"
-    "dcm-project/shared-workflows,dcm-project/quadlet-deploy,"
-    "osac-project/osac",
-).split(",")
-ISSUES_POLL_INTERVAL = int(os.environ.get("DCM_ISSUES_POLL_SECONDS", "300"))
+ISSUES_REPOS = list(PROJECT_SETTINGS.strings("issues_repos"))
+ISSUES_POLL_INTERVAL = PROJECT_SETTINGS.integer("issues_poll_seconds", 300)
 
-PG_DSN = os.environ.get(
-    "COCOINDEX_PG_URL",
-    "postgresql://hindsight:hindsight@localhost:5432/hindsight",
-)
+PG_DSN = PROJECT_SETTINGS.text("pg_dsn", DEFAULT_PG_DSN)
+assert PG_DSN is not None
 # See cocoindex-flows.py's PG_POOL_MIN_SIZE/MAX_SIZE comment (docs/FINDINGS.md
 # 2026-08-03) -- asyncpg's own min_size=10/max_size=10 default is oversized
 # for this pool's light, bursty pgvector-upsert-only workload, and each
 # onboarded project's own cocoindex-flows.py multiplies it against the same
 # shared Postgres instance.
-PG_POOL_MIN_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MIN_SIZE", "2"))
-PG_POOL_MAX_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MAX_SIZE", "5"))
-COCOINDEX_DB = pathlib.Path(os.environ.get(
-    "COCOINDEX_DB",
-    os.path.expanduser("~/.engram/dcm-cocoindex.db"),
-))
+PG_POOL_MIN_SIZE = PROJECT_SETTINGS.integer("pg_pool_min_size", DEFAULT_POOL_MIN_SIZE)
+PG_POOL_MAX_SIZE = PROJECT_SETTINGS.integer("pg_pool_max_size", DEFAULT_POOL_MAX_SIZE)
+COCOINDEX_DB = PROJECT_SETTINGS.path("cocoindex_db", "~/.engram/dcm-cocoindex.db")
+assert COCOINDEX_DB is not None
 
 
 # Unique per-file ContextKey name -- see engram-cocoindex-flows.py's PG_POOL
@@ -655,18 +625,18 @@ async def code_main(
         },
     )
     table = await postgres.mount_table_target(
-        PG_POOL, "dcm_code_embeddings", schema, pg_schema_name="cocoindex",
+        PG_POOL, CODE_TABLE, schema, pg_schema_name="cocoindex",
     )
     table.declare_vector_index(column="embedding", metric="cosine")
 
     table.declare_sql_command_attachment(
         name="fts_search_vector",
-        setup_sql="""
-            ALTER TABLE cocoindex.dcm_code_embeddings
+        setup_sql=f"""
+            ALTER TABLE cocoindex.{CODE_TABLE}
                 ADD COLUMN IF NOT EXISTS search_vector tsvector;
 
-            CREATE INDEX IF NOT EXISTS idx_dcm_code_embeddings_fts
-                ON cocoindex.dcm_code_embeddings USING gin(search_vector);
+            CREATE INDEX IF NOT EXISTS idx_{CODE_TABLE}_fts
+                ON cocoindex.{CODE_TABLE} USING gin(search_vector);
 
             CREATE OR REPLACE FUNCTION cocoindex.update_dcm_code_search_vector()
             RETURNS trigger AS $$
@@ -678,24 +648,24 @@ async def code_main(
             $$ LANGUAGE plpgsql;
 
             DROP TRIGGER IF EXISTS trg_dcm_code_search_vector
-                ON cocoindex.dcm_code_embeddings;
+                ON cocoindex.{CODE_TABLE};
             CREATE TRIGGER trg_dcm_code_search_vector
                 BEFORE INSERT OR UPDATE OF search_text, filepath
-                ON cocoindex.dcm_code_embeddings
+                ON cocoindex.{CODE_TABLE}
                 FOR EACH ROW
                 EXECUTE FUNCTION cocoindex.update_dcm_code_search_vector();
 
-            UPDATE cocoindex.dcm_code_embeddings
+            UPDATE cocoindex.{CODE_TABLE}
             SET search_vector = to_tsvector('simple',
                 coalesce(search_text, code, '') || ' ' || coalesce(filepath, ''))
             WHERE search_vector IS NULL;
         """,
-        teardown_sql="""
+        teardown_sql=f"""
             DROP TRIGGER IF EXISTS trg_dcm_code_search_vector
-                ON cocoindex.dcm_code_embeddings;
+                ON cocoindex.{CODE_TABLE};
             DROP FUNCTION IF EXISTS cocoindex.update_dcm_code_search_vector();
-            DROP INDEX IF EXISTS cocoindex.idx_dcm_code_embeddings_fts;
-            ALTER TABLE cocoindex.dcm_code_embeddings
+            DROP INDEX IF EXISTS cocoindex.idx_{CODE_TABLE}_fts;
+            ALTER TABLE cocoindex.{CODE_TABLE}
                 DROP COLUMN IF EXISTS search_vector;
         """,
     )

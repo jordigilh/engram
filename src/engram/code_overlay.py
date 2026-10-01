@@ -19,6 +19,13 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from engram.project_config import DEFAULT_PG_DSN, load_default_settings
+
+
+_DEPLOYMENT_SETTINGS = load_default_settings()
+_DEFAULT_PG_URL = _DEPLOYMENT_SETTINGS.text("pg_dsn", DEFAULT_PG_DSN)
+assert _DEFAULT_PG_URL is not None
+
 
 ChangeStatus = Literal["added", "modified", "deleted", "renamed", "untracked"]
 COCOINDEX_SUFFIXES = frozenset({
@@ -338,8 +345,7 @@ def preflight_overlay(
     if "cocoindex" in backends:
         checks["cocoindex_command"] = _command_available(cocoindex_command)
         checks["cocoindex_pg_configured"] = bool(
-            pg_url or os.environ.get("COCOINDEX_PG_URL")
-            or "postgresql://hindsight:hindsight@localhost:5432/hindsight"
+            pg_url or _DEFAULT_PG_URL
         )
         if not checks["cocoindex_command"]:
             errors.append(f"CocoIndex flow command is unavailable: {cocoindex_command}")

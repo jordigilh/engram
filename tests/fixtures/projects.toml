@@ -1,0 +1,379 @@
+[defaults]
+hindsight_url = "http://localhost:8888"
+pg_dsn = "postgresql://hindsight:hindsight@localhost:5432/hindsight"
+embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
+pg_pool_min_size = 2
+pg_pool_max_size = 5
+
+[projects.kubernaut]
+banks = ["cursor-memory", "kubernaut-docs", "kubernaut-issues"]
+recall_banks = ["hindsight", "hindsight-docs", "hindsight-issues", "cocoindex-code"]
+code_bank = "cocoindex-code"
+coverage_prefix = ""
+code_table = "code_embeddings"
+log_suffix = ""
+nightly_run_time = "02:01"
+issues_repos = [
+  "jordigilh/kubernaut",
+  "jordigilh/kubernaut-operator",
+  "jordigilh/kubernaut-console",
+  "jordigilh/kubernaut-demo-scenarios",
+  "jordigilh/kubernaut-docs",
+]
+release_lines = ["v1.5"]
+rca_project = "kubernaut"
+rca_repository = "jordigilh/kubernaut"
+rca_projects = ["kubernaut", "kubernaut-operator"]
+workspace_prefixes = ["Users-jgil-go-src-github-com-jordigilh-kubernaut"]
+
+[projects.kubernaut.paths]
+docs_dir = "~/.engram/watch/kubernaut-docs/docs"
+code_dir = "~/.engram/watch/kubernaut"
+code_docs_dir = "~/.engram/watch/kubernaut/docs"
+operator_dir = "~/.engram/watch/kubernaut-operator"
+console_dir = "~/.engram/watch/kubernaut-console"
+scenarios_dir = "~/.engram/watch/kubernaut-demo-scenarios"
+transcripts_dir = "~/.cursor/projects"
+release_watch_root = "~/.engram/watch"
+cocoindex_db = "~/.engram/cocoindex.db"
+transcript_watermarks = "~/.engram/logs/cocoindex-transcript-watermarks.json"
+
+[projects.kubernaut.mental_models]
+kubernaut-issues = ["active-priorities", "known-bugs"]
+cursor-memory = ["workflow-preferences", "architecture-decisions", "testing-methodology", "coding-conventions"]
+kubernaut-docs = ["af-pipeline", "platform-topology", "ka-architecture", "operator-architecture", "console-architecture"]
+
+[[projects.kubernaut.probes]]
+bank = "cursor-memory"
+query = "Go testing conventions and patterns"
+[[projects.kubernaut.probes]]
+bank = "kubernaut-docs"
+query = "signal processing architecture and data flow"
+[[projects.kubernaut.probes]]
+bank = "kubernaut-docs"
+query = "remediation orchestrator CRD spec"
+[[projects.kubernaut.probes]]
+bank = "kubernaut-issues"
+query = "rate limiter design decisions and requirements"
+[[projects.kubernaut.probes]]
+bank = "kubernaut-issues"
+query = "A2A streaming event structure"
+[[projects.kubernaut.probes]]
+bank = "kubernaut-docs"
+query = "kubernaut-operator reconciliation loop and CRD controllers"
+[[projects.kubernaut.probes]]
+bank = "kubernaut-docs"
+query = "kubernaut-console UI components and platform API usage"
+
+[projects.dcm]
+banks = ["cursor-memory", "dcm-docs", "dcm-issues"]
+recall_banks = ["hindsight", "dcm-docs", "dcm-issues", "dcm-code"]
+code_bank = "dcm-code"
+coverage_prefix = "dcm_"
+code_table = "dcm_code_embeddings"
+log_suffix = "-dcm"
+nightly_run_time = "02:31"
+issues_repos = [
+  "dcm-project/dcm",
+  "dcm-project/control-plane",
+  "dcm-project/cli",
+  "dcm-project/kubevirt-service-provider",
+  "dcm-project/k8s-container-service-provider",
+  "dcm-project/acm-cluster-service-provider",
+  "dcm-project/three-tier-app-demo-service-provider",
+  "dcm-project/osac-service-provider",
+  "dcm-project/utilities",
+  "dcm-project/dcm-project.github.io",
+  "dcm-project/enhancements",
+  "dcm-project/shared-workflows",
+  "dcm-project/quadlet-deploy",
+  "osac-project/osac",
+]
+workspace_prefixes = ["Users-jgil-go-src-github-com-dcm-project-"]
+
+[projects.dcm.paths]
+architecture_dir = "~/.engram/watch/dcm"
+docs_dir = "~/.engram/watch/dcm-project.github.io"
+enhancements_dir = "~/.engram/watch/enhancements"
+control_plane_dir = "~/.engram/watch/control-plane"
+cli_dir = "~/.engram/watch/cli"
+kubevirt_sp_dir = "~/.engram/watch/kubevirt-service-provider"
+k8s_container_sp_dir = "~/.engram/watch/k8s-container-service-provider"
+acm_cluster_sp_dir = "~/.engram/watch/acm-cluster-service-provider"
+three_tier_sp_dir = "~/.engram/watch/three-tier-app-demo-service-provider"
+osac_sp_dir = "~/.engram/watch/osac-service-provider"
+utilities_dir = "~/.engram/watch/utilities"
+shared_workflows_dir = "~/.engram/watch/shared-workflows"
+osac_dir = "~/.engram/watch/osac"
+cocoindex_db = "~/.engram/dcm-cocoindex.db"
+
+[projects.dcm.mental_models]
+dcm-docs = ["dcm-architecture", "dcm-enhancements", "dcm-api-contracts"]
+dcm-issues = ["active-priorities", "known-bugs"]
+cursor-memory = ["dcm-workflow-preferences", "dcm-architecture-decisions", "dcm-testing-methodology", "dcm-coding-conventions"]
+
+[[projects.dcm.probes]]
+bank = "dcm-docs"
+query = "DCM architecture and service provider model"
+[[projects.dcm.probes]]
+bank = "dcm-docs"
+query = "placement policy and catalog item lifecycle"
+[[projects.dcm.probes]]
+bank = "dcm-issues"
+query = "open issues and active priorities"
+
+[projects.engram]
+banks = ["cursor-memory", "engram-docs"]
+recall_banks = ["hindsight", "hindsight-docs", "cocoindex-code"]
+code_bank = "cocoindex-code"
+coverage_prefix = "engram_"
+code_table = "engram_code_embeddings"
+log_suffix = "-engram"
+workspace_prefixes = ["Users-jgil-go-src-github-com-jordigilh-engram"]
+
+[projects.engram.paths]
+repo_dir = "~/.engram/watch/engram"
+cocoindex_db = "~/.engram/engram-cocoindex.db"
+
+[projects.engram.mental_models]
+engram-docs = ["engram-architecture", "engram-operations"]
+cursor-memory = ["engram-workflow-preferences", "engram-architecture-decisions", "engram-testing-methodology", "engram-coding-conventions"]
+
+[[projects.engram.probes]]
+bank = "engram-docs"
+query = "Haiku correction gate and contradiction resolution design"
+[[projects.engram.probes]]
+bank = "engram-docs"
+query = "project scoping allowlist for transcript ingestion"
+
+[projects.koku]
+banks = ["cursor-memory", "koku-docs", "koku-issues"]
+recall_banks = ["hindsight", "koku-docs", "koku-issues", "koku-code"]
+code_bank = "koku-code"
+coverage_prefix = "koku_"
+code_table = "koku_code_embeddings"
+log_suffix = "-koku"
+pr_repos = ["project-koku/koku", "project-koku/koku-service-operator"]
+pr_limit = 2000
+jira_project = "COST"
+jira_limit = 2000
+workspace_prefixes = [
+  "Users-jgil-go-src-github-com-project-koku",
+  "Users-jgil-go-src-github-com-insights-onprem-koku",
+]
+
+[projects.koku.paths]
+repo_dir = "~/.engram/watch/koku"
+docs_dir = "~/.engram/watch/koku/docs"
+service_operator_dir = "~/.engram/watch/koku-service-operator"
+cocoindex_db = "~/.engram/koku-cocoindex.db"
+
+[projects.koku.mental_models]
+koku-docs = ["koku-architecture", "koku-operations"]
+koku-issues = ["active-priorities", "known-bugs"]
+cursor-memory = ["koku-workflow-preferences", "koku-architecture-decisions", "koku-testing-methodology", "koku-coding-conventions"]
+
+[[projects.koku.probes]]
+bank = "koku-docs"
+query = "Koku cost-model and report-processing architecture"
+[[projects.koku.probes]]
+bank = "koku-docs"
+query = "masu Celery task orchestration"
+[[projects.koku.probes]]
+bank = "koku-issues"
+query = "open issues and active priorities"
+
+[projects.praxis]
+banks = ["cursor-memory", "praxis-docs", "praxis-issues"]
+recall_banks = ["hindsight", "praxis-docs", "praxis-issues", "praxis-code"]
+code_bank = "praxis-code"
+coverage_prefix = "praxis_"
+code_table = "praxis_code_embeddings"
+log_suffix = "-praxis"
+organization = "praxis-proxy"
+issues_repos = [
+  "praxis-proxy/praxis",
+  "praxis-proxy/conventions",
+  "praxis-proxy/praxis-proxy.github.io",
+  "praxis-proxy/ai",
+  "praxis-proxy/benchmarks",
+  "praxis-proxy/forge",
+  "praxis-proxy/policy",
+  "praxis-proxy/operator",
+  "praxis-proxy/experimental",
+  "praxis-proxy/grid",
+  "praxis-proxy/demos",
+  "praxis-proxy/enhancements",
+]
+workspace_prefixes = ["Users-jgil-go-src-github-com-praxis-proxy"]
+
+[[projects.praxis.repositories]]
+name = "praxis"
+upstream = "praxis-proxy/praxis"
+rust = true
+[[projects.praxis.repositories]]
+name = "praxis-ai"
+upstream = "praxis-proxy/ai"
+rust = true
+[[projects.praxis.repositories]]
+name = "praxis-benchmarks"
+upstream = "praxis-proxy/benchmarks"
+rust = true
+[[projects.praxis.repositories]]
+name = "praxis-conventions"
+upstream = "praxis-proxy/conventions"
+rust = false
+[[projects.praxis.repositories]]
+name = "praxis-demos"
+upstream = "praxis-proxy/demos"
+rust = true
+[[projects.praxis.repositories]]
+name = "praxis-enhancements"
+upstream = "praxis-proxy/enhancements"
+rust = false
+[[projects.praxis.repositories]]
+name = "praxis-experiments"
+upstream = "praxis-proxy/experimental"
+rust = true
+[[projects.praxis.repositories]]
+name = "praxis-forge"
+upstream = "praxis-proxy/forge"
+rust = true
+[[projects.praxis.repositories]]
+name = "praxis-grid"
+upstream = "praxis-proxy/grid"
+rust = true
+[[projects.praxis.repositories]]
+name = "praxis-operator"
+upstream = "praxis-proxy/operator"
+rust = true
+[[projects.praxis.repositories]]
+name = "praxis-policy"
+upstream = "praxis-proxy/policy"
+rust = true
+[[projects.praxis.repositories]]
+name = "praxis-proxy.github.io"
+upstream = "praxis-proxy/praxis-proxy.github.io"
+rust = false
+
+[projects.praxis.paths]
+org_dir = "~/.engram/watch/praxis-proxy"
+manual_docs_dir = "~/.engram/manual-docs/praxis"
+jira_keys_file = "~/.engram/scripts/jira-keys.txt"
+cocoindex_db = "~/.engram/praxis-cocoindex.db"
+
+[projects.praxis.mental_models]
+praxis-docs = ["praxis-architecture", "praxis-enhancements", "praxis-api-contracts"]
+praxis-issues = ["active-priorities", "known-bugs", "praxis-roadmap-priorities"]
+cursor-memory = ["praxis-workflow-preferences", "praxis-architecture-decisions", "praxis-testing-methodology", "praxis-coding-conventions"]
+
+[[projects.praxis.probes]]
+bank = "praxis-docs"
+query = "Praxis Grid routing overlay rendering and candidate scoring"
+[[projects.praxis.probes]]
+bank = "praxis-docs"
+query = "filter chain model and CRDT/SWIM state propagation"
+[[projects.praxis.probes]]
+bank = "praxis-issues"
+query = "open issues and active priorities"
+[[projects.praxis.probes]]
+bank = "praxis-issues"
+query = "AI Grid project board status and mixture-of-models routing epic"
+
+[projects.kuadrant]
+banks = ["kuadrant-docs", "kuadrant-issues"]
+recall_banks = ["hindsight", "kuadrant-docs", "kuadrant-issues", "kuadrant-code"]
+code_bank = "kuadrant-code"
+coverage_prefix = "kuadrant_"
+code_table = "kuadrant_code_embeddings"
+log_suffix = "-kuadrant"
+issues_repos = [
+  "Kuadrant/kuadrant-operator",
+  "Kuadrant/limitador",
+  "Kuadrant/wasm-shim",
+  "Kuadrant/architecture",
+  "Kuadrant/authorino",
+  "Kuadrant/dns-operator",
+  "Kuadrant/authorino-operator",
+  "Kuadrant/limitador-operator",
+  "Kuadrant/mcp-gateway",
+]
+workspace_prefixes = ["Users-jgil-go-src-github-com-Kuadrant"]
+
+[[projects.kuadrant.repositories]]
+name = "kuadrant-operator"
+upstream = "Kuadrant/kuadrant-operator"
+language = "go"
+[[projects.kuadrant.repositories]]
+name = "limitador"
+upstream = "Kuadrant/limitador"
+language = "rust"
+[[projects.kuadrant.repositories]]
+name = "wasm-shim"
+upstream = "Kuadrant/wasm-shim"
+language = "rust"
+[[projects.kuadrant.repositories]]
+name = "architecture"
+upstream = "Kuadrant/architecture"
+[[projects.kuadrant.repositories]]
+name = "authorino"
+upstream = "Kuadrant/authorino"
+language = "go"
+[[projects.kuadrant.repositories]]
+name = "dns-operator"
+upstream = "Kuadrant/dns-operator"
+language = "go"
+[[projects.kuadrant.repositories]]
+name = "authorino-operator"
+upstream = "Kuadrant/authorino-operator"
+language = "go"
+[[projects.kuadrant.repositories]]
+name = "limitador-operator"
+upstream = "Kuadrant/limitador-operator"
+language = "go"
+[[projects.kuadrant.repositories]]
+name = "mcp-gateway"
+upstream = "Kuadrant/mcp-gateway"
+language = "go"
+
+[projects.kuadrant.paths]
+org_dir = "~/.engram/watch/Kuadrant"
+cocoindex_db = "~/.engram/kuadrant-cocoindex.db"
+
+[projects.kuadrant.mental_models]
+kuadrant-docs = ["kuadrant-architecture"]
+kuadrant-issues = ["kuadrant-active-priorities"]
+
+[[projects.kuadrant.probes]]
+bank = "kuadrant-docs"
+query = "Kuadrant architecture: rate limiting, auth, DNS, and policy attachment model"
+[[projects.kuadrant.probes]]
+bank = "kuadrant-issues"
+query = "recent Kuadrant issues and design decisions relevant to policy APIs"
+
+[projects.rhdh-plugins]
+banks = ["cursor-memory", "rhdh-plugins-docs", "rhdh-plugins-issues"]
+recall_banks = ["hindsight", "rhdh-plugins-docs", "rhdh-plugins-issues", "rhdh-plugins-code"]
+code_bank = "rhdh-plugins-code"
+coverage_prefix = "rhdh_plugins_"
+code_table = "rhdh_plugins_code_embeddings"
+log_suffix = "-rhdh-plugins"
+jira_epic = "RHIDP-15270"
+jira_server = "https://redhat.atlassian.net"
+
+[projects.rhdh-plugins.paths]
+repo_dir = "~/.engram/watch/rhdh-plugins"
+boost_dir = "~/.engram/watch/rhdh-plugins/workspaces/boost"
+cocoindex_db = "~/.engram/rhdh-plugins-cocoindex.db"
+
+[projects.rhdh-plugins.mental_models]
+rhdh-plugins-docs = ["rhdh-plugins-ai-catalog-rbac-design"]
+rhdh-plugins-issues = ["rhdh-plugins-active-priorities"]
+cursor-memory = ["rhdh-plugins-workflow-preferences", "rhdh-plugins-architecture-decisions", "rhdh-plugins-testing-methodology", "rhdh-plugins-coding-conventions"]
+
+[[projects.rhdh-plugins.probes]]
+bank = "rhdh-plugins-docs"
+query = "AI Catalog Graduated Visibility permission model and RBAC design"
+[[projects.rhdh-plugins.probes]]
+bank = "rhdh-plugins-issues"
+query = "AI Catalog RBAC epic RHIDP-15270 status and remaining scope"

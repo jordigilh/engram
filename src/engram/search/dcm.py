@@ -19,7 +19,6 @@ Usage:
 
 import argparse
 import logging
-import os
 import pathlib
 import sys
 from typing import Any
@@ -32,6 +31,13 @@ from typing import Any
 # be run via `-m`/an installed console script (not yet true in this repo).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 from engram import callgraph, chunking  # noqa: E402
+from engram.project_config import (  # noqa: E402
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_PG_DSN,
+    default_project_path,
+    load_project_settings,
+    sql_identifier,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,48 +45,40 @@ logging.basicConfig(
 )
 log = logging.getLogger("dcm-cocoindex-search")
 
-PG_URL = os.environ.get(
-    "COCOINDEX_PG_URL",
-    "postgresql://hindsight:hindsight@localhost:5432/hindsight",
+PROJECT_SETTINGS = load_project_settings("dcm")
+PG_URL = PROJECT_SETTINGS.text("pg_dsn", DEFAULT_PG_DSN)
+assert PG_URL is not None
+CODE_TABLE = sql_identifier(
+    PROJECT_SETTINGS.text("code_table", "dcm_code_embeddings") or "dcm_code_embeddings",
+    "project 'dcm' code_table",
 )
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDING_MODEL = PROJECT_SETTINGS.text("embedding_model", DEFAULT_EMBEDDING_MODEL)
+assert EMBEDDING_MODEL is not None
 RRF_K = 60
 
 # Same env vars (and defaults) as dcm-cocoindex-flows.py, so pattern search
 # walks the exact same checkouts the ingestion flow indexes. Excludes
 # DCM_SHARED_WORKFLOWS_DIR -- that repo is shell/YAML, not a tree-sitter
 # structural-pattern language.
-DCM_CONTROL_PLANE_DIR = pathlib.Path(os.environ.get(
-    "DCM_CONTROL_PLANE_DIR", os.path.expanduser("~/go/src/github.com/dcm-project/control-plane"),
-))
-DCM_CLI_DIR = pathlib.Path(os.environ.get(
-    "DCM_CLI_DIR", os.path.expanduser("~/go/src/github.com/dcm-project/cli"),
-))
-DCM_KUBEVIRT_SP_DIR = pathlib.Path(os.environ.get(
-    "DCM_KUBEVIRT_SP_DIR", os.path.expanduser("~/go/src/github.com/dcm-project/kubevirt-service-provider"),
-))
-DCM_K8S_CONTAINER_SP_DIR = pathlib.Path(os.environ.get(
-    "DCM_K8S_CONTAINER_SP_DIR", os.path.expanduser("~/go/src/github.com/dcm-project/k8s-container-service-provider"),
-))
-DCM_ACM_CLUSTER_SP_DIR = pathlib.Path(os.environ.get(
-    "DCM_ACM_CLUSTER_SP_DIR", os.path.expanduser("~/go/src/github.com/dcm-project/acm-cluster-service-provider"),
-))
-DCM_THREE_TIER_SP_DIR = pathlib.Path(os.environ.get(
-    "DCM_THREE_TIER_SP_DIR", os.path.expanduser("~/go/src/github.com/dcm-project/three-tier-app-demo-service-provider"),
-))
-DCM_OSAC_SP_DIR = pathlib.Path(os.environ.get(
-    "DCM_OSAC_SP_DIR", os.path.expanduser("~/go/src/github.com/dcm-project/osac-service-provider"),
-))
-DCM_UTILITIES_DIR = pathlib.Path(os.environ.get(
-    "DCM_UTILITIES_DIR", os.path.expanduser("~/go/src/github.com/dcm-project/utilities"),
-))
+def _project_path(key: str, default_name: str) -> pathlib.Path:
+    value = PROJECT_SETTINGS.path(key, str(default_project_path(default_name)))
+    assert value is not None
+    return value
+
+
+DCM_CONTROL_PLANE_DIR = _project_path("control_plane_dir", "control-plane")
+DCM_CLI_DIR = _project_path("cli_dir", "cli")
+DCM_KUBEVIRT_SP_DIR = _project_path("kubevirt_sp_dir", "kubevirt-service-provider")
+DCM_K8S_CONTAINER_SP_DIR = _project_path("k8s_container_sp_dir", "k8s-container-service-provider")
+DCM_ACM_CLUSTER_SP_DIR = _project_path("acm_cluster_sp_dir", "acm-cluster-service-provider")
+DCM_THREE_TIER_SP_DIR = _project_path("three_tier_sp_dir", "three-tier-app-demo-service-provider")
+DCM_OSAC_SP_DIR = _project_path("osac_sp_dir", "osac-service-provider")
+DCM_UTILITIES_DIR = _project_path("utilities_dir", "utilities")
 # osac-project/osac (upstream OSAC backend, read-only, folded into dcm --
 # see dcm-cocoindex-flows.py's DCM_OSAC_DIR comment). Points at the
 # watch-mirror worktree, not a live dev clone, since this repo is never
 # locally edited -- see watch-mirrors-config.sh.
-DCM_OSAC_DIR = pathlib.Path(os.environ.get(
-    "DCM_OSAC_DIR", os.path.expanduser("~/.engram/watch/osac"),
-))
+DCM_OSAC_DIR = _project_path("osac_dir", "osac")
 
 _GO_EXCLUDED = ["**/vendor/**", "**/*_test.go", "**/zz_generated*"]
 
@@ -155,10 +153,10 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                 embedding = _embed_query(query)
                 embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
                 cur.execute(
-                    """
+                    f"""
                     SELECT id, filepath, chunk_index, code,
                            1 - (embedding <=> %s::vector) AS score
-                    FROM cocoindex.dcm_code_embeddings
+                    FROM cocoindex.{CODE_TABLE}
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
                     """,
@@ -176,10 +174,10 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                 )
                 if tsquery:
                     cur.execute(
-                        """
+                        f"""
                         SELECT id, filepath, chunk_index, code,
                                ts_rank_cd(search_vector, to_tsquery('simple', %s)) AS score
-                        FROM cocoindex.dcm_code_embeddings
+                        FROM cocoindex.{CODE_TABLE}
                         WHERE search_vector @@ to_tsquery('simple', %s)
                         ORDER BY score DESC
                         LIMIT %s

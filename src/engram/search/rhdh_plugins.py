@@ -20,7 +20,6 @@ Usage:
 
 import argparse
 import logging
-import os
 import pathlib
 import sys
 from typing import Any
@@ -33,6 +32,13 @@ from typing import Any
 # be run via `-m`/an installed console script (not yet true in this repo).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 from engram import callgraph, chunking  # noqa: E402
+from engram.project_config import (  # noqa: E402
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_PG_DSN,
+    default_project_path,
+    load_project_settings,
+    sql_identifier,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,21 +46,27 @@ logging.basicConfig(
 )
 log = logging.getLogger("rhdh-plugins-cocoindex-search")
 
-PG_URL = os.environ.get(
-    "COCOINDEX_PG_URL",
-    "postgresql://hindsight:hindsight@localhost:5432/hindsight",
+PROJECT_SETTINGS = load_project_settings("rhdh-plugins")
+PG_URL = PROJECT_SETTINGS.text("pg_dsn", DEFAULT_PG_DSN)
+assert PG_URL is not None
+CODE_TABLE = sql_identifier(
+    PROJECT_SETTINGS.text("code_table", "rhdh_plugins_code_embeddings") or "rhdh_plugins_code_embeddings",
+    "project 'rhdh-plugins' code_table",
 )
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDING_MODEL = PROJECT_SETTINGS.text("embedding_model", DEFAULT_EMBEDDING_MODEL)
+assert EMBEDDING_MODEL is not None
 RRF_K = 60
 
 # Same env vars (and defaults) as rhdh-plugins-cocoindex-flows.py, so pattern
 # search walks the exact same checkout subtree the ingestion flow indexes.
-RHDH_PLUGINS_REPO_DIR = pathlib.Path(os.environ.get(
-    "RHDH_PLUGINS_REPO_DIR", os.path.expanduser("~/go/src/github.com/redhat-developer/rhdh-plugins"),
-))
-RHDH_PLUGINS_BOOST_DIR = pathlib.Path(os.environ.get(
-    "RHDH_PLUGINS_BOOST_DIR", str(RHDH_PLUGINS_REPO_DIR / "workspaces" / "boost"),
-))
+RHDH_PLUGINS_REPO_DIR = PROJECT_SETTINGS.path(
+    "repo_dir", str(default_project_path("rhdh-plugins"))
+)
+assert RHDH_PLUGINS_REPO_DIR is not None
+RHDH_PLUGINS_BOOST_DIR = PROJECT_SETTINGS.path(
+    "boost_dir", str(RHDH_PLUGINS_REPO_DIR / "workspaces" / "boost")
+)
+assert RHDH_PLUGINS_BOOST_DIR is not None
 
 # (repo_tag, root, included_patterns, excluded_patterns) -- mirrors
 # rhdh-plugins-cocoindex-flows.py's localfs.walk_dir(path_matcher=
@@ -122,10 +134,10 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                 embedding = _embed_query(query)
                 embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
                 cur.execute(
-                    """
+                    f"""
                     SELECT id, filepath, chunk_index, code,
                            1 - (embedding <=> %s::vector) AS score
-                    FROM cocoindex.rhdh_plugins_code_embeddings
+                    FROM cocoindex.{CODE_TABLE}
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
                     """,
@@ -143,10 +155,10 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                 )
                 if tsquery:
                     cur.execute(
-                        """
+                        f"""
                         SELECT id, filepath, chunk_index, code,
                                ts_rank_cd(search_vector, to_tsquery('simple', %s)) AS score
-                        FROM cocoindex.rhdh_plugins_code_embeddings
+                        FROM cocoindex.{CODE_TABLE}
                         WHERE search_vector @@ to_tsquery('simple', %s)
                         ORDER BY score DESC
                         LIMIT %s

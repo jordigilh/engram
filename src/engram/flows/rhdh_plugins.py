@@ -57,6 +57,15 @@ from cocoindex.resources.file import PatternFilePathMatcher
 # be run via `-m`/an installed console script (not yet true in this repo).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 from engram import chunking  # noqa: E402
+from engram.project_config import (  # noqa: E402
+    DEFAULT_HINDSIGHT_URL,
+    DEFAULT_PG_DSN,
+    DEFAULT_POOL_MAX_SIZE,
+    DEFAULT_POOL_MIN_SIZE,
+    default_project_path,
+    load_project_settings,
+    sql_identifier,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,45 +73,51 @@ logging.basicConfig(
 )
 log = logging.getLogger("rhdh-plugins-cocoindex-flows")
 
-HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
+PROJECT_SETTINGS = load_project_settings("rhdh-plugins")
+HINDSIGHT_URL = PROJECT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+assert HINDSIGHT_URL is not None
+CODE_TABLE = sql_identifier(
+    PROJECT_SETTINGS.text("code_table", "rhdh_plugins_code_embeddings") or "rhdh_plugins_code_embeddings",
+    "project 'rhdh-plugins' code_table",
+)
 
-RHDH_PLUGINS_REPO_DIR = pathlib.Path(os.environ.get(
-    "RHDH_PLUGINS_REPO_DIR",
-    os.path.expanduser("~/go/src/github.com/redhat-developer/rhdh-plugins"),
-))
+RHDH_PLUGINS_REPO_DIR = PROJECT_SETTINGS.path(
+    "repo_dir", str(default_project_path("rhdh-plugins"))
+)
+assert RHDH_PLUGINS_REPO_DIR is not None
 # The one workspace package this onboarding's scope actually covers -- see
 # module docstring. Not the whole monorepo.
-RHDH_PLUGINS_BOOST_DIR = pathlib.Path(os.environ.get(
-    "RHDH_PLUGINS_BOOST_DIR",
-    str(RHDH_PLUGINS_REPO_DIR / "workspaces" / "boost"),
-))
+RHDH_PLUGINS_BOOST_DIR = PROJECT_SETTINGS.path(
+    "boost_dir", str(RHDH_PLUGINS_REPO_DIR / "workspaces" / "boost")
+)
+assert RHDH_PLUGINS_BOOST_DIR is not None
 
 # rhdh-plugins' real project management for this scope is Jira (project
 # RHIDP), not GitHub Issues -- see module docstring. Scoped to one epic and
 # its children, not the whole RHIDP project (166+ open issues, most
 # unrelated to this work).
-JIRA_EPIC = os.environ.get("RHDH_PLUGINS_JIRA_EPIC", "RHIDP-15270")
-JIRA_SERVER = os.environ.get("RHDH_PLUGINS_JIRA_SERVER", "https://redhat.atlassian.net")
-JIRA_LOGIN_EMAIL = os.environ.get("RHDH_PLUGINS_JIRA_EMAIL", "jgil@redhat.com")
-ISSUES_POLL_INTERVAL = int(os.environ.get("RHDH_PLUGINS_ISSUES_POLL_SECONDS", "300"))
+JIRA_EPIC = PROJECT_SETTINGS.text("jira_epic", "RHIDP-15270")
+assert JIRA_EPIC is not None
+JIRA_SERVER = PROJECT_SETTINGS.text("jira_server", "https://redhat.atlassian.net")
+assert JIRA_SERVER is not None
+JIRA_LOGIN_EMAIL = PROJECT_SETTINGS.get("jira_email", "")
+if not isinstance(JIRA_LOGIN_EMAIL, str):
+    raise ValueError("project rhdh-plugins setting 'jira_email' must be a string")
+ISSUES_POLL_INTERVAL = PROJECT_SETTINGS.integer("issues_poll_seconds", 300)
 JIRA_FIELDS = [
     "summary", "description", "status", "issuetype", "priority",
     "labels", "reporter", "created", "updated", "comment", "parent",
 ]
 
-PG_DSN = os.environ.get(
-    "COCOINDEX_PG_URL",
-    "postgresql://hindsight:hindsight@localhost:5432/hindsight",
-)
+PG_DSN = PROJECT_SETTINGS.text("pg_dsn", DEFAULT_PG_DSN)
+assert PG_DSN is not None
 # See cocoindex-flows.py's PG_POOL_MIN_SIZE/MAX_SIZE comment (docs/FINDINGS.md
 # 2026-08-03) -- asyncpg's own min_size=10/max_size=10 default is oversized
 # for this pool's light, bursty pgvector-upsert-only workload.
-PG_POOL_MIN_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MIN_SIZE", "2"))
-PG_POOL_MAX_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MAX_SIZE", "5"))
-COCOINDEX_DB = pathlib.Path(os.environ.get(
-    "COCOINDEX_DB",
-    os.path.expanduser("~/.engram/rhdh-plugins-cocoindex.db"),
-))
+PG_POOL_MIN_SIZE = PROJECT_SETTINGS.integer("pg_pool_min_size", DEFAULT_POOL_MIN_SIZE)
+PG_POOL_MAX_SIZE = PROJECT_SETTINGS.integer("pg_pool_max_size", DEFAULT_POOL_MAX_SIZE)
+COCOINDEX_DB = PROJECT_SETTINGS.path("cocoindex_db", "~/.engram/rhdh-plugins-cocoindex.db")
+assert COCOINDEX_DB is not None
 
 # Unique per-file ContextKey name -- NEW_PROJECT_SETUP.md's "Gotcha" (see
 # engram-cocoindex-flows.py's PG_POOL for the reference example). Do NOT use
@@ -546,18 +561,18 @@ async def code_main(boost_dir: pathlib.Path) -> None:
         },
     )
     table = await postgres.mount_table_target(
-        PG_POOL, "rhdh_plugins_code_embeddings", schema, pg_schema_name="cocoindex",
+        PG_POOL, CODE_TABLE, schema, pg_schema_name="cocoindex",
     )
     table.declare_vector_index(column="embedding", metric="cosine")
 
     table.declare_sql_command_attachment(
         name="fts_search_vector",
-        setup_sql="""
-            ALTER TABLE cocoindex.rhdh_plugins_code_embeddings
+        setup_sql=f"""
+            ALTER TABLE cocoindex.{CODE_TABLE}
                 ADD COLUMN IF NOT EXISTS search_vector tsvector;
 
-            CREATE INDEX IF NOT EXISTS idx_rhdh_plugins_code_embeddings_fts
-                ON cocoindex.rhdh_plugins_code_embeddings USING gin(search_vector);
+            CREATE INDEX IF NOT EXISTS idx_{CODE_TABLE}_fts
+                ON cocoindex.{CODE_TABLE} USING gin(search_vector);
 
             CREATE OR REPLACE FUNCTION cocoindex.update_rhdh_plugins_code_search_vector()
             RETURNS trigger AS $$
@@ -569,24 +584,24 @@ async def code_main(boost_dir: pathlib.Path) -> None:
             $$ LANGUAGE plpgsql;
 
             DROP TRIGGER IF EXISTS trg_rhdh_plugins_code_search_vector
-                ON cocoindex.rhdh_plugins_code_embeddings;
+                ON cocoindex.{CODE_TABLE};
             CREATE TRIGGER trg_rhdh_plugins_code_search_vector
                 BEFORE INSERT OR UPDATE OF search_text, filepath
-                ON cocoindex.rhdh_plugins_code_embeddings
+                ON cocoindex.{CODE_TABLE}
                 FOR EACH ROW
                 EXECUTE FUNCTION cocoindex.update_rhdh_plugins_code_search_vector();
 
-            UPDATE cocoindex.rhdh_plugins_code_embeddings
+            UPDATE cocoindex.{CODE_TABLE}
             SET search_vector = to_tsvector('simple',
                 coalesce(search_text, code, '') || ' ' || coalesce(filepath, ''))
             WHERE search_vector IS NULL;
         """,
-        teardown_sql="""
+        teardown_sql=f"""
             DROP TRIGGER IF EXISTS trg_rhdh_plugins_code_search_vector
-                ON cocoindex.rhdh_plugins_code_embeddings;
+                ON cocoindex.{CODE_TABLE};
             DROP FUNCTION IF EXISTS cocoindex.update_rhdh_plugins_code_search_vector();
-            DROP INDEX IF EXISTS cocoindex.idx_rhdh_plugins_code_embeddings_fts;
-            ALTER TABLE cocoindex.rhdh_plugins_code_embeddings
+            DROP INDEX IF EXISTS cocoindex.idx_{CODE_TABLE}_fts;
+            ALTER TABLE cocoindex.{CODE_TABLE}
                 DROP COLUMN IF EXISTS search_vector;
         """,
     )

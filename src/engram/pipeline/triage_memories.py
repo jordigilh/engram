@@ -23,20 +23,23 @@ Usage:
 import argparse
 import json
 import logging
-import os
 import re
 import sys
 import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
-from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
-HINDSIGHT_URL = "http://localhost:8888"
+from engram.project_config import DEFAULT_HINDSIGHT_URL, load_default_settings
+
+DEPLOYMENT_SETTINGS = load_default_settings()
+HINDSIGHT_URL = DEPLOYMENT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+assert HINDSIGHT_URL is not None
 DEFAULT_BANK = "cursor-memory"
-LOG_DIR = Path.home() / ".engram" / "logs"
+LOG_DIR = DEPLOYMENT_SETTINGS.path("log_dir", "~/.engram/logs")
+assert LOG_DIR is not None
 REARRANGE_BATCH_SIZE = 5
 
 # Banks whose chunk/document IDs follow the CocoIndex flows convention
@@ -50,7 +53,8 @@ PRAXIS_BANKS = {"praxis-docs", "praxis-issues"}
 # Provenance for human-directed, LLM-free replacements. Neutral by default so
 # no personal identity is stored; override via ENGRAM_MANUAL_TRIAGE_REVIEWER
 # only with an explicit role label (never a personal name without consent).
-MANUAL_TRIAGE_REVIEWER = os.environ.get("ENGRAM_MANUAL_TRIAGE_REVIEWER", "manual-triage")
+MANUAL_TRIAGE_REVIEWER = DEPLOYMENT_SETTINGS.text("manual_triage_reviewer", "manual-triage")
+assert MANUAL_TRIAGE_REVIEWER is not None
 MANUAL_TRIAGE_TAG = "manual-triage"
 MANUAL_TRIAGE_REPLACEMENT_TAG = "manual-replacement"
 
@@ -414,7 +418,9 @@ def find_near_duplicates(memories: list[dict]) -> list[tuple[str, str, float]]:
 # Opt-in: set ENGRAM_GCP_PROJECT locally (never commit the real value) to
 # also dedup repeated mentions of your real Vertex AI project ID. Skipped
 # entirely when unset.
-_KNOWN_GCP_PROJECT = os.environ.get("ENGRAM_GCP_PROJECT", "")
+_KNOWN_GCP_PROJECT = DEPLOYMENT_SETTINGS.get("gcp_project", "")
+if not isinstance(_KNOWN_GCP_PROJECT, str):
+    raise ValueError("deployment setting 'gcp_project' must be a string")
 
 
 def find_repeated_facts(memories: list[dict]) -> dict[str, list[str]]:

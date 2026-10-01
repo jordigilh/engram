@@ -1,0 +1,70 @@
+# Deployment-local Engram project configuration.
+#
+# Copy this file to ~/.engram/projects.toml, replace the example values, and
+# keep the populated file out of Git. Relative paths are resolved next to this
+# file; ~ and environment variables are expanded.
+
+[defaults]
+hindsight_url = "http://localhost:8888"
+pg_dsn = "postgresql://hindsight:hindsight@localhost:5432/hindsight"
+embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
+# Optional Vertex project used by local correction/contradiction classifiers.
+# Explicit VERTEXAI_PROJECT/GOOGLE_CLOUD_PROJECT values from config.env win.
+# gcp_project = "<gcp-project-id>"
+# vertex_location = "global"
+pg_pool_min_size = 2
+pg_pool_max_size = 5
+contradiction_notify_threshold = 10
+topic_shift_refresh_threshold = 5
+topic_shift_refresh_min_interval_hours = 4
+
+[defaults.paths]
+transcripts_dir = "~/.cursor/projects"
+log_dir = "~/.engram/logs"
+state_dir = "~/.engram"
+
+# Every project-specific path, repository mapping, branch selection, and
+# workspace prefix belongs below a project table. The flow/search modules only
+# provide generic fallback behavior for an unconfigured project.
+[projects.kubernaut]
+code_table = "code_embeddings"
+issues_repos = [
+  "<github-owner>/kubernaut",
+  "<github-owner>/kubernaut-operator",
+]
+release_lines = ["v1.5"]
+workspace_prefixes = ["Users-<user>-go-src-github-com-<org>-kubernaut"]
+rca_project = "kubernaut"
+rca_repository = "<github-owner>/kubernaut"
+rca_projects = ["kubernaut", "kubernaut-operator"]
+
+[projects.kubernaut.paths]
+docs_dir = "~/.engram/watch/kubernaut-docs/docs"
+code_dir = "~/src/kubernaut"
+code_docs_dir = "~/src/kubernaut/docs"
+operator_dir = "~/src/kubernaut-operator"
+console_dir = "~/src/kubernaut-console"
+scenarios_dir = "~/src/kubernaut-demo-scenarios"
+release_watch_root = "~/.engram/watch"
+cocoindex_db = "~/.engram/cocoindex.db"
+transcript_watermarks = "~/.engram/logs/cocoindex-transcript-watermarks.json"
+rca_db = "~/.engram/kubernaut-rca.sqlite3"
+must_gather_dir = "."
+
+# A multi-repository project uses array-of-table entries. `rust` and
+# `language` are consumed only by the corresponding flow/search adapter.
+[projects.example]
+code_table = "example_code_embeddings"
+workspace_prefixes = ["Users-<user>-src-example"]
+issues_repos = ["example/example"]
+
+[[projects.example.repositories]]
+name = "example"
+upstream = "example/example"
+rust = false
+language = "go"
+
+[projects.example.paths]
+org_dir = "~/.engram/watch/example"
+repo_dir = "~/src/example"
+cocoindex_db = "~/.engram/example-cocoindex.db"

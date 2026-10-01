@@ -138,7 +138,6 @@ PYIMPORT
 echo ""
 echo "[4/5] Re-ingesting kubernaut-docs..."
 python3 -u "$SCRIPT_DIR/ingest-docs.py" \
-    --docs-dir ~/go/src/github.com/jordigilh/kubernaut-docs/docs \
     --hindsight-url "$TARGET_URL" 2>&1 | tail -3
 
 echo ""

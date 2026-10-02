@@ -26,7 +26,9 @@ Each project gets:
 > run natively under launchd or as the stateless `Dockerfile.engram` runtime
 > image. New project onboarding should use the image's generic
 > `[instances.<project>.backends.<name>]` TOML tables when possible; native
-> deployments add the equivalent route to `build_project_registry()`.
+> deployments add the equivalent route to
+> `~/.engram/runtime/native-instances.toml` (see
+> `docs/native-instances.toml.example`).
 > In either case, the client points at one route:
 > `http://127.0.0.1:8896/mcp/<project>`. Kubernaut RCA is the only intentionally
 > project-specific optional backend; all other gateway and runtime configuration

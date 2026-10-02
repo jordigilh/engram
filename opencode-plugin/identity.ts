@@ -11,6 +11,7 @@
 // See docs/findings/2026-08.md (2026-08-13, thirteenth-sixteenth follow-ups)
 // and https://github.com/jordigilh/engram/issues/22 for the design spikes
 // this implements.
+import type { WorktreeIndexPolicy } from "./worktree-index"
 
 export interface RepositoryIdentityOptions {
   project?: string
@@ -29,12 +30,8 @@ export interface EngramRepositoryMappings {
 export interface EngramPluginOptions extends RepositoryIdentityOptions {
   gatewayUrl?: string
   repositories?: EngramRepositoryMappings
-  /** Automatically create local zvec indexes for OpenCode-created Kubernaut worktrees. Defaults to true on the kubernaut route. */
-  autoIndexKubernautWorktrees?: boolean
-  /** Optional path to the zg executable; defaults to ~/bin/zg when present, otherwise PATH lookup. */
-  zvecBinary?: string
-  /** Local embedding model for automatic Kubernaut worktree indexes. */
-  zvecEmbedding?: string
+  /** Deployment-local worktree indexing policy; projects must be explicitly listed. */
+  worktreeIndex?: WorktreeIndexPolicy
 }
 
 export interface DeriveIdentityInput {
@@ -126,16 +123,21 @@ export interface McpServerEntryV2 {
   disabled: false
 }
 
-const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8896"
-
 /** Native V2 server entry for `ctx.mcp.transform(editor => editor.set(...))`.
  *  The gateway is a plain-LAN endpoint with no OAuth issuer, so `oauth: false`
- *  keeps V2 from attempting OAuth discovery against it. */
+ *  keeps V2 from attempting OAuth discovery against it. A missing gateway URL
+ *  means deployment configuration is absent, so no generated fallback entry is
+ *  returned. */
+export function buildMcpServerConfigV2(
+  identity: Pick<ResolvedIdentity, "project">,
+  options: { gatewayUrl: string },
+): McpServerEntryV2
 export function buildMcpServerConfigV2(
   identity: Pick<ResolvedIdentity, "project">,
   options: Pick<EngramPluginOptions, "gatewayUrl"> = {},
-): McpServerEntryV2 {
-  const gatewayUrl = (options.gatewayUrl || DEFAULT_GATEWAY_URL).replace(/\/$/, "")
+): McpServerEntryV2 | undefined {
+  const gatewayUrl = options.gatewayUrl?.trim().replace(/\/$/, "")
+  if (!gatewayUrl) return undefined
   return {
     type: "remote",
     url: `${gatewayUrl}/mcp/${identity.project}`,

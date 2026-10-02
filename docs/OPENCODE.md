@@ -27,6 +27,10 @@ Load the plugin globally from `opencode.jsonc` or configure it per repository.
 The global configuration is preferred when OpenCode and OpenChamber share one
 host. Native V2 form:
 
+Keep the deployment-specific gateway, repository, branch, and worktree policy
+in `~/.engram/opencode.json`; the inline `options` object below is useful for a
+temporary override or an isolated test.
+
 ```json
 {
   "plugins": [
@@ -65,8 +69,10 @@ host. Native V2 form:
 
 `oauth: false` is required: V2 attempts OAuth discovery on remote servers by
 default, and the gateway is a plain-LAN endpoint with no OAuth issuer. The
-plugin's generated fallback entry sets this automatically, but an explicit
-config entry must include it.
+plugin's generated fallback entry sets this automatically when
+`~/.engram/opencode.json` provides `gatewayUrl`; without that deployment value,
+the plugin keeps its behavioral hooks but does not invent an MCP endpoint. An
+explicit config entry must include `oauth: false`.
 
 For a standalone repository whose directory name matches a registered gateway
 route, the plugin can be used with zero repository mappings. Keep the explicit
@@ -111,16 +117,28 @@ Users do not register Hindsight, CocoIndex, or Serena separately. Do not add a
 second gateway entry through OpenChamber's Settings -> MCP; OpenChamber should
 use the OpenCode server's resolved configuration.
 
-### Kubernaut worktree indexes
+### Configured worktree indexes
 
-On the `kubernaut` route, the Engram OpenCode plugin watches OpenCode's
-`worktree.updated` events and automatically runs `zg --index` for each sibling
-worktree that does not have a usable local index. It also reconciles the
-worktree inventory when the plugin starts, so a worktree created while the
-event stream was disconnected is not missed. The canonical Kubernaut checkout
-is left unchanged. Each sibling worktree gets its own `.zvec-grep` index, using
-the local `local/potion-code-16m-v2` embedding by default; no code is sent to a
-remote embedding service by this default.
+The plugin reads deployment-local policy from `~/.engram/opencode.json`. No
+project receives automatic indexing implicitly; list each route explicitly:
+
+```json
+{
+  "worktreeIndex": {
+    "projects": ["<project-route>"],
+    "binary": "~/bin/zg",
+    "embedding": "local/potion-code-16m-v2"
+  }
+}
+```
+
+For every configured route, the plugin watches OpenCode's
+`worktree.updated` events and runs `zg --index` for each sibling worktree that
+does not have a usable local index. It also reconciles the worktree inventory
+when the plugin starts, so a worktree created while the event stream was
+disconnected is not missed. The canonical checkout is left unchanged. Each
+sibling worktree gets its own `.zvec-grep` index; the local embedding setting
+keeps source code on the host.
 
 ZG's manifest does not record Git branch or commit provenance. After a
 successful setup, the plugin therefore writes an Engram-owned
@@ -131,24 +149,25 @@ Index operations are serialized and a checkout that changes during a rebuild
 gets a follow-up rebuild rather than being marked fresh with the old revision.
 
 The default executable is `~/bin/zg` when present, otherwise `zg` from `PATH`.
-Override the executable or embedding in the plugin options when needed:
+Set `binary` or `embedding` in the deployment-local policy when needed. An
+explicit OpenCode plugin option can temporarily override the file for testing,
+but persistent identity and indexing configuration belongs under `~/.engram/`:
 
 ```jsonc
 {
   "plugins": [{
     "package": "/path/to/engram/opencode-plugin",
     "options": {
-      "zvecBinary": "/path/to/zg",
-      "zvecEmbedding": "local/potion-code-16m-v2",
-      "autoIndexKubernautWorktrees": false
+      "worktreeIndex": {
+        "projects": ["<project-route>"],
+        "binary": "/path/to/zg",
+        "embedding": "local/potion-code-16m-v2"
+      }
     }
   }]
 }
 ```
 
-`autoIndexKubernautWorktrees` defaults to enabled only for the exact
-`kubernaut` route; set it to `false` to opt out, or explicitly to `true` to
-enable indexing for another project route such as `kubernaut-console`.
 OpenChamber-created worktrees are covered when OpenChamber delegates worktree
 operations to the OpenCode server. A client that creates Git worktrees outside
 OpenCode's worktree API does not emit this event and needs a Git-level hook

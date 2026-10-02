@@ -82,6 +82,18 @@ class TestSearchCode:
         engram_search.search_code("   ", mode="bm25")
         assert capture == []
 
+    def test_punctuation_is_tokenized_before_building_tsquery(self, engram_search, monkeypatch):
+        capture = self._capture_queries(engram_search, monkeypatch)
+        engram_search.search_code("storage/index: error (foo & bar)", mode="bm25")
+
+        assert len(capture) == 1
+        assert capture[0][1] == ("storage:* & index:* & error:* & foo:* & bar:*",) * 2 + (30,)
+
+    def test_punctuation_only_query_in_bm25_mode_issues_no_query(self, engram_search, monkeypatch):
+        capture = self._capture_queries(engram_search, monkeypatch)
+        engram_search.search_code("/ : & ()", mode="bm25")
+        assert capture == []
+
     def test_connection_is_always_closed(self, engram_search, monkeypatch):
         capture = self._capture_queries(engram_search, monkeypatch)
         closed = []

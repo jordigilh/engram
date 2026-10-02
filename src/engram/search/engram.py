@@ -17,6 +17,7 @@ Usage:
 import argparse
 import logging
 import pathlib
+import re
 import sys
 from typing import Any
 
@@ -49,6 +50,7 @@ CODE_TABLE = sql_identifier(
     PROJECT_SETTINGS.text("code_table", "engram_code_embeddings") or "engram_code_embeddings",
     "project 'engram' code_table",
 )
+SEARCH_PROJECT = "engram"
 EMBEDDING_MODEL = PROJECT_SETTINGS.text("embedding_model", DEFAULT_EMBEDDING_MODEL)
 assert EMBEDDING_MODEL is not None
 RRF_K = 60  # RRF constant — standard value from the original paper
@@ -57,6 +59,8 @@ RRF_K = 60  # RRF constant — standard value from the original paper
 # walks the exact same checkout the ingestion flow indexes.
 ENGRAM_REPO_DIR = PROJECT_SETTINGS.path("repo_dir", str(default_project_path("engram")))
 assert ENGRAM_REPO_DIR is not None
+CALL_GRAPH_ROOT = ENGRAM_REPO_DIR
+CALL_GRAPH_LANGUAGE = "python"
 
 _EXCLUDED_PY_PATTERNS = [
     "**/__pycache__/**", "**/.pytest_cache/**", "**/.git/**",
@@ -71,6 +75,37 @@ _PATTERN_SEARCH_ROOTS = [
 ]
 
 _model = None
+
+
+def configure_project(
+    *,
+    project: str,
+    pg_url: str,
+    code_table: str,
+    embedding_model: str,
+    pattern_roots: list[tuple[str, pathlib.Path, list[str], list[str]]],
+    call_graph_root: pathlib.Path | None = None,
+    call_graph_language: str = "python",
+) -> None:
+    """Configure this reusable search engine for a deployment project.
+
+    The historical ``engram`` entrypoint keeps its original defaults.  The
+    generic configured entrypoint calls this once at startup with values from
+    ``projects.toml``; keeping the algorithm here avoids one source module per
+    project.
+    """
+    global CODE_TABLE, EMBEDDING_MODEL, PG_URL, SEARCH_PROJECT
+    global CALL_GRAPH_ROOT, CALL_GRAPH_LANGUAGE, _PATTERN_SEARCH_ROOTS, _model
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", code_table):
+        raise ValueError(f"unsafe code table: {code_table!r}")
+    CODE_TABLE = code_table
+    EMBEDDING_MODEL = embedding_model
+    PG_URL = pg_url
+    SEARCH_PROJECT = project
+    _PATTERN_SEARCH_ROOTS = pattern_roots
+    CALL_GRAPH_ROOT = call_graph_root or (pattern_roots[0][1] if pattern_roots else ENGRAM_REPO_DIR)
+    CALL_GRAPH_LANGUAGE = call_graph_language
+    _model = None
 
 
 def _get_model():
@@ -142,9 +177,11 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                 ]
 
             if mode in ("hybrid", "bm25"):
-                tsquery = " & ".join(
-                    t + ":*" for t in query.split() if t.strip()
-                )
+                # `to_tsquery` treats punctuation such as `/`, `:`, `&`, and
+                # parentheses as query-language operators. Build prefix terms
+                # only from lexical tokens so ordinary user text like
+                # "storage/index error" cannot turn into a tsquery syntax error.
+                tsquery = " & ".join(f"{token}:*" for token in re.findall(r"\w+", query))
                 if tsquery:
                     cur.execute(
                         f"""
@@ -269,7 +306,11 @@ def _format_pattern_results(pattern: str, language: str, results: list[dict]) ->
 
 def _build_graph_with_timing():
     return callgraph.build_call_graph_with_stats(
-        ENGRAM_REPO_DIR, included=["**/*.py"], excluded=_EXCLUDED_PY_PATTERNS, language="python", logger=log,
+        CALL_GRAPH_ROOT,
+        included=["**/*"],
+        excluded=_EXCLUDED_PY_PATTERNS,
+        language=CALL_GRAPH_LANGUAGE,
+        logger=log,
     )
 
 
@@ -318,15 +359,22 @@ def _format_lookup_error(result: dict) -> str:
 # MCP server
 # ---------------------------------------------------------------------------
 
-def _run_mcp_server(host: str = "127.0.0.1", port: int = 8890, transport: str = "stdio") -> None:
+def _run_mcp_server(
+    host: str = "127.0.0.1",
+    port: int = 8890,
+    transport: str = "stdio",
+    project: str | None = None,
+) -> None:
     # mcp==2.0.0 (2026-08-22 dependabot bump) renamed FastMCP to MCPServer
     # and moved host/port from the constructor to run(). See
     # docs/findings/2026-08.md's 2026-08-27 entry.
     from engram import mcp_compat  # 1.x/2.x compat (mcp<2.0 pinned)
 
-    mcp = mcp_compat.make_server("engram-code", host=host, port=port)
+    project_name = project or SEARCH_PROJECT
+    tool_prefix = f"{project_name}_"
+    mcp = mcp_compat.make_server(f"{project_name}-code", host=host, port=port)
 
-    @mcp.tool()
+    @mcp.tool(name=f"{tool_prefix}code_search")
     def engram_code_search(query: str, limit: int = 10) -> str:
         """Hybrid code search over the Engram tooling codebase.
 
@@ -341,7 +389,7 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8890, transport: str = 
         results = search_code(query, limit=min(limit, 20))
         return _format_results(query, results)
 
-    @mcp.tool()
+    @mcp.tool(name=f"{tool_prefix}code_pattern_search")
     def engram_code_pattern_search(pattern: str, language: str = "python", limit: int = 10) -> str:
         r"""Structural ("by-example") code search over the Engram tooling codebase.
 
@@ -361,7 +409,7 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8890, transport: str = 
         results = pattern_search_code(pattern, language, limit=min(limit, 20))
         return _format_pattern_results(pattern, language, results)
 
-    @mcp.tool()
+    @mcp.tool(name=f"{tool_prefix}call_graph_blast_radius")
     def engram_call_graph_blast_radius(function: str, depth: int = 2) -> str:
         """What (transitively) calls `function` in the Engram tooling codebase,
         up to `depth` hops -- "what breaks if I change this."
@@ -378,7 +426,7 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8890, transport: str = 
         result = call_graph_blast_radius(function, depth=depth)
         return _format_blast_radius_result(result)
 
-    @mcp.tool()
+    @mcp.tool(name=f"{tool_prefix}call_graph_shortest_path")
     def engram_call_graph_shortest_path(source: str, target: str) -> str:
         """Does `source` ever reach `target` through a chain of calls in the
         Engram tooling codebase, and how.
@@ -389,7 +437,7 @@ def _run_mcp_server(host: str = "127.0.0.1", port: int = 8890, transport: str = 
         result = call_graph_shortest_path(source, target)
         return _format_shortest_path_result(result)
 
-    @mcp.tool()
+    @mcp.tool(name=f"{tool_prefix}call_graph_get_cluster")
     def engram_call_graph_get_cluster(function: str) -> str:
         """Which cluster of related functions (via Leiden community detection
         over the call graph) `function` belongs to in the Engram tooling

@@ -23,8 +23,8 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from engram.project_config import (  # noqa: E402
     DEFAULT_HINDSIGHT_URL,
+    load_configured_mental_models,
     load_default_settings,
-    load_project_configs,
 )
 
 DEPLOYMENT_SETTINGS = load_default_settings()
@@ -397,16 +397,10 @@ MENTAL_MODELS = [
     },
 ]
 
-PROJECT_CONFIGS = load_project_configs()
-_CONFIGURED_MODEL_IDS = {
-    (bank, model_id)
-    for config in PROJECT_CONFIGS.values()
-    for bank, model_ids in config["mental_models"].items()
-    for model_id in model_ids
-}
-MENTAL_MODELS = [
-    model for model in MENTAL_MODELS if (model["bank"], model["id"]) in _CONFIGURED_MODEL_IDS
-]
+# Built-in models preserve the historical installation. New project models
+# are declarative records in projects.toml and are appended without a source
+# change.
+MENTAL_MODELS.extend(load_configured_mental_models())
 
 
 def api_request(method, path, payload=None):
@@ -453,7 +447,7 @@ def refresh_model(bank: str, model_id: str) -> bool:
 
 
 def list_models():
-    banks = sorted({bank for config in PROJECT_CONFIGS.values() for bank in config["banks"]})
+    banks = sorted({model["bank"] for model in MENTAL_MODELS})
     for bank in banks:
         result = api_request("GET", f"/v1/default/banks/{bank}/mental-models")
         items = result.get("items", [])

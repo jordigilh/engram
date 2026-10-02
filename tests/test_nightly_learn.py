@@ -892,9 +892,9 @@ class TestProjectConfigsEngram:
         assert "jordigilh/kubernaut" in nightly_learn.PROJECT_CONFIGS["kubernaut"]["issues_repos"]
         assert len(nightly_learn.PROJECT_CONFIGS["kubernaut"]["issues_repos"]) == 5
         assert "dcm-project/dcm" in nightly_learn.PROJECT_CONFIGS["dcm"]["issues_repos"]
-        # 13 dcm-project repos + osac-project/osac (upstream OSAC backend,
+        # 12 dcm-project repos + osac-project/osac (upstream OSAC backend,
         # read-only, folded into dcm -- see engram.flows.dcm's DCM_OSAC_DIR).
-        assert len(nightly_learn.PROJECT_CONFIGS["dcm"]["issues_repos"]) == 14
+        assert len(nightly_learn.PROJECT_CONFIGS["dcm"]["issues_repos"]) == 13
         assert "osac-project/osac" in nightly_learn.PROJECT_CONFIGS["dcm"]["issues_repos"]
 
 

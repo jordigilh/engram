@@ -29,22 +29,7 @@ from datetime import date, datetime, timedelta
 from glob import glob
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from engram.project_config import (  # noqa: E402
-    DEFAULT_HINDSIGHT_URL,
-    DEFAULT_PG_DSN,
-    load_all_project_settings,
-    load_default_settings,
-    load_project_configs,
-)
-
-DEPLOYMENT_SETTINGS = load_default_settings()
-HINDSIGHT_URL = DEPLOYMENT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
-assert HINDSIGHT_URL is not None
-PG_DSN = DEPLOYMENT_SETTINGS.text("pg_dsn", DEFAULT_PG_DSN)
-assert PG_DSN is not None
-LOG_DIR = DEPLOYMENT_SETTINGS.path("log_dir", "~/.engram/logs")
-assert LOG_DIR is not None
+LOG_DIR = Path.home() / ".engram" / "logs"
 MCP_CALLS_LOG = LOG_DIR / "mcp-calls.jsonl"
 # Written by engram_gateway.py's handle_tools_call(), distinct from
 # MCP_CALLS_LOG above (a client-side Cursor hook whose result_chars is
@@ -58,28 +43,110 @@ RECALL_SIGNALS_LOG = LOG_DIR / "recall-signals.jsonl"
 PREFILTER_SHADOW_LOG = LOG_DIR / "prefilter-shadow.jsonl"
 PENDING_CONTRADICTIONS_LOG = LOG_DIR / "contradictions-pending.jsonl"
 FALLBACK_RETAINED_LOG = LOG_DIR / "fallback-retained.jsonl"
-TRANSCRIPTS_ROOT = DEPLOYMENT_SETTINGS.path("transcripts_dir", "~/.cursor/projects")
-assert TRANSCRIPTS_ROOT is not None
-TRANSCRIPTS_GLOB = str(TRANSCRIPTS_ROOT / "*" / "agent-transcripts" / "**" / "*.jsonl")
-PROJECTS_ROOT = TRANSCRIPTS_ROOT
+TRANSCRIPTS_GLOB = os.path.expanduser("~/.cursor/projects/*/agent-transcripts/**/*.jsonl")
+PROJECTS_ROOT = Path(os.path.expanduser("~/.cursor/projects"))
 
-# Loaded from the same deployment-local catalog as nightly-learn.py. Used to
-# scope mcp_calls (by project_dir), transcripts (by workspace_prefixes), and
-# recall probes (by bank) to a single project instead of blending them.
-PROJECT_CONFIGS = load_project_configs()
-
-PROJECT_SETTINGS_BY_NAME = load_all_project_settings()
-
-
-def _project_path(project: str, key: str, default: str | None = None) -> Path | None:
-    settings = PROJECT_SETTINGS_BY_NAME.get(project)
-    if settings is None:
-        return Path(default).expanduser() if default is not None else None
-    return settings.path(key, default)
-
-
-def _coverage_prefix(project: str) -> str:
-    return PROJECT_CONFIGS.get(project, {}).get("coverage_prefix", "")
+# Keep in sync with PROJECT_CONFIGS in nightly-learn.py. Used to scope
+# mcp_calls (by project_dir), transcripts (by workspace_prefixes), and
+# recall probes (by bank) to a single project instead of blending both
+# together -- see docs/FINDINGS.md 2026-07-09 for why this matters (the
+# CLI report was silently combining kubernaut + dcm numbers even though the
+# underlying per-project snapshot JSON files were already correctly scoped).
+PROJECT_CONFIGS = {
+    "kubernaut": {
+        "banks": ["cursor-memory", "kubernaut-docs", "kubernaut-issues"],
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-jordigilh-kubernaut"],
+        "log_suffix": "",
+        "issues_repos": [
+            "jordigilh/kubernaut",
+            "jordigilh/kubernaut-operator",
+            "jordigilh/kubernaut-console",
+            "jordigilh/kubernaut-demo-scenarios",
+            "jordigilh/kubernaut-docs",
+        ],
+    },
+    "dcm": {
+        "banks": ["cursor-memory", "dcm-docs", "dcm-issues"],
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-dcm-project-"],
+        "log_suffix": "-dcm",
+        "issues_repos": [
+            "dcm-project/dcm",
+            "dcm-project/control-plane",
+            "dcm-project/cli",
+            "dcm-project/kubevirt-service-provider",
+            "dcm-project/k8s-container-service-provider",
+            "dcm-project/acm-cluster-service-provider",
+            "dcm-project/three-tier-app-demo-service-provider",
+            "dcm-project/utilities",
+            "dcm-project/dcm-project.github.io",
+            "dcm-project/enhancements",
+            "dcm-project/shared-workflows",
+            "dcm-project/quadlet-deploy",
+        ],
+    },
+    "engram": {
+        # No issues_repos: this repo has zero GitHub issues.
+        "banks": ["cursor-memory", "engram-docs"],
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-jordigilh-engram"],
+        "log_suffix": "-engram",
+    },
+    "koku": {
+        "banks": ["cursor-memory", "koku-docs", "koku-issues"],
+        # Two prefixes: current checkout path + older insights-onprem-koku*
+        # sessions that predate the allowlist -- see project_scope.py.
+        "workspace_prefixes": [
+            "Users-jgil-go-src-github-com-project-koku",
+            "Users-jgil-go-src-github-com-insights-onprem-koku",
+        ],
+        "log_suffix": "-koku",
+        # koku-service-operator (2026-08-10) folded into this scope -- see
+        # koku-cocoindex-flows.py's module docstring.
+        "issues_repos": ["project-koku/koku", "project-koku/koku-service-operator"],
+    },
+    "praxis": {
+        "banks": ["cursor-memory", "praxis-docs", "praxis-issues"],
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-praxis-proxy"],
+        "log_suffix": "-praxis",
+        # pingora deliberately excluded -- see nightly-learn.py's matching entry.
+        "issues_repos": [
+            "praxis-proxy/praxis",
+            "praxis-proxy/conventions",
+            "praxis-proxy/praxis-proxy.github.io",
+            "praxis-proxy/ai",
+            "praxis-proxy/benchmarks",
+            "praxis-proxy/forge",
+            "praxis-proxy/policy",
+            "praxis-proxy/operator",
+            "praxis-proxy/experimental",
+            "praxis-proxy/grid",
+            "praxis-proxy/demos",
+            "praxis-proxy/enhancements",
+        ],
+    },
+    # rhdh-plugins: REMOVED -- no longer contributing to this project
+    # (2026-09-09). Services disabled, databases dropped, gateway entry
+    # removed. Entry kept as a comment so history is clear.
+    # kuadrant: ingestion-only prior-art reference for praxis-proxy -- see
+    # nightly-learn.py's matching entry for the full scoping rationale.
+    # No cursor-memory: no Cursor workspace is ever opened against these 9
+    # read-only reference checkouts, so there's no dev-session signal.
+    "kuadrant": {
+        "banks": ["kuadrant-docs", "kuadrant-issues"],
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-Kuadrant"],
+        "log_suffix": "-kuadrant",
+        "issues_repos": [
+            "Kuadrant/kuadrant-operator",
+            "Kuadrant/limitador",
+            "Kuadrant/wasm-shim",
+            "Kuadrant/architecture",
+            "Kuadrant/authorino",
+            "Kuadrant/dns-operator",
+            "Kuadrant/authorino-operator",
+            "Kuadrant/limitador-operator",
+            "Kuadrant/mcp-gateway",
+        ],
+    },
+}
 
 CORRECTION_PATTERNS = [
     re.compile(r"\bno[,.]?\s+that'?s\s+(not|wrong|incorrect)", re.I),
@@ -463,7 +530,7 @@ def collect_mental_model_stats(project: str | None = None) -> list[dict]:
     results = []
     for bank in banks:
         try:
-            url = f"{HINDSIGHT_URL}/v1/default/banks/{bank}/mental-models"
+            url = f"http://localhost:8888/v1/default/banks/{bank}/mental-models"
             with urllib.request.urlopen(url, timeout=10) as resp:
                 data = json.loads(resp.read())
             for m in data.get("items", []):
@@ -525,58 +592,46 @@ def collect_ingestion_coverage(project: str | None = None) -> dict:
         if got_any:
             coverage[kind] = {"total": total}
 
-    # Bank document counts from Hindsight API. Project/bank ownership and
-    # report-key prefixes are deployment-local rather than hardcoded here.
-    for project_name, config in PROJECT_CONFIGS.items():
-        prefix = _coverage_prefix(project_name)
-        for bank_id in config.get("banks", []):
-            if bank_id.endswith("-issues"):
-                kind = "issues"
-            elif bank_id.endswith("-docs"):
-                kind = "docs"
-            else:
-                continue
-            try:
-                url = f"{HINDSIGHT_URL}/v1/default/banks/{bank_id}"
-                with urllib.request.urlopen(url, timeout=10) as resp:
-                    data = json.loads(resp.read())
-                coverage[f"{prefix}{kind}_indexed"] = data.get("total_documents", 0)
-            except Exception:
-                pass
+    # Bank document counts from Hindsight API
+    for bank_id, cov_key in [("kubernaut-issues", "issues_indexed"), ("kubernaut-docs", "docs_indexed"),
+                              ("dcm-issues", "dcm_issues_indexed"), ("dcm-docs", "dcm_docs_indexed"),
+                              ("engram-docs", "engram_docs_indexed"),
+                              ("praxis-issues", "praxis_issues_indexed"), ("praxis-docs", "praxis_docs_indexed")]:
+        try:
+            url = f"http://localhost:8888/v1/default/banks/{bank_id}"
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                data = json.loads(resp.read())
+            coverage[cov_key] = data.get("total_documents", 0)
+        except Exception:
+            pass
 
-    # Docs: count markdown files on the configured project paths.
-    coverage_projects = [project] if project else list(PROJECT_CONFIGS)
-    for project_name in coverage_projects:
-        prefix = _coverage_prefix(project_name)
-        docs_dir = _project_path(project_name, "docs_dir")
-        code_docs_dir = _project_path(project_name, "code_docs_dir")
-        if code_docs_dir is None:
-            repo_dir = _project_path(project_name, "repo_dir")
-            code_dir = _project_path(project_name, "code_dir")
-            code_docs_dir = (repo_dir or code_dir) / "docs" if (repo_dir or code_dir) else None
-        if docs_dir is not None:
-            try:
-                coverage[f"{prefix}docs_published"] = {"total": len(list(docs_dir.rglob("*.md")))}
-            except Exception:
-                pass
-        if code_docs_dir is not None:
-            try:
-                coverage[f"{prefix}docs_repo"] = {"total": len(list(code_docs_dir.rglob("*.md")))}
-            except Exception:
-                pass
+    # Docs: count markdown files on disk
+    docs_dir = os.environ.get("ENGRAM_DOCS_DIR", os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-docs/docs"))
+    code_docs_dir = os.environ.get("ENGRAM_CODE_DOCS_DIR", os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut/docs"))
+    try:
+        published = len(list(Path(docs_dir).rglob("*.md")))
+        coverage["docs_published"] = {"total": published}
+    except Exception:
+        pass
+    try:
+        repo_docs = len(list(Path(code_docs_dir).rglob("*.md")))
+        coverage["docs_repo"] = {"total": repo_docs}
+    except Exception:
+        pass
 
-    # Code index: row count from deployment-configured pgvector tables.
-    for project_name, config in PROJECT_CONFIGS.items():
-        table = config.get("code_table")
-        if not isinstance(table, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table):
-            continue
+    # Code index: row count from pgvector tables
+    for table, key in [("code_embeddings", "code_chunks"), ("dcm_code_embeddings", "dcm_code_chunks"),
+                        ("engram_code_embeddings", "engram_code_chunks"), ("koku_code_embeddings", "koku_code_chunks"),
+                        ("praxis_code_embeddings", "praxis_code_chunks")]:
         try:
             result = subprocess.run(
-                ["psql", PG_DSN, "-t", "-c", f"SELECT count(*) FROM cocoindex.{table};"],
+                ["psql", "-h", "localhost", "-p", "5432", "-U", "hindsight", "-d", "hindsight",
+                 "-t", "-c", f"SELECT count(*) FROM cocoindex.{table};"],
                 capture_output=True, text=True, timeout=10,
+                env={**os.environ, "PGPASSWORD": "hindsight"},
             )
             if result.returncode == 0:
-                coverage[f"{_coverage_prefix(project_name)}code_chunks"] = int(result.stdout.strip())
+                coverage[key] = int(result.stdout.strip())
         except Exception:
             pass
 
@@ -769,8 +824,8 @@ def collect_freshness_stats() -> dict:
     only log a "Starting ... (live, file-watching)" line once at process
     startup — there is no periodic "still watching, nothing changed" or
     per-file "indexed X" log line to key off, and no updated_at column in the
-    underlying pgvector tables either (the configured code tables have no
-    timestamp column). So for these three, this function can only report
+    underlying pgvector tables either (checked: cocoindex.code_embeddings has
+    no timestamp column). So for these three, this function can only report
     "time since the watcher process last (re)started", NOT "time since data
     was last actually indexed" — a healthy idle watcher with no local edits
     looks identical to a dead one by this signal alone. Callers must treat
@@ -778,7 +833,7 @@ def collect_freshness_stats() -> dict:
     verdict. See docs/FINDINGS.md 2026-07-07.
     """
     freshness = {}
-    stderr_log = LOG_DIR / "cocoindex-stderr.log"
+    stderr_log = Path.home() / ".engram" / "logs" / "cocoindex-stderr.log"
 
     if not stderr_log.exists():
         return freshness

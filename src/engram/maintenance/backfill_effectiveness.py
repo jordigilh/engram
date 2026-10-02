@@ -49,30 +49,13 @@ from pathlib import Path
 # here -- no importlib.util isolated-exec needed.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from engram.pipeline import nightly_learn as nl  # noqa: E402
-from engram.project_config import load_all_project_settings  # noqa: E402
 
-
-def _load_nightly_run_times() -> dict[str, tuple[int, int]]:
-    result: dict[str, tuple[int, int]] = {}
-    for project, settings in load_all_project_settings().items():
-        raw = settings.get("nightly_run_time")
-        if raw is None:
-            continue
-        if not isinstance(raw, str) or ":" not in raw:
-            raise ValueError(f"project {project!r} nightly_run_time must be HH:MM")
-        hour_text, minute_text = raw.split(":", 1)
-        try:
-            hour, minute = int(hour_text), int(minute_text)
-        except ValueError as exc:
-            raise ValueError(f"project {project!r} nightly_run_time must be HH:MM") from exc
-        if not (0 <= hour <= 23 and 0 <= minute <= 59):
-            raise ValueError(f"project {project!r} nightly_run_time must be HH:MM")
-        result[project] = (hour, minute)
-    return result
-
-
-# Each project's scheduled run time is deployment-local configuration.
-NIGHTLY_RUN_TIME = _load_nightly_run_times()
+# (hour, minute) each project's nightly launchd job is scheduled to start,
+# per ~/Library/LaunchAgents/io.vectorize.hindsight.nightly{,-dcm}.plist.
+NIGHTLY_RUN_TIME = {
+    "kubernaut": (2, 1),
+    "dcm": (2, 31),
+}
 
 
 def backfill_one(project: str, json_path: Path, dry_run: bool) -> bool:
@@ -185,7 +168,7 @@ def main():
         with open(nl.EFFECTIVENESS_LOG) as f:
             pre_backfill_line_count = sum(1 for _ in f)
 
-    for project in NIGHTLY_RUN_TIME:
+    for project in ("kubernaut", "dcm"):
         suffix = nl.PROJECT_CONFIGS[project]["log_suffix"]
         print(f"\n=== {project} ===")
         d = since

@@ -3,11 +3,14 @@
 **Status:** The local gateway integration now routes Kubernaut and
 `kubernaut-operator` code tools to zvec-grep as primary and schedules CocoIndex
 comparisons asynchronously for semantic search and comparable Go core/operator
-graph calls. The native gateway route is active for both live worktrees; quality
-gates remain open because this pilot is exploratory and has no adjudicated
-relevance labels. Other Kubernaut-family routes remain on the shared CocoIndex
-backend. zvec-grep exposes root-scoped, fresh callgraph MCP tools for Go, Rust,
-TypeScript/TSX, and Python.
+graph calls. The native gateway also routes the live `kubernaut-operator`
+checkout and explicitly enabled indexed `praxis-proxy` checkouts to zvec-grep;
+routes without a ready authorized workspace index remain on CocoIndex. The
+route is selected inside Engram, so clients keep one Engram MCP entry and do
+not register zg directly. Quality gates remain open because this pilot is
+exploratory and has no adjudicated relevance labels. Other Kubernaut-family
+routes remain on the shared CocoIndex backend. zvec-grep exposes root-scoped,
+fresh callgraph MCP tools for Go, Rust, TypeScript/TSX, and Python.
 
 **Date:** 2026-09-22
 
@@ -398,12 +401,12 @@ failure when it is actually missing the current branch's symbols.
 
 The current deployment is still a single shared Kubernaut code-ingestion/search
 process. The `kubernaut` and `kubernaut-operator` routes use zvec-grep as the
-primary live-worktree backend and share its asynchronous CocoIndex shadow. zvec
-follows branch changes inside each configured live checkout, but separate
-simultaneous worktrees need separate scoped processes or a future
-worktree/commit namespace in `code_embeddings`; they must not share one
-unqualified row set. That is an explicit follow-up before claiming full
-multi-session branch isolation.
+primary live-worktree backend and share its asynchronous CocoIndex shadow;
+other family routes remain on the shared CocoIndex backend. zvec follows branch
+changes inside each configured live checkout, but separate simultaneous
+worktrees need separate scoped processes or a future worktree/commit namespace
+in `code_embeddings`; they must not share one unqualified row set. That is an
+explicit follow-up before claiming full multi-session branch isolation.
 
 ## Historical Kubernaut Codanna Evaluation
 
@@ -418,6 +421,14 @@ shared CocoIndex backend.
 The primary URL defaults to `http://127.0.0.1:7999/mcp` and can be overridden
 with `ZVEC_GREP_MCP_URL`; the shadow URL defaults to
 `http://127.0.0.1:8891/mcp` and can be overridden with `COCOINDEX_MCP_URL`.
+The URL is an HTTP listener, not an executable path. On macOS, the
+`io.vectorize.zvec-grep` LaunchAgent runs the published multi-architecture Rust
+image through `scripts/run-zvec-grep-container.sh`; `zg` remains bound to
+loopback inside the container and a namespace-local bridge exposes only host
+`127.0.0.1:7999`. The native gateway continues to use
+`http://127.0.0.1:7999/mcp`. The image contains the matching Linux
+`libzvec_c_api.so` and Jieba dictionaries, so the host's macOS library path is
+not used by this backend.
 The comparison log is `~/.engram/logs/zvec-cocoindex-shadow.jsonl`. It records
 query/tool arguments, canonical root, branch, commit, dirty state, both full
 responses, per-backend latency, and shadow errors. A shadow is issued only when
@@ -430,8 +441,8 @@ differences for graph queries. These are continuous discrepancy indicators,
 not adjudicated relevance labels. The replay snapshot is also retained in
 `~/.engram/zvec-grep/live-shadow-acceptance-authoritative.jsonl`.
 
-The zvec-grep agent toolset now exposes search and root-scoped callgraph
-blast-radius, shortest-path, cluster, and communities tools; `full` adds index,
+The zvec-grep agent toolset now exposes `zvec_search_code` and root-scoped
+callgraph blast-radius, shortest-path, cluster, and communities tools; `full` adds index,
 status, and managed-rg operations. The local CodeGraph MCP remains available
 for exact, type-resolved navigation. This gateway change is implemented and
 unit-tested and active behind the Kubernaut Engram route (container front door
@@ -440,6 +451,16 @@ indexed the current worktree's matched production-Go scope at 1,071 files and
 17,615 entities, then completed seven semantic comparisons and two graph
 comparisons. Keep the gateway shadow log under observation; this exploratory
 sample is not an acceptance decision.
+
+Praxis routes follow the same gateway pattern: explicitly enabled
+`praxis-proxy` checkouts resolve to the zvec HTTP backend from the native
+Engram registry, while each OpenCode workspace continues to use only its own
+`/mcp/<project>` path on the Engram front door. Engram exposes zg semantic and
+Graphify-style call-graph tools there. CocoIndex remains available only for
+the legacy pattern-search compatibility surface; its duplicate call-graph
+tools are removed from an enabled route's catalog, so graph calls go to zg.
+`ENGRAM_ZVEC_PROJECTS` controls which Praxis routes are enabled; only add a
+route after its local `.zvec-grep` index is ready and authorized.
 
 On that seven-query snapshot, zvec and CocoIndex agreed on the top file for one
 query; the other top-file rankings differed, with full CocoIndex-only and

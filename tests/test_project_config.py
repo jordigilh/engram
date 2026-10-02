@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from engram.project_config import load_project_settings, project_config_path, sql_identifier
+from engram.project_config import load_adapter_config, load_project_settings, project_config_path, sql_identifier
 
 
 def test_missing_config_is_safe(tmp_path):
@@ -65,3 +65,89 @@ def test_sql_identifier_rejects_injection():
     assert sql_identifier("code_embeddings") == "code_embeddings"
     with pytest.raises(ValueError, match="unsafe"):
         sql_identifier("code_embeddings; DROP TABLE memories")
+
+
+def test_load_adapter_config_is_project_data_not_source_code(tmp_path):
+    config_path = tmp_path / "projects.toml"
+    config_path.write_text(
+        """
+[defaults]
+hindsight_url = "http://hindsight:8888"
+
+[projects.demo]
+docs_bank = "demo-docs"
+issues_bank = "demo-issues"
+code_table = "demo_code_embeddings"
+issues_repos = ["org/demo"]
+workspace_prefixes = ["Users-demo"]
+
+[projects.demo.paths]
+cocoindex_db = "state/demo.db"
+
+[[projects.demo.sources]]
+tag = "demo"
+root = "checkout"
+language = "go"
+docs_include = ["**/*.md"]
+code_include = ["**/*.go"]
+code_exclude = ["**/vendor/**"]
+""".strip()
+    )
+
+    settings = load_adapter_config("demo", config_path)
+
+    assert settings.docs_bank == "demo-docs"
+    assert settings.issues_bank == "demo-issues"
+    assert settings.code_table == "demo_code_embeddings"
+    assert settings.issues_repos == ("org/demo",)
+    assert settings.cocoindex_db == tmp_path / "state/demo.db"
+    assert settings.docs_sources[0].root == tmp_path / "checkout"
+    assert settings.code_sources[0].code_include == ("**/*.go",)
+    assert settings.code_sources[0].language == "go"
+
+
+def test_invalid_code_table_is_rejected():
+    with pytest.raises(ValueError, match="unsafe"):
+        sql_identifier("demo;drop_table")
+
+
+def test_code_only_source_does_not_require_a_docs_bank(tmp_path):
+    config_path = tmp_path / "projects.toml"
+    config_path.write_text(
+        """
+[projects.code]
+code_table = "code_embeddings"
+
+[[projects.code.sources]]
+tag = "repo"
+root = "."
+code_include = ["**/*.rs"]
+""".strip()
+    )
+
+    settings = load_adapter_config("code", config_path)
+
+    assert settings.docs_bank is None
+    assert settings.code_sources[0].code_include == ("**/*.rs",)
+
+
+def test_jira_issue_provider_is_configurable_without_github_repositories(tmp_path):
+    config_path = tmp_path / "projects.toml"
+    config_path.write_text(
+        """
+[projects.jira]
+issues_bank = "jira-issues"
+issue_provider = "jira"
+
+[projects.jira.jira]
+server = "https://jira.example"
+email = "operator@example.com"
+jql = "parent = EX-1 OR key = EX-1 order by created asc"
+""".strip()
+    )
+
+    settings = load_adapter_config("jira", config_path)
+
+    assert settings.issues_provider == "jira"
+    assert settings.jira_jql.startswith("parent = EX-1")
+    assert settings.issues_repos == ()

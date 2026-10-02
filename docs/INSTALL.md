@@ -433,11 +433,13 @@ issue poll cycles completing with the full count of issues + PRs. See
 > was chosen over a dedicated cache service, and for kubernaut's
 > `main`/`release-vX.Y` branch-scoping behavior.
 
-> **Onboarding additional projects**: each project gets its own flow/search
-> modules, console-script entries, deployment table, and flow plist. There is
-> no per-project flow or search symlink. See
-> [NEW_PROJECT_SETUP.md](NEW_PROJECT_SETUP.md) for the checklist, including
-> the tag-scoped variant for sub-repos that do not need a separate pipeline.
+> **Onboarding additional projects**: use the configuration-driven
+> `engram-flows-configured` and `engram-search-configured` entrypoints with a
+> new table in `~/.engram/projects.toml`. Do not add project modules,
+> pyproject entrypoints, symlinks, or source-code registry branches. Render
+> the generic launchd template for the deployment service. See
+> [NEW_PROJECT_SETUP.md](NEW_PROJECT_SETUP.md) for the full walkthrough,
+> including the lighter tag-scoped-recall variant.
 
 ## 17. Reload the client
 

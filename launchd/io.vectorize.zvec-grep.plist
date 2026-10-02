@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.vectorize.zvec-grep</string>
+    <!-- Engram talks to the local MCP HTTP endpoint, not to the zg executable.
+         The wrapper runs the dedicated multi-architecture image and keeps
+         this server on loopback; the native Engram gateway connects to
+         http://127.0.0.1:7999/mcp. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/go/src/github.com/jordigilh/engram/scripts/run-zvec-grep-container.sh</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>PATH</key>
+        <string>__HOME__/go/bin:__HOME__/.local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>ZVEC_GREP_HOME</key>
+        <string>__HOME__/.engram/zvec-grep</string>
+        <key>ZVEC_GREP_CONTAINER_RUNTIME</key>
+        <string>__HOME__/go/bin/docker</string>
+        <key>ZVEC_GREP_CONTAINER_IMAGE</key>
+        <string>quay.io/jordigilh/zvec-grep:zg-v0.0.1-test.3</string>
+        <key>ZVEC_GREP_PROXY_IMAGE</key>
+        <string>localhost/zg-loopback-proxy:local</string>
+    </dict>
+    <!-- ZG keeps several RocksDB/vector index files open across the shared
+         workspace pool. launchd's default soft limit is 256, which causes
+         otherwise healthy workspace searches to fail with EMFILE. -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.engram/logs/zvec-grep-server-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.engram/logs/zvec-grep-server-stderr.log</string>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+</dict>
+</plist>

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Render __PROJECT__ and __HOME__ from deployment-local values. -->
+    <key>Label</key>
+    <string>io.vectorize.cocoindex.__PROJECT__</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.engram/with-config-env.sh</string>
+        <string>__HOME__/.engram/venv/bin/engram-flows-configured</string>
+        <string>--project</string>
+        <string>__PROJECT__</string>
+        <string>--config</string>
+        <string>__HOME__/.engram/projects.toml</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__HOME__/.engram</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.engram/logs/cocoindex-__PROJECT__-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.engram/logs/cocoindex-__PROJECT__-stderr.log</string>
+</dict>
+</plist>

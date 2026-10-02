@@ -23,8 +23,9 @@ The account must be able to read every configured repository, including
 private repositories. Configure the repository list and interval in the
 project's `~/.engram/projects.toml` table:
 
-```bash
+```toml
 [projects.<project>]
+issues_bank = "<project>-issues"
 issues_repos = ["owner/repo", "owner/another-repo"]
 issues_poll_seconds = 300
 ```
@@ -39,8 +40,8 @@ For the shipped flows, the relevant settings are:
 | `dcm` | `projects.dcm.issues_repos` | Issues and pull requests |
 | `koku` | `projects.koku.pr_repos` | Pull requests only; its work items come from Jira |
 
-An unset project table leaves that deployment source unconfigured. For a new
-flow, add a project table rather than editing source after deployment.
+The table below documents legacy specialized flows. New projects use the
+configuration-driven adapter instead of adding another source module.
 
 ## Jira
 
@@ -138,11 +139,10 @@ launchctl bootstrap "gui/$(id -u)" \
 launchctl kickstart -k "gui/$(id -u)/io.vectorize.cocoindex.<project>"
 ```
 
-The plist should run the installed `engram-flows-<project>` console script via
-`~/.engram/with-config-env.sh` may still provide service credentials, but the
-project's Hindsight/Postgres values and paths come from `projects.toml`; pass
-`--apps issues` or the full app set. Deployment-specific paths and source
-mirror configuration belong under `~/.engram`, not in this repository.
+The generic plist runs `engram-flows-configured --project <project>` and reads
+the project's Hindsight/Postgres values and issue repositories from
+`~/.engram/projects.toml`. Deployment-specific paths and source mirror
+configuration belong under `~/.engram`, not in this repository.
 
 ## Verify
 

@@ -10,26 +10,39 @@ redhat-developer-rhdh-plugins, and blank "no folder open" sessions) into
 cursor-memory, not just the projects Engram has actually been onboarded for.
 See docs/FINDINGS.md.
 
-Project labels and workspace prefixes are loaded from the deployment-local
-projects.toml. The generic code does not embed a host's checkout layout.
+Keep in sync with nightly-learn.py's PROJECT_CONFIGS (used there for a
+different purpose -- per-project analytics scoping, i.e. "which onboarded
+project does this transcript belong to" -- vs. this module's "is this
+transcript in scope for the shared retain pipeline at all").
 """
 from __future__ import annotations
 
-from engram.project_config import load_all_project_settings  # noqa: E402
-
-
-def _load_project_label_by_prefix() -> dict[str, str]:
-    """Build the workspace allowlist from deployment-local project config."""
-    labels: dict[str, str] = {}
-    for project, settings in load_all_project_settings().items():
-        for prefix in settings.strings("workspace_prefixes"):
-            labels[prefix] = project
-    return labels
-
-
-# Public derived values remain available to callers; the source of truth is
-# ~/.engram/projects.toml rather than this package.
-PROJECT_LABEL_BY_PREFIX = _load_project_label_by_prefix()
+# Single source of truth for both "is this workspace in scope at all" and
+# "which onboarded project label does it map to" -- added 2026-07-19 after
+# finding every contradictions-pending.jsonl entry had project=null (see
+# docs/FINDINGS.md), because nothing upstream of pending_queue.append_pending()
+# ever resolved a transcript's path back to kubernaut/dcm/engram. Keep this
+# dict, not just a bare prefix list, so both concerns can never drift apart.
+PROJECT_LABEL_BY_PREFIX = {
+    # Covers kubernaut and every kubernaut-* sibling repo (operator,
+    # console-plugin, docs, demo-scenarios, patent, presentation,
+    # test-playbooks, v1-2/3/5/6, apifrontend, ...).
+    "Users-jgil-go-src-github-com-jordigilh-kubernaut": "kubernaut",
+    "Users-jgil-go-src-github-com-dcm-project-": "dcm",
+    # Engram's own dev transcripts -- working on Engram itself produces
+    # genuine coding-hygiene corrections too, not just kubernaut/dcm work.
+    "Users-jgil-go-src-github-com-jordigilh-engram": "engram",
+    # Koku (Python/Django cost-management platform, project-koku org, fork at
+    # jordigilh/koku). Two local checkout prefixes are onboarded because real
+    # work happened under both: the current "project-koku" path and older
+    # "insights-onprem-koku"/"insights-onprem-koku-pr5933" sessions (e.g.
+    # COST-7249 work) that predate this allowlist and were previously swept
+    # into cursor-memory as unfiltered pollution -- see this module's
+    # docstring. Onboarding both recovers that history under the koku label
+    # going forward instead of leaving it unlabeled.
+    "Users-jgil-go-src-github-com-project-koku": "koku",
+    "Users-jgil-go-src-github-com-insights-onprem-koku": "koku",
+}
 
 ALLOWED_WORKSPACE_PREFIXES = list(PROJECT_LABEL_BY_PREFIX.keys())
 

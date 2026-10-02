@@ -22,6 +22,8 @@ DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_POOL_MIN_SIZE = 2
 DEFAULT_POOL_MAX_SIZE = 5
 _SQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_BANK_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def project_config_path(config_path: str | os.PathLike[str] | None = None) -> pathlib.Path:
@@ -43,8 +45,13 @@ def _load_document(config_path: str | os.PathLike[str] | None = None) -> tuple[p
     path = project_config_path(config_path)
     if not path.exists():
         return path, {}
-    with path.open("rb") as stream:
-        document = tomllib.load(stream)
+    try:
+        with path.open("rb") as stream:
+            document = tomllib.load(stream)
+    except OSError as exc:
+        raise ValueError(f"cannot read project config {path}: {exc}") from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"invalid project config {path}: {exc}") from exc
     if not isinstance(document, dict):
         raise ValueError(f"project config {path} must contain a TOML table")
     return path, document
@@ -190,71 +197,217 @@ def load_all_project_settings(
     return result
 
 
-def load_project_configs(
-    config_path: str | os.PathLike[str] | None = None,
-) -> dict[str, dict[str, Any]]:
-    """Return normalized project metadata used by maintenance/reporting code.
-
-    The shape deliberately matches the historical ``PROJECT_CONFIGS`` public
-    mapping so callers can keep using the existing reporting helpers while
-    the deployment-specific catalog lives in TOML.
-    """
-    configs: dict[str, dict[str, Any]] = {}
-    for project, settings in load_all_project_settings(config_path).items():
-        config: dict[str, Any] = {
-            "banks": list(settings.strings("banks")),
-            "mental_models": {},
-            "probes": [],
-            "recall_banks": set(settings.strings("recall_banks")),
-            "workspace_prefixes": list(settings.strings("workspace_prefixes")),
-            "log_suffix": _text_value(settings, "log_suffix", "") or "",
-        }
-
-        for bank, model_ids in settings.table("mental_models").items():
-            if not isinstance(model_ids, list) or not all(
-                isinstance(model_id, str) and model_id.strip() for model_id in model_ids
-            ):
-                raise ValueError(
-                    f"project {project!r} setting 'mental_models.{bank}' must be a string array"
-                )
-            config["mental_models"][bank] = tuple(model_id.strip() for model_id in model_ids)
-
-        for probe in settings.records("probes"):
-            bank = probe.get("bank")
-            query = probe.get("query")
-            if not isinstance(bank, str) or not bank.strip() or not isinstance(query, str) or not query.strip():
-                raise ValueError(
-                    f"project {project!r} probe entries require non-empty 'bank' and 'query' strings"
-                )
-            config["probes"].append((bank.strip(), query.strip()))
-
-        for key in ("code_bank", "coverage_prefix"):
-            value = _text_value(settings, key)
-            if value is not None:
-                config[key] = value
-
-        if settings.get("issues_repos") is not None or settings.get("pr_repos") is not None:
-            repo_key = "issues_repos" if settings.get("issues_repos") is not None else "pr_repos"
-            config["issues_repos"] = list(settings.strings(repo_key))
-
-        code_table = _text_value(settings, "code_table")
-        if code_table is None and settings.get("coverage_tables") is not None:
-            # Accept the short-lived pre-release spelling while deployments
-            # migrate to the single canonical ``code_table`` setting.
-            code_table = _text_value(
-                settings,
-                "code_table",
-                settings.table("coverage_tables").get("code"),
-            )
-        if code_table is not None:
-            config["code_table"] = sql_identifier(
-                code_table, f"project {project!r} code_table"
-            )
-
-        configs[project] = config
-    return configs
-
-
 def default_project_path(project: str) -> pathlib.Path:
     """Return a generic, non-organization-specific watch root."""
     return pathlib.Path("~/.engram/watch").expanduser() / project
+
+
+def load_configured_mental_models(
+    config_path: str | os.PathLike[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Load optional fully described mental models from project TOML."""
+    models: list[dict[str, Any]] = []
+    for project, settings in load_all_project_settings(config_path).items():
+        for index, model in enumerate(settings.records("models")):
+            bank = model.get("bank")
+            model_id = model.get("id")
+            source_query = model.get("source_query")
+            if not all(isinstance(value, str) and value.strip() for value in (bank, model_id, source_query)):
+                raise ValueError(
+                    f"project {project!r} models[{index}] requires non-empty bank, id, and source_query"
+                )
+            item = dict(model)
+            item.setdefault("name", model_id)
+            item.setdefault("max_tokens", 2048)
+            item.setdefault("trigger", {"mode": "full", "refresh_after_consolidation": False})
+            item["bank"] = bank.strip()
+            item["id"] = model_id.strip()
+            item["source_query"] = source_query.strip()
+            models.append(item)
+    return models
+
+
+@dataclass(frozen=True)
+class ProjectSource:
+    """One repository/workspace source consumed by the generic adapters."""
+
+    tag: str
+    root: pathlib.Path
+    docs_include: tuple[str, ...]
+    docs_exclude: tuple[str, ...]
+    code_include: tuple[str, ...]
+    code_exclude: tuple[str, ...]
+    language: str = "python"
+
+
+@dataclass(frozen=True)
+class ProjectAdapterConfig:
+    """Validated settings required by the generic flow and search adapters."""
+
+    project: str
+    config_path: pathlib.Path
+    hindsight_url: str
+    pg_dsn: str
+    embedding_model: str
+    pg_pool_min_size: int
+    pg_pool_max_size: int
+    docs_bank: str | None
+    issues_bank: str | None
+    code_table: str | None
+    code_sources: tuple[ProjectSource, ...]
+    docs_sources: tuple[ProjectSource, ...]
+    issues_repos: tuple[str, ...]
+    issues_provider: str
+    jira_server: str | None
+    jira_email: str | None
+    jira_jql: str | None
+    jira_keychain_account: str
+    jira_keychain_service: str
+    cocoindex_db: pathlib.Path
+    issues_poll_seconds: int
+
+    @property
+    def sources(self) -> tuple[ProjectSource, ...]:
+        return tuple(dict.fromkeys((*self.docs_sources, *self.code_sources)))
+
+
+def _patterns(raw: Any, field: str, project: str, source: str) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list) or not all(isinstance(item, str) and item.strip() for item in raw):
+        raise ValueError(f"project {project!r} source {source!r} {field} must be a string array")
+    return tuple(item.strip() for item in raw)
+
+
+def _source_root(raw: Any, settings: ProjectSettings, source: str) -> pathlib.Path:
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError(f"project {settings.project!r} source {source!r} root must be a non-empty string")
+    value = pathlib.Path(os.path.expandvars(os.path.expanduser(raw.strip())))
+    if not value.is_absolute():
+        value = settings.config_path.parent / value
+    return value
+
+
+def _load_sources(settings: ProjectSettings) -> tuple[ProjectSource, ...]:
+    sources: list[ProjectSource] = []
+    seen: set[str] = set()
+    for index, raw in enumerate(settings.records("sources")):
+        tag = raw.get("tag", raw.get("name"))
+        if not isinstance(tag, str) or not _NAME_RE.fullmatch(tag):
+            raise ValueError(f"project {settings.project!r} source {index} tag must be a simple name")
+        if tag in seen:
+            raise ValueError(f"project {settings.project!r} has duplicate source tag {tag!r}")
+        language = raw.get("language", "python")
+        if not isinstance(language, str) or not language.strip():
+            raise ValueError(f"project {settings.project!r} source {tag!r} language must be a non-empty string")
+        source = ProjectSource(
+            tag=tag,
+            root=_source_root(raw.get("root"), settings, tag),
+            docs_include=_patterns(raw.get("docs_include"), "docs_include", settings.project, tag),
+            docs_exclude=_patterns(raw.get("docs_exclude"), "docs_exclude", settings.project, tag),
+            code_include=_patterns(raw.get("code_include"), "code_include", settings.project, tag),
+            code_exclude=_patterns(raw.get("code_exclude"), "code_exclude", settings.project, tag),
+            language=language.strip(),
+        )
+        if not source.docs_include and not source.code_include:
+            raise ValueError(f"project {settings.project!r} source {tag!r} must configure docs or code patterns")
+        seen.add(tag)
+        sources.append(source)
+    return tuple(sources)
+
+
+def _bank(settings: ProjectSettings, explicit: str, suffix: str) -> str | None:
+    value = settings.text(explicit)
+    if value is not None:
+        if not _BANK_RE.fullmatch(value):
+            raise ValueError(f"unsafe project {settings.project!r} {explicit}: {value!r}")
+        return value
+    banks = settings.strings("banks")
+    matches = tuple(bank for bank in banks if bank.endswith(suffix))
+    if len(matches) > 1:
+        raise ValueError(f"project {settings.project!r} has multiple {suffix} banks; set {explicit!r}")
+    if matches and not _BANK_RE.fullmatch(matches[0]):
+        raise ValueError(f"unsafe project {settings.project!r} bank: {matches[0]!r}")
+    return matches[0] if matches else None
+
+
+def load_adapter_config(
+    project: str,
+    config_path: str | os.PathLike[str] | None = None,
+) -> ProjectAdapterConfig:
+    """Load and validate one project's generic adapter configuration."""
+    if not _NAME_RE.fullmatch(project):
+        raise ValueError(f"invalid project name: {project!r}")
+    settings = load_project_settings(project, config_path)
+    sources = _load_sources(settings)
+    docs_sources = tuple(source for source in sources if source.docs_include)
+    code_sources = tuple(source for source in sources if source.code_include)
+    docs_bank = _bank(settings, "docs_bank", "-docs")
+    issues_bank = _bank(settings, "issues_bank", "-issues")
+    code_table = settings.text("code_table")
+    if code_table is not None:
+        code_table = sql_identifier(code_table, f"project {project!r} code_table")
+    configured_jira = settings.get("issue_provider", "github") == "jira"
+    if not docs_sources and not code_sources and not settings.strings("issues_repos") and not configured_jira:
+        raise ValueError(f"project {project!r} must configure sources or issues_repos")
+    if docs_sources and not docs_bank:
+        raise ValueError(f"project {project!r} has documentation sources but no docs_bank")
+    if code_sources and not code_table:
+        raise ValueError(f"project {project!r} has code sources but no code_table")
+    issues_repos = (
+        settings.strings("issues_repos")
+        if settings.get("issues_repos") is not None
+        else settings.strings("pr_repos")
+    )
+    issue_provider = settings.text("issue_provider", "github") or "github"
+    if issue_provider not in {"github", "jira"}:
+        raise ValueError(f"project {project!r} issue_provider must be 'github' or 'jira'")
+    jira = settings.table("jira")
+    jira_server = jira.get("server")
+    jira_email = jira.get("email")
+    jira_jql = jira.get("jql")
+    for key, value in (("server", jira_server), ("email", jira_email), ("jql", jira_jql)):
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f"project {project!r} jira.{key} must be a non-empty string")
+    if issue_provider == "jira" and not all(
+        isinstance(value, str) and value.strip() for value in (jira_server, jira_email, jira_jql)
+    ):
+        raise ValueError(f"project {project!r} Jira configuration requires server, email, and jql")
+    jira_keychain_account = jira.get("keychain_account", "jira-cli")
+    jira_keychain_service = jira.get("keychain_service", "jira-cloud-api-token")
+    if not isinstance(jira_keychain_account, str) or not jira_keychain_account.strip():
+        raise ValueError(f"project {project!r} jira.keychain_account must be a non-empty string")
+    if not isinstance(jira_keychain_service, str) or not jira_keychain_service.strip():
+        raise ValueError(f"project {project!r} jira.keychain_service must be a non-empty string")
+    return ProjectAdapterConfig(
+        project=project,
+        config_path=settings.config_path,
+        hindsight_url=os.environ.get(
+            "HINDSIGHT_URL",
+            settings.text("hindsight_url", DEFAULT_HINDSIGHT_URL) or DEFAULT_HINDSIGHT_URL,
+        ),
+        pg_dsn=os.environ.get(
+            "COCOINDEX_PG_URL",
+            settings.text("pg_dsn", DEFAULT_PG_DSN) or DEFAULT_PG_DSN,
+        ),
+        embedding_model=settings.text("embedding_model", DEFAULT_EMBEDDING_MODEL) or DEFAULT_EMBEDDING_MODEL,
+        pg_pool_min_size=settings.integer("pg_pool_min_size", DEFAULT_POOL_MIN_SIZE),
+        pg_pool_max_size=settings.integer("pg_pool_max_size", DEFAULT_POOL_MAX_SIZE),
+        docs_bank=docs_bank,
+        issues_bank=issues_bank,
+        code_table=code_table,
+        docs_sources=docs_sources,
+        code_sources=code_sources,
+        issues_repos=issues_repos,
+        issues_provider=issue_provider,
+        jira_server=jira_server.strip() if isinstance(jira_server, str) else None,
+        jira_email=jira_email.strip() if isinstance(jira_email, str) else None,
+        jira_jql=jira_jql.strip() if isinstance(jira_jql, str) else None,
+        jira_keychain_account=jira_keychain_account.strip(),
+        jira_keychain_service=jira_keychain_service.strip(),
+        cocoindex_db=settings.path("cocoindex_db", f"~/.engram/{project}-cocoindex.db")
+        or pathlib.Path.home() / ".engram" / f"{project}-cocoindex.db",
+        issues_poll_seconds=settings.integer("issues_poll_seconds", 300),
+    )

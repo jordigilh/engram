@@ -1,310 +1,949 @@
 # New Project Setup Guide
 
-Use this checklist to add a project to Engram. It covers the current
-configuration-driven deployment; architecture history and operational detail
-belong in the linked guides.
+How to add a new GitHub organization/project to the Engram knowledge system with full isolation from existing projects.
 
-## Choose a scope
+## Architecture
 
-| Scope | Add | Do not add |
-| --- | --- | --- |
-| **Full project** | Dedicated docs/issues banks, code table, CocoIndex flow, search server, and gateway route | Nothing from an already-ingested project unless it is intentionally shared |
-| **Existing project family** | Tags, a focused mental model, and optional repo-scoped code search | A second bank, flow, or service when the existing index is sufficient |
-| **Ingestion-only** | Docs/issues flow and deployment paths | Serena, client configuration, or a code index for repos nobody opens |
-| **Jira-backed issues** | A narrow Jira scope and Keychain-backed authentication | A whole-project Jira import when only one epic/workstream is needed |
+Each project gets:
+- **Dedicated Hindsight banks**: `<project>-docs` and `<project>-issues` for isolated memory
+- **Shared `cursor-memory` bank**: Behavioral corrections and coding conventions are universal
+- **Dedicated pgvector table**: `cocoindex.<project>_code_embeddings` for code search isolation
+- **Configured CocoIndex instance**: The shared generic adapter with its own state database
+- **Dedicated launchd service**: Independent process lifecycle
+- **OpenCode plugin configuration**: `opencode.json` loads the unified gateway plugin and derives the project route
+- **Optional stateless runtime image**: A containerized gateway can aggregate
+  project backends from a mounted TOML registry instead of requiring a native
+  gateway process on the host
 
-Use the full pattern only when the project's content volume, access pattern, or
-lifecycle needs isolation. For issue credentials, Jira scope, backfills, and
-polling, see [Issue Ingestion](ISSUE_INGESTION.md).
+> **2026-08-21 update**: the four backend servers below (`hindsight-docs`,
+> `hindsight-issues`, `cocoindex-code`, `serena`) are now fronted by one
+> aggregating gateway, `engram-gateway` (`src/engram/pipeline/
+> engram_gateway.py`, supervised by `launchd/io.vectorize.engram-runtime.plist`)
+> instead of each getting its own client-specific MCP entries — see
+> `docs/findings/2026-08.md`'s 2026-08-21 rollout entry for the full
+> rationale (recurring Cursor MCP client flakiness with 4 separate connections
+> per repo) and the current registry of every onboarded repo. The gateway can
+> run natively under launchd or as the stateless `Dockerfile.engram` runtime
+> image. New project onboarding must use a deployment-local TOML registry;
+> adding a project must never require editing `src/engram/` or registering a
+> new source-code entrypoint. Native and container deployments consume the
+> same registry format.
+> In either case, the client points at one route:
+> `http://127.0.0.1:8896/mcp/<project>`. Kubernaut RCA is the only intentionally
+> project-specific optional backend; all other gateway and runtime configuration
+> is reusable across projects.
 
 ## Prerequisites
 
-- Complete the platform setup in [INSTALL.md](INSTALL.md), or
-  [INSTALL-linux.md](INSTALL-linux.md) on Linux.
-- Hindsight is healthy on `localhost:8888`; PostgreSQL/pgvector is available on
-  the DSN in the deployment config.
-- `~/.engram/venv/` contains the installed Engram package and CocoIndex.
-- `gh auth status` succeeds when GitHub issues or pull requests are in scope.
-- Podman is installed if the packaged gateway runtime will be used.
-- Keep credentials and runtime secrets in `~/.engram/config.env`. Keep paths,
-  repositories, branches, workspace prefixes, index/table settings, and RCA
-  settings in `~/.engram/projects.toml`. Neither populated file belongs in Git.
+- Engram repository cloned at `~/go/src/github.com/jordigilh/engram`
+- Hindsight API running on `localhost:8888`
+- PostgreSQL with pgvector running on `localhost:5432`
+- CocoIndex Python environment at `~/.engram/venv/`
+- `gh` CLI authenticated with access to the target organization
+- Podman, if using the optional containerized runtime image
 
-## Prepare source checkouts
+## Variants
 
-Create or reuse stable local checkouts for every repository that the flow will
-read. Forking is optional; ingestion only needs a readable checkout and an
-authenticated tracker client.
+The steps below describe the full pattern (dedicated docs bank + issues bank +
+code table + own launchd service). Two lighter variants exist, both shipped
+for real during the 2026-07-15 Engram-onboarding + kubernaut-operator/console
+work (see [FINDINGS.md](FINDINGS.md)):
+
+**No-issues-bank variant** — for a project with no incident/decision issue
+tracking to ingest (e.g. this repo, `engram`, which tracks bugs/decisions in
+`docs/FINDINGS.md` instead; as of 2026-07-29 it does use a small number of
+GitHub issues, but only for forward-looking enhancement proposals, a
+separate and non-overlapping use case that still doesn't need an
+`<project>-issues` bank): skip the `<project>-issues` bank entirely, skip
+the `issues` app in the generic flow, and omit `issues_repos` from the
+project's `~/.engram/projects.toml` table; a missing `issues_repos` key simply
+means no GitHub issue source is configured.
+
+**Tag-scoped mental model variant** — for a sub-repo of an *already-onboarded*
+project that wants its own focused recall/search view without the overhead of
+a fully separate bank/table/pipeline (e.g. `kubernaut-operator`/
+`kubernaut-console`, which are still ingested into the shared `kubernaut-docs`
+bank / `code_embeddings` table, already tagged by repo at ingestion time). No
+new bank, no new CocoIndex app, no new launchd service — just:
+1. `create_mental_model` with a `tags: ["<repo>"]` filter, scoped to the
+   existing shared bank (see `engram.maintenance.create_mental_models`'s
+   `operator-architecture`/`console-architecture` entries).
+2. An optional `repo` parameter on `engram.search.kubernaut`'s `search_code()` /
+   `cocoindex_search` MCP tool, which adds a `filepath LIKE '<repo>/%'` filter
+   to scope code search the same way.
+3. A hand-authored `.cursor/rules/hindsight-memory.mdc` that defaults to the
+   repo's own tag/prefix for own-repo work, and explicitly drops the filter
+   for cross-repo/upstream triage (see `cursor/operator-hindsight-memory.mdc`).
+
+Use the full pattern below when a sub-repo's content volume, access pattern,
+or lifecycle genuinely warrants isolation; use the tag-scoped variant when it
+just needs a narrower lens on data that's already being ingested correctly.
+
+**Jira-scoped issues variant** — for a project whose issue/decision tracking
+lives in Jira rather than GitHub issues, and where only a narrow slice of
+that tracker (one epic, not the whole project) is in scope. First shipped
+2026-08-13 for `rhdh-plugins` (epic RHIDP-15270 "AI Catalog Graduated
+Visibility Permissions" + its child stories, out of a monorepo with 23
+workspaces and a tracker with 166+ open issues project-wide). Differences
+from the full pattern:
+1. Step 1 (fork/clone) is usually just a single `git clone` of one existing
+   checkout, not an org-wide fork loop — the target is often a single
+   monorepo, not a multi-repo org.
+2. Set `issue_provider = "jira"` and configure a narrow JQL scope under
+   `[projects.<project>.jira]`. The generic flow calls Jira's REST API directly
+   and flattens Atlassian Document Format (ADF) to plain text. It reuses the
+   `jira` CLI's macOS Keychain item by default, or uses `JIRA_API_TOKEN` when
+   explicitly supplied by the deployment environment.
+3. Scope the JQL to the target epic and its children explicitly (e.g.
+   `parent = <EPIC> OR key = <EPIC> order by created asc`), not a broad
+   `project = <PROJECT>` — the latter would pull in every issue in the
+   tracker, defeating the whole point of narrow-scope onboarding. The generic
+   adapter paginates the REST response without a hard-coded project limit.
+4. Omit `issues_repos` from the project's `~/.engram/projects.toml` table — it
+   specifically means "GitHub repos to total issues/PRs via `gh`," which does
+   not apply to Jira. The `<project>-issues` bank and mental models still work
+   normally for recall; only GitHub-specific totals are skipped.
+5. Also narrow the **code** source patterns in `~/.engram/projects.toml` to
+   match the epic's actual footprint (e.g. one workspace/package directory
+   inside a monorepo, not every package) — a Jira-scoped issues bank paired
+   with a whole-monorepo code index would defeat the same narrow-scope goal.
+
+> **Jira authentication gotcha**: don't require a separate Jira API token
+> setup for ingestion if the machine already has the `jira` CLI
+> (`github.com/ankitpokhrel/jira-cli` or similar) configured and
+> authenticated — its token lives in the macOS Keychain under a
+> predictable service/account name. Read it with the same `-a <account>
+> -s <service>` pair the CLI itself uses (e.g.
+> `security find-generic-password -a jira-cli -s jira-cloud-api-token -w` —
+> see `engram.flows.rhdh_plugins._jira_token`) instead of asking the user
+> for a fresh token; this was the approach the user explicitly chose over
+> prompting for new credentials during the `rhdh-plugins` onboarding. Also
+> prefer calling Jira's REST API (`/rest/api/3/search/jql`) directly with
+> that token over shelling out to the `jira` CLI for ingestion —
+> `jira-cli`'s `--paginate` has a real bug against Jira Cloud's newer
+> `/search/jql` endpoint (see koku's `_jira_token()` docstring for the full
+> history), and its query/output flags are meant for interactive use, not
+> scripted ingestion.
+
+## Steps
+
+### 1. Fork and Clone Repositories
+
+Fork all active (non-archived) repositories from the organization:
 
 ```bash
+# List active repos
+gh api orgs/<org>/repos --jq '.[] | select(.archived == false) | .name' --paginate
+
+# Fork each
+for repo in <list>; do
+  gh repo fork "<org>/$repo" --clone=false
+done
+
+# Clone to local directory
 mkdir -p ~/go/src/github.com/<org>
-gh repo clone <org>/<repo> ~/go/src/github.com/<org>/<repo>
+cd ~/go/src/github.com/<org>
+for repo in <list>; do
+  gh repo clone "jordigilh/$repo" "$repo" -- --origin fork
+done
 ```
 
-If the deployment uses detached branch mirrors, keep their definitions outside
-the repository:
+### 2. Create Hindsight Banks
 
 ```bash
-cp watch-mirrors-config.example.sh ~/.engram/watch-mirrors-config.sh
-$EDITOR ~/.engram/watch-mirrors-config.sh
-ENGRAM_WATCH_MIRRORS_CONFIG=~/.engram/watch-mirrors-config.sh \
-  ./setup-watch-mirrors.sh
+curl -X PUT http://localhost:8888/v1/default/banks/<project>-docs \
+  -H 'Content-Type: application/json' \
+  -d '{"description": "<Project> architecture docs, enhancements, guides"}'
+
+curl -X PUT http://localhost:8888/v1/default/banks/<project>-issues \
+  -H 'Content-Type: application/json' \
+  -d '{"description": "GitHub issues and PRs from all active <project> repositories"}'
 ```
 
-Add the resulting paths and branch choices to the project's `projects.toml`
-table. The mirror service and refresh workflow are described in
-[CocoIndex Operations](COCOINDEX.md).
+> **Ingestion cost policy — LLM-free by default.** Banks are created with
+> `retain_extraction_mode=chunks` (raw text slices + local ONNX embeddings,
+> zero LLM calls), `enable_observations=false`, and
+> `enable_auto_consolidation=false`, and the server defaults in
+> `~/.engram/config.env` enforce the same for every bank, including future
+> ones (`HINDSIGHT_API_RETAIN_EXTRACTION_MODE=chunks`,
+> `HINDSIGHT_API_ENABLE_OBSERVATIONS=false`,
+> `HINDSIGHT_API_ENABLE_AUTO_CONSOLIDATION=false`). Fact extraction
+> (`concise`/`verbose`), observations, and consolidation are **manual-only**,
+> enabled per bank with an explicit `PATCH /v1/default/banks/<id>/config`
+> after a deliberate cost decision — never as a side effect of ingestion.
+>
+> Measured cost of fact-mode (2026-09-09, single-doc calibration on a 9.7 KB
+> doc: ~2,400 content tokens → 20,653 input / 4,573 output): budget roughly
+> **8–9× content tokens of input** (per-retain prompt overhead dominates) and
+> **~2× content tokens of output** — extraction output runs *longer* than the
+> source text. At kubernaut scale (~1,700 docs + ~3,650 issues/PRs) that is
+> on the order of **130M input / 27M output tokens one-time**, ex-comments
+> and ex-consolidation passes. At GPT-5.6 Luna standard pricing on that date
+> ($0.20/$1.20 per MTok in/out) ≈ **$60 one-time**; other models price
+> differently, and Batch API / prompt caching change the math — re-price
+> from current rate cards before opting in.
+>
+> Determinism note: chunks are byte-faithful (same content → same stored
+> chunks, so rebuilds are identical). LLM-extracted facts vary run to run
+> (model output is nondeterministic and drifts across versions), so fact-mode
+> banks are not exactly reproducible — another reason extraction stays manual.
+>
+> Improvement — deterministic synthesis metadata (2026-09-09). To recover
+> some of what fact extraction provides (a synthetic expression of each
+> document for recall to key on) without any LLM, `engram.synthesis`
+> computes per file, at ingest time: extractive key sentences (TextRank over
+> a TF-IDF cosine graph, sentence budget scaled by document length) plus
+> TF-IDF keywords. Same bytes always yield the same synthesis (verified by
+> test + double-run diff), it runs in milliseconds per document, and it is
+> stored as chunk retain metadata (`key_sentences`, `keywords` — plain
+> strings, since `MemoryItem.metadata` is `dict[str, str]`). The generic
+> configured flow does this automatically for every configured docs source.
+> This is compression by statistics, not
+> comprehension — abstraction and judgment remain manual LLM operations.
+
+### 3. Create Mental Models
+
+Use the Hindsight API or MCP to create mental models for each bank:
+
+**`<project>-docs` bank:**
+- `<project>-architecture`: Trigger on architecture, components, data flow questions
+- `<project>-enhancements`: Trigger on enhancement proposals, design decisions
+- `<project>-api-contracts`: Trigger on API contracts, service types
+
+**`<project>-issues` bank:**
+- `active-priorities`: Trigger on open issues, priorities, project direction
+- `known-bugs`: Trigger on known bugs, root causes, workarounds
 
 ## Add the project adapters
 
-For a full project, copy the closest generic modules and adapt them to the
-project's sources:
+The adapters are already generic. Do **not** create
+`src/engram/flows/<project>.py`, `src/engram/search/<project>.py`, a
+project-specific `[project.scripts]` entry, or a source-code registry branch.
+Those are precisely the changes this setup is designed to avoid.
 
-| File | Responsibility |
-| --- | --- |
-| `src/engram/flows/<project>.py` | Docs, issues, code, and optional transcript apps |
-| `src/engram/search/<project>.py` | Hybrid/structural code search |
-| `pyproject.toml` | `engram-flows-<project>` and `engram-search-<project>` entry points |
-| `launchd/io.vectorize.cocoindex.<project>.plist` | Continuous flow service |
-| `tests/` | Flow, search, and configuration regression coverage |
-
-Start from `src/engram/flows/engram.py` and
-`src/engram/search/engram.py`, not from a project-specific implementation.
-
-Each adapter must use:
-
-- project-specific Hindsight bank names;
-- a project-specific `code_table` and CocoIndex state database;
-- paths and repository lists loaded from `projects.toml`;
-- a unique CocoIndex `ContextKey` for its Postgres pool; and
-- the project's language and file patterns.
-
-Omit the issues app and issues bank when the project has no issue/decision
-corpus. A tag-scoped sub-repo needs none of these new modules; add only the
-scope-specific model/rule/search configuration described in the existing flow.
-
-See [CocoIndex Operations](COCOINDEX.md) for flow behavior and
-[Architecture](README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor)
-for the division between memory, search, and code intelligence.
-
-## Configure the deployment
-
-Copy the canonical template once, then merge the new project into the existing
-file rather than replacing another deployment's settings:
-
-```bash
-mkdir -p ~/.engram
-test -e ~/.engram/projects.toml || \
-  cp docs/projects.toml.example ~/.engram/projects.toml
-$EDITOR ~/.engram/projects.toml
-```
-
-At minimum, add a project table and its paths. A full project usually needs:
-
-```toml
-[projects.<project>]
-banks = ["cursor-memory", "<project>-docs", "<project>-issues"]
-recall_banks = ["hindsight", "<project>-docs", "<project>-issues", "<project>-code"]
-code_bank = "<project>-code"
-code_table = "<project>_code_embeddings"
-issues_repos = ["<org>/<repo>"]
-workspace_prefixes = ["Users-<user>-go-src-github-com-<org>-<repo>"]
-release_lines = ["v1.0"] # omit when the project has no release routes
-
-[projects.<project>.paths]
-repo_dir = "~/go/src/github.com/<org>/<repo>"
-docs_dir = "~/go/src/github.com/<org>/<docs-repo>/docs"
-cocoindex_db = "~/.engram/<project>-cocoindex.db"
-```
-
-For multi-repository projects, use `[[projects.<project>.repositories]]`
-entries and add each source path under `[projects.<project>.paths]`. Use
-`pr_repos` for a GitHub-PR-only flow. Add `jira_*`, `jira_limit`, or a tracked
-Jira-key path only when the selected flow supports them.
-
-For Kubernaut RCA, add only the deployment-specific `rca_project`,
-`rca_repository`, `rca_projects`, database, and must-gather settings. See
-[Kubernaut RCA MCP](KUBERNAUT_RCA_MCP.md) for the route and branch policy.
-
-The project table is the source of truth for ingestion, search, coverage, and
-RCA. Do not hardcode project metadata in Python, repository-path environment
-variables, or committed plists. Keep normal credentials and runtime secrets in
-`config.env`; Jira tokens are the documented Keychain exception and must not be
-copied into either file.
-
-## Create banks and models
-
-Create only the banks used by the selected scope. `cursor-memory` is shared;
-project docs and issues banks are isolated.
-
-```bash
-curl -fsS -X PUT "http://localhost:8888/v1/default/banks/<project>-docs" \
-  -H 'Content-Type: application/json' \
-  -d '{"description":"<Project> documentation and architecture"}'
-
-# Omit this bank for an ingestion scope without issues.
-curl -fsS -X PUT "http://localhost:8888/v1/default/banks/<project>-issues" \
-  -H 'Content-Type: application/json' \
-  -d '{"description":"<Project> issues, pull requests, and decisions"}'
-
-curl -fsS -X PATCH "http://localhost:8888/v1/default/banks/<project>-docs/config" \
-  -H 'Content-Type: application/json' \
-  -d '{"updates":{"retain_extraction_mode":"chunks","retain_chunk_size":800}}'
-# Omit the next command when issues are out of scope.
-curl -fsS -X PATCH "http://localhost:8888/v1/default/banks/<project>-issues/config" \
-  -H 'Content-Type: application/json' \
-  -d '{"updates":{"retain_extraction_mode":"chunks","retain_chunk_size":800}}'
-```
-
-Keep new banks in the default LLM-free `chunks` mode unless a deliberate cost
-decision enables extraction or consolidation. Local embeddings still support
-recall; mental-model synthesis is a separate, on-demand operation.
-
-List the model IDs and probes in `projects.toml`:
-
-```toml
-[projects.<project>.mental_models]
-<project>-docs = ["<project>-architecture", "<project>-api-contracts"]
-<project>-issues = ["active-priorities", "known-bugs"]
-cursor-memory = ["<project>-workflow-preferences"]
-
-[[projects.<project>.probes]]
-bank = "<project>-docs"
-query = "<important architecture question>"
-```
-
-Add the corresponding model definitions to
-`src/engram/maintenance/create_mental_models.py`, then create and refresh the
-configured models:
-
-```bash
-~/.engram/venv/bin/python3 -m engram.maintenance.create_mental_models
-```
-
-## Install, backfill, and start the flow
-
-Install the package after adding the modules and entry points:
+Copy [`projects.toml.example`](projects.toml.example) to
+`~/.engram/projects.toml` and add one `[projects.<project>]` table plus one
+`[[projects.<project>.sources]]` record for each repository/workspace. The
+configuration supplies banks, the code table, source roots, file patterns,
+issue repositories, workspace prefixes, and the per-project CocoIndex state
+database. The generic entrypoints are installed once with Engram:
 
 ```bash
 uv pip install --python ~/.engram/venv/bin/python -e .
 ```
 
-Backfill a new project before relying on live file watching. A cold live scan
-can record fingerprints without populating an empty code table.
+Run the same adapter for every project by changing only the project key:
 
 ```bash
-~/.engram/with-config-env.sh \
-  ~/.engram/venv/bin/engram-flows-<project> \
+~/.engram/venv/bin/engram-flows-configured \
+  --project <project> --config ~/.engram/projects.toml \
   --mode backfill --apps docs code issues
+~/.engram/venv/bin/engram-search-configured \
+  --project <project> --config ~/.engram/projects.toml
 ```
 
-Omit `issues` when it is not configured. For GitHub/Jira-specific backfill and
-polling, follow [Issue Ingestion](ISSUE_INGESTION.md).
+Omit an app whose corresponding bank/source is not configured. The only
+project-specific files are deployment-local configuration and rendered service
+files; the repository's Python source remains unchanged for each new project.
 
-After the backfill is healthy, render a project-specific plist based on the
-closest existing `launchd/io.vectorize.cocoindex.*.plist` template. It should
-invoke the installed console script through `~/.engram/with-config-env.sh` and
-load deployment paths from `projects.toml`:
+### 4. Configure the project sources
+
+At minimum, configure a documentation/code source and its bank/table, or an
+issues bank with `issues_repos`:
+
+```toml
+[projects.<project>]
+docs_bank = "<project>-docs"
+issues_bank = "<project>-issues" # omit when issues are out of scope
+code_table = "<project>_code_embeddings"
+issues_repos = ["<org>/<repo>"]
+
+[projects.<project>.paths]
+cocoindex_db = "~/.engram/<project>-cocoindex.db"
+
+[[projects.<project>.sources]]
+tag = "<repo>"
+root = "~/go/src/github.com/<org>/<repo>"
+docs_include = ["**/*.md"]
+code_include = ["**/*.go", "**/*.py"]
+code_exclude = ["**/.git/**", "**/vendor/**", "**/node_modules/**"]
+```
+
+Add more `sources` records when a project contains multiple repositories; they
+share the configured bank/table while retaining their source tag in document
+metadata and indexed paths.
+
+> **Gotcha**: use the configuration-driven entrypoint rather than copying a
+> flow module. It owns one stable `coco.ContextKey` for all projects, so a
+> project's name never becomes process-global Python state and cannot create a
+> new ContextKey collision.
+
+### 5. Create the banks and models
+
+Create only the banks named by the project table. The generic flow writes to
+those banks and the generic search adapter reads the configured code table;
+neither requires a source edit.
+
+### 6. Create the deployment service
+
+Render the generic `launchd/io.vectorize.cocoindex.configured.plist` template.
+It invokes `engram-flows-configured --project <project>` and reads all paths
+from `~/.engram/projects.toml`; it does not need a new source file or a new
+console script:
+
+Install and start (no flow/search symlinking needed — the console scripts
+from steps 4/5 are already on `PATH` inside `~/.engram/venv/bin/`):
 
 ```bash
-sed "s|__HOME__|$HOME|g" \
-  launchd/io.vectorize.cocoindex.<project>.plist \
+# Replace both deployment placeholders.
+sed -e "s|__HOME__|$HOME|g" -e "s|__PROJECT__|<project>|g" \
+  launchd/io.vectorize.cocoindex.configured.plist \
   > "$HOME/Library/LaunchAgents/io.vectorize.cocoindex.<project>.plist"
 
 launchctl bootstrap "gui/$(id -u)" \
   "$HOME/Library/LaunchAgents/io.vectorize.cocoindex.<project>.plist"
 ```
 
-Keep the flow in `live` mode through launchd after the backfill.
+If you're not ready to run the new project's ingestion live yet, validate the
+generic flow with its manual backfill first and defer bootstrapping this
+deployment-local rendered plist. Nothing else in this guide depends on the
+service already being loaded.
 
-If the CocoIndex state database is lost while its PostgreSQL tables remain,
-drop the project's tables and their managed indexes/triggers before
-re-backfilling. Do not delete tracking state alone.
+### Deployment-local mirror configuration
 
-## Expose one gateway route
-
-The client should see one Engram MCP route. The gateway owns the Hindsight,
-CocoIndex, Serena, and optional project-specific connections.
-
-The recommended deployment is the stateless runtime image:
-
-1. Copy `docs/runtime-instances.toml.example` to
-   `~/.engram/runtime/instances.toml`.
-2. Replace `my-project` and backend URLs with endpoints reachable from the
-   container; remove unused backends.
-3. Start the image on `127.0.0.1:8896`.
-
-See [Runtime Image](RUNTIME_IMAGE.md) for the command and native-host
-alternative. For OpenCode/OpenChamber, configure one explicit
-`mcp.servers.engram` route and the global plugin as described in
-[OpenCode Integration](OPENCODE.md). Do not register Hindsight, CocoIndex, and
-Serena as separate client servers.
-
-### Code intelligence
-
-For a language-aware code backend, use Serena through the gateway. The language
-server is selected by the project adapter; Rust projects additionally need a
-local `rust-analyzer`. The OpenCode guide covers mappings, release routes, and
-worktree-index policy.
-
-## Optional integrations
-
-- **Shared repository family:** use the shared-daemon and multiplex setup only
-  when multiple active repos make separate processes a real resource problem.
-  Start with the simpler per-project gateway route; see
-  [OpenCode Integration](OPENCODE.md).
-- **Correction enforcement:** run `bash hooks/install.sh <repo>` when the
-  project needs the optional plan/contradiction hooks.
-- **Self-healing Git hooks:** install the generic or family variant from
-  [`git-hooks/README.md`](../git-hooks/README.md). Use the family variant only
-  for a shared long-lived language-server daemon.
-
-## Verify
+If the project reads repositories through detached branch mirrors, keep the
+repository list, local checkout paths, and branch choices outside this
+repository. Copy `watch-mirrors-config.example.sh` to
+`~/.engram/watch-mirrors-config.sh`, fill in the deployment's entries, and run:
 
 ```bash
-curl -fsS http://localhost:8888/health
-curl -fsS http://localhost:8888/v1/default/banks/<project>-docs
-launchctl print "gui/$(id -u)/io.vectorize.cocoindex.<project>"
-tail -20 "$HOME/.engram/logs/cocoindex-<project>-stderr.log"
-psql -h localhost -U hindsight -d hindsight \
-  -c "select count(*) from cocoindex.<project>_code_embeddings;"
+ENGRAM_WATCH_MIRRORS_CONFIG=~/.engram/watch-mirrors-config.sh \
+  ./setup-watch-mirrors.sh
 ```
 
-Then verify each active route:
+The same configuration is used by `refresh-watch-mirrors.sh` and the
+`io.vectorize.cocoindex.watch-sync` LaunchAgent. The LaunchAgent template is
+generic; render it with `__HOME__` replacement as above and bootstrap it with
+`launchctl`. Do not commit the populated mirror configuration or deployment
+helper scripts; those belong under `~/.engram`.
 
-- recall a known document and, if configured, a known issue;
-- run one code-search query and one real Serena symbol/reference lookup;
-- call `tools/list` through `http://127.0.0.1:8896/mcp/<project>`;
-- confirm the project prefix in `~/.cursor/projects/` matches
-  `workspace_prefixes` and that a project report contains only its own
-  transcript/MCP analytics.
+> **Cold start: backfill first, live-watch second (2026-09-09).** A fresh
+> project (empty pg tables + empty tracking DB) must be populated with a
+> one-shot `--mode backfill --apps code` (+ docs/issues as needed) run
+> *before* relying on the live service. Live-watch reliably tracks warm
+> incremental deltas (add → row appears, delete → row removed, verified),
+> but a cold full-scan in live mode fingerprints files without ever flushing
+> rows to pg — observed across every flow, still undiagnosed in cocoindex
+> (present in 1.0.20, unchanged in 1.0.21). Backfill is the supported
+> cold-start path, not a workaround.
+>
+> Gotcha: if the tracking DB (`~/.engram/<project>-cocoindex.db`) is wiped
+> while pg tables still exist, the next run dies with
+> `DuplicateTableError: relation ... already exists` (fresh state re-issues
+> `CREATE TABLE`). Always drop the project's pg tables (plus their FTS
+> trigger/function/index — see each flow's `teardown_sql`) before
+> re-backfilling, never wipe tracking state alone.
 
-## Repository and deployment checklist
+### 7. Choose Your Code-Intelligence Backend
 
-Commit only repository changes:
+> See [docs/README.md's Division of Labor](README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor)
+> for how Serena's role here differs from Hindsight (memory) and CocoIndex
+> (search) — this section is setup instructions only, not a conceptual
+> overview.
 
-- flow and search modules, if this is a full project;
-- console-script and launchd templates;
-- model definitions, rule/template changes, and tests;
-- documentation updates.
+Every onboarded project needs a code-intelligence MCP server so agents get
+real symbol lookup/find-references/diagnostics instead of grepping for
+identifiers. **[Serena](https://github.com/oraios/serena)** (an LSP-wrapping
+MCP server) is the default backend for every language this project has
+onboarded so far — it wraps the language's real LSP (`gopls` for Go,
+`pyright` for Python, `rust-analyzer` for Rust,
+`typescript-language-server` for TypeScript) behind one consistent MCP tool
+surface, so the same `find_symbol`/`find_referencing_symbols`/
+`get_diagnostics_for_file` tools work regardless of language.
 
-Keep these deployment-local:
+With the packaged image or native aggregating gateway, configure Serena as the
+project's `backends.serena` entry in step 8 and do not add it directly to the
+client config. The direct stdio entry below is only for the legacy native
+layout, when Serena is intentionally run outside the gateway:
 
-- `~/.engram/config.env` — credentials and runtime secrets;
-- `~/.engram/projects.toml` — paths, repositories, branches, workspace
-  prefixes, index/table settings, and RCA configuration;
-- `~/.engram/runtime/*.toml` — populated gateway registries;
-- `~/.engram/opencode.json` — client route and worktree policy;
-- `~/.engram/watch-mirrors-config.sh` — mirror definitions;
-- Jira Keychain entries and tracked-key files.
+```json
+"serena": {
+  "command": "/Users/jgil/.local/bin/uvx",
+  "args": [
+    "--from", "git+https://github.com/oraios/serena@1bbe53546124c00e4238972f1599a91fbf8c6539",
+    "serena", "start-mcp-server",
+    "--project", "${workspaceFolder}",
+    "--context", "ide",
+    "--add-mode", "no-memories",
+    "--open-web-dashboard", "false"
+  ],
+  "type": "stdio"
+}
+```
 
-## Detailed references
+Plus a per-repo `.serena/project.yml` — Serena's project registration is
+keyed by absolute path, so this file can never be shared across repos, even
+siblings in the same family:
 
-- [Installation](INSTALL.md) / [Linux installation](INSTALL-linux.md)
-- [CocoIndex Operations](COCOINDEX.md)
-- [Issue Ingestion](ISSUE_INGESTION.md)
-- [OpenCode and OpenChamber](OPENCODE.md)
-- [Runtime Image](RUNTIME_IMAGE.md)
-- [Kubernaut RCA MCP](KUBERNAUT_RCA_MCP.md)
-- [Architecture and division of labor](README.md)
-- [Self-healing Git hooks](../git-hooks/README.md)
+```yaml
+language_servers: [<go|python|rust|typescript>]
+```
+
+And a `.gitignore` entry (same wording used for every onboarded repo so far
+— this reflects that Serena is a personal trial, not yet a team decision):
+
+```
+# Serena MCP trial (project config/cache/logs; not yet a team decision)
+.serena/
+```
+
+> **Prerequisite per language, verified during real onboardings**:
+> - **Go**: no extra install — Serena's `solidlsp` layer auto-manages/caches
+>   a `gopls` binary itself.
+> - **Python**: no extra install — same auto-management, via `pyright`.
+> - **Rust**: Serena does **not** auto-install `rust-analyzer` — it fails
+>   fast with an explicit "Stop, do not attempt workarounds" message if it's
+>   missing. Install via `brew install rust-analyzer` (or
+>   `rustup component add rust-analyzer`). Also install `rustup` itself
+>   (not just Homebrew's `rustc`/`cargo`) if the target repo pins a
+>   `rust-toolchain.toml` channel newer than Homebrew's current formula —
+>   rust-analyzer's background `cargo check`/flycheck fails diagnostics-only
+>   in that case (symbol lookup/find-references are unaffected) until the
+>   pinned toolchain is installed and `~/.cargo/bin` takes `PATH` priority
+>   over Homebrew's own `rustc`/`cargo`.
+> - **TypeScript**: no extra install — same auto-management as Go/Python, via
+>   `typescript-language-server`. Spiked and confirmed working 2026-08-13
+>   against `rhdh-plugins` (a 23-workspace Yarn/Node monorepo): both
+>   `find_symbol` and `find_referencing_symbols` returned correct results.
+>   One perf note, not a correctness issue: an unscoped whole-repo search can
+>   be slow on first call in a large monorepo (cold index build), but is
+>   cached and fast on repeat calls and with `relative_path` scoping — pass
+>   `relative_path` to the target workspace/package when possible instead of
+>   searching the whole monorepo every time.
+
+**Known limitation (all languages)**: for symbols located inside certain
+non-declaration contexts (e.g. Go's Ginkgo `var _ = Describe(...)` test
+blocks, some Rust module-level statements), `find_referencing_symbols` can't
+attribute a named containing symbol and falls back to file-level attribution
+(`"kind": "File"`, `"name": None`) — the reference *location* itself is
+still found correctly, just less precisely labeled. On large codebases or
+very common identifiers, `find_referencing_symbols` can also time out
+(~235s observed on a broad identifier in a large Rust repo) — every other
+tool still works normally when this happens.
+
+### 8. Configure Workspace-Level MCP
+
+The project should expose one MCP route through the Engram gateway. The
+recommended deployment for a new project is the stateless runtime image, which
+keeps aggregation configuration outside the image and makes the same gateway
+portable across hosts.
+
+#### Packaged runtime image
+
+Build locally or pull the published multi-architecture image:
+
+```bash
+podman build -t localhost/engram-runtime:local -f /path/to/engram/Dockerfile.engram /path/to/engram
+# Or use: quay.io/jordigilh/engram:runtime-latest
+```
+
+Start with the generic
+[`runtime-instances.toml.example`](runtime-instances.toml.example):
+
+```bash
+mkdir -p ~/.engram/runtime
+cp /path/to/engram/docs/runtime-instances.toml.example ~/.engram/runtime/instances.toml
+```
+
+Replace `my-project` and the backend URLs with the exact public route and MCP
+endpoints for this deployment. Each backend can be an HTTP MCP endpoint or a
+stdio command available inside the container. Remove backend tables the project
+does not use; the example includes an optional stdio code-backend form.
+
+Include only the backend tables that the project actually uses. HTTP backends
+accept optional string-to-string `headers` and `timeout_seconds` overrides
+(1–600 seconds; default 60); stdio backends accept `args`, `env`, and an
+optional `shared_key` for sharing one subprocess across routes. Do not define
+both `endpoint` and `backends` for one instance.
+
+The tracked [`docs/runtime-kubernaut.toml.example`](runtime-kubernaut.toml.example)
+is a Kubernaut-specific example, including the optional Kubernaut RCA backend
+and its `kubernaut-v1.5` release route. Use the generic example for unrelated
+projects.
+
+Mount the registry read-only and expose the gateway port:
+
+```bash
+mkdir -p ~/.engram/runtime
+$EDITOR ~/.engram/runtime/<project>.toml
+
+podman run --rm \
+  --add-host host.containers.internal:host-gateway \
+  -v "$HOME/.engram/runtime/<project>.toml:/etc/engram/instances.toml:ro" \
+  -p 127.0.0.1:8896:8896 \
+  quay.io/jordigilh/engram:runtime-latest
+```
+
+The image is stateless and non-root. It validates backend URLs, rejects
+credentials embedded in URLs, queries configured backends concurrently, and
+keeps one unavailable backend from taking down the whole project route.
+
+#### OpenCode configuration
+
+Engram no longer ships or supports per-repository `.cursor/mcp.json` files.
+Use the hybrid OpenCode setup: keep one explicit `mcp.engram` gateway route in
+the project configuration, and load the global Engram plugin for methodology,
+compaction, and MCP-over-CLI hooks. The plugin preserves an explicit route and
+falls back to its repository identity mapping only when one is not configured.
+See [OpenCode Integration](OPENCODE.md) for directory/remote mappings and
+branch-route options.
+
+The gateway owns the Hindsight, CocoIndex, Serena, and project-specific backend
+connections. Do not register those backends separately, or the client will see
+duplicate tools and bypass the gateway's isolation and routing. OpenChamber
+should connect to the OpenCode server's resolved configuration rather than
+adding a second Engram entry in its MCP settings.
+
+> **Legacy native-backend note**: the shared-daemon notes below apply only
+> when deliberately running individual backend processes instead of the
+> aggregating gateway. The packaged image and the native gateway both require
+> one client route per project.
+
+> **Evolution (2026-08-13, shared HTTP daemons instead of one stdio process
+> per window)**: for a large family (kubernaut-family: 6 repos), opening N
+> repos as N separate OpenCode sessions can still spawn N
+> `cocoindex-code`/`serena` subprocesses (loading the same ~855-package Go
+> module N times). If that's a real resource concern, run
+> `engram-search-configured --project <project>`/`serena start-mcp-server` once each as permanent
+> `launchd` daemons (`--transport streamable-http`, fixed host/port) instead,
+> and register their project routes through the OpenCode plugin. See
+> `launchd/io.vectorize.cocoindex-code.kubernaut-family.plist`,
+> `launchd/io.vectorize.serena.kubernaut-family.plist`, and
+> `launchd/io.vectorize.serena-project-server.plist` for the concrete
+> templates, and `docs/findings/2026-08.md`'s 2026-08-13 (same day, seventh
+> and eighth follow-ups) entry for the full rationale and a real gotcha this
+> surfaced: starting the shared `serena` daemon with a fixed `--project`
+> silently disables the `activate_project` tool for every *other* repo in the
+> family, so the daemon must start with **no** `--project` and
+> `--add-mode query-projects` instead — an agent calls `activate_project`
+> with its own repo's path to get full read+write, or `query_project` for a
+> read-only peek at a different family member without switching. `serena
+> start-project-server` (one instance, not per-repo) must also be running as
+> a separate daemon for `query_project` to work at all. This pattern doesn't
+> replace the gateway's per-project route as the *default* for a newly
+> onboarded, standalone project — it is only worth the added complexity once a
+> family is large enough that N duplicate processes are a measurable resource
+> concern.
+>
+> **On Linux**: same architecture, `systemd --user` units instead of
+> `launchd` plists — see `docs/INSTALL-linux.md` step 9 and
+> `systemd/engram-cocoindex-code-kubernaut-family.service` /
+> `systemd/engram-serena-kubernaut-family.service` /
+> `systemd/engram-serena-project-server.service` for the direct analogs of
+> this section's 3 plists, including a real Postgres-reachability gotcha
+> specific to Linux's containerized Hindsight deployment that macOS doesn't
+> have (step 9 documents the fix).
+>
+> **This still leaves one gap**, closed by step 8a below: the shared `serena`
+> daemon has exactly one process-global "active project" at a time, so only
+> whichever family repo last called `activate_project` gets full read+write —
+> every other repo is stuck on read-only `query_project` until it "steals"
+> activation back (and two sessions on two different repos genuinely race for
+> it). If your family is small/rarely-concurrent enough that "read-only for
+> whichever repo isn't currently active" is acceptable, stop here. If you
+> want every repo to get full read+write all the time, do step 8a too.
+
+### 8a. (Optional, Native Repo Families Only) Give Every Family Repo Full Read+Write via `engram-serena-multiplex`
+
+If you're setting up a **family of repos under one org that should share one
+Serena instance** (the exact scenario this section exists for), you will hit
+the gap described above as soon as more than one repo is actively being
+worked on. `engram-serena-multiplex` (`src/engram/pipeline/serena_multiplex.py`)
+is the fix: a small daemon that sits in front of the shared `serena` daemon
+from step 8 and gives every family repo its own fixed HTTP mount
+(`http://127.0.0.1:<multiplex-port>/mcp/<project-name>`). Every tool call
+arriving on a mount is preceded — transparently, serialized behind one lock —
+by an `activate_project(<that mount's own project>)` call against the shared
+upstream, so every repo gets full read+write and concurrent calls from
+different repos' windows are safely serialized instead of racing. See
+`docs/findings/2026-08.md`'s 2026-08-13 (same day, ninth follow-up) entry for
+the full design rationale, including a real bug hit and fixed along the way
+(an earlier version built on `fastmcp`'s `Client`/`create_proxy` crashed the
+shared upstream daemon — a known open bug class in the `mcp`/`fastmcp`
+SDKs' SSE-reconnect handling; the shipped version is a minimal one-shot
+`httpx` POST relay that avoids it entirely).
+
+**When to use this**: you already did step 8's shared-daemon setup, your
+ family has 2+ repos that get worked on concurrently (even just "you, in two
+ OpenCode sessions"), and read-only access to whichever repo *isn't* currently
+active is not acceptable. **When to skip it**: a single-repo project (there's
+nothing to multiplex), or a family where only one repo is ever actively
+edited at a time (step 8's plain shared daemon is simpler and sufficient).
+
+1. **Prerequisite**: step 8's shared `serena` daemon must already be running
+   with no fixed `--project` and `--add-mode query-projects` (as documented
+   above) — the multiplex calls `activate_project` against that same daemon,
+   so it needs `activate_project` to actually be available.
+
+2. **Add a launchd daemon** for the multiplex itself, one per family (not
+   per repo) — see `launchd/io.vectorize.serena-multiplex.<family>.plist`
+   for the template. Pick a fixed port distinct from the shared `serena`
+   daemon's port (e.g. `serena` on 8892, multiplex on 8893):
+
+   ```xml
+   <key>ProgramArguments</key>
+   <array>
+       <string>__HOME__/.engram/venv/bin/engram-serena-multiplex</string>
+       <string>--host</string><string>127.0.0.1</string>
+       <string>--port</string><string>8893</string>
+       <string>--upstream-url</string><string>http://127.0.0.1:8892/mcp</string>
+       <!-- one --project <name> per family repo, matching the names
+            registered in ~/.serena/serena_config.yml, not repo paths -->
+       <string>--project</string><string>my-repo-a</string>
+       <string>--project</string><string>my-repo-b</string>
+   </array>
+   ```
+
+    3. **Register each family mount through the OpenCode plugin**, using the
+       project route and optional `branchRoutes` described in
+       [OpenCode Integration](OPENCODE.md). Do not create per-repo Cursor MCP
+       configuration files. `cocoindex-code`/`hindsight-docs`/
+       `hindsight-issues` remain owned by the unified gateway.
+
+4. **Update your family's git-hook restart script** (step 14) to also
+   `launchctl kickstart -k` the multiplex daemon's label alongside `serena`
+   and `cocoindex-code` — otherwise a `git checkout`/`pull` that changes
+   files on disk won't refresh the multiplex's view of anything it caches
+   (currently nothing beyond the active-project pointer, but keep it
+   symmetric with the other two daemons for when that changes).
+
+  5. **Verify**: open two repos' mounts as two independent OpenCode MCP sessions
+     and confirm each keeps reporting its own project
+   via `get_current_config` even after the other activates a different one
+   in between — that's the actual guarantee this buys you, not just "it
+   responds to requests."
+
+> **On Linux**: `systemd/engram-serena-multiplex-kubernaut-family.service`
+> is the direct analog of this step's launchd plist — same
+> `engram-serena-multiplex` console script, same `--project`/
+> `--upstream-url` flags, just `systemctl --user enable --now
+> <unit>.service` instead of `launchctl bootstrap`. See
+> `docs/INSTALL-linux.md` step 9 for the full command sequence (bundled
+> together with steps 2 and 3's plain shared-daemon units, since on Linux
+> there's no reason to install one without the other).
+
+### 9. Client Configuration
+
+Cursor MCP configuration is retired. Do not create or commit
+`.cursor/mcp.json` or add Engram servers to `~/.cursor/mcp.json`; use the
+OpenCode plugin described in [OpenCode Integration](OPENCODE.md).
+
+### 10. Create Cursor Rule
+
+Generate `.cursor/rules/hindsight-memory.mdc` from the template:
+
+#### a. Create a project vars file
+
+Create `cursor/projects/<project>.vars`:
+
+```bash
+DOMAIN_TRIGGERS="Go code, <project>, or any <domain-specific> work"
+DOCS_BANK="<project>-docs"
+DOCS_BANK_DESCRIPTION="<project> architecture, API/CRD contracts, operations"
+ISSUES_BANK="<project>-issues"
+CODE_SEARCH_TOOL="<project>_code_search"
+CODE_SEARCH_SERVER="<project>-code"
+EXAMPLE_CONCEPT_QUERY="how does <domain concept> work"
+EXAMPLE_SEMANTIC_QUERY_1="where do we handle <domain concept>?"
+EXAMPLE_SEMANTIC_QUERY_2="how does the <subsystem> pipeline work?"
+```
+
+#### b. Generate and deploy
+
+```bash
+cd cursor/
+./generate-mdc.sh projects/<project>.vars /tmp/<project>-hindsight.mdc
+
+for repo in ~/go/src/github.com/<org>/*/; do
+  mkdir -p "$repo/.cursor/rules"
+  \cp /tmp/<project>-hindsight.mdc "$repo/.cursor/rules/hindsight-memory.mdc"
+done
+```
+
+The template (`cursor/hindsight-memory.mdc.tmpl`) contains all the structural rules (recall gates, phase triggers, three-tier guidance, etc.). Only the project-specific variables differ.
+
+If the generated rule needs hand-editing beyond what the template variables
+cover (e.g. dropping a language-specific section, adding tag-scoped recall
+guidance — see `cursor/engram-hindsight-memory.mdc`/`cursor/console-hindsight-memory.mdc`
+for real examples), register the canonical/deployed pair in
+`check-rule-sync.py`'s `RULE_PAIRS` dict so drift-checking covers it:
+
+```python
+RULE_PAIRS: dict[str, tuple[Path, Path]] = {
+    "global": (CANONICAL, DEPLOYED),
+    "<project>": (
+        REPO_ROOT / "cursor" / "<project>-hindsight-memory.mdc",
+        HOME / "go" / "src" / "github.com" / "<org>" / "<repo>" / ".cursor" / "rules" / "hindsight-memory.mdc",
+    ),
+    ...
+}
+```
+
+`python3 check-rule-sync.py` (no `--pair`) checks every registered pair;
+`--pair <project>` checks just one.
+
+### 11. Nightly reporting
+
+Nightly learning and reporting are not currently supported onboarding features.
+Do not add project entries to `nightly_learn.py`, `report.py`, or related
+transcript analytics configuration.
+
+### 12. Verify End-to-End
+
+```bash
+# Check banks exist
+curl -s http://localhost:8888/v1/default/banks | python3 -m json.tool
+
+# Check launchd service
+launchctl list | grep cocoindex
+
+# Check CocoIndex logs
+tail -20 ~/.engram/logs/cocoindex-<project>-stderr.log
+
+# Check code embeddings
+psql -h localhost -U hindsight -d hindsight \
+  -c "SELECT count(*) FROM cocoindex.<project>_code_embeddings;"
+
+# Test recall
+curl -X POST http://localhost:8888/v1/default/banks/<project>-docs/memories/recall \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "architecture overview", "max_tokens": 1024}'
+
+# Health-check the code-intelligence backend (step 7) against real code —
+# do a couple of real find_symbol/find_referencing_symbols calls, not just
+# the health-check CLI, which can land on a file with no top-level symbols
+# (e.g. a Ginkgo test file) and report a false negative.
+# NOTE: the target path is a positional argument, not a --project flag --
+# `serena project health-check --project <path>` fails with an unrecognized-
+# option error (verified 2026-08-13); `--help` confirms the positional form.
+uvx --from git+https://github.com/oraios/serena@1bbe53546124c00e4238972f1599a91fbf8c6539 serena project health-check /path/to/target-repo
+```
+
+If using the packaged runtime image, also verify the configured route and
+confirm that an unconfigured route is not exposed. The request must be a POST
+because the gateway deliberately returns `405` for GET requests:
+
+```bash
+payload='{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -X POST -H 'Content-Type: application/json' -d "$payload" \
+  http://127.0.0.1:8896/mcp/<project>       # expected: 200
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -X POST -H 'Content-Type: application/json' -d "$payload" \
+  http://127.0.0.1:8896/mcp/<unconfigured-project>  # expected: 404
+```
+
+### 13. Install the Deterministic Correction Enforcement Hooks (optional)
+
+Recall and cursor rules are *advisory* — a model can always choose not to
+call `recall`, and a summarized/compacted context can silently drop a rule's
+instructions. The hook family in `hooks/` is the harness-enforced
+alternative: Cursor hooks cannot be skipped by the model the way a rule file
+can (see docs/findings/2026-08.md for the full design rationale and spike
+history).
+
+Three hooks, sharing one per-session marker:
+
+- `hooks/detect-plan-kickoff.sh` (`beforeSubmitPrompt`) — detects Cursor's
+  auto-continue "implement the plan" message, extracts the newly-confirmed
+  plan's `overview` field plus the repo name (basename of the first
+  workspace root), and caches both to a per-session marker file.
+- `hooks/post-plan-hindsight-check.py` (`preToolUse`, matcher
+  `Write|StrReplace|Shell|EditNotebook`) — on the first matched tool call
+  after a plan is confirmed, consumes that marker and runs a real
+  `contradiction_resolution.resolve()` check (in a subprocess under a hard
+  45s wall-clock watchdog) against the target project's `cursor-memory`
+  bank. A genuine contradiction hard-blocks the call with
+  `permission: deny` and a `user_message` explaining the conflict; the
+  model can then retry (same or revised) and pass through cleanly — this is
+  a one-time speed bump per plan, not a permanent lock, because the check
+  detects semantic conflict, not intent (see docs/findings/2026-08.md for a
+  real false-positive example: a plan that *deliberately* superseded a
+  stale convention looks identical to one that violates a still-valid one).
+- `hooks/post-plan-checklist-reminder.py` (`postToolUse`, same matcher) —
+  fires right after the enforcer, on the same tool call. If
+  `~/.engram/review-checklists/<repo>.md` exists for the marker's repo,
+  injects it via `additional_context` as a one-time reminder (e.g. a
+  project's Pre-PR review checklist that reviewers keep having to repeat).
+  No-ops (and is not even registered in `hooks.json`, see below) for repos
+  without a checklist file — currently that's every kubernaut repo, and all
+  dcm-project repos except `osac-service-provider`.
+
+Install into a target repo:
+
+```bash
+cd /path/to/engram
+bash hooks/install.sh /path/to/target-repo
+```
+
+This is idempotent (safe to re-run) and merges into any existing
+`.cursor/hooks.json` rather than overwriting it. It also symlinks the hook
+scripts into `~/.engram/hooks/` and the whole `hooks/review-checklists/`
+directory into `~/.engram/review-checklists/` — the single stable
+locations every onboarded repo's `hooks.json` points at, so the hooks keep
+working even if engram's own checkout path ever changes (same rationale as
+`chunking.py`'s symlink into `~/.engram/`, see step 4 above and
+docs/INSTALL.md).
+
+`install.sh` auto-detects kubernaut paths (any path containing
+`/kubernaut`) and, for those, registers only the detector+enforcer pair —
+the checklist reminder hook is not added to their `hooks.json` at all, since
+the checklist feature is DCM-specific. To add a checklist for a future
+(non-kubernaut) repo, just add `hooks/review-checklists/<repo>.md` and
+commit it — no script changes needed, the enforcer and reminder both key off
+file existence, not a hardcoded project list.
+
+> **Gotcha**: the enforcer's/reminder's `command` in `hooks.json` must
+> invoke `~/.engram/venv/bin/python3`, never a bare `python3`/`python` —
+> the real `resolve()` call needs `litellm`/`vertexai`, which only exist in
+> Hindsight's venv. `hooks/install.sh` gets this right automatically; if
+> you ever hand-edit `hooks.json`, don't "simplify" the interpreter path.
+
+> **Gotcha**: `hooks.json` embeds this machine's absolute paths and is
+> gitignored via the same blanket
+> `.cursor/*` pattern — it will not exist in a fresh clone/worktree until
+> `hooks/install.sh` is re-run there.
+
+> **Gotcha (checklist content security)**: checklist files are git-tracked
+> inside engram's own repo, not committed to the target repo (e.g.
+> `osac-service-provider`'s own contributors, most of whom don't use
+> Engram, never see this file) and not stored as a bare untracked file
+> under `~/.engram/` either — `git diff`/`git log` on
+> `hooks/review-checklists/*.md` is the real integrity control against
+> tampering. `post-plan-checklist-reminder.py`'s
+> `is_safe_checklist_content()` is a cheap secondary sanity check (max
+> length, no URLs, no obvious prompt-injection phrasing), not a
+> replacement for reviewing checklist-file diffs.
+
+Known scope limits (accepted, not bugs): a `Task` subagent's tool calls
+carry a different `session_id` than its parent conversation, so
+subagent-delegated plan implementation gets zero coverage from either the
+enforcer or the reminder; the enforcer check only fires on the *first*
+matched tool call per plan (by design — the marker is consumed immediately
+unless a checklist file is deferring it, see above), not on every
+subsequent one; and a `preToolUse` deny always deletes the marker
+immediately, so a denied-then-retried plan never gets a checklist reminder
+either (`postToolUse` never fires after a `preToolUse` deny).
+
+### 14. Install Self-Healing Git Hooks (recommended)
+
+Separate from step 13's correction-enforcement hooks, `git-hooks/` in this
+repo holds **templates and ready-to-use scripts** for a family of plain git
+hooks (`post-checkout`, `post-merge`, `reference-transaction`) — see
+`git-hooks/README.md` for the full reference; this step is a summary.
+`~/.engram/git-hooks/` is where you *install* (symlink or generate) them
+per-machine — it does not come pre-populated; that directory is created by
+this step, not shipped with engram. These hooks keep language-server state from
+going stale as a repo's working tree changes underneath a running
+ MCP client session:
+
+1. **Language-server staleness**: `gopls mcp` / `serena start-mcp-server`
+   processes cache file state at startup. A `git checkout`/`pull`/`merge`/
+   `reset`/`rebase` that rewrites files on disk without restarting these
+   processes leaves them serving stale symbol/reference data. These hooks
+    kill any matching stale process (matched by cwd for `gopls`, by
+    `--project <toplevel>` for `serena`) so the next MCP call
+   auto-respawns a fresh one.
+The **generic** variant is checked into this repo at `git-hooks/generic/` for
+standalone projects. The **family** variant is for projects sharing long-lived
+HTTP daemons; both variants only restart stale language-server processes and
+never create client configuration files.
+
+**2026-08-16 correction**: an earlier version of `post-checkout-generic-mcp.sh`
+(and the dcm-family variant) self-provisioned `post-merge`/
+`reference-transaction` from the kubernaut-family-*specific* scripts, which
+restart the kubernaut-family shared serena daemon — completely irrelevant to
+a generic/dcm repo's own per-repo gopls/serena, and it means routine git
+operations across 30 unrelated repos were needlessly restarting
+kubernaut-family's daemon (and never actually refreshing their own). Fixed
+by adding dedicated `post-merge-generic-mcp.sh` /
+`reference-transaction-generic-mcp.sh` (family-agnostic, per-repo restart
+only) and correcting both `post-checkout-generic-mcp.sh` and
+`post-checkout-dcm-mcp.sh` to self-provision those instead. See
+`docs/findings/2026-08.md`, 2026-08-16 entry, for the full incident.
+
+Install the generic variant (symlink, don't copy, so future fixes to the
+shared script land in every repo without a re-run):
+
+```bash
+d=/path/to/target-repo
+ln -sf /path/to/engram/git-hooks/generic/post-checkout-generic-mcp.sh "$d/.git/hooks/post-checkout"
+ln -sf /path/to/engram/git-hooks/generic/post-merge-generic-mcp.sh      "$d/.git/hooks/post-merge"
+ln -sf /path/to/engram/git-hooks/generic/reference-transaction-generic-mcp.sh "$d/.git/hooks/reference-transaction"
+```
+
+`post-merge` and `reference-transaction` are also self-provisioned by
+`post-checkout` on its own next run if either is missing, so re-linking just
+`post-checkout` after a fresh clone is normally enough — but link all three
+explicitly for a brand-new onboarding rather than relying on that
+self-healing to fire first. Use the **family** variant instead of generic
+ only if the new project shares a long-lived shared HTTP MCP daemon with
+ sibling repos (step 8/8a) — see `git-hooks/README.md` for the family
+ variant's templated install (`git-hooks/family/*.sh.tmpl` +
+ `git-hooks/generate-hooks.sh` + a real worked example at
+ `git-hooks/families/kubernaut-family.vars`).
+
+> **Gotcha**: these are plain POSIX shell hooks in `.git/hooks/`
+> (or the repo's `core.hooksPath` equivalent, if set), not Cursor
+> `hooks.json` entries — they run for *any* git client (command line,
+> Cursor's own git integration, etc.), not just tool calls the agent makes.
+> Verify with a smoke test after installing: run
+> `"$d/.git/hooks/post-checkout"` directly and confirm exit code 0, then
+> check `post-merge`/`reference-transaction` got self-provisioned (or link
+> them explicitly per above).
+
+## File Checklist
+
+| File | Purpose |
+|------|---------|
+| `~/.engram/projects.toml` | Deployment-local project and source configuration |
+| `docs/projects.toml.example` | Canonical configuration template |
+| `src/engram/flows/configured.py` | Shared configuration-driven ingestion adapter |
+| `src/engram/search/configured.py` | Shared configuration-driven code search adapter |
+| `launchd/io.vectorize.cocoindex.configured.plist` | Generic macOS service template |
+| `launchd/io.vectorize.engram-gateway-configured.plist` | Generic native gateway service template |
+| `cursor/projects/<project>.vars` | Template variables for cursor rule generation |
+| `cursor/hindsight-memory.mdc.tmpl` | Shared template (do not edit per-project) |
+| `cursor/generate-mdc.sh` | Generates .mdc from template + vars |
+| `opencode.json` | OpenCode plugin and unified gateway routing |
+| Each repo's `.serena/project.yml` | Per-repo Serena language-server registration (step 7); cannot be shared/symlinked, keyed by absolute path |
+| `Dockerfile.engram` | Optional stateless, project-agnostic MCP gateway image |
+| Local `instances.toml` | Mounted runtime registry of project backends (step 8) |
+| `docs/runtime-kubernaut.toml.example` | Kubernaut-only example, including the optional RCA backend; do not use as the generic template |
+| `src/engram/pipeline/serena_multiplex.py` / `engram-serena-multiplex` | (Optional, step 8a) Gives every repo in a shared-Serena family full read+write instead of just whichever is "active" |
+| `launchd/io.vectorize.serena-multiplex.<family>.plist` | (Optional, step 8a) macOS service for the multiplex daemon, one per family |
+| `systemd/engram-{cocoindex-code,serena,serena-project-server,serena-multiplex}-kubernaut-family.service` | (Optional, steps 8/8a) Linux (`systemd --user`) analogs of the 4 shared-daemon launchd plists above — see `docs/INSTALL-linux.md` step 9 |
+| `hooks/install.sh` | Installs the Deterministic Correction Enforcement hook family (optional, step 13) |
+| Each opted-in repo's `.cursor/hooks.json` | Harness-enforced plan-kickoff detector + contradiction-check enforcer (+ checklist reminder for non-kubernaut repos) |
+| `hooks/review-checklists/<repo>.md` | Per-repo PR review checklist content, injected by the checklist-reminder hook when present |
+| `git-hooks/generic/*.sh` | Self-healing plain git hooks, single-repo variant: restart stale gopls/serena processes on checkout/merge/rebase/reset (recommended, step 14) |
+| `git-hooks/family/*.sh.tmpl` + `git-hooks/generate-hooks.sh` + `git-hooks/families/*.vars` | Templated variant for repos sharing a long-lived HTTP MCP daemon and restarting family services (optional, steps 8a/14) |
+| `~/.engram/git-hooks/*.sh` | Per-machine install target: symlinks (generic) or `generate-hooks.sh` output (family) land here (step 14) |
+| Each opted-in repo's `.git/hooks/{post-checkout,post-merge,reference-transaction}` | Symlinks into the installed git-hooks scripts above (step 14) |
+
+## Isolation Guarantees
+
+- **Banks**: Fully separate Hindsight banks per project (full variant); or a
+  shared bank filtered by `tags` at recall/mental-model-creation time
+  (tag-scoped variant — see Variants above)
+- **Code index**: Separate pgvector tables (`code_embeddings` vs `<project>_code_embeddings`);
+  or the shared table filtered by `repo`-prefixed `filepath` at search time
+  (tag-scoped variant)
+- **CocoIndex state**: Separate SQLite databases (`cocoindex.db` vs `<project>-cocoindex.db`)
+  (full variant only — the tag-scoped variant adds no new CocoIndex app at all)
+- **MCP routing**: One workspace route maps to the project's mounted TOML `instances` entry; the optional Kubernaut RCA backend is configured as data, not a new gateway branch
+- **GitHub issues/PRs totals**: scoped per project via `issues_repos` in
+  `~/.engram/projects.toml` — a project with no `issues_repos` key
+  (e.g. the no-issues-bank variant) simply contributes nothing to any total, rather
+  than defaulting to one hardcoded repo (the pre-2026-07-15 behavior; see FINDINGS.md)
+- **Shared**: `cursor-memory` bank (behavioral corrections), Hindsight API instance, PostgreSQL

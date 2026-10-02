@@ -2,8 +2,8 @@
 # (docs, code, issues, transcripts). Direct analog of
 # launchd/io.vectorize.cocoindex.service.plist.
 #
-# Runs natively via the same `uv`-managed venv as the hourly/nightly units --
-# see engram-hindsight-hourly.service for rationale. Project paths, repository
+# Runs natively via the same `uv`-managed venv as the maintenance units -- see
+# engram-hindsight-hourly.service for rationale. Project paths, repository
 # mappings, and service settings are read from ~/.engram/projects.toml;
 # credentials remain in ~/.engram/config.env.
 #
@@ -20,7 +20,7 @@ After=network-online.target
 Type=simple
 WorkingDirectory=%h/.engram
 EnvironmentFile=%h/.engram/config.env
-ExecStart=%h/.engram/venv/bin/python3 %h/.engram/cocoindex-flows.py --mode live
+ExecStart=%h/.engram/venv/bin/engram-flows-kubernaut --mode live
 Restart=on-failure
 RestartSec=10
 StandardOutput=append:%h/.engram/logs/cocoindex-stdout.log

@@ -13,7 +13,7 @@ does and why, see the [root README](../README.md).
 - [Semantic Code Intelligence: Findings and Pilot Decision](SEMANTIC_CODE_INTELLIGENCE.md)
 - [Knowledge Graph and Mental Models](#knowledge-graph-and-mental-models)
 - [How Correction Detection Works](#how-correction-detection-works)
-- [Backup and Restore](#backup-and-restore)
+- [Backup, Restore, and Recovery](#backup-restore-and-recovery)
 
 See also: [Installation Guide](INSTALL.md) | [Metrics and Monitoring](METRICS.md) | [Dashboard](DASHBOARD.md)
 
@@ -24,13 +24,13 @@ See also: [Installation Guide](INSTALL.md) | [Metrics and Monitoring](METRICS.md
 ```mermaid
 flowchart LR
     subgraph session["During Sessions (zero LLM cost)"]
-        A[Cursor Agent] -->|recall ~600ms| B[Hindsight]
+        A[OpenCode/OpenChamber Agent] -->|recall ~600ms| B[Hindsight]
         B -->|"corrections + mental models"| A
         B --- emb[Local embeddings]
         B --- rnk[Local reranker]
     end
 
-    subgraph nightly["Nightly Batch (2 AM)"]
+    subgraph maintenance["On-Demand Learning"]
         C[Transcripts] -->|scan| D[Correction windows]
         D -->|retain| E["Haiku 4.5 (extract patterns)"]
         E -->|reflect| F["Sonnet 4.6 (synthesize models)"]
@@ -43,7 +43,7 @@ flowchart LR
 | Decision | Rationale |
 |----------|-----------|
 | **Recall-only during sessions** | Zero token cost, pure local vector search (~600ms) |
-| **Retain in periodic batches (hourly + nightly)** | Hourly (`--mode hourly`, 2h window) keeps latency to ~1-2h; nightly is the catch-all plus reflect/probes/triage |
+| **Retain/reflect on demand** | Explicit maintenance runs keep LLM cost visible and bounded; CocoIndex handles source freshness without an LLM |
 | **Haiku 4.5 for extraction** | 10x cheaper than Sonnet for structured pattern extraction |
 | **Sonnet 4.6 for reflection** | Complex reasoning about what patterns are effective |
 | **Correction and instruction-focused** | Learns from corrections and explicit instructions |
@@ -52,19 +52,18 @@ flowchart LR
 
 ### Data Freshness
 
-With CocoIndex integration, `kubernaut-docs` and `kubernaut-issues` banks are
-now continuously fresh — CocoIndex runs as a KeepAlive launchd service, detects
+With CocoIndex integration, each configured project's docs and issues banks are
+continuously fresh — CocoIndex runs as a KeepAlive service, detects
 source changes via delta processing, and re-ingests only the modified content.
-This replaces the previous batch ingestion model (nightly `ingest-issues.py`,
-manual `ingest-docs.py`) with sub-hour staleness for docs/issues and sub-minute
-freshness for code.
+This replaces legacy batch importers with sub-hour staleness for docs/issues and
+sub-minute freshness for code.
 
 | Source | Previous Model | CocoIndex Model | Target Freshness |
 |--------|---------------|-----------------|------------------|
-| Docs | Manual `ingest-docs.py` | File-watching (instant) | < 1 hour |
-| Issues + PRs | Nightly `ingest-issues.py` (500 cap) | Polling every 5 min (all items) | < 5 minutes |
+| Docs | Legacy batch importer | File-watching (instant) | < 1 hour |
+| Issues + PRs | Legacy batch importer | Polling every 5 min (all items) | < 5 minutes |
 | Code | Not indexed | File-watching (instant) + hybrid search | < 5 minutes |
-| Transcripts | Nightly batch | File-watching (instant) | < 1 hour |
+| Transcripts | Manual maintenance run | File-watching (instant) | < 1 hour |
 
 ---
 
@@ -72,16 +71,22 @@ freshness for code.
 
 ```mermaid
 graph TB
-    subgraph cursor["Cursor IDE"]
-        mcp_cfg["mcp.json"]
+    subgraph client["OpenCode / OpenChamber"]
+        mcp_cfg["~/.engram/opencode.json"]
+        plugin["Engram V2 plugin"]
         rule["hindsight-memory.mdc"]
         hooks["hooks.json"]
-        serena["Serena MCP<br/>(gopls/pyright/rust-analyzer/tsserver)"]
-        code_mcp["code-index MCP"]
+        engram_mcp["one Engram MCP route"]
     end
 
-    subgraph engram["Hindsight (native macOS :8888)"]
-        proxy["hindsight-proxy.py (:8888, never restarts)"]
+    subgraph gateway["Engram gateway (:8896 runtime / :8898 native)"]
+        relay["Route + backend aggregation"]
+        serena["Serena backend"]
+        code_mcp["CocoIndex code search"]
+    end
+
+    subgraph engram["Hindsight (:8888)"]
+        proxy["engram-hindsight-proxy (:8888, never restarts)"]
         api["FastAPI server (blue/green, internal :18888/:18889)"]
         pg["Embedded Postgres (pg0)"]
         emb["MPS/ONNX embeddings"]
@@ -90,8 +95,8 @@ graph TB
     end
 
     subgraph cocoindex_engine["CocoIndex"]
-        coco_flows["cocoindex-flows.py"]
-        coco_search["cocoindex-search.py"]
+        coco_flows["engram-flows-<project>"]
+        coco_search["engram-search-<project>"]
     end
 
     subgraph vertex["Vertex AI (global)"]
@@ -103,12 +108,15 @@ graph TB
         proxy_plist["proxy.plist (KeepAlive, never restarted)"]
         svc["service-blue/green.plist (KeepAlive)"]
         restart_plist["restart.plist (1 AM, blue/green swap)"]
-        nightly_plist["nightly.plist (2 AM)"]
+        maintenance_plist["optional maintenance job"]
         coco_plist["cocoindex.plist (KeepAlive)"]
     end
 
-    cursor -->|"MCP HTTP ×3 banks"| proxy
-    cursor -->|"hybrid code search"| coco_search
+    client --> engram_mcp
+    engram_mcp --> relay
+    relay --> proxy
+    relay --> serena
+    relay --> code_mcp
     proxy -->|"active color, re-read per connection"| api
     api --> pg
     api --> emb
@@ -117,7 +125,7 @@ graph TB
     proxy_plist --> proxy
     svc --> api
     restart_plist -->|"health-checked swap, never 8888 downtime"| svc
-    nightly_plist --> nightly_script["nightly-learn.py"]
+    maintenance_plist --> nightly_script["engram-nightly-learn"]
     coco_plist --> coco_flows
     nightly_script --> api
     coco_flows --> pg
@@ -130,27 +138,28 @@ graph TB
 | Component | Location | Purpose |
 |-----------|----------|---------|
 | Project source | `<your-clone>/engram/` | Code pushed to GitHub |
-| LLM config | `~/.engram/config.env` | Real project IDs, model names (never committed) |
-| Hindsight process | `~/.engram/hindsight-venv/bin/hindsight-api` | Native macOS service (launchd managed) |
-| MCP config | OpenCode plugin (`opencode.json`) | Derives the project route and connects to the unified Engram gateway |
-| Serena | [oraios/serena](https://github.com/oraios/serena) (LSP-wrapping MCP server) | Type-aware code intelligence — `find_symbol`/`find_referencing_symbols`/`get_symbols_overview`/diagnostics, backed by the real per-language LSP (`gopls`/`pyright`/`rust-analyzer`/`typescript-language-server`) — see [Division of Labor](#hindsight-vs-cocoindex-vs-serena-division-of-labor) below |
-| Cursor rule | `~/.cursor/rules/hindsight-memory.mdc` | Instructs agent to recall from all three banks |
+| Deployment config | `~/.engram/projects.toml` | Paths, repositories, banks, index policy, and project routes (never committed) |
+| Runtime secrets | `~/.engram/config.env` | Credentials and LLM/runtime secrets (never committed) |
+| Hindsight process | `~/.engram/hindsight-venv/bin/hindsight-api` or Podman Quadlet | Native macOS service or containerized Linux service |
+| MCP config | OpenCode plugin + `~/.engram/opencode.json` | Derives the project route and connects to the unified Engram gateway |
+| Serena | [oraios/serena](https://github.com/oraios/serena) behind the gateway | Type-aware code intelligence — `find_symbol`/`find_referencing_symbols`/`get_symbols_overview`/diagnostics, backed by the real per-language LSP (`gopls`/`pyright`/`rust-analyzer`/`typescript-language-server`) — see [Division of Labor](#hindsight-vs-cocoindex-vs-serena-division-of-labor) below |
+| Behavioral rule | `cursor/examples/*.mdc` or the OpenCode plugin | Instructs the agent to recall and follow project methodology |
 | Example rules | `cursor/examples/*.mdc` | Ready-made rules for Go, Python, Rust, TypeScript, minimal |
-| Nightly script | `nightly-learn.py` (symlinked to `~/.engram/`) | Processes transcripts, extracts patterns |
-| Doc ingestion | `ingest-docs.py` | One-time doc ingestion (deprecated — use CocoIndex) |
-| Issue ingestion | `ingest-issues.py` | Manual issues ingestion (deprecated — use CocoIndex) |
-| Mental models | `create-mental-models.py` | Create/refresh mental models across all banks |
-| Memory triage | `triage-memories.py` | Nightly cleanup of low-value memories (ephemeral, stale, duplicate) |
-| Memory recovery | `recover-memories.py` | One-time full reprocessing of all transcripts to rebuild the bank |
-| Effectiveness report | `report.py` | Metrics aggregation, token analysis, mental model stats |
-| Dashboard generator | `generate-dashboard.py` | Auto-updates `docs/DASHBOARD.md` from daily reports |
+| Learning job | `engram-nightly-learn` | Processes transcripts, extracts patterns |
+| Doc/issue ingestion | `engram-flows-<project>` | Continuous docs/issues ingestion through the configured flow |
+| Mental models | `engram.maintenance.create_mental_models` | Create/refresh configured mental models |
+| Memory triage | `python -m engram.pipeline.triage_memories` | On-demand cleanup of low-value memories (ephemeral, stale, duplicate) |
+| Memory recovery | `python -m engram.maintenance.recover_memories` | One-time full reprocessing of all transcripts to rebuild the bank |
+| Effectiveness report | `python -m engram.maintenance.report` | Metrics aggregation, token analysis, mental model stats |
+| Dashboard generator | `python -m engram.pipeline.generate_dashboard` | Auto-updates `docs/DASHBOARD.md` from daily reports |
 | MCP hook | `cursor/hooks.json` + `hooks/log-mcp-calls.sh` | Real-time MCP call logging with hit/miss |
-| CocoIndex flows | `flows/cocoindex-flows.py` (symlinked to `~/.engram/`) | Incremental ingestion for docs, issues, code, transcripts |
-| Code search | `search/cocoindex-search.py` | MCP hybrid code search (dense + BM25 via RRF fusion) |
-| Proxy | `hindsight-proxy.py` (symlinked to `~/.engram/`) | Sole owner of port 8888; never restarts, so Cursor's MCP connection never drops |
+| CocoIndex flows | `engram-flows-<project>` | Incremental ingestion for docs, issues, code, transcripts |
+| Code search | `engram-search-<project>` behind the gateway | MCP hybrid code search (dense + BM25 via RRF fusion) |
+| Gateway | Runtime image/native gateway | Sole client-facing MCP route; aggregates Hindsight, CocoIndex, Serena, and optional backends |
+| Hindsight proxy | `engram-hindsight-proxy` | Sole owner of port 8888; blue/green API restarts happen behind it |
 | Service plists | `~/Library/LaunchAgents/io.vectorize.hindsight.service-{blue,green}.plist` | KeepAlive + RunAtLoad; exactly one active at a time, bound to an internal port (18888/18889) |
 | Restart plist | `~/Library/LaunchAgents/io.vectorize.hindsight.restart.plist` | 1 AM: runs `hindsight-blue-green-restart.sh` — health-checked blue/green swap, not a raw `pkill` |
-| Nightly plist | `~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist` | Midnight execution |
+| Maintenance plist | Optional deployment-local launchd job | Only when an operator deliberately schedules maintenance |
 | CocoIndex plist | `~/Library/LaunchAgents/io.vectorize.cocoindex.service.plist` | KeepAlive continuous sync |
 | Persistent storage | `~/.pg0/instances/hindsight/data/` | PostgreSQL data (survives reboots) |
 | Logs | `~/.engram/logs/` | Daily JSON reports + recall-signals.jsonl |
@@ -160,9 +169,9 @@ graph TB
 | Bank | Content | Extraction Mode | LLM Cost |
 |------|---------|-----------------|----------|
 | `cursor-memory` | Corrections, instructions, workflow patterns | `concise` | Haiku 4.5 per window |
-| `kubernaut-docs` | Published architecture, API, operations docs | `chunks` | $0 (embeddings only) |
-| `kubernaut-issues` | GitHub issues + PRs: requirements, decisions, known bugs, design reviews | `chunks` | $0 (embeddings only) |
-| `code-index` | Codebase semantic chunks (Go functions, types, blocks) | `tree-sitter + dense embed + BM25 tsvector` | $0 (local embeddings) |
+| `<project>-docs` | Published architecture, API, operations docs | `chunks` | $0 (embeddings only) |
+| `<project>-issues` | GitHub issues + PRs or Jira work items | `chunks` | $0 (embeddings only) |
+| `<project>` code table | Codebase semantic chunks (functions, types, blocks) | `tree-sitter + dense embed + BM25 tsvector` | $0 (local embeddings) |
 
 ---
 
@@ -185,10 +194,10 @@ makes an agent's context both fresh and correct:
   issues/PRs, and transcripts all drift constantly under a real repo;
   CocoIndex notices immediately (filesystem watching for docs/code/
   transcripts, 5-minute GitHub polling for issues/PRs) instead of waiting
-  for a nightly batch. For docs/issues/transcripts, it hands what changed to
+  for a manual batch. For docs/issues/transcripts, it hands what changed to
   Hindsight's `retain` API, so distilled memory is never far behind the
-  source. For code, it's fully self-contained — owns the `code-index`
-  pgvector table and serves hybrid search, structural pattern search, and
+  source. For code, it's fully self-contained — owns the configured project
+  pgvector code table and serves hybrid search, structural pattern search, and
   call-graph extraction/clustering directly. No LLM anywhere in this layer.
 - **Hindsight — remembers, synthesizes, and forgets on purpose.** Raw facts
   (many arriving fresh via CocoIndex) are worth little on their own —
@@ -196,8 +205,9 @@ makes an agent's context both fresh and correct:
   lesson (`retain`, Haiku), synthesizes many such facts into one coherent
   mental model (`reflect`, Sonnet), detects when a new fact contradicts
   something already stored, and prunes ephemeral/stale/duplicate noise
-  nightly. The only layer with any LLM involvement, and the only one
-  reasoning across sessions rather than answering one live query.
+  during explicit maintenance runs. The only layer with any LLM involvement,
+  and the only one reasoning across sessions rather than answering one live
+  query.
 - **Serena — knows and safely edits, live and exact.** Neither of the above
   has real compiler-level understanding of code — Serena does, via each
   language's actual LSP (`gopls`/`pyright`/`rust-analyzer`/
@@ -222,11 +232,11 @@ makes an agent's context both fresh and correct:
 |---|---|---|---|
 | **Core job** | Memory: judge what's worth remembering, store it, reason about it, serve it back | Ingestion + search: detect what changed at the source, keep the index fresh, answer "about X" (semantic) and "shaped like X" (structural) queries | Code intelligence: real symbol lookup/find-references/diagnostics *and* semantic refactoring, via the language's actual LSP, anchored to a known symbol or file position |
 | **LLM involved** | Yes — Haiku extracts durable facts from raw windows (`retain`), Sonnet synthesizes mental models (`reflect`) | No — pure local embeddings (`all-MiniLM-L6-v2`) + tree-sitter parsing, zero LLM cost | No — delegates entirely to the LSP (`gopls`/`pyright`/`rust-analyzer`/`typescript-language-server`), zero LLM cost |
-| **Storage it owns** | `cursor-memory`, `kubernaut-docs`, `kubernaut-issues` banks (its own schema/API) | `code-index` pgvector table only (self-managed table in the same Postgres instance) | None persisted — no index, no database; per-session LSP process state only (`--add-mode no-memories` disables even Serena's own optional memory-notes feature, see `docs/findings/2026-08.md`'s 2026-08-21 entry) |
+| **Storage it owns** | `cursor-memory`, `<project>-docs`, `<project>-issues` banks (its own schema/API) | Configured project code table only (self-managed table in the same Postgres instance) | None persisted — no index, no database; per-session LSP process state only (`--add-mode no-memories` disables even Serena's own optional memory-notes feature, see `docs/findings/2026-08.md`'s 2026-08-21 entry) |
 | **Retrieval it serves** | `recall` — semantic vector search + local reranker over distilled facts | Hybrid dense + BM25 (RRF fusion) for "about X"; `CodePattern` structural by-example matching for "shaped like X" | `find_symbol` / `find_referencing_symbols` / `get_symbols_overview` / diagnostics — type-resolved, exact; **cannot** search by free-text concept or by shape at all |
 | **Edits it can perform** | None — read/reason/store only, no code mutation | None — indexing/search only, no code mutation | `rename_symbol` / `replace_symbol_body` — applied via the compiler's own understanding of the code, not text search-replace, so every real reference updates correctly and an unrelated same-named match in a different scope is never touched. The only one of the three that can safely mutate code at all |
 | **Higher-order reasoning** | Mental models (synthesizes many facts into a coherent doc), contradiction detection/resolution, project tagging | None — it doesn't synthesize or judge, it just chunks and indexes | None — no synthesis; every answer is a live fact from the compiler/LSP, nothing remembered between calls |
-| **Freshness mechanism** | None built-in — needs something to call `retain` (nightly batch or CocoIndex) | File-watching / 5-min polling — the reason docs/issues/code went from nightly-batch to sub-hour/sub-minute fresh | Always live by construction — queries the real LSP against the current checkout on every call, so there's no index to go stale (trade-off: slower per-call on cold cache, and only as correct as what's actually on disk right now) |
+| **Freshness mechanism** | None built-in — needs something to call `retain` (manual maintenance or CocoIndex) | File-watching / 5-min polling — the reason docs/issues/code went from legacy batch ingestion to sub-hour/sub-minute fresh | Always live by construction — queries the real LSP against the current checkout on every call, so there's no index to go stale (trade-off: slower per-call on cold cache, and only as correct as what's actually on disk right now) |
 | **Query starting point** | Free-text query (semantic) | Free-text query (semantic) or a shape/pattern (structural) | A **known** symbol name or file/line position — cannot answer "find code about rate limiting," only "what is/references/implements/should-become *this specific thing*" |
 | **Code-aware chunking / resolution** | None (would chunk by paragraph/token count) | Tree-sitter AST parsing — chunks by function/type/method boundary, syntactic only (no type resolution) | Full type resolution via the real compiler/LSP — the only one of the three that understands imports, generics, and interface satisfaction, not just syntax |
 | **Language coverage** | Language-agnostic — banks are plain text/facts, no code-shape awareness at all | Language-agnostic where CocoIndex ships a tree-sitter grammar (Python/TypeScript/Rust/Go here) | Language-agnostic by construction — one consistent tool surface regardless of which real LSP backs it (`gopls`/`pyright`/`rust-analyzer`/`typescript-language-server`); adding a new language means adding an LSP, not new Serena logic |
@@ -234,16 +244,14 @@ makes an agent's context both fresh and correct:
 **Relationship, not overlap**: for three of CocoIndex's four flows (docs, issues,
 transcripts), CocoIndex is purely the ingestion/freshness layer — it detects a
 change, chunks and embeds it, then calls Hindsight's `retain` API, which owns
-storage and serves it back out over its own MCP tools (`hindsight`,
-`hindsight-docs`, `hindsight-issues`). For the fourth flow (code), CocoIndex is
-fully independent end to end — it writes into its own `code-index` table and
-serves queries itself via `cocoindex_search`/`engram_code_search`; Hindsight
-has no visibility into that data at all. Serena is independent of *both* — it
-has no launchd service, no Postgres table, and no `retain`/ingestion step; it
-is registered per-project in `~/.serena/serena_config.yml` and answers every
-query live against the checkout via its own MCP tool surface
+storage and serves it through the project's gateway route. For the fourth flow
+(code), CocoIndex is fully independent end to end — it writes into the
+configured project code table and serves hybrid queries through the gateway;
+Hindsight has no visibility into that data at all. Serena is independent of
+*both* — it has no stored index or `retain`/ingestion step; the gateway invokes
+it live against the checkout through its own MCP tool surface
 (`find_symbol`/`find_referencing_symbols`/etc., see
-[NEW_PROJECT_SETUP.md §7](NEW_PROJECT_SETUP.md#7-choose-your-code-intelligence-backend)).
+[NEW_PROJECT_SETUP.md](NEW_PROJECT_SETUP.md#code-intelligence)).
 
 **Could one replace another?** No, not cleanly in any direction:
 
@@ -254,7 +262,7 @@ query live against the checkout via its own MCP tool surface
   coherent mental model, and detecting/resolving when a new correction
   contradicts something already stored. This isn't hypothetical: CocoIndex's
   own transcripts flow (regex-based, no LLM) is explicitly a *supplement*,
-  not a replacement, for the nightly Hindsight-based learning pipeline — it
+  not a replacement, for the manual Hindsight-based learning pipeline — it
   can't do that extraction/reflection work itself.
 - **Hindsight replacing CocoIndex** for code search would be a real downgrade.
   Hindsight's zero-cost `chunks` extraction mode could technically hold code,
@@ -284,7 +292,7 @@ and exact-identifier matching Hindsight was never built to do. Serena sits
 orthogonally to both — it's the only one with real compiler-level
 understanding of the code, but purely reactive (must already know what symbol
 to ask about) and stateless across sessions. Remove CocoIndex and Hindsight
-still works, just back to stale nightly-batch ingestion and zero code search.
+still works, just back to stale batch ingestion and zero code search.
 Remove Hindsight and CocoIndex still works for code search, but
 `cursor-memory`/docs/issues lose all LLM-based judgment, becoming a dumb,
 ever-growing chunk store with no forgetting, synthesis, or contradiction
@@ -300,14 +308,15 @@ missed-reference risk) for renames and edits.
 flowchart LR
     subgraph public["GitHub (public)"]
         start["start.sh"]
-        nightly["nightly-learn.py"]
+        maintenance["engram-nightly-learn"]
         docs["docs/"]
         example["config.env.example"]
         hook[".githooks/pre-commit"]
     end
 
     subgraph local["Local only (~/.engram/, ~/.pg0/)"]
-        config["config.env (project IDs)"]
+        config["config.env (secrets)"]
+        projects["projects.toml (paths and policy)"]
         pgdata["PostgreSQL data"]
         logs["logs/ (daily reports)"]
         adc["application_default_credentials.json"]
@@ -315,6 +324,9 @@ flowchart LR
 
     hook -.->|"blocks secrets"| public
     start -->|"reads"| config
+    start -->|"reads"| projects
+    maintenance -->|"reads"| config
+    maintenance -->|"reads"| projects
 ```
 
 ---
@@ -334,13 +346,13 @@ flowchart TB
     T1 -->|"no match"| T2 -->|"expand"| T3
 ```
 
-> **Note:** Code search (`code-index`) runs as a parallel MCP tool
-> (`cocoindex-search.py`), not through Hindsight's recall pipeline. It queries
+> **Note:** Code search runs as a parallel gateway tool, not through Hindsight's
+> recall pipeline. It queries
 > a separate pgvector table maintained by CocoIndex using **hybrid search** —
 > dense vector similarity for semantic queries and BM25 full-text matching for
-> exact identifiers, fused via Reciprocal Rank Fusion (RRF). It is invoked
-> directly by the Cursor agent alongside — not instead of — the 3-tier recall
-> hierarchy.
+> exact identifiers, fused via Reciprocal Rank Fusion (RRF). OpenCode invokes it
+> through the project's Engram route alongside — not instead of — the 3-tier
+> recall hierarchy.
 
 ### Entity Graph
 
@@ -358,15 +370,15 @@ Mental models are persistent, LLM-synthesized documents that sit above raw facts
 
 | Bank | Model ID | Purpose | Refresh |
 |------|----------|---------|---------|
-| `cursor-memory` | `coding-conventions` | Naming, style, structure preferences | After consolidation |
-| `cursor-memory` | `testing-methodology` | Test frameworks, patterns, coverage expectations | After consolidation |
-| `cursor-memory` | `workflow-preferences` | Dev workflow, review process, tooling choices | After consolidation |
+| `cursor-memory` | `coding-conventions` | Naming, style, structure preferences | Maintenance run |
+| `cursor-memory` | `testing-methodology` | Test frameworks, patterns, coverage expectations | Maintenance run |
+| `cursor-memory` | `workflow-preferences` | Dev workflow, review process, tooling choices | Maintenance run |
 | `cursor-memory` | `architecture-decisions` | Design patterns, tech choices | Manual |
 | `kubernaut-docs` | `ka-architecture` | KA service components, data flow, integration | Manual |
 | `kubernaut-docs` | `af-pipeline` | AF pipeline stages, events, decisions | Manual |
 | `kubernaut-docs` | `platform-topology` | Service interactions, infrastructure | Manual |
-| `kubernaut-issues` | `active-priorities` | Open issues, priorities, platform direction | Nightly |
-| `kubernaut-issues` | `known-bugs` | Known bugs, root causes, workarounds | Nightly |
+| `kubernaut-issues` | `active-priorities` | Open issues, priorities, platform direction | Manual |
+| `kubernaut-issues` | `known-bugs` | Known bugs, root causes, workarounds | Manual |
 
 #### Manual Model Content
 
@@ -383,21 +395,23 @@ True cross-bank entity linking is not natively supported (entities are per-bank)
 
 - The **same entity names** (e.g., "KA", "rate limiter") appear across all three banks
 - When the agent recalls a topic, it hits mental models in multiple banks simultaneously
-- The Cursor rule instructs recall from all three banks in parallel
+- The OpenCode plugin/rule instructs recall from all configured banks in parallel
 
 The entity graph within each bank handles intra-bank association. Mental models lift this into cross-bank coherence by synthesizing the same topic from different angles (behavior vs. docs vs. issues).
 
 #### Cost
 
 - **Creation**: ~$0.50 one-time (9 models × Sonnet 4.6 reflect call)
-- **Delta refresh**: ~$0.02 per refresh (only new facts since last refresh)
+- **Delta refresh**: ~$0.02 per maintenance refresh (only new facts since last refresh)
 - **Recall benefit**: one coherent block replaces many scattered facts → fewer total tokens in agent context
 
 ---
 
 ## How Correction Detection Works
 
-The nightly script scans Cursor agent transcripts (`.jsonl` files) for user messages that indicate the assistant made a mistake. It uses targeted regex patterns:
+The `engram-nightly-learn` job scans agent transcripts (`.jsonl` files) for user
+messages that indicate the assistant made a mistake. It uses targeted regex
+patterns:
 
 ```python
 "no that's wrong/incorrect"      # explicit rejection
@@ -454,13 +468,13 @@ agent transcripts — the authoritative source of truth:
 
 ```bash
 # Dry-run: show how many learning windows would be recovered
-python3 recover-memories.py
+python3 -m engram.maintenance.recover_memories
 
 # Full recovery: reprocess all transcripts
-python3 recover-memories.py --apply
+python3 -m engram.maintenance.recover_memories --apply
 
 # Limit to last 30 days
-python3 recover-memories.py --apply --max-age 30
+python3 -m engram.maintenance.recover_memories --apply --max-age 30
 ```
 
 The recovery script:
@@ -468,15 +482,15 @@ The recovery script:
 2. Resets both to force full reprocessing
 3. Scans all transcripts for corrections and instructions
 4. Re-extracts learning windows via Haiku extraction
-5. Restores watermarks so the nightly pipeline resumes normally
+5. Restores watermarks so the next maintenance run resumes normally
 
 This is slower than a database restore (each window goes through LLM extraction)
 but works even when no database backup exists. The cost is approximately the
-same as a fresh install's first nightly run (~$0.02 per window via Haiku 4.5).
+same as a fresh install's first maintenance run (~$0.02 per window via Haiku 4.5).
 
-### Memory triage (nightly cleanup)
+### Memory triage (on-demand cleanup)
 
-The nightly pipeline includes a triage phase that removes low-value memories
+The maintenance pipeline includes a triage phase that removes low-value memories
 (ephemeral narration, stale snapshots, near-duplicates) to keep retrieval
 relevant. See [Metrics — Memory Triage](METRICS.md#memory-triage) for details.
 
@@ -486,9 +500,9 @@ relevant. See [Metrics — Memory Triage](METRICS.md#memory-triage) for details.
 
 - **[Project Overview](../README.md)** — what Engram is, quick start, cost summary
 - **[Installation Guide](INSTALL.md)** — full setup from prerequisites to verification
-- **[Customizing the Rule](INSTALL.md#customizing-the-rule)** — adapt the Cursor rule for your project (Python, Rust, etc.)
+- **[Customizing the Rule](INSTALL.md#customizing-the-rule)** — adapt the behavioral rule for your project (Python, Rust, etc.)
 - **[CocoIndex Operations](COCOINDEX.md)** — flow catalog, running modes, monitoring, troubleshooting
 - **[Metrics and Monitoring](METRICS.md)** — observability, effectiveness tracking, report interpretation
-- **[Effectiveness Dashboard](DASHBOARD.md)** — daily metrics trend, auto-updated by nightly pipeline
+- **[Effectiveness Dashboard](DASHBOARD.md)** — metrics trend, updated by maintenance runs
 - **[Research Findings](FINDINGS.md)** — index of empirical results, incidents, and lessons learned; entries live in per-month files under `findings/` as of 2026-08-03
 - **[Red Hat Chai Bot and Fullsend Research](REDHAT_CHAI_BOT_RESEARCH.md)** — public research on Chai Bot, Fullsend memory, and the deterministic agent harness

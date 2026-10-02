@@ -6,7 +6,7 @@ pg_pool_min_size = 2
 pg_pool_max_size = 5
 
 [projects.kubernaut]
-banks = ["cursor-memory", "kubernaut-docs", "kubernaut-issues"]
+banks = ["shared-memory", "kubernaut-docs", "kubernaut-issues"]
 recall_banks = ["hindsight", "hindsight-docs", "hindsight-issues", "cocoindex-code"]
 code_bank = "cocoindex-code"
 coverage_prefix = ""
@@ -40,11 +40,11 @@ transcript_watermarks = "~/.engram/logs/cocoindex-transcript-watermarks.json"
 
 [projects.kubernaut.mental_models]
 kubernaut-issues = ["active-priorities", "known-bugs"]
-cursor-memory = ["workflow-preferences", "architecture-decisions", "testing-methodology", "coding-conventions"]
+shared-memory = ["workflow-preferences", "architecture-decisions", "testing-methodology", "coding-conventions"]
 kubernaut-docs = ["af-pipeline", "platform-topology", "ka-architecture", "operator-architecture", "console-architecture"]
 
 [[projects.kubernaut.probes]]
-bank = "cursor-memory"
+bank = "shared-memory"
 query = "Go testing conventions and patterns"
 [[projects.kubernaut.probes]]
 bank = "kubernaut-docs"
@@ -66,7 +66,7 @@ bank = "kubernaut-docs"
 query = "kubernaut-console UI components and platform API usage"
 
 [projects.dcm]
-banks = ["cursor-memory", "dcm-docs", "dcm-issues"]
+banks = ["shared-memory", "dcm-docs", "dcm-issues"]
 recall_banks = ["hindsight", "dcm-docs", "dcm-issues", "dcm-code"]
 code_bank = "dcm-code"
 coverage_prefix = "dcm_"
@@ -110,7 +110,7 @@ cocoindex_db = "~/.engram/dcm-cocoindex.db"
 [projects.dcm.mental_models]
 dcm-docs = ["dcm-architecture", "dcm-enhancements", "dcm-api-contracts"]
 dcm-issues = ["active-priorities", "known-bugs"]
-cursor-memory = ["dcm-workflow-preferences", "dcm-architecture-decisions", "dcm-testing-methodology", "dcm-coding-conventions"]
+shared-memory = ["dcm-workflow-preferences", "dcm-architecture-decisions", "dcm-testing-methodology", "dcm-coding-conventions"]
 
 [[projects.dcm.probes]]
 bank = "dcm-docs"
@@ -123,7 +123,7 @@ bank = "dcm-issues"
 query = "open issues and active priorities"
 
 [projects.engram]
-banks = ["cursor-memory", "engram-docs"]
+banks = ["shared-memory", "engram-docs"]
 recall_banks = ["hindsight", "hindsight-docs", "cocoindex-code"]
 code_bank = "cocoindex-code"
 coverage_prefix = "engram_"
@@ -137,7 +137,7 @@ cocoindex_db = "~/.engram/engram-cocoindex.db"
 
 [projects.engram.mental_models]
 engram-docs = ["engram-architecture", "engram-operations"]
-cursor-memory = ["engram-workflow-preferences", "engram-architecture-decisions", "engram-testing-methodology", "engram-coding-conventions"]
+shared-memory = ["engram-workflow-preferences", "engram-architecture-decisions", "engram-testing-methodology", "engram-coding-conventions"]
 
 [[projects.engram.probes]]
 bank = "engram-docs"
@@ -147,7 +147,7 @@ bank = "engram-docs"
 query = "project scoping allowlist for transcript ingestion"
 
 [projects.koku]
-banks = ["cursor-memory", "koku-docs", "koku-issues"]
+banks = ["shared-memory", "koku-docs", "koku-issues"]
 recall_banks = ["hindsight", "koku-docs", "koku-issues", "koku-code"]
 code_bank = "koku-code"
 coverage_prefix = "koku_"
@@ -171,7 +171,7 @@ cocoindex_db = "~/.engram/koku-cocoindex.db"
 [projects.koku.mental_models]
 koku-docs = ["koku-architecture", "koku-operations"]
 koku-issues = ["active-priorities", "known-bugs"]
-cursor-memory = ["koku-workflow-preferences", "koku-architecture-decisions", "koku-testing-methodology", "koku-coding-conventions"]
+shared-memory = ["koku-workflow-preferences", "koku-architecture-decisions", "koku-testing-methodology", "koku-coding-conventions"]
 
 [[projects.koku.probes]]
 bank = "koku-docs"
@@ -184,7 +184,7 @@ bank = "koku-issues"
 query = "open issues and active priorities"
 
 [projects.praxis]
-banks = ["cursor-memory", "praxis-docs", "praxis-issues"]
+banks = ["shared-memory", "praxis-docs", "praxis-issues"]
 recall_banks = ["hindsight", "praxis-docs", "praxis-issues", "praxis-code"]
 code_bank = "praxis-code"
 coverage_prefix = "praxis_"
@@ -265,7 +265,7 @@ cocoindex_db = "~/.engram/praxis-cocoindex.db"
 [projects.praxis.mental_models]
 praxis-docs = ["praxis-architecture", "praxis-enhancements", "praxis-api-contracts"]
 praxis-issues = ["active-priorities", "known-bugs", "praxis-roadmap-priorities"]
-cursor-memory = ["praxis-workflow-preferences", "praxis-architecture-decisions", "praxis-testing-methodology", "praxis-coding-conventions"]
+shared-memory = ["praxis-workflow-preferences", "praxis-architecture-decisions", "praxis-testing-methodology", "praxis-coding-conventions"]
 
 [[projects.praxis.probes]]
 bank = "praxis-docs"
@@ -352,7 +352,7 @@ bank = "kuadrant-issues"
 query = "recent Kuadrant issues and design decisions relevant to policy APIs"
 
 [projects.rhdh-plugins]
-banks = ["cursor-memory", "rhdh-plugins-docs", "rhdh-plugins-issues"]
+banks = ["shared-memory", "rhdh-plugins-docs", "rhdh-plugins-issues"]
 recall_banks = ["hindsight", "rhdh-plugins-docs", "rhdh-plugins-issues", "rhdh-plugins-code"]
 code_bank = "rhdh-plugins-code"
 coverage_prefix = "rhdh_plugins_"
@@ -369,7 +369,7 @@ cocoindex_db = "~/.engram/rhdh-plugins-cocoindex.db"
 [projects.rhdh-plugins.mental_models]
 rhdh-plugins-docs = ["rhdh-plugins-ai-catalog-rbac-design"]
 rhdh-plugins-issues = ["rhdh-plugins-active-priorities"]
-cursor-memory = ["rhdh-plugins-workflow-preferences", "rhdh-plugins-architecture-decisions", "rhdh-plugins-testing-methodology", "rhdh-plugins-coding-conventions"]
+shared-memory = ["rhdh-plugins-workflow-preferences", "rhdh-plugins-architecture-decisions", "rhdh-plugins-testing-methodology", "rhdh-plugins-coding-conventions"]
 
 [[projects.rhdh-plugins.probes]]
 bank = "rhdh-plugins-docs"

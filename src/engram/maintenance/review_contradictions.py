@@ -8,7 +8,7 @@ model's explanation) and lets you:
 
   [a]pprove  -- invalidate the conflicting memory (non-destructive,
                reversible -- see contradiction_resolution.invalidate_memory()),
-               retain the new statement into cursor-memory (tagged as
+               retain the new statement into shared-memory (tagged as
                superseding it), and remove from the queue. Entries queued
                before 2026-07-29 (GitHub issue #1) have no memory_id and
                fall back to the legacy delete_document(document_id) path.
@@ -89,10 +89,10 @@ def main() -> int:
             old_doc_id = entry.get("document_id")
             if memory_id:
                 reason = f"superseded: {entry['new_statement'][:200]}"
-                invalidated = invalidate_memory("cursor-memory", memory_id, reason=reason)
+                invalidated = invalidate_memory("shared-memory", memory_id, reason=reason)
                 print(f"{'Invalidated' if invalidated else 'Could not invalidate (already gone or not found)'} superseded memory {memory_id}.")
             elif old_doc_id:
-                deleted = delete_document("cursor-memory", old_doc_id)
+                deleted = delete_document("shared-memory", old_doc_id)
                 print(
                     f"{'Deleted' if deleted else 'Could not delete (already gone or not found)'} superseded memory "
                     f"{old_doc_id} (queued before the invalidate fix -- legacy document-level delete)."
@@ -100,7 +100,7 @@ def main() -> int:
             else:
                 print("No memory_id or document_id on this entry (queued before the supersede fix) -- old memory left in place.")
             result = _cf.hindsight_retain(
-                bank_id="cursor-memory",
+                bank_id="shared-memory",
                 content=entry["new_statement"],
                 document_id=f"contradiction-resolved-{entry['id']}",
                 metadata={

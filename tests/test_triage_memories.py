@@ -9,8 +9,8 @@ from engram.pipeline import triage_memories as triage
 
 class TestPraxisDocumentGrouping:
     def test_cursor_memory_legacy_chunk_regex_preserved(self):
-        memory = {"id": "m1", "chunk_id": "cursor-memory_abc-123_0"}
-        assert triage.document_key(memory, "cursor-memory") == "abc-123"
+        memory = {"id": "m1", "chunk_id": "shared-memory_abc-123_0"}
+        assert triage.document_key(memory, "shared-memory") == "abc-123"
 
     def test_praxis_groups_by_document_id(self):
         memory = {"id": "m2", "document_id": "ai-pr-1049-comment0"}
@@ -33,7 +33,7 @@ class TestPraxisClassification:
         memory = {"text": "Use --comments\nfile:///var/folders/abc/praxis.html 30/30"}
         cutoff = datetime.now() - timedelta(days=14)
         assert "format-noise" in triage.classify_memory(memory, cutoff, "praxis-docs")
-        assert "format-noise" not in triage.classify_memory(memory, cutoff, "cursor-memory")
+        assert "format-noise" not in triage.classify_memory(memory, cutoff, "shared-memory")
 
     def test_valuable_pattern_still_wins(self):
         memory = {"text": "Architecture decision: file:///var/folders/abc/x is stored as a chunk."}

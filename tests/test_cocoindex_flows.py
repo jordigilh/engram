@@ -248,7 +248,7 @@ class TestProcessTranscriptProjectTagging:
         nightly-learn.py got tagged with [project] the same day this file's
         parallel process_transcript() retain call did not, so cocoindex-path
         transcripts (e.g. same-day dcm-project/osac-service-provider,
-        kubernaut-v1-5 work) kept landing in cursor-memory untagged even
+        kubernaut-v1-5 work) kept landing in shared-memory untagged even
         though the workspace resolved cleanly. See docs/FINDINGS.md."""
         monkeypatch.setattr(cocoindex_flows, "ENGRAM_TRANSCRIPTS_DIR", tmp_path)
         monkeypatch.setattr(cocoindex_flows, "_extract_learning_windows", lambda messages, start_index=0: [
@@ -610,7 +610,7 @@ class TestHindsightRetain:
                 return json.dumps({"success": True}).encode()
 
         monkeypatch.setattr(cocoindex_flows, "urlopen", lambda req, timeout=60: FakeResponse())
-        result = cocoindex_flows.hindsight_retain(bank_id="cursor-memory", content="x", document_id="doc-1")
+        result = cocoindex_flows.hindsight_retain(bank_id="shared-memory", content="x", document_id="doc-1")
         assert result == {"success": True}
 
     def test_regression_payload_does_not_include_dead_strategy_field(self, cocoindex_flows, monkeypatch):
@@ -636,7 +636,7 @@ class TestHindsightRetain:
             return FakeResponse()
 
         monkeypatch.setattr(cocoindex_flows, "urlopen", fake_urlopen)
-        cocoindex_flows.hindsight_retain(bank_id="cursor-memory", content="x", document_id="doc-1")
+        cocoindex_flows.hindsight_retain(bank_id="shared-memory", content="x", document_id="doc-1")
 
         assert "strategy" not in captured_requests[0]["items"][0]
 
@@ -649,7 +649,7 @@ class TestHindsightRetain:
         monkeypatch.setattr(cocoindex_flows, "urlopen", always_fails)
         monkeypatch.setattr(cocoindex_flows.time, "sleep", lambda *_: None)
 
-        result = cocoindex_flows.hindsight_retain(bank_id="cursor-memory", content="x", document_id="doc-1")
+        result = cocoindex_flows.hindsight_retain(bank_id="shared-memory", content="x", document_id="doc-1")
         assert result == {}
 
 

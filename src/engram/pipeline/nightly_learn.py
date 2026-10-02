@@ -44,7 +44,7 @@ from engram import fallback_extract  # noqa: E402
 from engram import project_scope  # noqa: E402
 
 HINDSIGHT_URL = "http://localhost:8888"
-BANK_ID = "cursor-memory"
+BANK_ID = "shared-memory"
 EPOCH_START_DATE = "2026-06-26"
 BUCKET_TRIVIAL = 5000
 BUCKET_SMALL = 15000
@@ -119,11 +119,11 @@ TOPIC_SHIFT_REFRESH_MIN_INTERVAL_HOURS = float(
     os.environ.get("ENGRAM_TOPIC_SHIFT_REFRESH_MIN_INTERVAL_HOURS", "4")
 )
 # Bank -> mental model ids eligible for a topic-shift refresh. Only
-# cursor-memory is listed: it's the only bank run_hourly() retains into
+# shared-memory is listed: it's the only bank run_hourly() retains into
 # directly (kubernaut-docs/issues and dcm-docs/issues are populated by the
 # separate CocoIndex/ingest-issues pipelines and only refreshed nightly).
 TOPIC_SHIFT_MODELS = {
-    "cursor-memory": ("workflow-preferences", "architecture-decisions", "testing-methodology", "coding-conventions"),
+    "shared-memory": ("workflow-preferences", "architecture-decisions", "testing-methodology", "coding-conventions"),
 }
 
 logging.basicConfig(
@@ -202,7 +202,7 @@ def maybe_refresh_mental_models_on_topic_shift(bank_id: str, new_items_count: in
     same-day topic shift (e.g. a new architecture decision retained this
     afternoon) isn't reflected in recall until the next night at the
     earliest. Each refresh is a real Sonnet resynthesis call (~8-14KB of
-    output per model, confirmed against the live cursor-memory bank during
+    output per model, confirmed against the live shared-memory bank during
     the 2026-07-14 spike), so this supplements rather than replaces the
     nightly unconditional refresh, and is gated by both a minimum new-item
     count (TOPIC_SHIFT_REFRESH_THRESHOLD) and a minimum time between forced
@@ -558,7 +558,7 @@ def retain_windows(windows: list[str], transcript_id: str, project: str | None =
     so any queued/auto-resolved contradiction is tagged with which onboarded
     project it came from (see docs/FINDINGS.md 2026-07-19). It is also written
     onto every retained item's own `tags` field -- see docs/FINDINGS.md
-    2026-07-27 ("DCM recall polluted by kubernaut/FedRAMP content"): cursor-memory
+    2026-07-27 ("DCM recall polluted by kubernaut/FedRAMP content"): shared-memory
     is a deliberately shared bank across kubernaut/dcm/engram for universal
     coding-hygiene lessons, but until this fix every retained fact was
     untagged, so project-specific content (e.g. kubernaut's FedRAMP/NIST-800-53
@@ -1016,17 +1016,17 @@ RECALL_SIGNALS_PATH = LOG_DIR / "recall-signals.jsonl"
 
 PROJECT_CONFIGS = {
     "kubernaut": {
-        "banks": ["cursor-memory", "kubernaut-docs", "kubernaut-issues"],
+        "banks": ["shared-memory", "kubernaut-docs", "kubernaut-issues"],
         "mental_models": {
             "kubernaut-issues": ("active-priorities", "known-bugs"),
-            "cursor-memory": ("workflow-preferences", "architecture-decisions", "testing-methodology", "coding-conventions"),
+            "shared-memory": ("workflow-preferences", "architecture-decisions", "testing-methodology", "coding-conventions"),
             # operator-architecture/console-architecture are tag-scoped views
             # (tags=["kubernaut-operator"]/["kubernaut-console"]) on this same
             # shared bank, not a physical per-repo split -- see docs/FINDINGS.md.
             "kubernaut-docs": ("af-pipeline", "platform-topology", "ka-architecture", "operator-architecture", "console-architecture"),
         },
         "probes": [
-            ("cursor-memory", "Go testing conventions and patterns"),
+            ("shared-memory", "Go testing conventions and patterns"),
             ("kubernaut-docs", "signal processing architecture and data flow"),
             ("kubernaut-docs", "remediation orchestrator CRD spec"),
             ("kubernaut-issues", "rate limiter design decisions and requirements"),
@@ -1047,16 +1047,16 @@ PROJECT_CONFIGS = {
         ],
     },
     "dcm": {
-        "banks": ["cursor-memory", "dcm-docs", "dcm-issues"],
+        "banks": ["shared-memory", "dcm-docs", "dcm-issues"],
         "mental_models": {
             "dcm-docs": ("dcm-architecture", "dcm-enhancements", "dcm-api-contracts"),
             "dcm-issues": ("active-priorities", "known-bugs"),
             # Tag-isolated (tags=["dcm"], strict match) sibling of kubernaut's
-            # cursor-memory models below -- created 2026-07-27 after the
+            # shared-memory models below -- created 2026-07-27 after the
             # existing 4 shared models were found to be ~100% kubernaut/
             # FedRAMP-specific despite having no tags at all, polluting DCM's
             # recall. See docs/FINDINGS.md.
-            "cursor-memory": ("dcm-workflow-preferences", "dcm-architecture-decisions", "dcm-testing-methodology", "dcm-coding-conventions"),
+            "shared-memory": ("dcm-workflow-preferences", "dcm-architecture-decisions", "dcm-testing-methodology", "dcm-coding-conventions"),
         },
         "probes": [
             ("dcm-docs", "DCM architecture and service provider model"),
@@ -1088,13 +1088,13 @@ PROJECT_CONFIGS = {
     "engram": {
         # No issues bank: this repo has zero GitHub issues (decisions and bugs
         # are tracked in docs/FINDINGS.md instead), so no "issues_repos" key.
-        "banks": ["cursor-memory", "engram-docs"],
+        "banks": ["shared-memory", "engram-docs"],
         "mental_models": {
             "engram-docs": ("engram-architecture", "engram-operations"),
             # Tag-isolated (tags=["engram"], strict match) sibling of
-            # kubernaut's/dcm's cursor-memory models -- see docs/FINDINGS.md
+            # kubernaut's/dcm's shared-memory models -- see docs/FINDINGS.md
             # 2026-07-27.
-            "cursor-memory": ("engram-workflow-preferences", "engram-architecture-decisions", "engram-testing-methodology", "engram-coding-conventions"),
+            "shared-memory": ("engram-workflow-preferences", "engram-architecture-decisions", "engram-testing-methodology", "engram-coding-conventions"),
         },
         "probes": [
             ("engram-docs", "Haiku correction gate and contradiction resolution design"),
@@ -1106,14 +1106,14 @@ PROJECT_CONFIGS = {
         "workspace_prefixes": ["Users-jgil-go-src-github-com-jordigilh-engram"],
     },
     "koku": {
-        "banks": ["cursor-memory", "koku-docs", "koku-issues"],
+        "banks": ["shared-memory", "koku-docs", "koku-issues"],
         "mental_models": {
             "koku-docs": ("koku-architecture", "koku-operations"),
             "koku-issues": ("active-priorities", "known-bugs"),
             # Tag-isolated (tags=["koku"], strict match) sibling of
-            # kubernaut's/dcm's/engram's cursor-memory models -- applied from
+            # kubernaut's/dcm's/engram's shared-memory models -- applied from
             # day one per the 2026-07-27 pollution fix, see docs/FINDINGS.md.
-            "cursor-memory": ("koku-workflow-preferences", "koku-architecture-decisions", "koku-testing-methodology", "koku-coding-conventions"),
+            "shared-memory": ("koku-workflow-preferences", "koku-architecture-decisions", "koku-testing-methodology", "koku-coding-conventions"),
         },
         "probes": [
             ("koku-docs", "Koku cost-model and report-processing architecture"),
@@ -1138,7 +1138,7 @@ PROJECT_CONFIGS = {
         "issues_repos": ["project-koku/koku", "project-koku/koku-service-operator"],
     },
     "praxis": {
-        "banks": ["cursor-memory", "praxis-docs", "praxis-issues"],
+        "banks": ["shared-memory", "praxis-docs", "praxis-issues"],
         "mental_models": {
             "praxis-docs": ("praxis-architecture", "praxis-enhancements", "praxis-api-contracts"),
             # praxis-roadmap-priorities synthesizes org Project (v2) board
@@ -1148,9 +1148,9 @@ PROJECT_CONFIGS = {
             # plan / docs/findings/2026-08.md.
             "praxis-issues": ("active-priorities", "known-bugs", "praxis-roadmap-priorities"),
             # Tag-isolated (tags=["praxis"], strict match) sibling of
-            # kubernaut's/dcm's/engram's/koku's cursor-memory models -- same
+            # kubernaut's/dcm's/engram's/koku's shared-memory models -- same
             # 2026-07-27 pollution fix applied from day one, see docs/FINDINGS.md.
-            "cursor-memory": ("praxis-workflow-preferences", "praxis-architecture-decisions", "praxis-testing-methodology", "praxis-coding-conventions"),
+            "shared-memory": ("praxis-workflow-preferences", "praxis-architecture-decisions", "praxis-testing-methodology", "praxis-coding-conventions"),
         },
         "probes": [
             ("praxis-docs", "Praxis Grid routing overlay rendering and candidate scoring"),
@@ -1187,14 +1187,14 @@ PROJECT_CONFIGS = {
     # project's 166+ open issues. See src/engram/flows/rhdh_plugins.py's
     # module docstring for the full scoping rationale.
     "rhdh-plugins": {
-        "banks": ["cursor-memory", "rhdh-plugins-docs", "rhdh-plugins-issues"],
+        "banks": ["shared-memory", "rhdh-plugins-docs", "rhdh-plugins-issues"],
         "mental_models": {
             "rhdh-plugins-docs": ("rhdh-plugins-ai-catalog-rbac-design",),
             "rhdh-plugins-issues": ("rhdh-plugins-active-priorities",),
             # Tag-isolated (tags=["rhdh-plugins"], strict match) sibling of
-            # kubernaut's/dcm's/engram's/koku's/praxis's cursor-memory
+            # kubernaut's/dcm's/engram's/koku's/praxis's shared-memory
             # models -- same 2026-07-27 pollution fix applied from day one.
-            "cursor-memory": ("rhdh-plugins-workflow-preferences", "rhdh-plugins-architecture-decisions", "rhdh-plugins-testing-methodology", "rhdh-plugins-coding-conventions"),
+            "shared-memory": ("rhdh-plugins-workflow-preferences", "rhdh-plugins-architecture-decisions", "rhdh-plugins-testing-methodology", "rhdh-plugins-coding-conventions"),
         },
         "probes": [
             ("rhdh-plugins-docs", "AI Catalog Graduated Visibility permission model and RBAC design"),
@@ -1210,8 +1210,8 @@ PROJECT_CONFIGS = {
     },
     # kuadrant: ingestion-only prior-art reference for praxis-proxy
     # (2026-08-27 onboarding, see engram_gateway.py's "kuadrant" registry
-    # entry and engram.flows.kuadrant's module docstring). No cursor-memory
-    # entry, unlike every other project above: cursor-memory tracks *this
+    # entry and engram.flows.kuadrant's module docstring). No shared-memory
+    # entry, unlike every other project above: shared-memory tracks *this
     # user's own* corrections/conventions/preferences while developing a
     # project, and nobody develops against these 8 read-only reference
     # checkouts (no Cursor workspace is ever opened here) -- there is no
@@ -1244,7 +1244,7 @@ PROJECT_CONFIGS = {
     },
 }
 
-BANKS = ["cursor-memory", "kubernaut-docs", "kubernaut-issues"]
+BANKS = ["shared-memory", "kubernaut-docs", "kubernaut-issues"]
 
 
 def api_get(path: str) -> dict:
@@ -1737,7 +1737,7 @@ def run_hourly(watermarks: dict, seen_hashes: set) -> dict:
 
     # Scoped to onboarded projects only (project_scope.py) -- see docs/FINDINGS.md
     # 2026-07-13. Before this, every one of ~270 Cursor workspaces on this
-    # machine fed the shared cursor-memory bank, not just kubernaut/dcm/engram.
+    # machine fed the shared-memory bank, not just kubernaut/dcm/engram.
     transcripts = find_recent_transcripts(
         hours=2, workspace_prefixes=project_scope.ALLOWED_WORKSPACE_PREFIXES
     )
@@ -1808,13 +1808,13 @@ def run_hourly(watermarks: dict, seen_hashes: set) -> dict:
             log.error("  Failed: %s", e)
 
     # Topic-shift mental model refresh (lever #2, 2026-07-14 review) --
-    # cursor-memory is the only bank this loop retains into.
+    # shared-memory is the only bank this loop retains into.
     refresh_result = maybe_refresh_mental_models_on_topic_shift(
-        "cursor-memory", results["windows_retained"]
+        "shared-memory", results["windows_retained"]
     )
     results["topic_shift_refresh"] = refresh_result
     if refresh_result["triggered"]:
-        log.info("Topic-shift refresh triggered for cursor-memory")
+        log.info("Topic-shift refresh triggered for shared-memory")
     elif refresh_result["count_since_refresh"] > 0:
         log.info(
             "Topic-shift refresh: %d/%d new items since last refresh (%s)",
@@ -1957,7 +1957,7 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
     # the bank's entire correction history with no way to bound it, and as
     # of 2026-08-10 that made it deterministically fail with HTTP 500
     # ("LiteLLM response was truncated due to token limit") once
-    # cursor-memory grew large enough -- confirmed not to be a transient
+    # shared-memory grew large enough -- confirmed not to be a transient
     # outage by manually re-running it against a healthy hindsight-api and
     # reproducing the identical error. It would only keep failing as the
     # bank keeps growing, and reflect_result was never read downstream
@@ -2090,7 +2090,7 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
     results["mental_model_refresh"] = "triggered"
 
     # This unconditional refresh just covered every bank it manages,
-    # including cursor-memory (shared across projects) -- reset the
+    # including shared-memory (shared across projects) -- reset the
     # topic-shift counters so run_hourly() doesn't force a redundant
     # refresh later today for material this nightly pass already covered.
     refresh_state = load_model_refresh_state()

@@ -54,7 +54,7 @@ PROJECTS_ROOT = Path(os.path.expanduser("~/.cursor/projects"))
 # underlying per-project snapshot JSON files were already correctly scoped).
 PROJECT_CONFIGS = {
     "kubernaut": {
-        "banks": ["cursor-memory", "kubernaut-docs", "kubernaut-issues"],
+        "banks": ["shared-memory", "kubernaut-docs", "kubernaut-issues"],
         "workspace_prefixes": ["Users-jgil-go-src-github-com-jordigilh-kubernaut"],
         "log_suffix": "",
         "issues_repos": [
@@ -66,7 +66,7 @@ PROJECT_CONFIGS = {
         ],
     },
     "dcm": {
-        "banks": ["cursor-memory", "dcm-docs", "dcm-issues"],
+        "banks": ["shared-memory", "dcm-docs", "dcm-issues"],
         "workspace_prefixes": ["Users-jgil-go-src-github-com-dcm-project-"],
         "log_suffix": "-dcm",
         "issues_repos": [
@@ -86,12 +86,12 @@ PROJECT_CONFIGS = {
     },
     "engram": {
         # No issues_repos: this repo has zero GitHub issues.
-        "banks": ["cursor-memory", "engram-docs"],
+        "banks": ["shared-memory", "engram-docs"],
         "workspace_prefixes": ["Users-jgil-go-src-github-com-jordigilh-engram"],
         "log_suffix": "-engram",
     },
     "koku": {
-        "banks": ["cursor-memory", "koku-docs", "koku-issues"],
+        "banks": ["shared-memory", "koku-docs", "koku-issues"],
         # Two prefixes: current checkout path + older insights-onprem-koku*
         # sessions that predate the allowlist -- see project_scope.py.
         "workspace_prefixes": [
@@ -104,7 +104,7 @@ PROJECT_CONFIGS = {
         "issues_repos": ["project-koku/koku", "project-koku/koku-service-operator"],
     },
     "praxis": {
-        "banks": ["cursor-memory", "praxis-docs", "praxis-issues"],
+        "banks": ["shared-memory", "praxis-docs", "praxis-issues"],
         "workspace_prefixes": ["Users-jgil-go-src-github-com-praxis-proxy"],
         "log_suffix": "-praxis",
         # pingora deliberately excluded -- see nightly-learn.py's matching entry.
@@ -128,7 +128,7 @@ PROJECT_CONFIGS = {
     # removed. Entry kept as a comment so history is clear.
     # kuadrant: ingestion-only prior-art reference for praxis-proxy -- see
     # nightly-learn.py's matching entry for the full scoping rationale.
-    # No cursor-memory: no Cursor workspace is ever opened against these 9
+    # No shared-memory: no Cursor workspace is ever opened against these 9
     # read-only reference checkouts, so there's no dev-session signal.
     "kuadrant": {
         "banks": ["kuadrant-docs", "kuadrant-issues"],
@@ -516,7 +516,7 @@ def collect_mental_model_stats(project: str | None = None) -> list[dict]:
     """Collect mental model status from Hindsight API.
 
     If project is given, only returns models for that project's banks
-    (cursor-memory is shared across projects, so it's included either way).
+    (shared-memory is shared across projects, so it's included either way).
     """
     import urllib.request
     if project:

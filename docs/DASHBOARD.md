@@ -30,7 +30,7 @@ _Reflect call returned no text._
 
 | Bank | Nodes | Documents | Pending |
 |------|------:|----------:|--------:|
-| cursor-memory | — | — | — |
+| shared-memory | — | — | — |
 | kubernaut-docs | — | — | — |
 | kubernaut-issues | — | — | — |
 

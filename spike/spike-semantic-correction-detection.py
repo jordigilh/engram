@@ -21,7 +21,7 @@ Steps:
        for each, plus where A and B disagree.
     3. Run the contradiction check (Config A: Sonnet) against the
        synthetic pairs suite (Config B) -- report its own accuracy.
-    4. Sanity-check the contradiction check against real cursor-memory
+    4. Sanity-check the contradiction check against real shared-memory
        bank content using a sample of confirmed held-out corrections.
     5. Estimate real-world daily message volume/cost from recent
        transcripts.
@@ -209,14 +209,14 @@ def step3_contradiction_suite() -> dict:
 
 
 def step4_real_world_contradiction_check() -> int:
-    hr("STEP 4: Real-world sanity check -- contradiction check vs. actual cursor-memory content")
+    hr("STEP 4: Real-world sanity check -- contradiction check vs. actual shared-memory content")
     print("Taking confirmed held-out corrections and checking them against real recall()")
-    print("results from the live cursor-memory bank, to see if any false-positive")
+    print("results from the live shared-memory bank, to see if any false-positive")
     print("contradictions surface against real content before this ever gates a real retain.\n")
     positives = [e for e in eval_examples() if e.is_correction][:6]
     false_positive_contradictions = 0
     for ex in positives:
-        memory_pairs = recall("cursor-memory", ex.text, max_results=3)
+        memory_pairs = recall("shared-memory", ex.text, max_results=3)
         if not memory_pairs:
             print(f"  (no related memories found for: {ex.text[:60]})")
             continue

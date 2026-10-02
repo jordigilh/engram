@@ -56,7 +56,7 @@ mode to begin coding:
 4. If your plan does not follow the recalled methodology, **revise it before
    presenting**.
 
-**Why the `tags` filter matters**: `cursor-memory` is a deliberately shared
+**Why the `tags` filter matters**: `shared-memory` is a deliberately shared
 bank across kubernaut/dcm/engram/koku/praxis/rhdh-plugins for universal
 coding-hygiene lessons, but per-project mental models in it have
 historically turned out to be language/project-specific despite carrying no
@@ -68,7 +68,7 @@ so other projects' content can never enter them. **Known limitation**: only
 newly retained facts carry a project tag going forward — an *untagged,
 ad-hoc* `recall()` call (no `tags` param) can still surface old pre-fix
 content from any project. Always pass
-`tags: ["rhdh-plugins"], tags_match: "any_strict"` on cursor-memory recall
+`tags: ["rhdh-plugins"], tags_match: "any_strict"` on shared-memory recall
 calls to get the isolation guarantee. Expect rhdh-plugins' own tagged
 content to be sparse at first — it only grows as new retains happen
 post-onboarding (2026-08-13).

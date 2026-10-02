@@ -6,7 +6,7 @@ How to add a new GitHub organization/project to the Engram knowledge system with
 
 Each project gets:
 - **Dedicated Hindsight banks**: `<project>-docs` and `<project>-issues` for isolated memory
-- **Shared `cursor-memory` bank**: Behavioral corrections and coding conventions are universal
+- **Shared memory bank (`shared-memory`)**: Behavioral corrections and coding conventions are universal
 - **Dedicated pgvector table**: `cocoindex.<project>_code_embeddings` for code search isolation
 - **Configured CocoIndex instance**: The shared generic adapter with its own state database
 - **Dedicated launchd service**: Independent process lifecycle
@@ -762,7 +762,7 @@ Three hooks, sharing one per-session marker:
   `Write|StrReplace|Shell|EditNotebook`) — on the first matched tool call
   after a plan is confirmed, consumes that marker and runs a real
   `contradiction_resolution.resolve()` check (in a subprocess under a hard
-  45s wall-clock watchdog) against the target project's `cursor-memory`
+  45s wall-clock watchdog) against the target project's `shared-memory`
   bank. A genuine contradiction hard-blocks the call with
   `permission: deny` and a `user_message` explaining the conflict; the
   model can then retry (same or revised) and pass through cleanly — this is
@@ -946,4 +946,4 @@ self-healing to fire first. Use the **family** variant instead of generic
   `~/.engram/projects.toml` — a project with no `issues_repos` key
   (e.g. the no-issues-bank variant) simply contributes nothing to any total, rather
   than defaulting to one hardcoded repo (the pre-2026-07-15 behavior; see FINDINGS.md)
-- **Shared**: `cursor-memory` bank (behavioral corrections), Hindsight API instance, PostgreSQL
+- **Shared**: `shared-memory` bank (behavioral corrections), Hindsight API instance, PostgreSQL

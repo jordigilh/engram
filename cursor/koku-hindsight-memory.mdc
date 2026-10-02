@@ -51,7 +51,7 @@ mode to begin coding:
    presenting**
 
 **Why the `tags` filter matters (2026-07-27 incident, see docs/FINDINGS.md in
-the engram repo)**: `cursor-memory` is a deliberately shared bank across
+the engram repo)**: `shared-memory` is a deliberately shared bank across
 kubernaut/dcm/engram/koku for universal coding-hygiene lessons, but its 4
 original mental models turned out to be ~100% kubernaut/Go/FedRAMP-specific
 despite carrying no project tag at all — a koku session's recall could
@@ -64,7 +64,7 @@ them. **Known limitation**: only newly retained facts carry a project tag
 going forward — Hindsight's memory-curation API has no way to retag existing
 facts, so an *untagged, ad-hoc* `recall()` call (no `tags` param) can still
 surface old pre-fix content from any project. Always pass `tags: ["koku"], tags_match: "any_strict"`
-on cursor-memory recall calls to get the isolation guarantee. Also expect
+on shared-memory recall calls to get the isolation guarantee. Also expect
 koku's own tagged content to be sparse at first — it only grows as new
 retains happen post-onboarding (2026-07-31).
 

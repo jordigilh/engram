@@ -6,7 +6,7 @@
 #   - Native instance running on port 8889 (target)
 #
 # Strategy:
-#   - cursor-memory: export all facts via API, re-ingest as verbatim chunks (zero LLM cost)
+#   - shared-memory: export all facts via API, re-ingest as verbatim chunks (zero LLM cost)
 #   - kubernaut-docs: re-run ingest-docs.py against native (zero LLM cost)
 #   - kubernaut-issues: re-run ingest-issues.py against native (zero LLM cost)
 
@@ -24,15 +24,15 @@ echo "  Source: $SOURCE_URL (container)"
 echo "  Target: $TARGET_URL (native)"
 echo ""
 
-# --- Phase 1: Export cursor-memory facts ---
-echo "[1/5] Exporting cursor-memory facts from container..."
+# --- Phase 1: Export shared-memory facts ---
+echo "[1/5] Exporting shared-memory facts from container..."
 
 python3 -u - "$SOURCE_URL" "$EXPORT_DIR" <<'PYEXPORT'
 import json, sys, urllib.request
 
 source_url = sys.argv[1]
 export_dir = sys.argv[2]
-bank = "cursor-memory"
+bank = "shared-memory"
 
 all_items = []
 offset = 0
@@ -63,7 +63,7 @@ PYEXPORT
 echo ""
 echo "[2/5] Creating banks on native instance..."
 
-for bank in cursor-memory kubernaut-docs kubernaut-issues; do
+for bank in shared-memory kubernaut-docs kubernaut-issues; do
     http_code=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
         "$TARGET_URL/v1/default/banks/$bank" \
         -H "Content-Type: application/json" \
@@ -77,7 +77,7 @@ for bank in cursor-memory kubernaut-docs kubernaut-issues; do
 done
 
 # Configure extraction modes
-curl -s -X PATCH "$TARGET_URL/v1/default/banks/cursor-memory/config" \
+curl -s -X PATCH "$TARGET_URL/v1/default/banks/shared-memory/config" \
     -H "Content-Type: application/json" \
     -d '{"updates": {"retain_extraction_mode": "verbatim"}}' > /dev/null
 
@@ -91,16 +91,16 @@ curl -s -X PATCH "$TARGET_URL/v1/default/banks/kubernaut-issues/config" \
 
 echo "  Extraction modes configured"
 
-# --- Phase 3: Import cursor-memory facts ---
+# --- Phase 3: Import shared-memory facts ---
 echo ""
-echo "[3/5] Importing cursor-memory facts into native..."
+echo "[3/5] Importing shared-memory facts into native..."
 
 python3 -u - "$TARGET_URL" "$EXPORT_DIR" <<'PYIMPORT'
 import json, sys, urllib.request, time
 
 target_url = sys.argv[1]
 export_dir = sys.argv[2]
-bank = "cursor-memory"
+bank = "shared-memory"
 
 input_file = f"{export_dir}/{bank}.json"
 with open(input_file) as f:

@@ -9,7 +9,7 @@ Declares four apps:
                      (kubernaut, kubernaut-operator, kubernaut-console, kubernaut-demo-scenarios,
                       kubernaut-docs)
   3. code-app:       Go source → pgvector code_embeddings table
-  4. transcript-app: Cursor agent transcripts → Hindsight cursor-memory bank
+  4. transcript-app: Cursor agent transcripts → Hindsight shared-memory bank
 
 Runs as a single long-lived process via launchd. Supports backfill and live modes.
 """
@@ -210,7 +210,7 @@ CORRECTION_PATTERNS = [
     # Keep in sync with the same list in nightly-learn.py/report.py. Added
     # 2026-07-08 — see docs/FINDINGS.md for why (16 real corrections/7 days,
     # 0 detected; this copy is the one that decides what gets tagged
-    # [CORRECTION] for cursor-memory bank ingestion, so it's the most
+    # [CORRECTION] for shared-memory bank ingestion, so it's the most
     # consequential of the three to have fixed).
     re.compile(r"\b(you'?re|you\s+are)\s+(still\s+)?not\s+(following|aligned)\b", re.I),
     re.compile(r"\bnot\s+following\s+(the\s+)?(project'?s?\s+)?(methodology|convention|AGENTS\.md|CLAUDE\.md)\b", re.I),
@@ -942,7 +942,7 @@ code_app = coco.App(
 
 
 # ---------------------------------------------------------------------------
-# App 4: transcript-app — Agent transcripts → Hindsight cursor-memory bank
+# App 4: transcript-app — Agent transcripts → Hindsight shared-memory bank
 # ---------------------------------------------------------------------------
 
 def _is_correction(text: str) -> bool:
@@ -1120,11 +1120,11 @@ async def process_transcript(file: localfs.File) -> None:
         # tags: [project] if known, same as nightly-learn.py's retain_windows()
         # (see docs/FINDINGS.md 2026-07-27 -- that fix only touched
         # retain_windows(); this parallel CocoIndex-side retain path kept
-        # writing untagged facts to cursor-memory for another day of live
+        # writing untagged facts to shared-memory for another day of live
         # traffic until this mirror fix).
         tags: list[str] = [project] if project else []
         if "[CORRECTION]" in window_text:
-            resolution = contradiction_resolution.resolve("cursor-memory", window_text, project=project)
+            resolution = contradiction_resolution.resolve("shared-memory", window_text, project=project)
             if resolution.action == "auto_resolved":
                 tags += ["CORRECTION", "supersedes-prior-memory"]
             elif resolution.action == "queued":
@@ -1133,7 +1133,7 @@ async def process_transcript(file: localfs.File) -> None:
                 # retains it itself on approve. See docs/FINDINGS.md.
                 continue
         hindsight_retain(
-            bank_id="cursor-memory",
+            bank_id="shared-memory",
             content=window_text,
             document_id=_window_document_id(transcript_id, window_text),
             metadata={"source": "cocoindex-transcript", "transcript_id": transcript_id},

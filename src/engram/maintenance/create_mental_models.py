@@ -32,9 +32,9 @@ HINDSIGHT_URL = DEPLOYMENT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
 assert HINDSIGHT_URL is not None
 
 MENTAL_MODELS = [
-    # cursor-memory: behavioral patterns (delta, auto-refresh after consolidation)
+    # shared-memory: behavioral patterns (delta, auto-refresh after consolidation)
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "coding-conventions",
         "name": "Coding Conventions",
         "source_query": "What are the user's coding conventions, naming patterns, and style preferences?",
@@ -42,7 +42,7 @@ MENTAL_MODELS = [
         "trigger": {"mode": "delta", "refresh_after_consolidation": True},
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "testing-methodology",
         "name": "Testing Methodology",
         "source_query": "What testing approach, frameworks, and patterns does the user follow?",
@@ -50,7 +50,7 @@ MENTAL_MODELS = [
         "trigger": {"mode": "delta", "refresh_after_consolidation": True},
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "workflow-preferences",
         "name": "Development Workflow",
         "source_query": "What is the user's preferred development workflow, review process, and tooling?",
@@ -58,7 +58,7 @@ MENTAL_MODELS = [
         "trigger": {"mode": "delta", "refresh_after_consolidation": True},
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "architecture-decisions",
         "name": "Architecture Decisions",
         "source_query": "What architectural decisions and design patterns has the user established?",
@@ -179,11 +179,11 @@ MENTAL_MODELS = [
         "max_tokens": 4096,
         "trigger": {"mode": "delta", "refresh_after_consolidation": False},
     },
-    # cursor-memory, tag-isolated (tags=["koku"], strict match) sibling of
+    # shared-memory, tag-isolated (tags=["koku"], strict match) sibling of
     # kubernaut's/dcm's/engram's own scoped models -- same 2026-07-27 fix
     # pattern applied from day one for koku's onboarding, see docs/FINDINGS.md.
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "koku-coding-conventions",
         "name": "Koku Coding Conventions",
         "source_query": "What are the user's coding conventions, naming patterns, and style preferences when working on koku (Python/Django)?",
@@ -192,7 +192,7 @@ MENTAL_MODELS = [
         "tags": ["koku"],
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "koku-testing-methodology",
         "name": "Koku Testing Methodology",
         "source_query": "What testing approach, frameworks, and patterns does the user follow when working on koku?",
@@ -201,7 +201,7 @@ MENTAL_MODELS = [
         "tags": ["koku"],
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "koku-workflow-preferences",
         "name": "Koku Development Workflow",
         "source_query": "What is the user's preferred development workflow, review process, and tooling when working on koku?",
@@ -210,7 +210,7 @@ MENTAL_MODELS = [
         "tags": ["koku"],
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "koku-architecture-decisions",
         "name": "Koku Architecture Decisions",
         "source_query": "What architectural decisions and design patterns has the user established while working on koku?",
@@ -241,11 +241,11 @@ MENTAL_MODELS = [
         "max_tokens": 4096,
         "trigger": {"mode": "delta", "refresh_after_consolidation": False},
     },
-    # cursor-memory, tag-isolated (tags=["rhdh-plugins"]) sibling of
+    # shared-memory, tag-isolated (tags=["rhdh-plugins"]) sibling of
     # koku's/kubernaut's/dcm's/engram's own scoped models -- same 2026-07-27
     # fix pattern applied from day one for this onboarding.
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "rhdh-plugins-coding-conventions",
         "name": "rhdh-plugins Coding Conventions",
         "source_query": "What are the user's coding conventions, naming patterns, and style preferences when working on rhdh-plugins (TypeScript/React Backstage plugins)?",
@@ -254,7 +254,7 @@ MENTAL_MODELS = [
         "tags": ["rhdh-plugins"],
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "rhdh-plugins-testing-methodology",
         "name": "rhdh-plugins Testing Methodology",
         "source_query": "What testing approach, frameworks, and patterns does the user follow when working on rhdh-plugins?",
@@ -263,7 +263,7 @@ MENTAL_MODELS = [
         "tags": ["rhdh-plugins"],
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "rhdh-plugins-workflow-preferences",
         "name": "rhdh-plugins Development Workflow",
         "source_query": "What is the user's preferred development workflow, review process, and tooling when working on rhdh-plugins?",
@@ -272,7 +272,7 @@ MENTAL_MODELS = [
         "tags": ["rhdh-plugins"],
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "rhdh-plugins-architecture-decisions",
         "name": "rhdh-plugins Architecture Decisions",
         "source_query": "What architectural decisions and design patterns has the user established while working on rhdh-plugins?",
@@ -335,11 +335,11 @@ MENTAL_MODELS = [
         "max_tokens": 4096,
         "trigger": {"mode": "delta", "refresh_after_consolidation": False},
     },
-    # cursor-memory, tag-isolated (tags=["praxis"], strict match) sibling of
+    # shared-memory, tag-isolated (tags=["praxis"], strict match) sibling of
     # kubernaut's/dcm's/engram's/koku's own scoped models -- same 2026-07-27
     # fix pattern applied from day one, see docs/FINDINGS.md.
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "praxis-coding-conventions",
         "name": "Praxis Coding Conventions",
         "source_query": "What are the user's coding conventions, naming patterns, and style preferences when working on praxis-proxy (Rust)?",
@@ -348,7 +348,7 @@ MENTAL_MODELS = [
         "tags": ["praxis"],
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "praxis-testing-methodology",
         "name": "Praxis Testing Methodology",
         "source_query": "What testing approach, frameworks, and patterns does the user follow when working on praxis-proxy?",
@@ -357,7 +357,7 @@ MENTAL_MODELS = [
         "tags": ["praxis"],
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "praxis-workflow-preferences",
         "name": "Praxis Development Workflow",
         "source_query": "What is the user's preferred development workflow, review process, and tooling when working on praxis-proxy?",
@@ -366,7 +366,7 @@ MENTAL_MODELS = [
         "tags": ["praxis"],
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "praxis-architecture-decisions",
         "name": "Praxis Architecture Decisions",
         "source_query": "What architectural decisions and design patterns has the user established while working on praxis-proxy?",
@@ -376,7 +376,7 @@ MENTAL_MODELS = [
     },
     # kuadrant-docs/kuadrant-issues: ingestion-only prior-art reference for
     # praxis-proxy (2026-08-27 onboarding) -- see engram.flows.kuadrant's
-    # module docstring. No cursor-memory entry: nobody develops against
+    # module docstring. No shared-memory entry: nobody develops against
     # these 8 read-only reference checkouts, so there's no coding-
     # conventions/workflow-preferences signal to extract a model from.
     {

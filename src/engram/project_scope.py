@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Single source of truth for which Cursor workspaces are allowed to feed the
-shared cursor-memory retain pipeline (nightly-learn.py's run_hourly()/
+shared-memory retain pipeline (nightly-learn.py's run_hourly()/
 run_nightly(), cocoindex-flows.py's transcript_app).
 
 Added 2026-07-12/13 after discovering the retain path had no project filter
 at all: it swept every one of the ~270 Cursor workspaces on this machine
 (including totally unrelated repos like koku/insights-onprem,
 redhat-developer-rhdh-plugins, and blank "no folder open" sessions) into
-cursor-memory, not just the projects Engram has actually been onboarded for.
+shared-memory, not just the projects Engram has actually been onboarded for.
 See docs/FINDINGS.md.
 
 Keep in sync with nightly-learn.py's PROJECT_CONFIGS (used there for a
@@ -37,7 +37,7 @@ PROJECT_LABEL_BY_PREFIX = {
     # work happened under both: the current "project-koku" path and older
     # "insights-onprem-koku"/"insights-onprem-koku-pr5933" sessions (e.g.
     # COST-7249 work) that predate this allowlist and were previously swept
-    # into cursor-memory as unfiltered pollution -- see this module's
+    # into shared-memory as unfiltered pollution -- see this module's
     # docstring. Onboarding both recovers that history under the koku label
     # going forward instead of leaving it unlabeled.
     "Users-jgil-go-src-github-com-project-koku": "koku",

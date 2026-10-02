@@ -206,12 +206,12 @@ Test a retain + recall cycle:
 
 ```bash
 # Retain a fact
-curl -s -X POST http://localhost:8888/v1/default/banks/cursor-memory/memories \
+curl -s -X POST http://localhost:8888/v1/default/banks/shared-memory/memories \
   -H "Content-Type: application/json" \
   -d '{"items": [{"content": "Always use table-driven tests in Go with t.Run subtests."}]}'
 
 # Recall it
-curl -s -X POST http://localhost:8888/v1/default/banks/cursor-memory/memories/recall \
+curl -s -X POST http://localhost:8888/v1/default/banks/shared-memory/memories/recall \
   -H "Content-Type: application/json" \
   -d '{"query": "Go testing best practices"}' | python3 -m json.tool
 ```

@@ -70,7 +70,7 @@ CocoIndex declares four flows, each with a source, transform pipeline, and sink.
 | **docs** | Markdown files in the configured project paths | Split by heading → chunk → embed | Hindsight retain API (`<project>-docs` bank) | File-watching (instant) |
 | **issues** | Configured GitHub/Jira repositories | Serialize issue/PR/ticket + comments → chunk → embed | Hindsight retain API (`<project>-issues` bank) | Polling at the configured interval (default 5 min) |
 | **code** | Source files in the configured project paths | tree-sitter AST parse → dense embed + BM25 tsvector | Configured pgvector code table | File-watching (instant) |
-| **transcripts** | `.jsonl` files in Cursor transcripts dir | Extract correction windows → embed | Hindsight retain API (`cursor-memory` bank) | File-watching (instant) |
+| **transcripts** | `.jsonl` files in Cursor transcripts dir | Extract correction windows → embed | Hindsight retain API (`shared-memory` bank) | File-watching (instant) |
 
 ### Transform Details
 

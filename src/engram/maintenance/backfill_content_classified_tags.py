@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-off backfill: tag cursor-memory documents that backfill-memory-tags.py's
+"""One-off backfill: tag shared-memory documents that backfill-memory-tags.py's
 transcript-path resolution (plan_retags()) could NOT resolve, using
 content-based LLM classification instead.
 
@@ -84,7 +84,7 @@ def should_apply_tag(result: classify.ProjectClassificationResult, min_confidenc
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--bank", default="cursor-memory")
+    ap.add_argument("--bank", default="shared-memory")
     ap.add_argument("--min-confidence", type=float, default=0.75)
     args = ap.parse_args()
 

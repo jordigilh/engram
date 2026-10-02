@@ -370,7 +370,7 @@ def generate_dashboard(reports: list[dict]) -> str:
     lines.append("| Bank | Nodes | Documents | Pending |")
     lines.append("|------|------:|----------:|--------:|")
     for bank_key, label in [
-        ("cursor-memory", "cursor-memory"),
+        ("shared-memory", "shared-memory"),
         ("kubernaut-docs", "kubernaut-docs"),
         ("kubernaut-issues", "kubernaut-issues"),
     ]:
@@ -434,7 +434,7 @@ def generate_dashboard(reports: list[dict]) -> str:
             e_r = eff_r.get("effectiveness", {})
             pr_r = eff_r.get("proactive_recall", {})
             rs_r = eff_r.get("recall_session_stats", {})
-            bs_r = r.get("bank_stats", {}).get("cursor-memory", {})
+            bs_r = r.get("bank_stats", {}).get("shared-memory", {})
 
             sw = e_r.get("sessions_with_recall", 0)
             swo = e_r.get("sessions_without_recall", 0)

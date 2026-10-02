@@ -257,7 +257,7 @@ python3 -m engram.maintenance.report --csv
   ------------------------------------------------------------------
   Bank                            Probes  Avg Latency  Avg Results
   ------------------------------------------------------------------
-  cursor-memory                        7      850ms         22.3
+  shared-memory                        7      850ms         22.3
   <project>-docs                      14      1200ms        31.5
   <project>-issues                     7      1900ms         9.0
 
@@ -265,8 +265,8 @@ python3 -m engram.maintenance.report --csv
   ------------------------------------------------------------------
   Bank                      Model                      Content    Refreshed
   ------------------------------------------------------------------
-  cursor-memory             coding-conventions          5838 ch   2026-06-12
-  cursor-memory             testing-methodology         8236 ch   2026-06-12
+  shared-memory             coding-conventions          5838 ch   2026-06-12
+  shared-memory             testing-methodology         8236 ch   2026-06-12
   <project>-docs            project-architecture         9937 ch   2026-06-12
    <project>-issues          active-priorities           8501 ch   2026-06-13
   ------------------------------------------------------------------

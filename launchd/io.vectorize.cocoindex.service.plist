@@ -11,7 +11,7 @@
         <string>--mode</string>
         <string>live</string>
         <!-- transcripts deliberately excluded: it retains raw chat transcript
-             text into the cursor-memory bank with LLM fact-extraction left on
+             text into the shared-memory bank with LLM fact-extraction left on
              (concise mode) -- that's exactly the automatic LLM-cost surface
              the 2026-08-13 "retain/reflect on-demand" decision targeted, so
              it stays on-demand only (call retain/reflect explicitly in chat).

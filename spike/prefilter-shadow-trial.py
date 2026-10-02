@@ -316,7 +316,7 @@ def report() -> None:
 
     print("Decision guidance: only consider adopting a prefilter if its recall vs. Haiku")
     print("is at or very near 100% -- any missed corrections above are real corrections")
-    print("that would have been silently invisible to cursor-memory under that gate.")
+    print("that would have been silently invisible to shared-memory under that gate.")
 
 
 def _acquire_lock() -> bool:

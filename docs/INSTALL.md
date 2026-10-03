@@ -122,7 +122,8 @@ This sources `~/.engram/config.env` and runs the native `hindsight-api` binary.
 For production, install as a launchd service (auto-start on login, auto-restart
 on crash). First install the shared env wrapper — **every** launchd plist that
 runs a process needing LLM config (`hindsight-api`, `engram-nightly-learn`,
-`engram-flows-*`, and `prefilter-shadow-trial.py`) launches through this wrapper
+`engram-flows-configured`, and `prefilter-shadow-trial.py`) launches through
+this wrapper
 instead of having deployment-specific credentials or project IDs baked into
 the plist:
 

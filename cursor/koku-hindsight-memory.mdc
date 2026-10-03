@@ -6,10 +6,9 @@ alwaysApply: true
 ## When to recall (MUST)
 
 This rule is deployed to both `project-koku/koku` (Python) and
-`project-koku/koku-service-operator` (Go) -- see the module docstring in
-`src/engram/flows/koku.py` in the engram repo: koku-service-operator is
-deliberately folded into the same koku-docs/koku-issues/koku-code scope
-rather than getting its own bank, "one product, one Jira project (COST)".
+`project-koku/koku-service-operator` (Go). The two repositories deliberately
+share the same koku-docs/koku-issues/koku-code scope rather than getting
+separate banks: "one product, one Jira project (COST)".
 
 You MUST call `recall` on your **first turn** when the task involves:
 - Python/Django code, koku, cost model, report processing, or masu pipeline work

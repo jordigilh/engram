@@ -308,12 +308,24 @@ def _run_sense(
 def _run_cocoindex(
     queries: list[dict[str, Any]], pg_url: str, table: str, repo_tag: str
 ) -> list[dict[str, Any]]:
-    os.environ["COCOINDEX_PG_URL"] = pg_url
-    from engram.search.kubernaut import search_code
+    from engram.search import engram as search
+
+    # Reuse the generic search engine directly for this disposable benchmark
+    # table. The configured launcher performs the same setup from TOML in
+    # production; this script receives its database/table arguments on the
+    # command line instead.
+    search.configure_project(
+        project=repo_tag,
+        pg_url=pg_url,
+        code_table=table,
+        embedding_model=search.EMBEDDING_MODEL,
+        pattern_roots=[],
+        call_graph_roots=[],
+    )
 
     rows = []
     for query in queries:
-        results = search_code(
+        results = search.search_code(
             query["query"],
             limit=10,
             mode="hybrid",

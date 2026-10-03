@@ -121,9 +121,9 @@ from the full pattern:
 > prefer calling Jira's REST API (`/rest/api/3/search/jql`) directly with
 > that token over shelling out to the `jira` CLI for ingestion —
 > `jira-cli`'s `--paginate` has a real bug against Jira Cloud's newer
-> `/search/jql` endpoint (see koku's `_jira_token()` docstring for the full
-> history), and its query/output flags are meant for interactive use, not
-> scripted ingestion.
+> `/search/jql` endpoint; the generic adapter uses the direct REST API because
+> the CLI's query/output flags are meant for interactive use, not scripted
+> ingestion.
 
 ## Steps
 

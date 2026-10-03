@@ -6,12 +6,11 @@ cocoindex.engram_code_embeddings table (this repo's own Python source).
 Results are fused using Reciprocal Rank Fusion (RRF) so both semantic
 similarity and exact keyword matches contribute to ranking.
 
-Usage:
-    python3 engram-cocoindex-search.py                    # Start MCP server (stdio)
-    python3 engram-cocoindex-search.py --query "how does contradiction resolution work"
-    python3 engram-cocoindex-search.py --query "resolve_contradiction" --mode dense
-    python3 engram-cocoindex-search.py --query "resolve_contradiction" --mode bm25
-    python3 engram-cocoindex-search.py --pattern 'def \NAME(\(A*\)):' --language python
+The configuration-driven launcher selects a project at runtime:
+
+    engram-search-configured --project engram --query "how does contradiction resolution work"
+    engram-search-configured --project engram --query "resolve_contradiction" --mode dense
+    engram-search-configured --project engram --pattern 'def \NAME(\(A*\)):' --language python
 """
 
 import argparse
@@ -21,12 +20,8 @@ import re
 import sys
 from typing import Any
 
-# This file is part of the engram.search package (src/engram/search/).
-# sys.path[0] for a script invoked via a symlink (as launchd does) resolves
-# to the symlink's realpath target directory (src/engram/search/), not the
-# symlink's own directory -- src/ itself must still be added explicitly so
-# `engram` resolves as a top-level package rather than needing this file to
-# be run via `-m`/an installed console script (not yet true in this repo).
+# Keep direct source execution usable for this shared engine as well as the
+# installed, configuration-driven console script.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 from engram import callgraph, chunking  # noqa: E402
 from engram.project_config import (  # noqa: E402

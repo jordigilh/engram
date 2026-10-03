@@ -17,7 +17,7 @@
         <!-- Ingestion-only onboarding (2026-08-27, extended to 9 repos
              2026-08-28 with mcp-gateway): docs/issues/code apps plus
              git-sync (periodic `git pull` across all 9 read-only
-             checkouts - see kuadrant.py's module docstring for why this
+              checkouts - see the deployment-local project configuration for why this
              exists: nobody opens these repos as a Cursor workspace, so
              nothing else keeps them in sync with upstream). No serena, no
              transcripts app (this org has no Cursor agent sessions of its

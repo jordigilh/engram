@@ -12,7 +12,7 @@
 #
 # Used as the first argument of ProgramArguments in every launchd plist under
 # launchd/ that runs a script needing Vertex AI config (nightly-learn.py,
-# cocoindex-flows.py, dcm-nightly-ingest.sh, hindsight-api itself):
+# cocoindex-flows.py, hindsight-api itself):
 #   ProgramArguments = [
 #     "__HOME__/.engram/with-config-env.sh",
 #     "__HOME__/.engram/venv/bin/python3",

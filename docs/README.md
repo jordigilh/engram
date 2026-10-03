@@ -95,8 +95,8 @@ graph TB
     end
 
     subgraph cocoindex_engine["CocoIndex"]
-        coco_flows["engram-flows-<project>"]
-        coco_search["engram-search-<project>"]
+        coco_flows["engram-flows-configured --project <project>"]
+        coco_search["engram-search-configured --project <project>"]
     end
 
     subgraph vertex["Vertex AI (global)"]
@@ -146,15 +146,15 @@ graph TB
 | Behavioral rule | `cursor/examples/*.mdc` or the OpenCode plugin | Instructs the agent to recall and follow project methodology |
 | Example rules | `cursor/examples/*.mdc` | Ready-made rules for Go, Python, Rust, TypeScript, minimal |
 | Learning job | `engram-nightly-learn` | Processes transcripts, extracts patterns |
-| Doc/issue ingestion | `engram-flows-<project>` | Continuous docs/issues ingestion through the configured flow |
+| Doc/issue ingestion | `engram-flows-configured --project <project>` | Continuous docs/issues ingestion through the configured flow |
 | Mental models | `engram.maintenance.create_mental_models` | Create/refresh configured mental models |
 | Memory triage | `python -m engram.pipeline.triage_memories` | On-demand cleanup of low-value memories (ephemeral, stale, duplicate) |
 | Memory recovery | `python -m engram.maintenance.recover_memories` | One-time full reprocessing of all transcripts to rebuild the bank |
 | Effectiveness report | `python -m engram.maintenance.report` | Metrics aggregation, token analysis, mental model stats |
 | Dashboard generator | `python -m engram.pipeline.generate_dashboard` | Auto-updates `docs/DASHBOARD.md` from daily reports |
 | MCP hook | `cursor/hooks.json` + `hooks/log-mcp-calls.sh` | Real-time MCP call logging with hit/miss |
-| CocoIndex flows | `engram-flows-<project>` | Incremental ingestion for docs, issues, code, transcripts |
-| Code search | `engram-search-<project>` behind the gateway | MCP hybrid code search (dense + BM25 via RRF fusion) |
+| CocoIndex flows | `engram-flows-configured --project <project>` | Incremental ingestion for docs, issues, code, transcripts |
+| Code search | `engram-search-configured --project <project>` behind the gateway | MCP hybrid code search (dense + BM25 via RRF fusion) |
 | Gateway | Runtime image/native gateway | Sole client-facing MCP route; aggregates Hindsight, CocoIndex, Serena, and optional backends |
 | Hindsight proxy | `engram-hindsight-proxy` | Sole owner of port 8888; blue/green API restarts happen behind it |
 | Service plists | `~/Library/LaunchAgents/io.vectorize.hindsight.service-{blue,green}.plist` | KeepAlive + RunAtLoad; exactly one active at a time, bound to an internal port (18888/18889) |

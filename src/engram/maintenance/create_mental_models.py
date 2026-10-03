@@ -375,8 +375,8 @@ MENTAL_MODELS = [
         "tags": ["praxis"],
     },
     # kuadrant-docs/kuadrant-issues: ingestion-only prior-art reference for
-    # praxis-proxy (2026-08-27 onboarding) -- see engram.flows.kuadrant's
-    # module docstring. No shared-memory entry: nobody develops against
+    # praxis-proxy (2026-08-27 onboarding) -- see the deployment-local
+    # project configuration. No shared-memory entry: nobody develops against
     # these 8 read-only reference checkouts, so there's no coding-
     # conventions/workflow-preferences signal to extract a model from.
     {

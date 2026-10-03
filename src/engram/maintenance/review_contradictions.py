@@ -31,18 +31,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from engram.pending_queue import load_pending, remove_pending  # noqa: E402
 from engram.contradiction_resolution import delete_document, invalidate_memory  # noqa: E402
 
-# A plain import (rather than an isolated importlib exec) is safe here now
-# that kubernaut.py has a real, importable module identity
-# (engram.flows.kubernaut): Python's sys.modules cache means it only ever
-# executes once per process no matter how many places import it, so there's
-# no risk of CocoIndex's "Context key already used" ValueError from double
-# module-exec -- the risk that motivated an isolated exec back when this was
-# a hyphenated top-level script loaded via spec_from_file_location.
+# The generic configured flow owns the deployment-neutral retain helper. It is
+# safe to import here because it does not construct a project-specific app or
+# register project-specific ContextKeys.
 try:
-    from engram.flows import kubernaut as _cf  # noqa: E402
+    from engram.flows import configured as _cf  # noqa: E402
     _HAS_RETAIN = True
 except Exception as e:  # pragma: no cover - only if cocoindex deps missing
-    print(f"Note: could not import engram.flows.kubernaut ({e}); approve will be disabled.")
+    print(f"Note: could not import engram.flows.configured ({e}); approve will be disabled.")
     _HAS_RETAIN = False
 
 

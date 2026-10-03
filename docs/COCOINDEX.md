@@ -43,7 +43,7 @@ flowchart LR
     end
 
     subgraph cocoindex["CocoIndex Engine"]
-        flows["engram-flows-<project>"]
+        flows["engram-flows-configured --project <project>"]
     end
 
     subgraph sinks["Sinks"]
@@ -70,7 +70,7 @@ CocoIndex declares four flows, each with a source, transform pipeline, and sink.
 | **docs** | Markdown files in the configured project paths | Split by heading → chunk → embed | Hindsight retain API (`<project>-docs` bank) | File-watching (instant) |
 | **issues** | Configured GitHub/Jira repositories | Serialize issue/PR/ticket + comments → chunk → embed | Hindsight retain API (`<project>-issues` bank) | Polling at the configured interval (default 5 min) |
 | **code** | Source files in the configured project paths | tree-sitter AST parse → dense embed + BM25 tsvector | Configured pgvector code table | File-watching (instant) |
-| **transcripts** | `.jsonl` files in Cursor transcripts dir | Extract correction windows → embed | Hindsight retain API (`cursor-memory` bank) | File-watching (instant) |
+| **transcripts** | `.jsonl` files in Cursor transcripts dir | Extract correction windows → embed | Hindsight retain API (`shared-memory` bank) | File-watching (instant) |
 
 ### Transform Details
 
@@ -103,7 +103,7 @@ A `declare_sql_command_attachment` on the table creates a PostgreSQL trigger
 that auto-populates a `tsvector` column and GIN index from `search_text` — this
 is managed entirely by CocoIndex's lifecycle (setup on create, teardown on
 removal). The result is **hybrid search**: the project's
-`engram-search-<project>` server queries both
+`engram-search-configured --project <project>` server queries both
 the dense vector index and the BM25 index, then fuses results via Reciprocal
 Rank Fusion (RRF).
 
@@ -151,13 +151,13 @@ The MCP tool `cocoindex_search` accepts a `mode` parameter:
 
 ```bash
 # Hybrid (default)
-~/.engram/venv/bin/engram-search-kubernaut --query "how does the reconciler handle errors"
+~/.engram/venv/bin/engram-search-configured --project kubernaut --config ~/.engram/projects.toml --query "how does the reconciler handle errors"
 
 # Dense only
-~/.engram/venv/bin/engram-search-kubernaut --query "error handling in reconciler" --mode dense
+~/.engram/venv/bin/engram-search-configured --project kubernaut --config ~/.engram/projects.toml --query "error handling in reconciler" --mode dense
 
 # BM25 only — great for exact identifiers
-~/.engram/venv/bin/engram-search-kubernaut --query "ParseConfig" --mode bm25
+~/.engram/venv/bin/engram-search-configured --project kubernaut --config ~/.engram/projects.toml --query "ParseConfig" --mode bm25
 ```
 
 ## Structural Pattern Search
@@ -167,21 +167,18 @@ project search server also exposes a second MCP tool for the
 opposite question — "find code *shaped like* X" — via CocoIndex's
 `CodePattern` (tree-sitter-backed by-example structural matching).
 
-| Project | Tool | Languages |
-|---------|------|-----------|
-| kubernaut | `cocoindex_pattern_search` | go (kubernaut, kubernaut-operator), typescript/tsx (kubernaut-console) |
-| koku | `koku_code_pattern_search` | python |
-| engram | `engram_code_pattern_search` | python |
-| dcm | `dcm_code_pattern_search` | go (8 repos — see `repo` param) |
+| Deployment | Tool | Languages |
+|------------|------|-----------|
+| Active configured deployments | `cocoindex_pattern_search` | Loaded from each project's TOML sources |
+| RHDH (historical, disabled) | None | No local service or route |
 
 ### How it works
 
 Unlike hybrid search, there is no structural-pattern *index* — `CodePattern`
 parses source directly, so each call walks the project's live checkout
 (`engram.chunking.find_code_files()`, scoped to the exact same
-`included_patterns`/`excluded_patterns` each project's `engram.flows.<project>`
-module already uses for ingestion, so pattern search never drifts from what's
-indexed).
+`included_patterns`/`excluded_patterns` configured in `projects.toml`, so
+pattern search never drifts from what's indexed).
 For each candidate file: a cheap parse-free prefilter rejects files that
 can't possibly match, then a match renders with enclosing-scope context via
 `render_match()`. See docs/FINDINGS.md 2026-08-07 for the spike that
@@ -196,13 +193,10 @@ Omitting a body/block entirely means "don't care what's inside":
 ```bash
 # Any Go function returning exactly (bool, error), regardless of name,
 # params, or body:
-~/.engram/venv/bin/engram-search-kubernaut --pattern 'func \NAME(\(A*\)) (bool, error)' --language go
+~/.engram/venv/bin/engram-search-configured --project kubernaut --config ~/.engram/projects.toml --pattern 'func \NAME(\(A*\)) (bool, error)' --language go
 
 # Any Python function/method, regardless of body:
-~/.engram/venv/bin/engram-search-koku --pattern 'def \NAME(\(A*\)):' --language python
-
-# Scope to one of DCM's 8 repos:
-~/.engram/venv/bin/engram-search-dcm --pattern 'func \NAME(\(A*\)) error' --language go --repo dcm-cli
+~/.engram/venv/bin/engram-search-configured --project <project> --config ~/.engram/projects.toml --pattern 'def \NAME(\(A*\)):' --language python
 ```
 
 ### What this is NOT: complementary to Serena, not a replacement
@@ -232,7 +226,8 @@ that CocoIndex manages as part of the table's lifecycle. This means:
   automatically when the flow initializes.
 - **Teardown**: if the attachment is removed or changed, CocoIndex runs the
   teardown SQL to clean up.
-- **No external migration scripts**: everything is declared in `engram.flows.kubernaut`.
+- **No external migration scripts**: everything is declared in the generic
+  configured flow and selected by `projects.toml`.
 
 This is preferred over manually creating triggers via `psql` because it keeps
 the full schema under CocoIndex's control.
@@ -246,8 +241,8 @@ this implementation, Serena, `open-codebase-index`, Codanna, and SCIP are
 documented in
 [`SEMANTIC_CODE_INTELLIGENCE.md`](SEMANTIC_CODE_INTELLIGENCE.md).
 
-**Status: rolled out to all six onboarded projects (engram, koku,
-rhdh-plugins, praxis-proxy, dcm, kubernaut).** See
+**Status: rolled out to the active deployment set (engram, praxis-proxy,
+kuadrant, and the kubernaut project family).** See
 [`docs/CALL_GRAPH_DESIGN.md`](CALL_GRAPH_DESIGN.md) for how the extraction/
 resolution/caching mechanism actually works, and
 `docs/CALL_GRAPH_CLUSTERING.md` for the chronological findings (per-language
@@ -258,20 +253,20 @@ parts (caching, branch scoping), not a duplicate of either.
 Structural pattern search above answers "find code shaped like X" within one
 file at a time. Engram's graphify-inspired extension builds on that existing
 CocoIndex `match_code()` primitive; it is not a separate Graphify service or
-dependency. Every onboarded project's `engram-search-<project>` server additionally exposes
+dependency. Every onboarded project's `engram-search-configured --project <project>` server additionally exposes
 3 MCP tools (plus matching CLI flags) that build a cross-file call graph
 from the same `CodePattern` infrastructure and answer relational questions
 about it:
 
 ```bash
 # Who (transitively) calls this function -- "what breaks if I change this":
-~/.engram/venv/bin/engram-search-engram --blast-radius 'pattern_search_code' --depth 2
+~/.engram/venv/bin/engram-search-configured --project engram --config ~/.engram/projects.toml --blast-radius 'pattern_search_code' --depth 2
 
 # Does A ever reach B through a chain of calls, and how:
-~/.engram/venv/bin/engram-search-engram --shortest-path 'main' 'find_code_files'
+~/.engram/venv/bin/engram-search-configured --project engram --config ~/.engram/projects.toml --shortest-path 'main' 'find_code_files'
 
 # Which Leiden-detected cluster of related functions does X belong to:
-~/.engram/venv/bin/engram-search-engram --cluster 'find_code_files'
+~/.engram/venv/bin/engram-search-configured --project engram --config ~/.engram/projects.toml --cluster 'find_code_files'
 ```
 
 Same accuracy ceiling as structural pattern search, plus one more: call
@@ -292,12 +287,12 @@ Every project except kubernaut rebuilds the graph fresh on every call (no
 persisted index) and logs elapsed time + node/edge/unresolved/ambiguous-call
 counts at `log.info` -- deliberately: no invalidation logic to get wrong,
 always-fresh results, and every measured build stayed comfortably
-interactive (under ~33s even for dcm's 8-repo Go build).
+interactive (under ~33s even for the largest multi-repo Go build).
 
 **kubernaut is the one exception**, and requires no extra setup beyond what
 the CocoIndex setup in `INSTALL.md` already configures: its own repo alone (1,000+ Go
 files) took ~55s to rebuild, too slow to pay on every call, so
-`engram-search-kubernaut`'s call-graph tools go through a Postgres-backed cache
+the configured kubernaut search server's call-graph tools go through a Postgres-backed cache
 (`cocoindex.call_graph_cache`, auto-created on first use in the same
 database configured by `defaults.pg_dsn`) instead of rebuilding every
 time. No TTL: a cache entry is invalidated purely by content fingerprint
@@ -344,14 +339,17 @@ mirroring its existing multi-branch `_PATTERN_SEARCH_ROOTS` setup.
 ### Live mode (default)
 
 ```bash
-~/.engram/venv/bin/engram-flows-kubernaut --mode live
+~/.engram/venv/bin/engram-flows-configured --project kubernaut --config ~/.engram/projects.toml --mode live --apps docs issues code
 ```
 
-Runs all four flows concurrently using threads:
-- **docs, code, transcripts**: File-watching threads using CocoIndex live mode
+Runs the configured docs, code, and issues apps concurrently using threads:
+- **docs, code**: File-watching threads using CocoIndex live mode
   (fsevents on macOS). Changes are detected and processed within seconds.
 - **issues**: Polling thread that fetches all issues + PRs from GitHub every
   `issues_poll_seconds` in `~/.engram/projects.toml` (default: 300s / 5 min).
+
+Transcripts are configured separately and can be selected explicitly when
+their automatic-retain cost is acceptable.
 
 This is the mode used by the project launchd plist. The `report_to_stdout` flag
 is disabled in concurrent mode (CocoIndex only allows one progress reporter),
@@ -360,10 +358,10 @@ so all output goes to the project-specific stderr log.
 ### Backfill mode
 
 ```bash
-~/.engram/venv/bin/engram-flows-kubernaut --mode backfill
+~/.engram/venv/bin/engram-flows-configured --project kubernaut --config ~/.engram/projects.toml --mode backfill
 ```
 
-Processes all existing sources from scratch, then exits. Use for:
+Processes all selected sources from scratch, then exits. Use for:
 - Initial setup (first install)
 - Recovery after data loss
 - After changing embedding models
@@ -404,7 +402,8 @@ python3 -m engram.maintenance.report
 ### Healthy indicators
 
 - `Issues poll: complete` messages appear every ~5 minutes in stderr log
-- All four apps show `Starting` messages at startup (docs, code, transcripts, issues)
+- The selected docs/code/issues apps show startup activity; transcripts are
+  selected explicitly when needed under the cost policy.
 - No repeated errors in stderr log
 - `launchctl list` shows PID (not `-`) for the cocoindex service
 - `python3 -m engram.maintenance.report` shows all sources as "Healthy" in the DATA FRESHNESS section
@@ -440,7 +439,7 @@ embeddings (stored separately in pgvector) will use a different vector space.
 **Fix:** Run a full backfill to re-embed all code chunks:
 
 ```bash
-~/.engram/venv/bin/engram-flows-kubernaut --mode backfill
+~/.engram/venv/bin/engram-flows-configured --project kubernaut --config ~/.engram/projects.toml --mode backfill
 ```
 
 ### `gh` CLI not authenticated
@@ -477,8 +476,9 @@ total issues + PRs:
 grep "Fetched.*from" ~/.engram/logs/cocoindex-stderr.log | tail -5
 ```
 
-The flow uses `--limit 10000` for both `gh issue list` and `gh pr list`. If you
-have more than 10,000 items, increase the limit in `engram.flows.kubernaut`.
+The generic GitHub connector uses a configurable limit for issue and PR lists.
+If you have more than 10,000 items, increase the source `limit` in
+`projects.toml`.
 
 ### Stale code index results
 
@@ -487,21 +487,21 @@ file changes (e.g., files modified outside the watched directory).
 
 ```bash
 # Force reprocessing
-~/.engram/venv/bin/engram-flows-kubernaut --mode backfill
+~/.engram/venv/bin/engram-flows-configured --project kubernaut --config ~/.engram/projects.toml --mode backfill
 ```
 
 ---
 
 ## Adding New Sources
 
-To declare a new CocoIndex flow:
+To add a new source to a configured flow:
 
-1. Define a source connector in `engram.flows.kubernaut` (file watcher, API
-   poller, or database reader)
-2. Add transform steps (chunking, embedding, metadata extraction)
-3. Configure the sink (Hindsight retain API for memory banks, or pgvector for
-   direct search)
-4. Test with backfill mode: `~/.engram/venv/bin/engram-flows-kubernaut --mode backfill`
+1. Add a source record to the project's `projects.toml` table (file watcher,
+   API poller, or tracker connector)
+2. Select the source's docs/code patterns and connector settings
+3. Run the generic configured flow; it selects the Hindsight or pgvector sink
+   from the same TOML values
+4. Test with backfill mode: `~/.engram/venv/bin/engram-flows-configured --project <project> --config ~/.engram/projects.toml --mode backfill`
 5. Verify the data appears in recall or search results
 
 CocoIndex handles lineage tracking automatically — when a source document is

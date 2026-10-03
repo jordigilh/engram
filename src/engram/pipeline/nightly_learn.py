@@ -19,6 +19,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -41,32 +42,26 @@ from engram import correction_gate  # noqa: E402
 from engram import contradiction_resolution  # noqa: E402
 from engram import fallback_extract  # noqa: E402
 from engram import project_scope  # noqa: E402
-from engram.project_config import (  # noqa: E402
-    DEFAULT_HINDSIGHT_URL,
-    load_default_settings,
-    load_project_configs,
-)
 
-DEPLOYMENT_SETTINGS = load_default_settings()
-HINDSIGHT_URL = DEPLOYMENT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
-assert HINDSIGHT_URL is not None
-BANK_ID = "cursor-memory"
+HINDSIGHT_URL = "http://localhost:8888"
+BANK_ID = "shared-memory"
 EPOCH_START_DATE = "2026-06-26"
 BUCKET_TRIVIAL = 5000
 BUCKET_SMALL = 15000
 BUCKET_MEDIUM = 100000
-TRANSCRIPTS_ROOT = DEPLOYMENT_SETTINGS.path("transcripts_dir", "~/.cursor/projects")
-assert TRANSCRIPTS_ROOT is not None
-TRANSCRIPTS_GLOB = str(TRANSCRIPTS_ROOT / "*" / "agent-transcripts" / "**" / "*.jsonl")
-LOG_DIR = DEPLOYMENT_SETTINGS.path("log_dir", "~/.engram/logs")
-assert LOG_DIR is not None
+TRANSCRIPTS_GLOB = os.path.expanduser(
+    "~/.cursor/projects/*/agent-transcripts/**/*.jsonl"
+)
+LOG_DIR = Path.home() / ".engram" / "logs"
 MAX_CONTENT_LEN = 12000  # max chars per retain item to control token usage
 
 # Standing-cadence nudge for the human-review queue (lever #5 of the
 # 2026-07-14 "reduce input tokens" review) -- see
 # notify_pending_contradictions_backlog().
 PENDING_CONTRADICTIONS_LOG = LOG_DIR / "contradictions-pending.jsonl"
-CONTRADICTION_NOTIFY_THRESHOLD = DEPLOYMENT_SETTINGS.integer("contradiction_notify_threshold", 10)
+CONTRADICTION_NOTIFY_THRESHOLD = int(
+    os.environ.get("ENGRAM_CONTRADICTION_NOTIFY_THRESHOLD", "10")
+)
 CONTRADICTION_NOTIFY_STATE = LOG_DIR / "last-contradiction-notify.txt"
 
 CORRECTION_PATTERNS = [
@@ -109,8 +104,7 @@ INSTRUCTION_PATTERNS = [
     re.compile(r"\bbefore\s+(implementing|proceeding|starting\s+any)", re.I),
 ]
 
-STATE_DIR = DEPLOYMENT_SETTINGS.path("state_dir", "~/.engram")
-assert STATE_DIR is not None
+STATE_DIR = Path.home() / ".engram"
 WATERMARKS_PATH = STATE_DIR / "watermarks.json"
 RETAINED_HASHES_PATH = STATE_DIR / "retained-hashes.json"
 MODEL_REFRESH_STATE_PATH = STATE_DIR / "model-refresh-state.json"
@@ -118,16 +112,18 @@ MODEL_REFRESH_STATE_PATH = STATE_DIR / "model-refresh-state.json"
 # Lever #2 of the 2026-07-14 "reduce input tokens" review: refresh mental
 # models on topic-shift (enough new material since the last refresh),
 # not just on the nightly cycle. See maybe_refresh_mental_models_on_topic_shift().
-TOPIC_SHIFT_REFRESH_THRESHOLD = DEPLOYMENT_SETTINGS.integer("topic_shift_refresh_threshold", 5)
-TOPIC_SHIFT_REFRESH_MIN_INTERVAL_HOURS = DEPLOYMENT_SETTINGS.number(
-    "topic_shift_refresh_min_interval_hours", 4
+TOPIC_SHIFT_REFRESH_THRESHOLD = int(
+    os.environ.get("ENGRAM_TOPIC_SHIFT_REFRESH_THRESHOLD", "5")
+)
+TOPIC_SHIFT_REFRESH_MIN_INTERVAL_HOURS = float(
+    os.environ.get("ENGRAM_TOPIC_SHIFT_REFRESH_MIN_INTERVAL_HOURS", "4")
 )
 # Bank -> mental model ids eligible for a topic-shift refresh. Only
-# cursor-memory is listed: it's the only bank run_hourly() retains into
+# shared-memory is listed: it's the only bank run_hourly() retains into
 # directly (kubernaut-docs/issues and dcm-docs/issues are populated by the
 # separate CocoIndex/ingest-issues pipelines and only refreshed nightly).
 TOPIC_SHIFT_MODELS = {
-    "cursor-memory": ("workflow-preferences", "architecture-decisions", "testing-methodology", "coding-conventions"),
+    "shared-memory": ("workflow-preferences", "architecture-decisions", "testing-methodology", "coding-conventions"),
 }
 
 logging.basicConfig(
@@ -206,7 +202,7 @@ def maybe_refresh_mental_models_on_topic_shift(bank_id: str, new_items_count: in
     same-day topic shift (e.g. a new architecture decision retained this
     afternoon) isn't reflected in recall until the next night at the
     earliest. Each refresh is a real Sonnet resynthesis call (~8-14KB of
-    output per model, confirmed against the live cursor-memory bank during
+    output per model, confirmed against the live shared-memory bank during
     the 2026-07-14 spike), so this supplements rather than replaces the
     nightly unconditional refresh, and is gated by both a minimum new-item
     count (TOPIC_SHIFT_REFRESH_THRESHOLD) and a minimum time between forced
@@ -298,7 +294,7 @@ def api_post(path: str, payload: dict) -> dict:
         raise
 
 
-PROJECTS_ROOT = TRANSCRIPTS_ROOT
+PROJECTS_ROOT = Path(os.path.expanduser("~/.cursor/projects"))
 
 
 def find_recent_transcripts(
@@ -562,7 +558,7 @@ def retain_windows(windows: list[str], transcript_id: str, project: str | None =
     so any queued/auto-resolved contradiction is tagged with which onboarded
     project it came from (see docs/FINDINGS.md 2026-07-19). It is also written
     onto every retained item's own `tags` field -- see docs/FINDINGS.md
-    2026-07-27 ("DCM recall polluted by kubernaut/FedRAMP content"): cursor-memory
+    2026-07-27 ("DCM recall polluted by kubernaut/FedRAMP content"): shared-memory
     is a deliberately shared bank across kubernaut/dcm/engram for universal
     coding-hygiene lessons, but until this fix every retained fact was
     untagged, so project-specific content (e.g. kubernaut's FedRAMP/NIST-800-53
@@ -1018,7 +1014,237 @@ def reflect_windowed(days: int = 7) -> dict[str, Any]:
 
 RECALL_SIGNALS_PATH = LOG_DIR / "recall-signals.jsonl"
 
-PROJECT_CONFIGS = load_project_configs()
+PROJECT_CONFIGS = {
+    "kubernaut": {
+        "banks": ["shared-memory", "kubernaut-docs", "kubernaut-issues"],
+        "mental_models": {
+            "kubernaut-issues": ("active-priorities", "known-bugs"),
+            "shared-memory": ("workflow-preferences", "architecture-decisions", "testing-methodology", "coding-conventions"),
+            # operator-architecture/console-architecture are tag-scoped views
+            # (tags=["kubernaut-operator"]/["kubernaut-console"]) on this same
+            # shared bank, not a physical per-repo split -- see docs/FINDINGS.md.
+            "kubernaut-docs": ("af-pipeline", "platform-topology", "ka-architecture", "operator-architecture", "console-architecture"),
+        },
+        "probes": [
+            ("shared-memory", "Go testing conventions and patterns"),
+            ("kubernaut-docs", "signal processing architecture and data flow"),
+            ("kubernaut-docs", "remediation orchestrator CRD spec"),
+            ("kubernaut-issues", "rate limiter design decisions and requirements"),
+            ("kubernaut-issues", "A2A streaming event structure"),
+            ("kubernaut-docs", "kubernaut-operator reconciliation loop and CRD controllers"),
+            ("kubernaut-docs", "kubernaut-console UI components and platform API usage"),
+        ],
+        "recall_banks": {"hindsight", "hindsight-docs", "hindsight-issues", "cocoindex-code"},
+        "code_bank": "cocoindex-code",
+        "log_suffix": "",
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-jordigilh-kubernaut"],
+        "issues_repos": [
+            "jordigilh/kubernaut",
+            "jordigilh/kubernaut-operator",
+            "jordigilh/kubernaut-console",
+            "jordigilh/kubernaut-demo-scenarios",
+            "jordigilh/kubernaut-docs",
+        ],
+    },
+    "dcm": {
+        "banks": ["shared-memory", "dcm-docs", "dcm-issues"],
+        "mental_models": {
+            "dcm-docs": ("dcm-architecture", "dcm-enhancements", "dcm-api-contracts"),
+            "dcm-issues": ("active-priorities", "known-bugs"),
+            # Tag-isolated (tags=["dcm"], strict match) sibling of kubernaut's
+            # shared-memory models below -- created 2026-07-27 after the
+            # existing 4 shared models were found to be ~100% kubernaut/
+            # FedRAMP-specific despite having no tags at all, polluting DCM's
+            # recall. See docs/FINDINGS.md.
+            "shared-memory": ("dcm-workflow-preferences", "dcm-architecture-decisions", "dcm-testing-methodology", "dcm-coding-conventions"),
+        },
+        "probes": [
+            ("dcm-docs", "DCM architecture and service provider model"),
+            ("dcm-docs", "placement policy and catalog item lifecycle"),
+            ("dcm-issues", "open issues and active priorities"),
+        ],
+        "recall_banks": {"hindsight", "dcm-docs", "dcm-issues", "dcm-code"},
+        "code_bank": "dcm-code",
+        "log_suffix": "-dcm",
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-dcm-project-"],
+        "issues_repos": [
+            "dcm-project/dcm",
+            "dcm-project/control-plane",
+            "dcm-project/cli",
+            "dcm-project/kubevirt-service-provider",
+            "dcm-project/k8s-container-service-provider",
+            "dcm-project/acm-cluster-service-provider",
+            "dcm-project/three-tier-app-demo-service-provider",
+            "dcm-project/utilities",
+            "dcm-project/dcm-project.github.io",
+            "dcm-project/enhancements",
+            "dcm-project/shared-workflows",
+            "dcm-project/quadlet-deploy",
+            # Upstream OSAC backend (distinct org, read-only), folded into
+            # OSAC is a read-only source folded into the DCM project scope.
+            "osac-project/osac",
+        ],
+    },
+    "engram": {
+        # No issues bank: this repo has zero GitHub issues (decisions and bugs
+        # are tracked in docs/FINDINGS.md instead), so no "issues_repos" key.
+        "banks": ["shared-memory", "engram-docs"],
+        "mental_models": {
+            "engram-docs": ("engram-architecture", "engram-operations"),
+            # Tag-isolated (tags=["engram"], strict match) sibling of
+            # kubernaut's/dcm's shared-memory models -- see docs/FINDINGS.md
+            # 2026-07-27.
+            "shared-memory": ("engram-workflow-preferences", "engram-architecture-decisions", "engram-testing-methodology", "engram-coding-conventions"),
+        },
+        "probes": [
+            ("engram-docs", "Haiku correction gate and contradiction resolution design"),
+            ("engram-docs", "project scoping allowlist for transcript ingestion"),
+        ],
+        "recall_banks": {"hindsight", "hindsight-docs", "cocoindex-code"},
+        "code_bank": "cocoindex-code",
+        "log_suffix": "-engram",
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-jordigilh-engram"],
+    },
+    "koku": {
+        "banks": ["shared-memory", "koku-docs", "koku-issues"],
+        "mental_models": {
+            "koku-docs": ("koku-architecture", "koku-operations"),
+            "koku-issues": ("active-priorities", "known-bugs"),
+            # Tag-isolated (tags=["koku"], strict match) sibling of
+            # kubernaut's/dcm's/engram's shared-memory models -- applied from
+            # day one per the 2026-07-27 pollution fix, see docs/FINDINGS.md.
+            "shared-memory": ("koku-workflow-preferences", "koku-architecture-decisions", "koku-testing-methodology", "koku-coding-conventions"),
+        },
+        "probes": [
+            ("koku-docs", "Koku cost-model and report-processing architecture"),
+            ("koku-docs", "masu Celery task orchestration"),
+            ("koku-issues", "open issues and active priorities"),
+        ],
+        "recall_banks": {"hindsight", "koku-docs", "koku-issues", "koku-code"},
+        "code_bank": "koku-code",
+        "log_suffix": "-koku",
+        # Two prefixes onboarded: the current checkout path and older
+        # "insights-onprem-koku"/"-pr5933" sessions that predate this
+        # allowlist -- see project_scope.py.
+        "workspace_prefixes": [
+            "Users-jgil-go-src-github-com-project-koku",
+            "Users-jgil-go-src-github-com-insights-onprem-koku",
+        ],
+        # koku-service-operator (2026-08-10) is folded into this same project
+        # scope rather than getting its own PROJECT_CONFIGS entry -- see
+        # koku-cocoindex-flows.py's module docstring. "workspace_prefixes"
+        # above already covers it via the shared "...project-koku" prefix
+        # (startswith match), no separate entry needed there.
+        "issues_repos": ["project-koku/koku", "project-koku/koku-service-operator"],
+    },
+    "praxis": {
+        "banks": ["shared-memory", "praxis-docs", "praxis-issues"],
+        "mental_models": {
+            "praxis-docs": ("praxis-architecture", "praxis-enhancements", "praxis-api-contracts"),
+            # praxis-roadmap-priorities synthesizes org Project (v2) board
+            # Status + issue milestones -- the actual prioritization signal
+            # for this org, which plain issue labels/state don't carry. See
+            # the 2026-08-10 "roadmap-signal scope" entry in the onboarding
+            # plan / docs/findings/2026-08.md.
+            "praxis-issues": ("active-priorities", "known-bugs", "praxis-roadmap-priorities"),
+            # Tag-isolated (tags=["praxis"], strict match) sibling of
+            # kubernaut's/dcm's/engram's/koku's shared-memory models -- same
+            # 2026-07-27 pollution fix applied from day one, see docs/FINDINGS.md.
+            "shared-memory": ("praxis-workflow-preferences", "praxis-architecture-decisions", "praxis-testing-methodology", "praxis-coding-conventions"),
+        },
+        "probes": [
+            ("praxis-docs", "Praxis Grid routing overlay rendering and candidate scoring"),
+            ("praxis-docs", "filter chain model and CRDT/SWIM state propagation"),
+            ("praxis-issues", "open issues and active priorities"),
+            ("praxis-issues", "AI Grid project board status and mixture-of-models routing epic"),
+        ],
+        "recall_banks": {"hindsight", "praxis-docs", "praxis-issues", "praxis-code"},
+        "code_bank": "praxis-code",
+        "log_suffix": "-praxis",
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-praxis-proxy"],
+        # pingora deliberately excluded (vendored cloudflare/pingora fork,
+        # not team-authored architecture) -- see the onboarding plan's
+        # "Confirmed scope" section.
+        "issues_repos": [
+            "praxis-proxy/praxis",
+            "praxis-proxy/conventions",
+            "praxis-proxy/praxis-proxy.github.io",
+            "praxis-proxy/ai",
+            "praxis-proxy/benchmarks",
+            "praxis-proxy/forge",
+            "praxis-proxy/policy",
+            "praxis-proxy/operator",
+            "praxis-proxy/experimental",
+            "praxis-proxy/grid",
+            "praxis-proxy/demos",
+            "praxis-proxy/enhancements",
+        ],
+    },
+    # rhdh-plugins: narrow-scope onboarding (2026-08-13) -- covers only
+    # workspaces/boost/ (the package touching the AI Catalog Graduated
+    # Visibility Permissions epic) out of this 23-package monorepo, and only
+    # Jira epic RHIDP-15270 + its 6 child stories, not the wider RHIDP
+    # project's 166+ open issues. See src/engram/flows/rhdh_plugins.py's
+    # module docstring for the full scoping rationale.
+    "rhdh-plugins": {
+        "banks": ["shared-memory", "rhdh-plugins-docs", "rhdh-plugins-issues"],
+        "mental_models": {
+            "rhdh-plugins-docs": ("rhdh-plugins-ai-catalog-rbac-design",),
+            "rhdh-plugins-issues": ("rhdh-plugins-active-priorities",),
+            # Tag-isolated (tags=["rhdh-plugins"], strict match) sibling of
+            # kubernaut's/dcm's/engram's/koku's/praxis's shared-memory
+            # models -- same 2026-07-27 pollution fix applied from day one.
+            "shared-memory": ("rhdh-plugins-workflow-preferences", "rhdh-plugins-architecture-decisions", "rhdh-plugins-testing-methodology", "rhdh-plugins-coding-conventions"),
+        },
+        "probes": [
+            ("rhdh-plugins-docs", "AI Catalog Graduated Visibility permission model and RBAC design"),
+            ("rhdh-plugins-issues", "AI Catalog RBAC epic RHIDP-15270 status and remaining scope"),
+        ],
+        "recall_banks": {"hindsight", "rhdh-plugins-docs", "rhdh-plugins-issues", "rhdh-plugins-code"},
+        "code_bank": "rhdh-plugins-code",
+        "log_suffix": "-rhdh-plugins",
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-redhat-developer-rhdh-plugins"],
+        # No issues_repos: this scope's issue tracker is Jira (epic
+        # RHIDP-15270), not GitHub -- see report.py's identical "engram has
+        # zero GitHub issues" precedent for the same .get(..., []) fallback.
+    },
+    # kuadrant: ingestion-only prior-art reference for praxis-proxy
+    # (2026-08-27 onboarding, see engram_gateway.py's "kuadrant" registry
+    # entry and the deployment-local project configuration). No shared-memory
+    # entry, unlike every other project above: shared-memory tracks *this
+    # user's own* corrections/conventions/preferences while developing a
+    # project, and nobody develops against these 8 read-only reference
+    # checkouts (no Cursor workspace is ever opened here) -- there is no
+    # dev-session signal to extract windows from.
+    "kuadrant": {
+        "banks": ["kuadrant-docs", "kuadrant-issues"],
+        "mental_models": {
+            "kuadrant-docs": ("kuadrant-architecture",),
+            "kuadrant-issues": ("kuadrant-active-priorities",),
+        },
+        "probes": [
+            ("kuadrant-docs", "Kuadrant architecture: rate limiting, auth, DNS, and policy attachment model"),
+            ("kuadrant-issues", "recent Kuadrant issues and design decisions relevant to policy APIs"),
+        ],
+        "recall_banks": {"hindsight", "kuadrant-docs", "kuadrant-issues", "kuadrant-code"},
+        "code_bank": "kuadrant-code",
+        "log_suffix": "-kuadrant",
+        "workspace_prefixes": ["Users-jgil-go-src-github-com-Kuadrant"],
+        "issues_repos": [
+            "Kuadrant/kuadrant-operator",
+            "Kuadrant/limitador",
+            "Kuadrant/wasm-shim",
+            "Kuadrant/architecture",
+            "Kuadrant/authorino",
+            "Kuadrant/dns-operator",
+            "Kuadrant/authorino-operator",
+            "Kuadrant/limitador-operator",
+            "Kuadrant/mcp-gateway",
+        ],
+    },
+}
+
+BANKS = ["shared-memory", "kubernaut-docs", "kubernaut-issues"]
 
 
 def api_get(path: str) -> dict:
@@ -1511,7 +1737,7 @@ def run_hourly(watermarks: dict, seen_hashes: set) -> dict:
 
     # Scoped to onboarded projects only (project_scope.py) -- see docs/FINDINGS.md
     # 2026-07-13. Before this, every one of ~270 Cursor workspaces on this
-    # machine fed the shared cursor-memory bank, not just kubernaut/dcm/engram.
+    # machine fed the shared-memory bank, not just kubernaut/dcm/engram.
     transcripts = find_recent_transcripts(
         hours=2, workspace_prefixes=project_scope.ALLOWED_WORKSPACE_PREFIXES
     )
@@ -1582,13 +1808,13 @@ def run_hourly(watermarks: dict, seen_hashes: set) -> dict:
             log.error("  Failed: %s", e)
 
     # Topic-shift mental model refresh (lever #2, 2026-07-14 review) --
-    # cursor-memory is the only bank this loop retains into.
+    # shared-memory is the only bank this loop retains into.
     refresh_result = maybe_refresh_mental_models_on_topic_shift(
-        "cursor-memory", results["windows_retained"]
+        "shared-memory", results["windows_retained"]
     )
     results["topic_shift_refresh"] = refresh_result
     if refresh_result["triggered"]:
-        log.info("Topic-shift refresh triggered for cursor-memory")
+        log.info("Topic-shift refresh triggered for shared-memory")
     elif refresh_result["count_since_refresh"] > 0:
         log.info(
             "Topic-shift refresh: %d/%d new items since last refresh (%s)",
@@ -1731,7 +1957,7 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
     # the bank's entire correction history with no way to bound it, and as
     # of 2026-08-10 that made it deterministically fail with HTTP 500
     # ("LiteLLM response was truncated due to token limit") once
-    # cursor-memory grew large enough -- confirmed not to be a transient
+    # shared-memory grew large enough -- confirmed not to be a transient
     # outage by manually re-running it against a healthy hindsight-api and
     # reproducing the identical error. It would only keep failing as the
     # bank keeps growing, and reflect_result was never read downstream
@@ -1864,7 +2090,7 @@ def run_nightly(watermarks: dict, seen_hashes: set, project: str = "kubernaut") 
     results["mental_model_refresh"] = "triggered"
 
     # This unconditional refresh just covered every bank it manages,
-    # including cursor-memory (shared across projects) -- reset the
+    # including shared-memory (shared across projects) -- reset the
     # topic-shift counters so run_hourly() doesn't force a redundant
     # refresh later today for material this nightly pass already covered.
     refresh_state = load_model_refresh_state()

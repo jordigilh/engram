@@ -66,6 +66,11 @@
         <string>__HOME__/go</string>
         <key>HOME</key>
         <string>__HOME__</string>
+        <!-- Comma-separated Praxis routes whose ready local zg indexes are
+             exposed through the matching Engram gateway route. Keep a route
+             out of this list until its workspace index is authorized. -->
+        <key>ENGRAM_ZVEC_PROJECTS</key>
+        <string>praxis,praxis-ai,praxis-benchmarks,praxis-conventions,praxis-demos,praxis-enhancements,praxis-experiments,praxis-forge,praxis-grid,praxis-operator,praxis-policy,praxis-proxy.github.io</string>
     </dict>
     <key>StandardOutPath</key>
     <string>__HOME__/.engram/logs/engram-gateway-native-stdout.log</string>

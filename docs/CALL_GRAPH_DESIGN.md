@@ -224,7 +224,7 @@ splitter (`_split_top_level`, `_parse_def_param_names`,
 ## 4. Multi-repo aggregation
 
 Some orgs' MCP server searches several independently-checked-out repos in
-one call (`praxis.py`'s 7 Rust repos, `dcm.py`'s 8 Go repos, kubernaut's 2).
+one call (for example, praxis's 7 Rust repos or kubernaut's 2).
 `build_multi_repo_call_graph()` takes the same `(repo_tag, root, included,
 excluded)` tuple shape those orgs' existing `_PATTERN_SEARCH_ROOTS` already
 use, walks and resolves **each repo independently** (own `build_call_graph`

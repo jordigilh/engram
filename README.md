@@ -151,8 +151,8 @@ graph TB
     end
 
     subgraph cocoindex_engine["CocoIndex"]
-        coco["engram-flows-kubernaut"]
-        coco_search["engram-search-kubernaut"]
+        coco["engram-flows-configured"]
+        coco_search["engram-search-configured"]
         coco --> pg
         coco_search --> pg
     end

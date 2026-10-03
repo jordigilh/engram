@@ -121,6 +121,16 @@ export interface McpServerEntryV2 {
   url: string
   oauth: false
   disabled: false
+  /**
+   * Keep Engram on OpenCode's native MCP tool list rather than Code Mode.
+   *
+   * Code Mode is normally useful, but delegated workers have hit an
+   * intermittent namespace-registration failure where a qualified path such
+   * as `engram.docs_sync_retain` is qualified a second time and dispatched as
+   * `engram.engram.docs_sync_retain`. Native MCP mode exposes the stable flat
+   * `<server>_<tool>` names instead and is the safer bootstrap path.
+   */
+  codemode: false
 }
 
 /** Native V2 server entry for `ctx.mcp.transform(editor => editor.set(...))`.
@@ -143,6 +153,7 @@ export function buildMcpServerConfigV2(
     url: `${gatewayUrl}/mcp/${identity.project}`,
     oauth: false,
     disabled: false,
+    codemode: false,
   }
 }
 

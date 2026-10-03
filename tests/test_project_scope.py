@@ -1,5 +1,5 @@
 """Tests for project_scope.py -- the shared onboarded-project allowlist gate
-for the cursor-memory retain pipeline -- and for
+for the shared-memory retain pipeline -- and for
 purge-out-of-scope-memories.py's classification logic that relies on it.
 """
 from __future__ import annotations

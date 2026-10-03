@@ -23,24 +23,20 @@ The account must be able to read every configured repository, including
 private repositories. Configure the repository list and interval in the
 project's `~/.engram/projects.toml` table:
 
-```bash
+```toml
 [projects.<project>]
+issues_bank = "<project>-issues"
 issues_repos = ["owner/repo", "owner/another-repo"]
 issues_poll_seconds = 300
 ```
 
-For the shipped flows, the relevant settings are:
+The configuration-driven adapter reads these settings for every project:
 
-| Flow | GitHub setting | Notes |
-|------|----------------|-------|
-| `kubernaut` | `projects.kubernaut.issues_repos` | Issues and pull requests |
-| `praxis` | `projects.praxis.issues_repos` | Issues and pull requests; Jira keys are also supported |
-| `kuadrant` | `projects.kuadrant.issues_repos` | Issues and pull requests |
-| `dcm` | `projects.dcm.issues_repos` | Issues and pull requests |
-| `koku` | `projects.koku.pr_repos` | Pull requests only; its work items come from Jira |
-
-An unset project table leaves that deployment source unconfigured. For a new
-flow, add a project table rather than editing source after deployment.
+| Source | TOML setting | Notes |
+|--------|--------------|-------|
+| GitHub issues and pull requests | `projects.<project>.issues_repos` | Issues and pull requests |
+| GitHub pull requests only | `projects.<project>.pr_repos` | Useful when work items come from another tracker |
+| Jira work items | `projects.<project>.jira_project` or `projects.<project>.jira_jql` | Optional tracker-specific scope |
 
 ## Jira
 
@@ -84,13 +80,12 @@ ignored. Keep this file local and set its permissions to `0600`.
 
 ### Jira scope settings
 
-Use the settings supported by the selected flow:
+Use the settings supported by the configured project:
 
-| Flow | Jira scope | Settings |
-|------|------------|----------|
-| `praxis` | Explicit tracked keys | `projects.praxis.paths.jira_keys_file`, `projects.praxis.jira_keys`, `projects.praxis.jira_server`, `projects.praxis.jira_email` |
-| `koku` | Jira project, capped to recent work | `projects.koku.jira_project`, `projects.koku.jira_server`, `projects.koku.jira_email`, `projects.koku.jira_limit` |
-| `rhdh-plugins` | Jira epic and its children | `projects.rhdh-plugins.jira_epic`, `projects.rhdh-plugins.jira_server`, `projects.rhdh-plugins.jira_email` |
+| Jira scope | Settings |
+|------------|----------|
+| Explicit tracked keys | `projects.<project>.paths.jira_keys_file`, `projects.<project>.jira_keys` |
+| Project or JQL scope | `projects.<project>.jira_project`, `projects.<project>.jira_jql` |
 
 Use a narrow JQL scope for a new Jira integration. Do not ingest an entire
 large Jira project when only one epic or workstream is relevant.
@@ -110,7 +105,7 @@ service. `with-config-env.sh` loads `~/.engram/config.env` for the process:
 
 ```bash
 ~/.engram/with-config-env.sh \
-  ~/.engram/venv/bin/engram-flows-<project> \
+  ~/.engram/venv/bin/engram-flows-configured --project <project> \
   --mode backfill --apps issues
 ```
 
@@ -138,11 +133,10 @@ launchctl bootstrap "gui/$(id -u)" \
 launchctl kickstart -k "gui/$(id -u)/io.vectorize.cocoindex.<project>"
 ```
 
-The plist should run the installed `engram-flows-<project>` console script via
-`~/.engram/with-config-env.sh` may still provide service credentials, but the
-project's Hindsight/Postgres values and paths come from `projects.toml`; pass
-`--apps issues` or the full app set. Deployment-specific paths and source
-mirror configuration belong under `~/.engram`, not in this repository.
+The generic plist runs `engram-flows-configured --project <project>` and reads
+the project's Hindsight/Postgres values and issue repositories from
+`~/.engram/projects.toml`. Deployment-specific paths and source mirror
+configuration belong under `~/.engram`, not in this repository.
 
 ## Verify
 

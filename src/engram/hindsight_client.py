@@ -1,5 +1,5 @@
 """Minimal Hindsight recall client for the spike's real-world contradiction
-sanity check (querying the actual cursor-memory bank content).
+sanity check (querying the actual shared-memory bank content).
 
 Mirrors the request shape used in nightly-learn.py's measure_recall_quality().
 """

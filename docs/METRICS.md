@@ -257,7 +257,7 @@ python3 -m engram.maintenance.report --csv
   ------------------------------------------------------------------
   Bank                            Probes  Avg Latency  Avg Results
   ------------------------------------------------------------------
-  cursor-memory                        7      850ms         22.3
+  shared-memory                        7      850ms         22.3
   <project>-docs                      14      1200ms        31.5
   <project>-issues                     7      1900ms         9.0
 
@@ -265,8 +265,8 @@ python3 -m engram.maintenance.report --csv
   ------------------------------------------------------------------
   Bank                      Model                      Content    Refreshed
   ------------------------------------------------------------------
-  cursor-memory             coding-conventions          5838 ch   2026-06-12
-  cursor-memory             testing-methodology         8236 ch   2026-06-12
+  shared-memory             coding-conventions          5838 ch   2026-06-12
+  shared-memory             testing-methodology         8236 ch   2026-06-12
   <project>-docs            project-architecture         9937 ch   2026-06-12
    <project>-issues          active-priorities           8501 ch   2026-06-13
   ------------------------------------------------------------------
@@ -473,9 +473,9 @@ mode effectiveness to understand which retrieval method contributes most:
 To compare modes manually:
 
 ```bash
-~/.engram/venv/bin/engram-search-kubernaut --query "reconciler error handling" --mode hybrid
-~/.engram/venv/bin/engram-search-kubernaut --query "reconciler error handling" --mode dense
-~/.engram/venv/bin/engram-search-kubernaut --query "ParseConfig" --mode bm25
+~/.engram/venv/bin/engram-search-configured --project kubernaut --config ~/.engram/projects.toml --query "reconciler error handling" --mode hybrid
+~/.engram/venv/bin/engram-search-configured --project kubernaut --config ~/.engram/projects.toml --query "reconciler error handling" --mode dense
+~/.engram/venv/bin/engram-search-configured --project kubernaut --config ~/.engram/projects.toml --query "ParseConfig" --mode bm25
 ```
 
 **Healthy indicators:**
@@ -487,7 +487,7 @@ To compare modes manually:
 - BM25 returns 0 results for known identifiers: the `search_vector` trigger
   may not be firing — check `SELECT count(*) FROM cocoindex.<code_table> WHERE search_vector IS NULL`
 - Hybrid results identical to dense-only: BM25 index may be empty — re-run
-  `~/.engram/venv/bin/engram-flows-kubernaut --mode backfill`
+  `~/.engram/venv/bin/engram-flows-configured --project kubernaut --config ~/.engram/projects.toml --mode backfill`
 
 ### Freshness-at-Recall
 
@@ -525,7 +525,7 @@ locate unfamiliar code.
 
 **Warning signs:**
 - Exploration calls/task increasing: code index may not be covering the queried area — check if the source directory is configured
-- Code index hit rate < 50%: embeddings may need reprocessing — run `~/.engram/venv/bin/engram-flows-kubernaut --mode backfill`
+- Code index hit rate < 50%: embeddings may need reprocessing — run `~/.engram/venv/bin/engram-flows-configured --project kubernaut --config ~/.engram/projects.toml --mode backfill`
 
 ## Exploration Efficiency
 

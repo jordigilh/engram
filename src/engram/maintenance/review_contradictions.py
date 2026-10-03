@@ -8,7 +8,7 @@ model's explanation) and lets you:
 
   [a]pprove  -- invalidate the conflicting memory (non-destructive,
                reversible -- see contradiction_resolution.invalidate_memory()),
-               retain the new statement into cursor-memory (tagged as
+               retain the new statement into shared-memory (tagged as
                superseding it), and remove from the queue. Entries queued
                before 2026-07-29 (GitHub issue #1) have no memory_id and
                fall back to the legacy delete_document(document_id) path.
@@ -31,18 +31,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from engram.pending_queue import load_pending, remove_pending  # noqa: E402
 from engram.contradiction_resolution import delete_document, invalidate_memory  # noqa: E402
 
-# A plain import (rather than an isolated importlib exec) is safe here now
-# that kubernaut.py has a real, importable module identity
-# (engram.flows.kubernaut): Python's sys.modules cache means it only ever
-# executes once per process no matter how many places import it, so there's
-# no risk of CocoIndex's "Context key already used" ValueError from double
-# module-exec -- the risk that motivated an isolated exec back when this was
-# a hyphenated top-level script loaded via spec_from_file_location.
+# The generic configured flow owns the deployment-neutral retain helper. It is
+# safe to import here because it does not construct a project-specific app or
+# register project-specific ContextKeys.
 try:
-    from engram.flows import kubernaut as _cf  # noqa: E402
+    from engram.flows import configured as _cf  # noqa: E402
     _HAS_RETAIN = True
 except Exception as e:  # pragma: no cover - only if cocoindex deps missing
-    print(f"Note: could not import engram.flows.kubernaut ({e}); approve will be disabled.")
+    print(f"Note: could not import engram.flows.configured ({e}); approve will be disabled.")
     _HAS_RETAIN = False
 
 
@@ -89,10 +85,10 @@ def main() -> int:
             old_doc_id = entry.get("document_id")
             if memory_id:
                 reason = f"superseded: {entry['new_statement'][:200]}"
-                invalidated = invalidate_memory("cursor-memory", memory_id, reason=reason)
+                invalidated = invalidate_memory("shared-memory", memory_id, reason=reason)
                 print(f"{'Invalidated' if invalidated else 'Could not invalidate (already gone or not found)'} superseded memory {memory_id}.")
             elif old_doc_id:
-                deleted = delete_document("cursor-memory", old_doc_id)
+                deleted = delete_document("shared-memory", old_doc_id)
                 print(
                     f"{'Deleted' if deleted else 'Could not delete (already gone or not found)'} superseded memory "
                     f"{old_doc_id} (queued before the invalidate fix -- legacy document-level delete)."
@@ -100,7 +96,7 @@ def main() -> int:
             else:
                 print("No memory_id or document_id on this entry (queued before the supersede fix) -- old memory left in place.")
             result = _cf.hindsight_retain(
-                bank_id="cursor-memory",
+                bank_id="shared-memory",
                 content=entry["new_statement"],
                 document_id=f"contradiction-resolved-{entry['id']}",
                 metadata={

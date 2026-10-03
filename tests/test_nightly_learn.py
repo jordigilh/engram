@@ -122,8 +122,8 @@ class TestProjectForTranscriptPath:
 
 
 class TestRetainWindowsProjectTagging:
-    """Regression coverage for the 2026-07-27 fix: cursor-memory is a shared
-    bank across kubernaut/dcm/engram, but retained items carried no project
+    """Regression coverage for the 2026-07-27 fix: the shared-memory bank is
+    shared across kubernaut/dcm/engram, but retained items carried no project
     tag, so project-specific content (e.g. kubernaut's FedRAMP/NIST-800-53
     requirements) was indistinguishable from genuinely universal conventions
     and polluted every other project's recall. See docs/FINDINGS.md."""
@@ -481,7 +481,7 @@ class TestDedupGraph:
 
         monkeypatch.setattr(nightly_learn, "urlopen", fake_urlopen)
 
-        deleted_count = nightly_learn.dedup_graph("cursor-memory")
+        deleted_count = nightly_learn.dedup_graph("shared-memory")
 
         assert deleted_count == 2
         assert set(deleted_ids) == {"old-1", "mid-1"}
@@ -498,7 +498,7 @@ class TestDedupGraph:
 
         monkeypatch.setattr(nightly_learn, "urlopen", fail_if_called)
 
-        assert nightly_learn.dedup_graph("cursor-memory") == 0
+        assert nightly_learn.dedup_graph("shared-memory") == 0
 
 
 class TestContextLoadingTokens:
@@ -892,9 +892,9 @@ class TestProjectConfigsEngram:
         assert "jordigilh/kubernaut" in nightly_learn.PROJECT_CONFIGS["kubernaut"]["issues_repos"]
         assert len(nightly_learn.PROJECT_CONFIGS["kubernaut"]["issues_repos"]) == 5
         assert "dcm-project/dcm" in nightly_learn.PROJECT_CONFIGS["dcm"]["issues_repos"]
-        # 13 dcm-project repos + osac-project/osac (upstream OSAC backend,
-        # read-only, folded into dcm -- see engram.flows.dcm's DCM_OSAC_DIR).
-        assert len(nightly_learn.PROJECT_CONFIGS["dcm"]["issues_repos"]) == 14
+        # 12 dcm-project repos + osac-project/osac (upstream OSAC backend,
+        # read-only, folded into the DCM project scope).
+        assert len(nightly_learn.PROJECT_CONFIGS["dcm"]["issues_repos"]) == 13
         assert "osac-project/osac" in nightly_learn.PROJECT_CONFIGS["dcm"]["issues_repos"]
 
 
@@ -1010,7 +1010,7 @@ class TestMaybeRefreshMentalModelsOnTopicShift:
         calls = []
         monkeypatch.setattr(nightly_learn, "api_post", lambda *a, **k: calls.append(a) or {"success": True})
 
-        result = nightly_learn.maybe_refresh_mental_models_on_topic_shift("cursor-memory", 0)
+        result = nightly_learn.maybe_refresh_mental_models_on_topic_shift("shared-memory", 0)
 
         assert result["triggered"] is False
         assert calls == []
@@ -1020,7 +1020,7 @@ class TestMaybeRefreshMentalModelsOnTopicShift:
         calls = []
         monkeypatch.setattr(nightly_learn, "api_post", lambda *a, **k: calls.append(a) or {"success": True})
 
-        result = nightly_learn.maybe_refresh_mental_models_on_topic_shift("cursor-memory", 3)
+        result = nightly_learn.maybe_refresh_mental_models_on_topic_shift("shared-memory", 3)
 
         assert result["triggered"] is False
         assert result["reason"] == "below_threshold"
@@ -1032,22 +1032,22 @@ class TestMaybeRefreshMentalModelsOnTopicShift:
         calls = []
         monkeypatch.setattr(nightly_learn, "api_post", lambda path, payload: calls.append(path) or {"success": True})
 
-        result = nightly_learn.maybe_refresh_mental_models_on_topic_shift("cursor-memory", 6)
+        result = nightly_learn.maybe_refresh_mental_models_on_topic_shift("shared-memory", 6)
 
         assert result["triggered"] is True
-        assert len(calls) == len(nightly_learn.TOPIC_SHIFT_MODELS["cursor-memory"])
-        for model_id in nightly_learn.TOPIC_SHIFT_MODELS["cursor-memory"]:
+        assert len(calls) == len(nightly_learn.TOPIC_SHIFT_MODELS["shared-memory"])
+        for model_id in nightly_learn.TOPIC_SHIFT_MODELS["shared-memory"]:
             assert any(model_id in c for c in calls)
 
     def test_counter_resets_to_zero_after_triggering(self, nightly_learn, tmp_path, monkeypatch):
         self._patch_state(nightly_learn, monkeypatch, tmp_path, threshold=5)
         monkeypatch.setattr(nightly_learn, "api_post", lambda *a, **k: {"success": True})
 
-        nightly_learn.maybe_refresh_mental_models_on_topic_shift("cursor-memory", 6)
+        nightly_learn.maybe_refresh_mental_models_on_topic_shift("shared-memory", 6)
         state = nightly_learn.load_model_refresh_state()
 
-        assert state["cursor-memory"]["count_since_refresh"] == 0
-        assert state["cursor-memory"]["last_triggered_at"] is not None
+        assert state["shared-memory"]["count_since_refresh"] == 0
+        assert state["shared-memory"]["last_triggered_at"] is not None
 
     def test_regression_debounced_within_min_interval_even_above_threshold(self, nightly_learn, tmp_path, monkeypatch):
         """Regression guard: a burst of corrections landing within the
@@ -1059,11 +1059,11 @@ class TestMaybeRefreshMentalModelsOnTopicShift:
         calls = []
         monkeypatch.setattr(nightly_learn, "api_post", lambda *a, **k: calls.append(a) or {"success": True})
 
-        first = nightly_learn.maybe_refresh_mental_models_on_topic_shift("cursor-memory", 6)
+        first = nightly_learn.maybe_refresh_mental_models_on_topic_shift("shared-memory", 6)
         assert first["triggered"] is True
         calls.clear()
 
-        second = nightly_learn.maybe_refresh_mental_models_on_topic_shift("cursor-memory", 6)
+        second = nightly_learn.maybe_refresh_mental_models_on_topic_shift("shared-memory", 6)
 
         assert second["triggered"] is False
         assert second["reason"] == "debounced"
@@ -1073,14 +1073,14 @@ class TestMaybeRefreshMentalModelsOnTopicShift:
         self._patch_state(nightly_learn, monkeypatch, tmp_path, threshold=5, min_interval_hours=4.0)
         monkeypatch.setattr(nightly_learn, "api_post", lambda *a, **k: {"success": True})
         state = {
-            "cursor-memory": {
+            "shared-memory": {
                 "count_since_refresh": 0,
                 "last_triggered_at": (nightly_learn.datetime.now() - nightly_learn.timedelta(hours=5)).isoformat(),
             },
         }
         nightly_learn.save_model_refresh_state(state)
 
-        result = nightly_learn.maybe_refresh_mental_models_on_topic_shift("cursor-memory", 6)
+        result = nightly_learn.maybe_refresh_mental_models_on_topic_shift("shared-memory", 6)
 
         assert result["triggered"] is True
 
@@ -1091,7 +1091,7 @@ class TestMaybeRefreshMentalModelsOnTopicShift:
             raise OSError("connection refused")
         monkeypatch.setattr(nightly_learn, "api_post", _raise)
 
-        result = nightly_learn.maybe_refresh_mental_models_on_topic_shift("cursor-memory", 6)
+        result = nightly_learn.maybe_refresh_mental_models_on_topic_shift("shared-memory", 6)
 
         assert result["triggered"] is False
         assert "error" in result["reason"]
@@ -1313,7 +1313,7 @@ class TestReflectWindowed:
 class TestRunNightlyReflectRetired:
     """Regression for the 2026-08-10 incident: run_nightly()'s "Phase: Reflect
     on accumulated patterns" called the unscoped, all-time reflect() every
-    night in addition to reflect_windowed(days=7). As cursor-memory grew
+    night in addition to reflect_windowed(days=7). As shared-memory grew
     (12,134 nodes / 838,877 links as of 2026-08-09), that unscoped call
     started deterministically failing with HTTP 500 ("LiteLLM response was
     truncated due to token limit") -- confirmed by manually re-running it

@@ -257,7 +257,7 @@ def classify_off_topic_content(text: str, model: str = HAIKU_MODEL, retries: int
     """Narrower, higher-bar sibling of classify_project_from_content(): instead
     of asking 'which of our 3 projects is this', asks 'is this CONFIRMED to be
     about some other, unrelated project entirely'. Used only to flag deletion
-    candidates from the untagged cursor-memory backlog -- see
+    candidates from the untagged shared-memory backlog -- see
     purge-confirmed-off-topic-memories.py and docs/FINDINGS.md."""
     import litellm
 

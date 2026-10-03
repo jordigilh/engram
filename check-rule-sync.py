@@ -75,8 +75,7 @@ RULE_PAIRS: dict[str, tuple[Path, Path]] = {
     ),
     # koku-service-operator shares the SAME canonical source as "koku" above
     # (one product, one Jira project, folded into the same
-    # docs/issues/code-search scope -- see src/engram/flows/koku.py's module
-    # docstring) but is a genuinely independent repo (different language,
+    # docs/issues/code-search scope) but is a genuinely independent repo (different language,
     # own git history), so it gets its own deployed copy and its own
     # RULE_PAIRS entry -- unlike the koku forks above, which are the same
     # fork/branch family as koku itself.

@@ -48,7 +48,7 @@ class TestRecall:
                 {"id": "mem-2", "document_id": "doc-2", "text": "second memory"},
             ]
         }))
-        triples = hc.recall("cursor-memory", "some query")
+        triples = hc.recall("shared-memory", "some query")
         assert triples == [
             ("mem-1", "doc-1", "first memory"),
             ("mem-2", "doc-2", "second memory"),
@@ -61,12 +61,12 @@ class TestRecall:
             "chunks": [{"id": "wrong-id", "document_id": "wrong-doc", "text": "should not be used"}],
             "results": [{"id": "mem-1", "document_id": "doc-1", "text": "correct memory"}],
         }))
-        triples = hc.recall("cursor-memory", "some query")
+        triples = hc.recall("shared-memory", "some query")
         assert triples == [("mem-1", "doc-1", "correct memory")]
 
     def test_missing_results_key_returns_empty_list(self, monkeypatch):
         monkeypatch.setattr(hc, "urlopen", _urlopen_returning({"chunks": {}}))
-        assert hc.recall("cursor-memory", "some query") == []
+        assert hc.recall("shared-memory", "some query") == []
 
     def test_skips_entries_missing_text_or_id(self, monkeypatch):
         monkeypatch.setattr(hc, "urlopen", _urlopen_returning({
@@ -78,7 +78,7 @@ class TestRecall:
                 "not-a-dict",
             ]
         }))
-        assert hc.recall("cursor-memory", "q") == [("mem-1", "doc-1", "ok")]
+        assert hc.recall("shared-memory", "q") == [("mem-1", "doc-1", "ok")]
 
     def test_document_id_is_optional_and_defaults_to_none(self, monkeypatch):
         """RecallResult.document_id is optional in the schema -- a result
@@ -87,13 +87,13 @@ class TestRecall:
         monkeypatch.setattr(hc, "urlopen", _urlopen_returning({
             "results": [{"id": "mem-1", "text": "ok, no document_id"}],
         }))
-        assert hc.recall("cursor-memory", "q") == [("mem-1", None, "ok, no document_id")]
+        assert hc.recall("shared-memory", "q") == [("mem-1", None, "ok, no document_id")]
 
     def test_respects_max_results(self, monkeypatch):
         monkeypatch.setattr(hc, "urlopen", _urlopen_returning({
             "results": [{"id": f"mem-{i}", "document_id": str(i), "text": f"text{i}"} for i in range(10)]
         }))
-        triples = hc.recall("cursor-memory", "q", max_results=3)
+        triples = hc.recall("shared-memory", "q", max_results=3)
         assert len(triples) == 3
 
     def test_retries_on_transient_error_then_succeeds(self, monkeypatch):
@@ -110,7 +110,7 @@ class TestRecall:
         monkeypatch.setattr(hc, "urlopen", flaky_urlopen)
         monkeypatch.setattr(time, "sleep", lambda *_: None)
 
-        assert hc.recall("cursor-memory", "q", retries=2) == [("mem-1", "doc-1", "ok")]
+        assert hc.recall("shared-memory", "q", retries=2) == [("mem-1", "doc-1", "ok")]
         assert attempts["count"] == 2
 
     def test_returns_empty_list_after_exhausting_retries(self, monkeypatch):
@@ -122,4 +122,4 @@ class TestRecall:
         monkeypatch.setattr(hc, "urlopen", always_fails)
         monkeypatch.setattr(time, "sleep", lambda *_: None)
 
-        assert hc.recall("cursor-memory", "q", retries=2) == []
+        assert hc.recall("shared-memory", "q", retries=2) == []

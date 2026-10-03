@@ -27,12 +27,6 @@ import time
 import psycopg2
 import pytest
 
-# Defined locally (rather than reusing the root conftest.py's eventual
-# dcm_search fixture from the separate test/unit-coverage-search-modules
-# branch/PR) so this integration-tier PR has no merge-order dependency on
-# that one -- both may land in either order.
-from engram.search import dcm as _dcm_search_module
-
 PGVECTOR_IMAGE = "docker.io/pgvector/pgvector:pg16"
 CONTAINER_READY_TIMEOUT_S = 30
 
@@ -84,11 +78,6 @@ def _spawn_local_container() -> tuple[str, str]:
 
 
 @pytest.fixture(scope="session")
-def dcm_search():
-    return _dcm_search_module
-
-
-@pytest.fixture(scope="session")
 def pg_url() -> str:
     existing = os.environ.get("IT_POSTGRES_URL")
     if existing:
@@ -102,84 +91,3 @@ def pg_url() -> str:
         yield url
     finally:
         subprocess.run(["podman", "rm", "-f", container_id], capture_output=True)
-
-
-@pytest.fixture(scope="session")
-def _vector_extension(pg_url: str) -> None:
-    conn = psycopg2.connect(pg_url)
-    conn.autocommit = True
-    try:
-        with conn.cursor() as cur:
-            cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
-            cur.execute("CREATE SCHEMA IF NOT EXISTS cocoindex;")
-    finally:
-        conn.close()
-
-
-# Mirrors src/engram/flows/dcm.py's CodeEmbedding dataclass + the
-# fts_search_vector SQL attachment's setup_sql (lines ~553-665) *exactly*,
-# down to the real table/function/trigger names -- this is what lets the
-# test file call search/dcm.py's real search_code() completely unmodified
-# (only PG_URL and _embed_query are patched) and have its hardcoded
-# "cocoindex.dcm_code_embeddings" table references just work. Safe to reuse
-# the production name here because this schema lives in the disposable
-# per-session container, never the real dev Postgres.
-#
-# The vector column is declared vector(4) rather than production's
-# vector(384) (all-MiniLM-L6-v2's real output dimension) to keep test
-# fixtures small and hand-computable -- search_code() itself never hardcodes
-# a dimension, it just casts whatever _embed_query() returns to ::vector, so
-# this is a faithful stand-in for the SQL/pgvector behavior under test.
-_CREATE_TABLE_SQL = """
-    CREATE TABLE IF NOT EXISTS cocoindex.dcm_code_embeddings (
-        id text PRIMARY KEY,
-        filepath text,
-        chunk_index int,
-        code text,
-        embedding vector(4),
-        search_text text
-    );
-
-    ALTER TABLE cocoindex.dcm_code_embeddings
-        ADD COLUMN IF NOT EXISTS search_vector tsvector;
-
-    CREATE INDEX IF NOT EXISTS idx_dcm_code_embeddings_fts
-        ON cocoindex.dcm_code_embeddings USING gin(search_vector);
-
-    CREATE OR REPLACE FUNCTION cocoindex.update_dcm_code_search_vector()
-    RETURNS trigger AS $$
-    BEGIN
-        NEW.search_vector := to_tsvector('simple',
-            coalesce(NEW.search_text, '') || ' ' || coalesce(NEW.filepath, ''));
-        RETURN NEW;
-    END;
-    $$ LANGUAGE plpgsql;
-
-    DROP TRIGGER IF EXISTS trg_dcm_code_search_vector
-        ON cocoindex.dcm_code_embeddings;
-    CREATE TRIGGER trg_dcm_code_search_vector
-        BEFORE INSERT OR UPDATE OF search_text, filepath
-        ON cocoindex.dcm_code_embeddings
-        FOR EACH ROW
-        EXECUTE FUNCTION cocoindex.update_dcm_code_search_vector();
-"""
-
-_TRUNCATE_SQL = "TRUNCATE TABLE cocoindex.dcm_code_embeddings;"
-
-
-@pytest.fixture
-def code_table(pg_url: str, _vector_extension: None):
-    """Real cocoindex.dcm_code_embeddings table (production schema/trigger,
-    verbatim) truncated before/after each test so tests stay isolated
-    within the one shared session container."""
-    conn = psycopg2.connect(pg_url)
-    conn.autocommit = True
-    try:
-        with conn.cursor() as cur:
-            cur.execute(_CREATE_TABLE_SQL)
-            cur.execute(_TRUNCATE_SQL)
-        yield conn
-    finally:
-        with conn.cursor() as cur:
-            cur.execute(_TRUNCATE_SQL)
-        conn.close()

@@ -95,8 +95,8 @@ graph TB
     end
 
     subgraph cocoindex_engine["CocoIndex"]
-        coco_flows["engram-flows-<project>"]
-        coco_search["engram-search-<project>"]
+        coco_flows["engram-flows-configured --project <project>"]
+        coco_search["engram-search-configured --project <project>"]
     end
 
     subgraph vertex["Vertex AI (global)"]
@@ -146,15 +146,15 @@ graph TB
 | Behavioral rule | `cursor/examples/*.mdc` or the OpenCode plugin | Instructs the agent to recall and follow project methodology |
 | Example rules | `cursor/examples/*.mdc` | Ready-made rules for Go, Python, Rust, TypeScript, minimal |
 | Learning job | `engram-nightly-learn` | Processes transcripts, extracts patterns |
-| Doc/issue ingestion | `engram-flows-<project>` | Continuous docs/issues ingestion through the configured flow |
+| Doc/issue ingestion | `engram-flows-configured --project <project>` | Continuous docs/issues ingestion through the configured flow |
 | Mental models | `engram.maintenance.create_mental_models` | Create/refresh configured mental models |
 | Memory triage | `python -m engram.pipeline.triage_memories` | On-demand cleanup of low-value memories (ephemeral, stale, duplicate) |
 | Memory recovery | `python -m engram.maintenance.recover_memories` | One-time full reprocessing of all transcripts to rebuild the bank |
 | Effectiveness report | `python -m engram.maintenance.report` | Metrics aggregation, token analysis, mental model stats |
 | Dashboard generator | `python -m engram.pipeline.generate_dashboard` | Auto-updates `docs/DASHBOARD.md` from daily reports |
 | MCP hook | `cursor/hooks.json` + `hooks/log-mcp-calls.sh` | Real-time MCP call logging with hit/miss |
-| CocoIndex flows | `engram-flows-<project>` | Incremental ingestion for docs, issues, code, transcripts |
-| Code search | `engram-search-<project>` behind the gateway | MCP hybrid code search (dense + BM25 via RRF fusion) |
+| CocoIndex flows | `engram-flows-configured --project <project>` | Incremental ingestion for docs, issues, code, transcripts |
+| Code search | `engram-search-configured --project <project>` behind the gateway | MCP hybrid code search (dense + BM25 via RRF fusion) |
 | Gateway | Runtime image/native gateway | Sole client-facing MCP route; aggregates Hindsight, CocoIndex, Serena, and optional backends |
 | Hindsight proxy | `engram-hindsight-proxy` | Sole owner of port 8888; blue/green API restarts happen behind it |
 | Service plists | `~/Library/LaunchAgents/io.vectorize.hindsight.service-{blue,green}.plist` | KeepAlive + RunAtLoad; exactly one active at a time, bound to an internal port (18888/18889) |
@@ -168,7 +168,7 @@ graph TB
 
 | Bank | Content | Extraction Mode | LLM Cost |
 |------|---------|-----------------|----------|
-| `cursor-memory` | Corrections, instructions, workflow patterns | `concise` | Haiku 4.5 per window |
+| `shared-memory` | Corrections, instructions, workflow patterns | `concise` | Haiku 4.5 per window |
 | `<project>-docs` | Published architecture, API, operations docs | `chunks` | $0 (embeddings only) |
 | `<project>-issues` | GitHub issues + PRs or Jira work items | `chunks` | $0 (embeddings only) |
 | `<project>` code table | Codebase semantic chunks (functions, types, blocks) | `tree-sitter + dense embed + BM25 tsvector` | $0 (local embeddings) |
@@ -232,7 +232,7 @@ makes an agent's context both fresh and correct:
 |---|---|---|---|
 | **Core job** | Memory: judge what's worth remembering, store it, reason about it, serve it back | Ingestion + search: detect what changed at the source, keep the index fresh, answer "about X" (semantic) and "shaped like X" (structural) queries | Code intelligence: real symbol lookup/find-references/diagnostics *and* semantic refactoring, via the language's actual LSP, anchored to a known symbol or file position |
 | **LLM involved** | Yes — Haiku extracts durable facts from raw windows (`retain`), Sonnet synthesizes mental models (`reflect`) | No — pure local embeddings (`all-MiniLM-L6-v2`) + tree-sitter parsing, zero LLM cost | No — delegates entirely to the LSP (`gopls`/`pyright`/`rust-analyzer`/`typescript-language-server`), zero LLM cost |
-| **Storage it owns** | `cursor-memory`, `<project>-docs`, `<project>-issues` banks (its own schema/API) | Configured project code table only (self-managed table in the same Postgres instance) | None persisted — no index, no database; per-session LSP process state only (`--add-mode no-memories` disables even Serena's own optional memory-notes feature, see `docs/findings/2026-08.md`'s 2026-08-21 entry) |
+| **Storage it owns** | `shared-memory`, `<project>-docs`, `<project>-issues` banks (its own schema/API) | Configured project code table only (self-managed table in the same Postgres instance) | None persisted — no index, no database; per-session LSP process state only (`--add-mode no-memories` disables even Serena's own optional memory-notes feature, see `docs/findings/2026-08.md`'s 2026-08-21 entry) |
 | **Retrieval it serves** | `recall` — semantic vector search + local reranker over distilled facts | Hybrid dense + BM25 (RRF fusion) for "about X"; `CodePattern` structural by-example matching for "shaped like X" | `find_symbol` / `find_referencing_symbols` / `get_symbols_overview` / diagnostics — type-resolved, exact; **cannot** search by free-text concept or by shape at all |
 | **Edits it can perform** | None — read/reason/store only, no code mutation | None — indexing/search only, no code mutation | `rename_symbol` / `replace_symbol_body` — applied via the compiler's own understanding of the code, not text search-replace, so every real reference updates correctly and an unrelated same-named match in a different scope is never touched. The only one of the three that can safely mutate code at all |
 | **Higher-order reasoning** | Mental models (synthesizes many facts into a coherent doc), contradiction detection/resolution, project tagging | None — it doesn't synthesize or judge, it just chunks and indexes | None — no synthesis; every answer is a live fact from the compiler/LSP, nothing remembered between calls |
@@ -294,7 +294,7 @@ understanding of the code, but purely reactive (must already know what symbol
 to ask about) and stateless across sessions. Remove CocoIndex and Hindsight
 still works, just back to stale batch ingestion and zero code search.
 Remove Hindsight and CocoIndex still works for code search, but
-`cursor-memory`/docs/issues lose all LLM-based judgment, becoming a dumb,
+`shared-memory`/docs/issues lose all LLM-based judgment, becoming a dumb,
 ever-growing chunk store with no forgetting, synthesis, or contradiction
 handling. Remove Serena and both Hindsight and CocoIndex keep working exactly
 as before — but the agent loses type-aware navigation and safe, compiler-
@@ -370,10 +370,10 @@ Mental models are persistent, LLM-synthesized documents that sit above raw facts
 
 | Bank | Model ID | Purpose | Refresh |
 |------|----------|---------|---------|
-| `cursor-memory` | `coding-conventions` | Naming, style, structure preferences | Maintenance run |
-| `cursor-memory` | `testing-methodology` | Test frameworks, patterns, coverage expectations | Maintenance run |
-| `cursor-memory` | `workflow-preferences` | Dev workflow, review process, tooling choices | Maintenance run |
-| `cursor-memory` | `architecture-decisions` | Design patterns, tech choices | Manual |
+| `shared-memory` | `coding-conventions` | Naming, style, structure preferences | Maintenance run |
+| `shared-memory` | `testing-methodology` | Test frameworks, patterns, coverage expectations | Maintenance run |
+| `shared-memory` | `workflow-preferences` | Dev workflow, review process, tooling choices | Maintenance run |
+| `shared-memory` | `architecture-decisions` | Design patterns, tech choices | Manual |
 | `kubernaut-docs` | `ka-architecture` | KA service components, data flow, integration | Manual |
 | `kubernaut-docs` | `af-pipeline` | AF pipeline stages, events, decisions | Manual |
 | `kubernaut-docs` | `platform-topology` | Service interactions, infrastructure | Manual |

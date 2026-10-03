@@ -665,11 +665,10 @@ RELEVANT_HINDSIGHT_TOOLS = frozenset(
 # keeps the added footprint to 1 tool per backend.
 RECALL_ONLY_HINDSIGHT_TOOLS = frozenset({"recall"})
 
-# Same rationale as RECALL_ONLY_HINDSIGHT_TOOLS, for kuadrant's code-search
-# backend: only the semantic/BM25 search tool is exposed cross-project,
-# not pattern-search or the call-graph tools (impact-analysis tooling for
-# a codebase nobody here refactors) -- see engram.search.kuadrant's module
-# docstring.
+# Same rationale as RECALL_ONLY_HINDSIGHT_TOOLS, for the Kuadrant
+# code-search backend: only the semantic/BM25 search tool is exposed
+# cross-project, not pattern-search or call-graph tools (impact-analysis
+# tooling for a read-only reference corpus).
 RECALL_ONLY_CODE_TOOLS = frozenset({"kuadrant_code_search"})
 
 MANUAL_MENTAL_MODEL_TOOLS = frozenset({"manual_mental_model"})

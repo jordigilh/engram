@@ -15,11 +15,6 @@ from datetime import date, datetime, timedelta, timezone
 from glob import glob
 from pathlib import Path
 
-import sys
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from engram.project_config import load_default_settings  # noqa: E402
-
 
 def _find_repo_root() -> Path:
     """Resolve the engram repo root so docs/DASHBOARD.md etc. can be found
@@ -45,8 +40,7 @@ def _find_repo_root() -> Path:
 
 
 REPO_ROOT = _find_repo_root()
-LOG_DIR = load_default_settings().path("log_dir", "~/.engram/logs")
-assert LOG_DIR is not None
+LOG_DIR = Path(os.path.expanduser("~/.engram/logs"))
 DASHBOARD_PATH = REPO_ROOT / "docs" / "DASHBOARD.md"
 PENDING_CONTRADICTIONS_LOG = LOG_DIR / "contradictions-pending.jsonl"
 AUTO_RESOLVED_LOG = LOG_DIR / "contradictions-auto-resolved.jsonl"
@@ -376,7 +370,7 @@ def generate_dashboard(reports: list[dict]) -> str:
     lines.append("| Bank | Nodes | Documents | Pending |")
     lines.append("|------|------:|----------:|--------:|")
     for bank_key, label in [
-        ("cursor-memory", "cursor-memory"),
+        ("shared-memory", "shared-memory"),
         ("kubernaut-docs", "kubernaut-docs"),
         ("kubernaut-issues", "kubernaut-issues"),
     ]:
@@ -440,7 +434,7 @@ def generate_dashboard(reports: list[dict]) -> str:
             e_r = eff_r.get("effectiveness", {})
             pr_r = eff_r.get("proactive_recall", {})
             rs_r = eff_r.get("recall_session_stats", {})
-            bs_r = r.get("bank_stats", {}).get("cursor-memory", {})
+            bs_r = r.get("bank_stats", {}).get("shared-memory", {})
 
             sw = e_r.get("sessions_with_recall", 0)
             swo = e_r.get("sessions_without_recall", 0)

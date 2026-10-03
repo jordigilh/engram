@@ -7,6 +7,10 @@
 # The route name becomes the public path /mcp/my-project. Keep one instance
 # per project/workspace or separately routed release line. Remove backend
 # tables that this deployment does not use.
+# Legacy `endpoint` routes (the image-backed relay compatibility form) default
+# to a 180s outer timeout so a downstream gateway can finish its read-only
+# retry. Set `timeout_seconds` explicitly when a route needs a different
+# budget.
 
 [instances."my-project".backends.docs]
 kind = "http"

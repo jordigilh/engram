@@ -61,6 +61,7 @@ ENGRAM_REPO_DIR = PROJECT_SETTINGS.path("repo_dir", str(default_project_path("en
 assert ENGRAM_REPO_DIR is not None
 CALL_GRAPH_ROOT = ENGRAM_REPO_DIR
 CALL_GRAPH_LANGUAGE = "python"
+_DEFAULT_BRANCH: str | None = None
 
 _EXCLUDED_PY_PATTERNS = [
     "**/__pycache__/**", "**/.pytest_cache/**", "**/.git/**",
@@ -73,6 +74,7 @@ _EXCLUDED_PY_PATTERNS = [
 _PATTERN_SEARCH_ROOTS = [
     ("engram", ENGRAM_REPO_DIR, ["**/*.py"], _EXCLUDED_PY_PATTERNS),
 ]
+_CALL_GRAPH_ROOTS: list[tuple] = list(_PATTERN_SEARCH_ROOTS)
 
 _model = None
 
@@ -83,9 +85,11 @@ def configure_project(
     pg_url: str,
     code_table: str,
     embedding_model: str,
-    pattern_roots: list[tuple[str, pathlib.Path, list[str], list[str]]],
+    pattern_roots: list[tuple],
     call_graph_root: pathlib.Path | None = None,
     call_graph_language: str = "python",
+    call_graph_roots: list[tuple] | None = None,
+    default_branch: str | None = None,
 ) -> None:
     """Configure this reusable search engine for a deployment project.
 
@@ -95,9 +99,8 @@ def configure_project(
     project.
     """
     global CODE_TABLE, EMBEDDING_MODEL, PG_URL, SEARCH_PROJECT
-    global CALL_GRAPH_ROOT, CALL_GRAPH_LANGUAGE, _PATTERN_SEARCH_ROOTS, _model
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", code_table):
-        raise ValueError(f"unsafe code table: {code_table!r}")
+    global CALL_GRAPH_ROOT, CALL_GRAPH_LANGUAGE, _PATTERN_SEARCH_ROOTS, _CALL_GRAPH_ROOTS, _DEFAULT_BRANCH, _model
+    sql_identifier(code_table, "CocoIndex table name")
     CODE_TABLE = code_table
     EMBEDDING_MODEL = embedding_model
     PG_URL = pg_url
@@ -105,6 +108,11 @@ def configure_project(
     _PATTERN_SEARCH_ROOTS = pattern_roots
     CALL_GRAPH_ROOT = call_graph_root or (pattern_roots[0][1] if pattern_roots else ENGRAM_REPO_DIR)
     CALL_GRAPH_LANGUAGE = call_graph_language
+    # ``[]`` is meaningful: a project may have code-search roots whose
+    # language is not supported by the call-graph extractor.  Only fall back
+    # to all pattern roots for callers that omit the argument entirely.
+    _CALL_GRAPH_ROOTS = list(pattern_roots) if call_graph_roots is None else list(call_graph_roots)
+    _DEFAULT_BRANCH = default_branch
     _model = None
 
 
@@ -146,10 +154,119 @@ def _rrf_fuse(
     return [{**items[key], "rrf_score": round(score, 6)} for key, score in ranked]
 
 
-def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[str, Any]]:
+def _root_details(root: tuple) -> tuple[str, pathlib.Path, list[str], list[str], str, str | None]:
+    """Normalize configured and historical four-item search-root tuples."""
+    if len(root) < 4:
+        raise ValueError("search roots must contain tag, path, include, and exclude values")
+    tag, path, included, excluded = root[:4]
+    language = root[4] if len(root) > 4 and root[4] else "auto"
+    branch = root[5] if len(root) > 5 else None
+    return tag, pathlib.Path(path), list(included), list(excluded), str(language), branch
+
+
+def _scope_token(value: str, label: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._@-]*", value):
+        raise ValueError(f"unsafe {label}: {value!r}")
+    return value
+
+
+def _normalized_branch(branch: str | None) -> str | None:
+    effective = _DEFAULT_BRANCH if branch is None else branch
+    if effective is None:
+        return None
+    effective = effective.strip()
+    if not effective or effective in {"main", "default"}:
+        return "main"
+    if effective.startswith("release/"):
+        return effective.removeprefix("release/")
+    if effective.startswith("release-"):
+        return effective.removeprefix("release-")
+    return effective
+
+
+def _branch_tag(tag: str, branch: str) -> str:
+    base = tag.split("@", 1)[0]
+    if branch == "main":
+        return base
+    if re.fullmatch(r"v\d+\.\d+", branch):
+        return f"{base}@release-{branch}"
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", branch).strip("-") or "unknown"
+    return f"{base}@branch-{safe}"
+
+
+def _root_matches(tag: str, repo: str | None, branch: str | None) -> bool:
+    if repo is not None:
+        repo = _scope_token(repo, "repo")
+        if "@" in repo:
+            if tag != repo:
+                return False
+        elif tag.split("@", 1)[0] != repo:
+            return False
+    if branch is None:
+        return True
+    if repo is not None and "@" in repo:
+        return tag == repo
+    return tag == _branch_tag(tag, branch)
+
+
+def _select_roots(roots: list[tuple], repo: str | None, branch: str | None) -> list[tuple]:
+    effective_branch = _normalized_branch(branch)
+    return [
+        root for root in roots
+        if _root_matches(_root_details(root)[0], repo, effective_branch)
+    ]
+
+
+def _select_pattern_roots(repo: str | None, branch: str | None) -> list[tuple]:
+    """Select configured filesystem roots for structural and graph queries."""
+    return _select_roots(_PATTERN_SEARCH_ROOTS, repo=repo, branch=branch)
+
+
+def _branch_where(repo: str | None, branch: str | None) -> tuple[str, list[str]]:
+    """Build parameterized filepath scope for indexed branch/source tags."""
+    effective_branch = _normalized_branch(branch)
+    clauses: list[str] = []
+    params: list[str] = []
+    if repo is not None:
+        repo = _scope_token(repo, "repo")
+        if "@" in repo:
+            clauses.append("filepath LIKE %s")
+            params.append(f"{repo}/%")
+            return " AND " + " AND ".join(clauses), params
+    if effective_branch is None:
+        if repo:
+            clauses.append("filepath LIKE %s")
+            params.append(f"{repo}/%")
+    elif effective_branch == "main":
+        clauses.append("filepath NOT LIKE %s")
+        params.append("%@%")
+        if repo:
+            clauses.append("filepath LIKE %s")
+            params.append(f"{repo}/%")
+    else:
+        suffix = _branch_tag("source", effective_branch).removeprefix("source")
+        clauses.append("filepath LIKE %s")
+        params.append(f"{repo or '%'}{suffix}/%")
+    where = (" AND " + " AND ".join(clauses)) if clauses else ""
+    return where, params
+
+
+def search_code(
+    query: str,
+    limit: int = 10,
+    mode: str = "hybrid",
+    repo: str | None = None,
+    branch: str | None = None,
+    table: str | None = None,
+) -> list[dict[str, Any]]:
     import psycopg2
 
+    if mode not in {"hybrid", "dense", "bm25"}:
+        raise ValueError(f"unsupported search mode: {mode!r}")
+    limit = max(1, int(limit))
     candidate_pool = limit * 3
+    table_name = sql_identifier(table or CODE_TABLE, "CocoIndex table name")
+    branch_where, branch_params = _branch_where(repo, branch)
 
     conn = psycopg2.connect(PG_URL)
     try:
@@ -164,11 +281,12 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                     f"""
                     SELECT id, filepath, chunk_index, code,
                            1 - (embedding <=> %s::vector) AS score
-                    FROM cocoindex.{CODE_TABLE}
+                    FROM cocoindex.{table_name}
+                    WHERE TRUE{branch_where}
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
                     """,
-                    (embedding_str, embedding_str, candidate_pool),
+                    (embedding_str, *branch_params, embedding_str, candidate_pool),
                 )
                 dense_results = [
                     {"id": r[0], "filepath": r[1], "chunk_index": r[2],
@@ -187,12 +305,12 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                         f"""
                         SELECT id, filepath, chunk_index, code,
                                ts_rank_cd(search_vector, to_tsquery('simple', %s)) AS score
-                        FROM cocoindex.{CODE_TABLE}
-                        WHERE search_vector @@ to_tsquery('simple', %s)
+                        FROM cocoindex.{table_name}
+                        WHERE search_vector @@ to_tsquery('simple', %s){branch_where}
                         ORDER BY score DESC
                         LIMIT %s
                         """,
-                        (tsquery, tsquery, candidate_pool),
+                        (tsquery, tsquery, *branch_params, candidate_pool),
                     )
                     bm25_results = [
                         {"id": r[0], "filepath": r[1], "chunk_index": r[2],
@@ -239,7 +357,13 @@ def _format_results(query: str, results: list[dict], mode: str = "hybrid") -> st
     return "\n".join(lines)
 
 
-def pattern_search_code(pattern: str, language: str, limit: int = 10) -> list[dict[str, Any]]:
+def pattern_search_code(
+    pattern: str,
+    language: str,
+    limit: int = 10,
+    repo: str | None = None,
+    branch: str | None = None,
+) -> list[dict[str, Any]]:
     """Structural ("by-example") code search via CocoIndex's CodePattern --
     tree-sitter AST matching against this repo's own live checkout.
 
@@ -257,7 +381,10 @@ def pattern_search_code(pattern: str, language: str, limit: int = 10) -> list[di
 
     cp = CodePattern(pattern, language)
     results: list[dict[str, Any]] = []
-    for repo_tag, root, included, excluded in _PATTERN_SEARCH_ROOTS:
+    for root_spec in _select_pattern_roots(repo=repo, branch=branch):
+        repo_tag, root, included, excluded, root_language, _root_branch = _root_details(root_spec)
+        if root_language not in {"auto", language}:
+            continue
         if len(results) >= limit:
             break
         for path in chunking.find_code_files(root, included, excluded):
@@ -304,38 +431,111 @@ def _format_pattern_results(pattern: str, language: str, results: list[dict]) ->
 # only supplies *which* root/language to build from. No behavior change from
 # when this logic lived here directly.
 
-def _build_graph_with_timing():
-    return callgraph.build_call_graph_with_stats(
-        CALL_GRAPH_ROOT,
-        included=["**/*"],
-        excluded=_EXCLUDED_PY_PATTERNS,
-        language=CALL_GRAPH_LANGUAGE,
-        logger=log,
-    )
+def _build_graph_with_timing(
+    repo: str | None = None,
+    branch: str | None = None,
+    language: str | None = None,
+):
+    requested_language = language or CALL_GRAPH_LANGUAGE
+    roots = _select_roots(_CALL_GRAPH_ROOTS, repo=repo, branch=branch)
+    if requested_language != "auto":
+        roots = [root for root in roots if _root_details(root)[4] in {"auto", requested_language}]
+
+    # The call-graph builder resolves one grammar per graph.  A configured
+    # project may legitimately mix Go, Rust, Python, and TypeScript roots, so
+    # build one graph per language and merge the independent results rather
+    # than silently dropping every non-Python root.
+    groups: dict[str, list[tuple]] = {}
+    for root in roots:
+        root_language = _root_details(root)[4]
+        graph_language = requested_language if requested_language != "auto" else root_language
+        if graph_language == "auto":
+            graph_language = "python"
+        groups.setdefault(graph_language, []).append(root)
+
+    if not groups:
+        fallback_language = requested_language if requested_language != "auto" else "python"
+        return callgraph.build_multi_repo_call_graph_with_stats(
+            [], language=fallback_language, logger=log,
+        )
+
+    graphs = []
+    for graph_language, language_roots in groups.items():
+        normalized = [
+            (
+                _root_details(root)[0],
+                _root_details(root)[1],
+                _root_details(root)[2],
+                _root_details(root)[3],
+            )
+            for root in language_roots
+        ]
+        # Use the multi-repository wrapper even for one root so the source
+        # tag remains part of every qualified function name.  Without that
+        # prefix a single-root project and a release/repository-scoped query
+        # would disagree about the node's identity.
+        graphs.append(
+            callgraph.build_multi_repo_call_graph_with_stats(
+                normalized,
+                language=graph_language,
+                logger=log,
+            )
+        )
+
+    if len(graphs) == 1:
+        return graphs[0]
+    merged = callgraph.nx.DiGraph()
+    merged.graph["unresolved_calls"] = 0
+    merged.graph["total_calls"] = 0
+    merged.graph["ambiguous_calls"] = []
+    for graph in graphs:
+        merged.add_nodes_from(graph.nodes(data=True))
+        merged.add_edges_from(graph.edges(data=True))
+        merged.graph["unresolved_calls"] += graph.graph.get("unresolved_calls", 0)
+        merged.graph["total_calls"] += graph.graph.get("total_calls", 0)
+        merged.graph["ambiguous_calls"].extend(graph.graph.get("ambiguous_calls", []))
+    return merged
 
 
-def call_graph_blast_radius(function: str, depth: int = 2) -> dict[str, Any]:
+def call_graph_blast_radius(
+    function: str,
+    depth: int = 2,
+    repo: str | None = None,
+    branch: str | None = None,
+    language: str | None = None,
+) -> dict[str, Any]:
     """Who (transitively) calls `function`, up to `depth` hops -- "what
     breaks if I change this." See docs/CALL_GRAPH_CLUSTERING.md for the
     accuracy ceiling (name-based resolution, no type info)."""
-    graph = _build_graph_with_timing()
+    graph = _build_graph_with_timing(repo=repo, branch=branch, language=language)
     return callgraph.query_blast_radius(graph, function, depth=depth)
 
 
-def call_graph_shortest_path(source: str, target: str) -> dict[str, Any]:
+def call_graph_shortest_path(
+    source: str,
+    target: str,
+    repo: str | None = None,
+    branch: str | None = None,
+    language: str | None = None,
+) -> dict[str, Any]:
     """Does `source` ever reach `target` through a chain of calls, and how."""
-    graph = _build_graph_with_timing()
+    graph = _build_graph_with_timing(repo=repo, branch=branch, language=language)
     return callgraph.query_shortest_path(graph, source, target)
 
 
-def call_graph_get_cluster(function: str) -> dict[str, Any]:
+def call_graph_get_cluster(
+    function: str,
+    repo: str | None = None,
+    branch: str | None = None,
+    language: str | None = None,
+) -> dict[str, Any]:
     """Which Leiden community `function` belongs to, and its other members.
 
     Clustering quality depends entirely on the underlying graph's structure:
     a small, centralized codebase may legitimately produce one dominant
     cluster or many singletons -- that reflects the codebase, not a broken
     clustering step (see docs/CALL_GRAPH_CLUSTERING.md)."""
-    graph = _build_graph_with_timing()
+    graph = _build_graph_with_timing(repo=repo, branch=branch, language=language)
     return callgraph.query_get_cluster(graph, function)
 
 
@@ -375,7 +575,12 @@ def _run_mcp_server(
     mcp = mcp_compat.make_server(f"{project_name}-code", host=host, port=port)
 
     @mcp.tool(name=f"{tool_prefix}code_search")
-    def engram_code_search(query: str, limit: int = 10) -> str:
+    def engram_code_search(
+        query: str,
+        limit: int = 10,
+        repo: str | None = None,
+        branch: str | None = None,
+    ) -> str:
         """Hybrid code search over the Engram tooling codebase.
 
         Combines dense vector similarity and BM25 keyword matching via
@@ -386,11 +591,17 @@ def _run_mcp_server(
         Returns ranked code snippets with file paths and relevance scores.
         Prefer this over Grep when searching by concept rather than exact text.
         """
-        results = search_code(query, limit=min(limit, 20))
+        results = search_code(query, limit=min(limit, 20), repo=repo, branch=branch)
         return _format_results(query, results)
 
     @mcp.tool(name=f"{tool_prefix}code_pattern_search")
-    def engram_code_pattern_search(pattern: str, language: str = "python", limit: int = 10) -> str:
+    def engram_code_pattern_search(
+        pattern: str,
+        language: str | None = None,
+        limit: int = 10,
+        repo: str | None = None,
+        branch: str | None = None,
+    ) -> str:
         r"""Structural ("by-example") code search over the Engram tooling codebase.
 
         For "find code shaped like X" -- e.g. every function matching a
@@ -406,11 +617,20 @@ def _run_mcp_server(
         This is purely syntactic: it does NOT resolve types and can't find
         references/callers or diagnostics.
         """
-        results = pattern_search_code(pattern, language, limit=min(limit, 20))
-        return _format_pattern_results(pattern, language, results)
+        effective_language = language or (CALL_GRAPH_LANGUAGE if CALL_GRAPH_LANGUAGE != "auto" else "python")
+        results = pattern_search_code(
+            pattern, effective_language, limit=min(limit, 20), repo=repo, branch=branch,
+        )
+        return _format_pattern_results(pattern, effective_language, results)
 
     @mcp.tool(name=f"{tool_prefix}call_graph_blast_radius")
-    def engram_call_graph_blast_radius(function: str, depth: int = 2) -> str:
+    def engram_call_graph_blast_radius(
+        function: str,
+        depth: int = 2,
+        repo: str | None = None,
+        branch: str | None = None,
+        language: str | None = None,
+    ) -> str:
         """What (transitively) calls `function` in the Engram tooling codebase,
         up to `depth` hops -- "what breaks if I change this."
 
@@ -423,22 +643,37 @@ def _run_mcp_server(
         edges, and dynamic dispatch/external calls can't be seen at all.
         Rebuilds the call graph fresh on every call (no persisted index).
         """
-        result = call_graph_blast_radius(function, depth=depth)
+        result = call_graph_blast_radius(
+            function, depth=depth, repo=repo, branch=branch, language=language,
+        )
         return _format_blast_radius_result(result)
 
     @mcp.tool(name=f"{tool_prefix}call_graph_shortest_path")
-    def engram_call_graph_shortest_path(source: str, target: str) -> str:
+    def engram_call_graph_shortest_path(
+        source: str,
+        target: str,
+        repo: str | None = None,
+        branch: str | None = None,
+        language: str | None = None,
+    ) -> str:
         """Does `source` ever reach `target` through a chain of calls in the
         Engram tooling codebase, and how.
 
         Same name-based-resolution caveat as engram_call_graph_blast_radius
         applies (see its docstring) -- this is a SPIKE, engram-only.
         """
-        result = call_graph_shortest_path(source, target)
+        result = call_graph_shortest_path(
+            source, target, repo=repo, branch=branch, language=language,
+        )
         return _format_shortest_path_result(result)
 
     @mcp.tool(name=f"{tool_prefix}call_graph_get_cluster")
-    def engram_call_graph_get_cluster(function: str) -> str:
+    def engram_call_graph_get_cluster(
+        function: str,
+        repo: str | None = None,
+        branch: str | None = None,
+        language: str | None = None,
+    ) -> str:
         """Which cluster of related functions (via Leiden community detection
         over the call graph) `function` belongs to in the Engram tooling
         codebase, and its other members.
@@ -448,43 +683,74 @@ def _run_mcp_server(
         centralized codebase may legitimately produce one dominant cluster or
         many singletons; that reflects the codebase, not a broken tool.
         """
-        result = call_graph_get_cluster(function)
+        result = call_graph_get_cluster(
+            function, repo=repo, branch=branch, language=language,
+        )
         return _format_cluster_result(result)
 
     if transport == "stdio":
         log.info("Starting engram-code MCP server (stdio)")
         mcp_compat.run_server(mcp, transport="stdio")
     else:
-        log.info("Starting engram-code MCP server on %s:%d (sse)", host, port)
-        mcp_compat.run_server(mcp, transport="sse", host=host, port=port)
+        log.info("Starting engram-code MCP server on %s:%d (%s)", host, port, transport)
+        mcp_compat.run_server(mcp, transport=transport, host=host, port=port)
 
 
 # ---------------------------------------------------------------------------
 # CLI query mode
 # ---------------------------------------------------------------------------
 
-def _run_cli_query(query: str, limit: int = 10, mode: str = "hybrid") -> None:
-    results = search_code(query, limit=limit, mode=mode)
+def _run_cli_query(
+    query: str,
+    limit: int = 10,
+    mode: str = "hybrid",
+    repo: str | None = None,
+    branch: str | None = None,
+) -> None:
+    results = search_code(query, limit=limit, mode=mode, repo=repo, branch=branch)
     print(_format_results(query, results, mode=mode))
 
 
-def _run_cli_pattern_query(pattern: str, language: str, limit: int = 10) -> None:
-    results = pattern_search_code(pattern, language, limit=limit)
+def _run_cli_pattern_query(
+    pattern: str,
+    language: str,
+    limit: int = 10,
+    repo: str | None = None,
+    branch: str | None = None,
+) -> None:
+    results = pattern_search_code(pattern, language, limit=limit, repo=repo, branch=branch)
     print(_format_pattern_results(pattern, language, results))
 
 
-def _run_cli_blast_radius(function: str, depth: int) -> None:
-    result = call_graph_blast_radius(function, depth=depth)
+def _run_cli_blast_radius(
+    function: str,
+    depth: int,
+    repo: str | None = None,
+    branch: str | None = None,
+    language: str | None = None,
+) -> None:
+    result = call_graph_blast_radius(function, depth=depth, repo=repo, branch=branch, language=language)
     print(_format_blast_radius_result(result))
 
 
-def _run_cli_shortest_path(source: str, target: str) -> None:
-    result = call_graph_shortest_path(source, target)
+def _run_cli_shortest_path(
+    source: str,
+    target: str,
+    repo: str | None = None,
+    branch: str | None = None,
+    language: str | None = None,
+) -> None:
+    result = call_graph_shortest_path(source, target, repo=repo, branch=branch, language=language)
     print(_format_shortest_path_result(result))
 
 
-def _run_cli_cluster(function: str) -> None:
-    result = call_graph_get_cluster(function)
+def _run_cli_cluster(
+    function: str,
+    repo: str | None = None,
+    branch: str | None = None,
+    language: str | None = None,
+) -> None:
+    result = call_graph_get_cluster(function, repo=repo, branch=branch, language=language)
     print(_format_cluster_result(result))
 
 
@@ -498,6 +764,8 @@ def main():
     parser.add_argument("--limit", "-n", type=int, default=10, help="Max results (default: 10)")
     parser.add_argument("--mode", "-m", default="hybrid", choices=["hybrid", "dense", "bm25"],
                         help="Search mode (default: hybrid)")
+    parser.add_argument("--repo", help="Scope results to one configured source tag")
+    parser.add_argument("--branch", help="Scope results to main or a configured release/branch tag")
     parser.add_argument("--blast-radius", help="Call-graph spike: who (transitively) calls this function")
     parser.add_argument("--depth", type=int, default=2, help="Depth for --blast-radius (default: 2)")
     parser.add_argument("--shortest-path", nargs=2, metavar=("SOURCE", "TARGET"),
@@ -508,15 +776,15 @@ def main():
     args = parser.parse_args()
 
     if args.pattern:
-        _run_cli_pattern_query(args.pattern, args.language, limit=args.limit)
+        _run_cli_pattern_query(args.pattern, args.language, limit=args.limit, repo=args.repo, branch=args.branch)
     elif args.blast_radius:
-        _run_cli_blast_radius(args.blast_radius, depth=args.depth)
+        _run_cli_blast_radius(args.blast_radius, depth=args.depth, repo=args.repo, branch=args.branch, language=args.language)
     elif args.shortest_path:
-        _run_cli_shortest_path(*args.shortest_path)
+        _run_cli_shortest_path(*args.shortest_path, repo=args.repo, branch=args.branch, language=args.language)
     elif args.cluster:
-        _run_cli_cluster(args.cluster)
+        _run_cli_cluster(args.cluster, repo=args.repo, branch=args.branch, language=args.language)
     elif args.query:
-        _run_cli_query(args.query, limit=args.limit, mode=args.mode)
+        _run_cli_query(args.query, limit=args.limit, mode=args.mode, repo=args.repo, branch=args.branch)
     else:
         _run_mcp_server(host=args.host, port=args.port)
 

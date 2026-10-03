@@ -74,6 +74,7 @@ describe("buildMcpServerConfigV2", () => {
       url: "http://127.0.0.1:8896/mcp/service-api-v1.5",
       oauth: false,
       disabled: false,
+      codemode: false,
     })
   })
 
@@ -117,6 +118,7 @@ describe("v2 setup", () => {
       url: "http://127.0.0.1:8896/mcp/engram",
       oauth: false,
       disabled: false,
+      codemode: false,
     })
     expect(typeof cleanup).toBe("function")
     ;(cleanup as () => void)()

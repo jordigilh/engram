@@ -13,11 +13,17 @@
         <string>__PROJECT__</string>
         <string>--config</string>
         <string>__HOME__/.engram/projects.toml</string>
+        <string>--mode</string>
+        <string>live</string>
     </array>
     <key>WorkingDirectory</key>
     <string>__HOME__/.engram</string>
     <key>EnvironmentVariables</key>
     <dict>
+        <key>PATH</key>
+        <string>__HOME__/.engram/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
     </dict>

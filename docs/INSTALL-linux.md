@@ -10,8 +10,8 @@ on Linux. Follow this doc for the platform-specific pieces, then continue with
 
 **Architecture**: unlike macOS (native process, no container), Hindsight
 itself runs **containerized** on Linux via Podman, while the Engram flow,
-search, and maintenance commands (`engram-flows-*`, `engram-search-*`,
-`engram-nightly-learn`) run
+ search, and maintenance commands (`engram-flows-configured`,
+ `engram-search-configured`, `engram-nightly-learn`) run
 **natively** via the same hermetic `uv`-managed Python venv the macOS install
 uses — see [FINDINGS.md](FINDINGS.md) 2026-07-29 ("Decided architecture") for
 why the split isn't symmetric, and 2026-07-29 ("#9 Implemented") for what was
@@ -165,8 +165,9 @@ uv pip install --python ~/.engram/venv/bin/python cocoindex==1.0.23
 `uv pip install -e ".[dev]"` is the one-shot editable install of the whole
 `engram` package (see [`INSTALL.md`](INSTALL.md) step 9) — it makes
 `correction_gate.py`, `contradiction_resolution.py`, `project_scope.py` etc.
-importable as `engram.*` and generates the `engram-flows-kubernaut` /
-`engram-search-kubernaut` / `engram-nightly-learn`
+importable as `engram.*` and generates the configuration-driven
+`engram-flows-configured` / `engram-search-configured` /
+`engram-nightly-learn`
 console scripts in `~/.engram/venv/bin/`; the systemd units invoke those
 console scripts directly.
 

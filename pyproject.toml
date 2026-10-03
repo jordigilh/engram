@@ -55,11 +55,12 @@ markers = [
     "integration: tests requiring a real Postgres+pgvector instance (see tests/integration/README.md); excluded from the default `pytest` run",
 ]
 
-# Launchd-invoked entry points include 7 legacy flows + 7 legacy search
-# adapters, one configuration-driven flow, and one configuration-driven search
-# + ingest-issues + hindsight-proxy + serena-multiplex). ingest-docs and the
-# maintenance/backfill tools are run by hand, not by launchd -- invoke those
-# as `python -m engram.pipeline.ingest_docs` / `python -m engram.maintenance.report`.
+# The generic flow/search entry points are the only adapters used by the
+# launchd/systemd templates.  The legacy per-project scripts remain registered
+# temporarily for rollback while the separate cleanup change removes them.
+# ingest-docs and maintenance/backfill tools are run by hand, not by launchd --
+# invoke those as `python -m engram.pipeline.ingest_docs` /
+# `python -m engram.maintenance.report`.
 [project.scripts]
 engram-flows-kubernaut = "engram.flows.kubernaut:main"
 engram-flows-dcm = "engram.flows.dcm:main"

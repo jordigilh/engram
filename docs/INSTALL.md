@@ -243,8 +243,8 @@ python3 check-rule-sync.py --fix    # copies canonical -> deployed on drift
 
 ## 9. Install the engram package
 
-Everything under `src/engram/` (shared modules, per-project CocoIndex flows/
-search, the learning pipeline, maintenance scripts) is a real, pip-
+Everything under `src/engram/` (shared modules, the configuration-driven
+CocoIndex flow/search adapters, the learning pipeline, maintenance scripts) is a real, pip-
 installable package now — one editable install replaces the old per-module
 symlinking (`correction_gate.py`, `contradiction_resolution.py`,
 `project_scope.py`, and a `spike/` path hack are no longer symlinked
@@ -258,8 +258,9 @@ uv pip install --python ~/.engram/venv/bin/python 'google-cloud-aiplatform>=1.38
 ```
 
 This generates the console scripts used by the launchd templates:
-`engram-flows-*`, `engram-search-*`, `engram-nightly-learn`, and the shared
-service entry points. Manual tools such as reports and backfills can be run as
+`engram-flows-configured`, `engram-search-configured`,
+`engram-nightly-learn`, and the shared service entry points. Manual tools such
+as reports and backfills can be run as
 `python3 -m engram.<subpackage>.<module>`.
 
 Project source paths and transcript prefixes are deployment settings. Add them
@@ -268,7 +269,7 @@ environment variables for a new project.
 
 ## 10. Schedule always-on services with launchd
 
-The Hindsight service and the project-specific CocoIndex flow are the
+The Hindsight service and the configuration-driven CocoIndex flow are the
 always-on services. LLM learning, reflection, and triage are intentionally
 on-demand; do not enable the legacy hourly/nightly learning plists by default.
 Use `engram-nightly-learn` manually when a deliberate maintenance run is
@@ -276,7 +277,7 @@ wanted.
 
 ## 11. Ingest project documentation (Knowledge RAG)
 
-Documentation is owned by the project's CocoIndex flow. For a new project, use
+Documentation is owned by the project's configured CocoIndex flow. For a new project, use
 the [backfill-before-live checklist](NEW_PROJECT_SETUP.md#install-backfill-and-start-the-flow)
 or run the configured flow with `--mode backfill --apps docs`; do not use a
 standalone importer for the normal deployment path.
@@ -344,9 +345,9 @@ uv pip install --python ~/.engram/venv/bin/python cocoindex==1.0.23
 ```
 
 `pdfplumber` (PDF text extraction) rides along as a transitive dependency of
-`cocoindex` at this point, but any flow that ingests manually-curated PDFs
-(e.g. `engram.flows.praxis`'s `process_pdf_file`, for supplementary
-project-overview PDFs dropped in `~/.engram/manual-docs/<project>/`) does
+`cocoindex` at this point, but the generic configured flow can ingest
+manually-curated PDFs for supplementary project-overview files dropped in
+`~/.engram/manual-docs/<project>/` and does
 `import pdfplumber` directly, so pin it explicitly rather than relying on an
 undeclared transitive dependency:
 
@@ -356,10 +357,11 @@ uv pip install --python ~/.engram/venv/bin/python pdfplumber
 
 ### Configure and backfill
 
-The launchd templates invoke the installed `engram-flows-*` and
-`engram-search-*` console scripts directly; no flow or search symlinks are
-needed. Configure source paths in `~/.engram/projects.toml`, run a backfill,
-then install the matching continuous-sync plist. For a new project, use
+The launchd templates invoke the installed configuration-driven
+`engram-flows-configured` and `engram-search-configured` console scripts
+directly; no flow or search symlinks are needed. Configure source paths in
+`~/.engram/projects.toml`, run a backfill, then install the matching
+continuous-sync plist. For a new project, use
 [`NEW_PROJECT_SETUP.md`](NEW_PROJECT_SETUP.md).
 
 ### Configure source directories
@@ -389,7 +391,7 @@ settings; repository paths and project routing belong in `projects.toml`.
 ### Run initial backfill
 
 ```bash
-~/.engram/venv/bin/engram-flows-kubernaut --mode backfill
+~/.engram/venv/bin/engram-flows-configured --project kubernaut --config ~/.engram/projects.toml --mode backfill
 ```
 
 This processes all existing docs, issues, code, and transcripts. Subsequent runs
@@ -411,15 +413,16 @@ launchctl load ~/Library/LaunchAgents/io.vectorize.cocoindex.service.plist
 ### Verify
 
 ```bash
-# Check all four flows started
+# Check configured flow activity
 grep "Starting\|Fetched\|poll:" ~/.engram/logs/cocoindex-stderr.log | tail -10
 
 # Check issues + PRs are fully indexed
 grep "Fetched.*from" ~/.engram/logs/cocoindex-stderr.log | tail -5
 ```
 
-You should see all four apps starting (docs, code, transcripts, issues) and
-issue poll cycles completing with the full count of issues + PRs. See
+You should see the configured docs/code/issues apps starting and issue poll
+cycles completing with the full count of issues + PRs. Transcripts remain an
+explicitly selectable on-demand app under the cost policy. See
 [CocoIndex Operations](COCOINDEX.md) for monitoring and troubleshooting details.
 
 > **Call-graph tools**: every onboarded project's search MCP server also
@@ -482,8 +485,8 @@ The `tests/` directory has a `pytest` regression suite covering the shared
 modules (`engram.correction_gate`, `engram.contradiction_resolution`,
 `engram.project_scope`), the `engram.hindsight_client` recall client,
 `engram.maintenance.review_contradictions`'s approve/reject/skip/quit flow,
-and the core retain logic in `engram.pipeline.nightly_learn` and
-`engram.flows.kubernaut`. Added 2026-07-13 after three real bugs shipped to
+and the core retain logic in `engram.pipeline.nightly_learn` and the configured
+flow. Added 2026-07-13 after three real bugs shipped to
 production in one session with zero automated coverage catching any of them
 (see [FINDINGS.md](FINDINGS.md)).
 

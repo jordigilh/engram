@@ -1,0 +1,12 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "engram": {
+        "type": "remote",
+        "url": "http://127.0.0.1:8896/mcp/engram",
+        "oauth": false
+      }
+    }
+  }
+}

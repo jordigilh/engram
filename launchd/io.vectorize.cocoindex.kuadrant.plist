@@ -7,13 +7,17 @@
     <key>ProgramArguments</key>
     <array>
         <string>__HOME__/.engram/with-config-env.sh</string>
-        <string>__HOME__/.engram/venv/bin/engram-flows-kuadrant</string>
+        <string>__HOME__/.engram/venv/bin/engram-flows-configured</string>
+        <string>--project</string>
+        <string>kuadrant</string>
+        <string>--config</string>
+        <string>__HOME__/.engram/projects.toml</string>
         <string>--mode</string>
         <string>live</string>
         <!-- Ingestion-only onboarding (2026-08-27, extended to 9 repos
              2026-08-28 with mcp-gateway): docs/issues/code apps plus
              git-sync (periodic `git pull` across all 9 read-only
-             checkouts -- see kuadrant.py's module docstring for why this
+             checkouts - see kuadrant.py's module docstring for why this
              exists: nobody opens these repos as a Cursor workspace, so
              nothing else keeps them in sync with upstream). No serena, no
              transcripts app (this org has no Cursor agent sessions of its

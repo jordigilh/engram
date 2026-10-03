@@ -6,9 +6,15 @@
     <string>io.vectorize.cocoindex.search</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.engram/venv/bin/engram-search-kubernaut</string>
+        <string>__HOME__/.engram/venv/bin/engram-search-configured</string>
+        <string>--project</string>
+        <string>kubernaut</string>
+        <string>--config</string>
+        <string>__HOME__/.engram/projects.toml</string>
+        <string>--transport</string>
+        <string>streamable-http</string>
         <string>--port</string>
-        <string>8889</string>
+        <string>8890</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>

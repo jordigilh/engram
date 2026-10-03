@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from engram.project_config import load_adapter_config, load_project_settings, project_config_path, sql_identifier
+from engram.project_config import (
+    effective_source_tag,
+    load_adapter_config,
+    load_project_settings,
+    project_config_path,
+    sql_identifier,
+)
 
 
 def test_missing_config_is_safe(tmp_path):
@@ -151,3 +157,48 @@ jql = "parent = EX-1 OR key = EX-1 order by created asc"
     assert settings.issues_provider == "jira"
     assert settings.jira_jql.startswith("parent = EX-1")
     assert settings.issues_repos == ()
+
+
+def test_release_source_tag_is_branch_qualified(tmp_path):
+    config_path = tmp_path / "projects.toml"
+    config_path.write_text(
+        """
+[projects.release]
+code_table = "release_code_embeddings"
+
+[[projects.release.sources]]
+tag = "repo"
+root = "checkout"
+branch = "release/v1.5"
+language = "go"
+code_include = ["**/*.go"]
+""".strip()
+    )
+
+    settings = load_adapter_config("release", config_path)
+
+    assert effective_source_tag(settings.code_sources[0]) == "repo@release-v1.5"
+
+
+def test_explicit_issue_sources_can_combine_github_prs_and_jira(tmp_path):
+    config_path = tmp_path / "projects.toml"
+    config_path.write_text(
+        """
+[projects.combo]
+issues_bank = "combo-issues"
+pr_repos = ["org/repo"]
+jira_project = "COST"
+
+[projects.combo.jira]
+server = "https://jira.example"
+email = "operator@example.com"
+jql = "project = COST"
+""".strip()
+    )
+
+    settings = load_adapter_config("combo", config_path)
+
+    assert [(source.provider, source.item_kinds) for source in settings.issue_sources] == [
+        ("github", ("pr",)),
+        ("jira", ("issue", "pr")),
+    ]

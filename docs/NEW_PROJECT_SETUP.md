@@ -68,9 +68,9 @@ new bank, no new CocoIndex app, no new launchd service — just:
 1. `create_mental_model` with a `tags: ["<repo>"]` filter, scoped to the
    existing shared bank (see `engram.maintenance.create_mental_models`'s
    `operator-architecture`/`console-architecture` entries).
-2. An optional `repo` parameter on `engram.search.kubernaut`'s `search_code()` /
-   `cocoindex_search` MCP tool, which adds a `filepath LIKE '<repo>/%'` filter
-   to scope code search the same way.
+2. An optional `repo` parameter on the configured search server's
+   `search_code()` / code-search MCP tool, which adds a
+   `filepath LIKE '<repo>/%'` filter to scope code search the same way.
 3. A hand-authored `.cursor/rules/hindsight-memory.mdc` that defaults to the
    repo's own tag/prefix for own-repo work, and explicitly drops the filter
    for cross-repo/upstream triage (see `cursor/operator-hindsight-memory.mdc`).
@@ -115,7 +115,7 @@ from the full pattern:
 > predictable service/account name. Read it with the same `-a <account>
 > -s <service>` pair the CLI itself uses (e.g.
 > `security find-generic-password -a jira-cli -s jira-cloud-api-token -w` —
-> see `engram.flows.rhdh_plugins._jira_token`) instead of asking the user
+> using the generic flow's deployment-local Jira token lookup) instead of asking the user
 > for a fresh token; this was the approach the user explicitly chose over
 > prompting for new credentials during the `rhdh-plugins` onboarding. Also
 > prefer calling Jira's REST API (`/rest/api/3/search/jql`) directly with

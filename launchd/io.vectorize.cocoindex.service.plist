@@ -7,19 +7,23 @@
     <key>ProgramArguments</key>
     <array>
         <string>__HOME__/.engram/with-config-env.sh</string>
-        <string>__HOME__/.engram/venv/bin/engram-flows-kubernaut</string>
+        <string>__HOME__/.engram/venv/bin/engram-flows-configured</string>
+        <string>--project</string>
+        <string>kubernaut</string>
+        <string>--config</string>
+        <string>__HOME__/.engram/projects.toml</string>
         <string>--mode</string>
         <string>live</string>
         <!-- transcripts deliberately excluded: it retains raw chat transcript
              text into the shared-memory bank with LLM fact-extraction left on
-             (concise mode) -- that's exactly the automatic LLM-cost surface
+             (concise mode) - that's exactly the automatic LLM-cost surface
              the 2026-08-13 "retain/reflect on-demand" decision targeted, so
              it stays on-demand only (call retain/reflect explicitly in chat).
              docs/issues are back in live mode as of 2026-08-14: their banks
              (kubernaut-docs, kubernaut-issues) are now configured with
              retain_extraction_mode=chunks + enable_observations=false, so
              hindsight_retain() stores raw chunks with local ONNX embeddings
-             only -- no LLM call at all. See docs/findings/2026-08.md
+             only - no LLM call at all. See docs/findings/2026-08.md
              2026-08-14 "chunks-mode ingestion" decision. -->
         <string>--apps</string>
         <string>docs</string>

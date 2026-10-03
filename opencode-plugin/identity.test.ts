@@ -121,6 +121,7 @@ describe("buildMcpServerConfigV2", () => {
       url: "http://127.0.0.1:8896/mcp/service-api-v1.5",
       oauth: false,
       disabled: false,
+      codemode: false,
     })
   })
 

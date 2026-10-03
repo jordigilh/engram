@@ -55,28 +55,13 @@ markers = [
     "integration: tests requiring a real Postgres+pgvector instance (see tests/integration/README.md); excluded from the default `pytest` run",
 ]
 
-# The generic flow/search entry points are the only adapters used by the
-# launchd/systemd templates.  The legacy per-project scripts remain registered
-# temporarily for rollback while the separate cleanup change removes them.
+# The generic flow/search entry points are the adapters used by the active
+# launchd/systemd templates.
 # ingest-docs and maintenance/backfill tools are run by hand, not by launchd --
 # invoke those as `python -m engram.pipeline.ingest_docs` /
 # `python -m engram.maintenance.report`.
 [project.scripts]
-engram-flows-kubernaut = "engram.flows.kubernaut:main"
-engram-flows-dcm = "engram.flows.dcm:main"
-engram-flows-engram = "engram.flows.engram:main"
-engram-flows-koku = "engram.flows.koku:main"
-engram-flows-praxis = "engram.flows.praxis:main"
-engram-flows-rhdh-plugins = "engram.flows.rhdh_plugins:main"
-engram-flows-kuadrant = "engram.flows.kuadrant:main"
 engram-flows-configured = "engram.flows.configured:main"
-engram-search-kubernaut = "engram.search.kubernaut:main"
-engram-search-dcm = "engram.search.dcm:main"
-engram-search-engram = "engram.search.engram:main"
-engram-search-koku = "engram.search.koku:main"
-engram-search-praxis = "engram.search.praxis:main"
-engram-search-rhdh-plugins = "engram.search.rhdh_plugins:main"
-engram-search-kuadrant = "engram.search.kuadrant:main"
 engram-search-configured = "engram.search.configured:main"
 engram-nightly-learn = "engram.pipeline.nightly_learn:main"
 engram-ingest-issues = "engram.pipeline.ingest_issues:main"

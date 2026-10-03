@@ -16,7 +16,7 @@ Implemented per the plan below: `src/engram/callgraph.py` (extraction + Leiden
 clustering, `tests/test_callgraph.py`, 21 tests) plus three new MCP tools --
 `engram_call_graph_blast_radius`, `engram_call_graph_shortest_path`,
 `engram_call_graph_get_cluster` -- and matching CLI flags on the existing
-`engram-search-<project>`. Scope, per the reviewed plan: prove the
+`engram-search-configured --project <project>`. Scope, per the reviewed plan: prove the
 pipeline on `engram`'s own small Python codebase, live-rebuild-per-query
 only (no persistence), and cross-check the extraction heuristic's accuracy
 against Serena/gopls ground truth before drawing conclusions.
@@ -139,11 +139,10 @@ approach already ruled out at scale in finding 1 below.
 
 Root-caused further: the false positives weren't from direct lexical
 imports (which import-aware static parsing could resolve) but from pytest
-fixtures -- e.g. `test_dcm_cocoindex_search.py` calls `dcm_search.pattern_search_code(...)`
-where `dcm_search` is a fixture (defined in `conftest.py`) bound to a specific
-module at fixture-setup time, not an importable name a static parser could
-trace back to one module. Import-aware resolution would have fixed nothing
-here.
+fixtures: a project-specific search fixture can call
+`pattern_search_code(...)` through a fixture-bound module rather than an
+importable name a static parser could trace back to one module. Import-aware
+resolution would have fixed nothing here.
 
 ### Precision fix: signature-compatibility filtering + Graphify-style ambiguous-edge reporting
 
@@ -221,7 +220,8 @@ extraction logic. Preflight against the real 635-file checkout: 2.9s build,
 2,470 nodes / 3,145 edges, 0 crashes, 99.9% def-capture (the two apparent
 misses were docstring example code that tree-sitter correctly does not treat
 as a real definition) -- cleared the ≥90% gate cleanly, executed directly.
-`search/koku.py` gained the same three MCP tools + CLI flags as `engram`'s.
+The project-specific search adapters gained the same three MCP tools + CLI
+flags as `engram`'s.
 
 ### Phase 2: rhdh-plugins (TypeScript) -- new definition shapes, and a grammar-mismatch bug that looked like a match_code bug
 
@@ -319,7 +319,7 @@ just "port the pattern to a new grammar":
 **1. `praxis.py` searches seven independent repo checkouts in one call**
 (`praxis`, `praxis-ai`, `praxis-demos`, `praxis-forge`, `praxis-grid`,
 `praxis-operator`, `praxis-policy` -- `_PATTERN_SEARCH_ROOTS`), unlike
-`koku.py`/`rhdh_plugins.py`'s single root each. `build_call_graph()` gained
+the single-root project adapters. `build_call_graph()` gained
 an optional `repo_tag` param that prefixes every `display_path` as
 `f"{repo_tag}/{rel_path}"`, and a new `build_multi_repo_call_graph()`/
 `_with_stats()` pair walks each repo independently (own `name_index`, own
@@ -328,7 +328,7 @@ deliberately **not** a single combined walk: a call in one repo can never
 resolve to a same-named function in a different repo, matching the
 same-file-preference precedent already established for same-repo
 resolution (see the original spike's precision-fix section above). This is
-generically reusable, not praxis-specific -- `dcm.py`'s upcoming Phase 4
+generically reusable, not praxis-specific -- the upcoming multi-repo Go phase
 has the identical eight-separate-repos shape.
 
 **2. Rust needed the same {generic, return-type} pattern-arity split
@@ -459,7 +459,7 @@ ordinary `call_expression` nodes with the type name as `NAME` (matching
 `String(x)`/`int(x)` in TS/Python), correctly falling into the existing
 unresolved-call bucket rather than needing special-casing.
 
-**4. `dcm.py` reuses `build_multi_repo_call_graph_with_stats` across its 8
+**4. The multi-repo Go adapter reuses `build_multi_repo_call_graph_with_stats` across its 8
 independently-checked-out Go repos**, the identical multi-repo shape
 `praxis.py` established in Phase 3 (confirmed reusable exactly as
 predicted there, not just "the same idea ported") -- `_PATTERN_SEARCH_ROOTS`
@@ -492,10 +492,10 @@ depth 1 = `Run`, depth 2 = `main`) and was independently confirmed via
 
 Coverage: 10 new Go tests in `tests/test_callgraph.py`
 (`TestExtractDefinitionsGo`, `TestExtractCallSitesGo`,
-`TestBuildCallGraphGo`), and 11 new wiring tests in
-`tests/test_dcm_cocoindex_search.py` (`TestCallGraphWiring` plus 3
-`repo=`-aware CLI-routing additions to `TestMainRouting`). 865 tests total
-repo-wide, `ruff check` clean.
+`TestBuildCallGraphGo`), plus project-specific wiring and `repo=`-aware
+CLI-routing tests. The generic adapter's current routing coverage is in
+`tests/test_configured_search.py`. 865 tests total repo-wide, `ruff check`
+clean.
 
 ### Phase 5: kubernaut (Go) -- the one repo that broke the rebuild-every-call budget, fixed with a Postgres cache instead of a new component
 
@@ -592,7 +592,7 @@ independently-cached queries, e.g. per-`repo=` scope, don't collide) and a
 selects from `_CALL_GRAPH_ROOTS` and builds a `repo`-aware cache key
 (`"kubernaut-go:all"` or `"kubernaut-go:<repo>"`), and the three
 `call_graph_*` functions + `cocoindex_call_graph_*` MCP tools + `--blast-radius`/
-`--shortest-path`/`--cluster` CLI flags mirror dcm.py's Phase 4 `repo=`-scoped
+`--shortest-path`/`--cluster` CLI flags mirror the multi-repo Go adapter's Phase 4 `repo=`-scoped
 shape exactly, substituting the cached builder for the plain one.
 
 **End-to-end against the live checkouts** (`~/.engram/watch/kubernaut` +

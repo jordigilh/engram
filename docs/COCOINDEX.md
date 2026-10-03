@@ -43,7 +43,7 @@ flowchart LR
     end
 
     subgraph cocoindex["CocoIndex Engine"]
-        flows["engram-flows-<project>"]
+        flows["engram-flows-configured --project <project>"]
     end
 
     subgraph sinks["Sinks"]
@@ -103,7 +103,7 @@ A `declare_sql_command_attachment` on the table creates a PostgreSQL trigger
 that auto-populates a `tsvector` column and GIN index from `search_text` — this
 is managed entirely by CocoIndex's lifecycle (setup on create, teardown on
 removal). The result is **hybrid search**: the project's
-`engram-search-<project>` server queries both
+`engram-search-configured --project <project>` server queries both
 the dense vector index and the BM25 index, then fuses results via Reciprocal
 Rank Fusion (RRF).
 
@@ -167,15 +167,10 @@ project search server also exposes a second MCP tool for the
 opposite question — "find code *shaped like* X" — via CocoIndex's
 `CodePattern` (tree-sitter-backed by-example structural matching).
 
-| Project | Tool | Languages |
-|---------|------|-----------|
-| kubernaut | `cocoindex_pattern_search` | go (kubernaut, kubernaut-operator), typescript/tsx (kubernaut-console) |
-| koku | `koku_code_pattern_search` | python |
-| engram | `engram_code_pattern_search` | python |
-| dcm | `dcm_code_pattern_search` | go (8 repos — see `repo` param) |
-| praxis | `praxis_code_pattern_search` | rust |
-| rhdh-plugins | `rhdh-plugins_code_pattern_search` | typescript |
-| kuadrant | `kuadrant_code_pattern_search` | go, rust |
+| Deployment | Tool | Languages |
+|------------|------|-----------|
+| Active configured deployments | `cocoindex_pattern_search` | Loaded from each project's TOML sources |
+| RHDH (historical, disabled) | None | No local service or route |
 
 ### How it works
 
@@ -201,10 +196,7 @@ Omitting a body/block entirely means "don't care what's inside":
 ~/.engram/venv/bin/engram-search-configured --project kubernaut --config ~/.engram/projects.toml --pattern 'func \NAME(\(A*\)) (bool, error)' --language go
 
 # Any Python function/method, regardless of body:
-~/.engram/venv/bin/engram-search-configured --project koku --config ~/.engram/projects.toml --pattern 'def \NAME(\(A*\)):' --language python
-
-# Scope to one of DCM's 8 repos:
-~/.engram/venv/bin/engram-search-configured --project dcm --config ~/.engram/projects.toml --pattern 'func \NAME(\(A*\)) error' --language go --repo dcm-cli
+~/.engram/venv/bin/engram-search-configured --project <project> --config ~/.engram/projects.toml --pattern 'def \NAME(\(A*\)):' --language python
 ```
 
 ### What this is NOT: complementary to Serena, not a replacement
@@ -295,7 +287,7 @@ Every project except kubernaut rebuilds the graph fresh on every call (no
 persisted index) and logs elapsed time + node/edge/unresolved/ambiguous-call
 counts at `log.info` -- deliberately: no invalidation logic to get wrong,
 always-fresh results, and every measured build stayed comfortably
-interactive (under ~33s even for dcm's 8-repo Go build).
+interactive (under ~33s even for the largest multi-repo Go build).
 
 **kubernaut is the one exception**, and requires no extra setup beyond what
 the CocoIndex setup in `INSTALL.md` already configures: its own repo alone (1,000+ Go

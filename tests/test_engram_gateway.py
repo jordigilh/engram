@@ -379,7 +379,7 @@ class TestAggregateToolsList:
     def test_backend_failure_is_excluded_but_others_still_returned(self, engram_gateway):
         backends = {
             "docs": FakeAdapter(tools=[_tool("recall")]),
-            "code": FakeAdapter(list_error=RuntimeError("engram-search-praxis crashed")),
+            "code": FakeAdapter(list_error=RuntimeError("configured code search crashed")),
         }
 
         tool_defs, catalog, errors = asyncio.run(engram_gateway.aggregate_tools_list(backends))
@@ -997,10 +997,9 @@ class TestGatewayCallMetricsLogging:
 class TestBuildBackendAdapters:
     """Real adapter instantiation from registry specs -- still no I/O
     (adapters connect lazily), but this is where shared-stdio-backend
-    de-duplication actually happens: engram-search-praxis (etc.) is
-    spawned ONCE and reused across every project that references the same
-    shared_key, since it's a stateless, family-wide code index unlike
-    per-repo-bound serena."""
+    de-duplication happens: one configured code backend is spawned ONCE and
+    reused across every project that references the same shared_key, since it
+    is a stateless, family-wide code index unlike per-repo-bound serena."""
 
     def test_http_spec_becomes_http_relay_adapter(self, engram_gateway):
         registry = {"kubernaut": {"docs": {"kind": "http", "url": "http://x/mcp/kubernaut-docs/"}}}

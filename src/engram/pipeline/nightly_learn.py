@@ -1081,7 +1081,7 @@ PROJECT_CONFIGS = {
             "dcm-project/shared-workflows",
             "dcm-project/quadlet-deploy",
             # Upstream OSAC backend (distinct org, read-only), folded into
-            # dcm -- see engram.flows.dcm's DCM_OSAC_DIR comment.
+            # OSAC is a read-only source folded into the DCM project scope.
             "osac-project/osac",
         ],
     },
@@ -1210,7 +1210,7 @@ PROJECT_CONFIGS = {
     },
     # kuadrant: ingestion-only prior-art reference for praxis-proxy
     # (2026-08-27 onboarding, see engram_gateway.py's "kuadrant" registry
-    # entry and engram.flows.kuadrant's module docstring). No shared-memory
+    # entry and the deployment-local project configuration). No shared-memory
     # entry, unlike every other project above: shared-memory tracks *this
     # user's own* corrections/conventions/preferences while developing a
     # project, and nobody develops against these 8 read-only reference

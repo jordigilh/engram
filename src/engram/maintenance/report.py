@@ -99,8 +99,7 @@ PROJECT_CONFIGS = {
             "Users-jgil-go-src-github-com-insights-onprem-koku",
         ],
         "log_suffix": "-koku",
-        # koku-service-operator (2026-08-10) folded into this scope -- see
-        # koku-cocoindex-flows.py's module docstring.
+        # koku-service-operator (2026-08-10) is folded into this scope.
         "issues_repos": ["project-koku/koku", "project-koku/koku-service-operator"],
     },
     "praxis": {

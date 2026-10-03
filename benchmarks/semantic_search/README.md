@@ -95,7 +95,7 @@ COCOINDEX_DB="$COCOINDEX_STATE_DB" COCOINDEX_PG_URL="$COCOINDEX_PG_URL" \
   --root "$SOURCE_SCOPE_ROOT" --repo-tag kubernaut --table "$COCOINDEX_TABLE"
 ```
 
-Replay the same suite through `engram.search.kubernaut.search_code()`:
+Replay the same suite through the shared configuration-driven search engine:
 
 ```sh
 PYTHONPATH=src python - <<'PY'
@@ -103,15 +103,23 @@ import json
 import os
 from pathlib import Path
 
-from engram.search.kubernaut import search_code
+from engram.search import engram as search
 
 suite = json.loads(Path("benchmarks/semantic_search/kubernaut_workflow_discovery.json").read_text())
 table = os.environ.get("COCOINDEX_TABLE")
+search.configure_project(
+    project="benchmark",
+    pg_url=os.environ.get("COCOINDEX_PG_URL", "postgresql://hindsight:hindsight@localhost:5432/hindsight"),
+    code_table=table or "code_embeddings",
+    embedding_model=os.environ.get("COCOINDEX_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
+    pattern_roots=[],
+    call_graph_roots=[],
+)
 for case in suite["queries"]:
     if case["status"] != "active":
         continue
     options = {"table": table} if table else {}
-    results = search_code(
+    results = search.search_code(
         case["query"], limit=10, mode="hybrid",
         repo="kubernaut", branch="main", **options,
     )

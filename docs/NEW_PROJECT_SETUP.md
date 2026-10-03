@@ -90,10 +90,11 @@ from the full pattern:
    checkout, not an org-wide fork loop — the target is often a single
    monorepo, not a multi-repo org.
 2. Set `issue_provider = "jira"` and configure a narrow JQL scope under
-   `[projects.<project>.jira]`. The generic flow calls Jira's REST API directly
-   and flattens Atlassian Document Format (ADF) to plain text. It reuses the
-   `jira` CLI's macOS Keychain item by default, or uses `JIRA_API_TOKEN` when
-   explicitly supplied by the deployment environment.
+   `[projects.<project>.jira]`. Jira credentials and endpoint access are
+   prerequisites for Jira consumption; provision them through the deployment's
+   own authentication and secret-management process. The generic flow calls
+   Jira's REST API directly and flattens Atlassian Document Format (ADF) to
+   plain text.
 3. Scope the JQL to the target epic and its children explicitly (e.g.
    `parent = <EPIC> OR key = <EPIC> order by created asc`), not a broad
    `project = <PROJECT>` — the latter would pull in every issue in the
@@ -107,23 +108,6 @@ from the full pattern:
    match the epic's actual footprint (e.g. one workspace/package directory
    inside a monorepo, not every package) — a Jira-scoped issues bank paired
    with a whole-monorepo code index would defeat the same narrow-scope goal.
-
-> **Jira authentication gotcha**: don't require a separate Jira API token
-> setup for ingestion if the machine already has the `jira` CLI
-> (`github.com/ankitpokhrel/jira-cli` or similar) configured and
-> authenticated — its token lives in the macOS Keychain under a
-> predictable service/account name. Read it with the same `-a <account>
-> -s <service>` pair the CLI itself uses (e.g.
-> `security find-generic-password -a jira-cli -s jira-cloud-api-token -w` —
-> using the generic flow's deployment-local Jira token lookup) instead of asking the user
-> for a fresh token; this was the approach the user explicitly chose over
-> prompting for new credentials during the `rhdh-plugins` onboarding. Also
-> prefer calling Jira's REST API (`/rest/api/3/search/jql`) directly with
-> that token over shelling out to the `jira` CLI for ingestion —
-> `jira-cli`'s `--paginate` has a real bug against Jira Cloud's newer
-> `/search/jql` endpoint; the generic adapter uses the direct REST API because
-> the CLI's query/output flags are meant for interactive use, not scripted
-> ingestion.
 
 ## Steps
 

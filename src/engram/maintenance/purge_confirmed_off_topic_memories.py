@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,8 +45,8 @@ from engram import classify  # noqa: E402
 from engram.contradiction_resolution import delete_document  # noqa: E402
 from engram.maintenance import backfill_memory_tags as bmt  # noqa: E402
 
-HINDSIGHT_URL = "http://localhost:8888"
-AUDIT_LOG = Path(os.path.expanduser("~/.engram/logs/off-topic-purge-audit.jsonl"))
+HINDSIGHT_URL = bmt.HINDSIGHT_URL
+AUDIT_LOG = bmt.LOG_DIR / "off-topic-purge-audit.jsonl"
 DEFAULT_MIN_CONFIDENCE = 0.85  # higher bar than tagging (0.75) -- deletion is irreversible
 
 

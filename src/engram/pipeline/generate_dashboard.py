@@ -15,6 +15,11 @@ from datetime import date, datetime, timedelta, timezone
 from glob import glob
 from pathlib import Path
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from engram.project_config import load_default_settings  # noqa: E402
+
 
 def _find_repo_root() -> Path:
     """Resolve the engram repo root so docs/DASHBOARD.md etc. can be found
@@ -40,7 +45,8 @@ def _find_repo_root() -> Path:
 
 
 REPO_ROOT = _find_repo_root()
-LOG_DIR = Path(os.path.expanduser("~/.engram/logs"))
+LOG_DIR = load_default_settings().path("log_dir", "~/.engram/logs")
+assert LOG_DIR is not None
 DASHBOARD_PATH = REPO_ROOT / "docs" / "DASHBOARD.md"
 PENDING_CONTRADICTIONS_LOG = LOG_DIR / "contradictions-pending.jsonl"
 AUTO_RESOLVED_LOG = LOG_DIR / "contradictions-auto-resolved.jsonl"

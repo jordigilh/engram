@@ -25,7 +25,6 @@ Usage:
 
 import argparse
 import logging
-import os
 import pathlib
 import sys
 from typing import Any
@@ -38,6 +37,13 @@ from typing import Any
 # be run via `-m`/an installed console script (not yet true in this repo).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 from engram import callgraph, chunking  # noqa: E402
+from engram.project_config import (  # noqa: E402
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_PG_DSN,
+    default_project_path,
+    load_project_settings,
+    sql_identifier,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,30 +51,29 @@ logging.basicConfig(
 )
 log = logging.getLogger("kuadrant-cocoindex-search")
 
-PG_URL = os.environ.get(
-    "COCOINDEX_PG_URL",
-    "postgresql://hindsight:hindsight@localhost:5432/hindsight",
+PROJECT_SETTINGS = load_project_settings("kuadrant")
+PG_URL = PROJECT_SETTINGS.text("pg_dsn", DEFAULT_PG_DSN)
+assert PG_URL is not None
+CODE_TABLE = sql_identifier(
+    PROJECT_SETTINGS.text("code_table", "kuadrant_code_embeddings") or "kuadrant_code_embeddings",
+    "project 'kuadrant' code_table",
 )
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDING_MODEL = PROJECT_SETTINGS.text("embedding_model", DEFAULT_EMBEDDING_MODEL)
+assert EMBEDDING_MODEL is not None
 RRF_K = 60
 
 # Same env var (and default) as kuadrant-cocoindex-flows.py, so pattern
 # search walks the exact same checkouts the ingestion flow indexes.
-KUADRANT_ORG_DIR = pathlib.Path(os.environ.get(
-    "KUADRANT_ORG_DIR", os.path.expanduser("~/go/src/github.com/Kuadrant"),
-))
+KUADRANT_ORG_DIR = PROJECT_SETTINGS.path("org_dir", str(default_project_path("kuadrant")))
+assert KUADRANT_ORG_DIR is not None
 
 # (repo_tag, root, included_patterns, excluded_patterns, language) -- mirrors
 # kuadrant-cocoindex-flows.py's KUADRANT_REPOS/_CODE_PATTERNS exactly.
 # `architecture` (no source) is excluded, same as code_main.
 _REPO_LANGUAGES: dict[str, str] = {
-    "kuadrant-operator": "go",
-    "limitador": "rust",
-    "wasm-shim": "rust",
-    "authorino": "go",
-    "dns-operator": "go",
-    "authorino-operator": "go",
-    "limitador-operator": "go",
+    str(entry["name"]): str(entry["language"])
+    for entry in PROJECT_SETTINGS.records("repositories")
+    if entry.get("language")
 }
 _LANGUAGE_PATTERNS: dict[str, tuple[list[str], list[str]]] = {
     "go": (["**/*.go"], ["**/vendor/**", "**/*_test.go", "**/zz_generated*"]),
@@ -135,10 +140,10 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                 embedding = _embed_query(query)
                 embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
                 cur.execute(
-                    """
+                    f"""
                     SELECT id, filepath, chunk_index, code,
                            1 - (embedding <=> %s::vector) AS score
-                    FROM cocoindex.kuadrant_code_embeddings
+                    FROM cocoindex.{CODE_TABLE}
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
                     """,
@@ -156,10 +161,10 @@ def search_code(query: str, limit: int = 10, mode: str = "hybrid") -> list[dict[
                 )
                 if tsquery:
                     cur.execute(
-                        """
+                        f"""
                         SELECT id, filepath, chunk_index, code,
                                ts_rank_cd(search_vector, to_tsquery('simple', %s)) AS score
-                        FROM cocoindex.kuadrant_code_embeddings
+                        FROM cocoindex.{CODE_TABLE}
                         WHERE search_vector @@ to_tsquery('simple', %s)
                         ORDER BY score DESC
                         LIMIT %s

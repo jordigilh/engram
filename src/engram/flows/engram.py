@@ -40,6 +40,15 @@ from cocoindex.resources.file import PatternFilePathMatcher
 # be run via `-m`/an installed console script (not yet true in this repo).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 from engram import chunking  # noqa: E402
+from engram.project_config import (  # noqa: E402
+    DEFAULT_HINDSIGHT_URL,
+    DEFAULT_PG_DSN,
+    DEFAULT_POOL_MAX_SIZE,
+    DEFAULT_POOL_MIN_SIZE,
+    default_project_path,
+    load_project_settings,
+    sql_identifier,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,33 +56,33 @@ logging.basicConfig(
 )
 log = logging.getLogger("engram-cocoindex-flows")
 
-HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
+PROJECT_SETTINGS = load_project_settings("engram")
+HINDSIGHT_URL = PROJECT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+assert HINDSIGHT_URL is not None
+CODE_TABLE = sql_identifier(
+    PROJECT_SETTINGS.text("code_table", "engram_code_embeddings") or "engram_code_embeddings",
+    "project 'engram' code_table",
+)
 
 # Default points at the branch-scoped read-only mirror (see
 # watch-mirrors-config.sh), not the live dev clone -- see docs/FINDINGS.md
 # 2026-08-03. Currently a zero-cost future-proof (engram is worked on via
 # direct commits to main today, no branch churn), kept in sync with the
 # launchd plist's explicit env var so a manual invocation is also safe.
-ENGRAM_REPO_DIR = pathlib.Path(os.environ.get(
-    "ENGRAM_REPO_DIR",
-    os.path.expanduser("~/.engram/watch/engram"),
-))
+ENGRAM_REPO_DIR = PROJECT_SETTINGS.path("repo_dir", str(default_project_path("engram")))
+assert ENGRAM_REPO_DIR is not None
 
-PG_DSN = os.environ.get(
-    "COCOINDEX_PG_URL",
-    "postgresql://hindsight:hindsight@localhost:5432/hindsight",
-)
+PG_DSN = PROJECT_SETTINGS.text("pg_dsn", DEFAULT_PG_DSN)
+assert PG_DSN is not None
 # See cocoindex-flows.py's PG_POOL_MIN_SIZE/MAX_SIZE comment (docs/FINDINGS.md
 # 2026-08-03) -- asyncpg's own min_size=10/max_size=10 default is oversized
 # for this pool's light, bursty pgvector-upsert-only workload, and each
 # onboarded project's own cocoindex-flows.py multiplies it against the same
 # shared Postgres instance.
-PG_POOL_MIN_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MIN_SIZE", "2"))
-PG_POOL_MAX_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MAX_SIZE", "5"))
-COCOINDEX_DB = pathlib.Path(os.environ.get(
-    "COCOINDEX_DB",
-    os.path.expanduser("~/.engram/engram-cocoindex.db"),
-))
+PG_POOL_MIN_SIZE = PROJECT_SETTINGS.integer("pg_pool_min_size", DEFAULT_POOL_MIN_SIZE)
+PG_POOL_MAX_SIZE = PROJECT_SETTINGS.integer("pg_pool_max_size", DEFAULT_POOL_MAX_SIZE)
+COCOINDEX_DB = PROJECT_SETTINGS.path("cocoindex_db", "~/.engram/engram-cocoindex.db")
+assert COCOINDEX_DB is not None
 
 # Named distinctly from cocoindex-flows.py's own ContextKey("pg_pool") -- both
 # run as separate launchd processes today, but CocoIndex registers
@@ -296,18 +305,18 @@ async def code_main(code_dir: pathlib.Path) -> None:
         },
     )
     table = await postgres.mount_table_target(
-        PG_POOL, "engram_code_embeddings", schema, pg_schema_name="cocoindex",
+        PG_POOL, CODE_TABLE, schema, pg_schema_name="cocoindex",
     )
     table.declare_vector_index(column="embedding", metric="cosine")
 
     table.declare_sql_command_attachment(
         name="fts_search_vector",
-        setup_sql="""
-            ALTER TABLE cocoindex.engram_code_embeddings
+        setup_sql=f"""
+            ALTER TABLE cocoindex.{CODE_TABLE}
                 ADD COLUMN IF NOT EXISTS search_vector tsvector;
 
-            CREATE INDEX IF NOT EXISTS idx_engram_code_embeddings_fts
-                ON cocoindex.engram_code_embeddings USING gin(search_vector);
+            CREATE INDEX IF NOT EXISTS idx_{CODE_TABLE}_fts
+                ON cocoindex.{CODE_TABLE} USING gin(search_vector);
 
             CREATE OR REPLACE FUNCTION cocoindex.update_engram_code_search_vector()
             RETURNS trigger AS $$
@@ -319,24 +328,24 @@ async def code_main(code_dir: pathlib.Path) -> None:
             $$ LANGUAGE plpgsql;
 
             DROP TRIGGER IF EXISTS trg_engram_code_search_vector
-                ON cocoindex.engram_code_embeddings;
+                ON cocoindex.{CODE_TABLE};
             CREATE TRIGGER trg_engram_code_search_vector
                 BEFORE INSERT OR UPDATE OF search_text, filepath
-                ON cocoindex.engram_code_embeddings
+                ON cocoindex.{CODE_TABLE}
                 FOR EACH ROW
                 EXECUTE FUNCTION cocoindex.update_engram_code_search_vector();
 
-            UPDATE cocoindex.engram_code_embeddings
+            UPDATE cocoindex.{CODE_TABLE}
             SET search_vector = to_tsvector('simple',
                 coalesce(search_text, code, '') || ' ' || coalesce(filepath, ''))
             WHERE search_vector IS NULL;
         """,
-        teardown_sql="""
+        teardown_sql=f"""
             DROP TRIGGER IF EXISTS trg_engram_code_search_vector
-                ON cocoindex.engram_code_embeddings;
+                ON cocoindex.{CODE_TABLE};
             DROP FUNCTION IF EXISTS cocoindex.update_engram_code_search_vector();
-            DROP INDEX IF EXISTS cocoindex.idx_engram_code_embeddings_fts;
-            ALTER TABLE cocoindex.engram_code_embeddings
+            DROP INDEX IF EXISTS cocoindex.idx_{CODE_TABLE}_fts;
+            ALTER TABLE cocoindex.{CODE_TABLE}
                 DROP COLUMN IF EXISTS search_vector;
         """,
     )

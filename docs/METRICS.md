@@ -8,7 +8,7 @@ reduces mistakes and improves productivity:
 1. **MCP Usage** — How often each tool is called and whether it returns useful results
 2. **Effectiveness** — Correlation between recall usage and correction rates
 3. **Proactive Recall** — Whether the agent uses memory autonomously without user prompting
-4. **Recall Quality** — Latency and result counts from nightly health probes
+4. **Recall Quality** — Latency and result counts from maintenance health probes
 
 ## Token and Cost Side Effects
 
@@ -19,17 +19,18 @@ features"). Lower token consumption follows directly from that (fewer
 sweeps, fewer correction loops to redo work) — it's a measured consequence,
 not the reason Engram exists. The numbers below quantify that side effect.
 
-**Engram's own operating cost** (retain/reflect run nightly against Vertex
-AI; recall and CocoIndex sync are local and free):
+**Engram's own operating cost** (retain/reflect run during explicit maintenance
+against Vertex AI; recall and CocoIndex sync are local and free):
 
 | Operation | Model | Frequency | Cost |
 |-----------|-------|-----------|------|
 | Recall | Local (no LLM) | Every response | $0 |
-| Retain | Haiku 4.5 | ~23 windows/night | ~$0.02 |
-| Reflect | Sonnet 4.6 | Once/night | ~$0.10 |
+| Retain | Haiku 4.5 | Per maintenance run | Varies |
+| Reflect | Sonnet 4.6 | Per maintenance run | Varies |
 | CocoIndex sync | Local (no LLM) | Continuous | $0 |
 
-**≈ $0.12/night** for a full learning cycle.
+**≈ $0.12 per reference full learning cycle**; actual cost depends on the
+number of windows and configured models in the maintenance run.
 
 **Where that shows up in session token cost** (fewer exploration sweeps +
 fewer correction loops, not a change to the productive work itself):
@@ -49,7 +50,7 @@ At 5 sessions/day over a month, this translates to:
 
 ## Data Collection
 
-### Real-time: Cursor Hook
+### Real-time: Client Hook (optional Cursor integration)
 
 A `afterMCPExecution` hook logs every MCP tool call as it happens:
 
@@ -103,14 +104,15 @@ Each line contains:
 
 `est_tokens` is a **tiktoken (cl100k_base) estimate**, not an exact billed
 count: Anthropic doesn't publish an open tokenizer, so this is the closest
-widely-available stand-in for Claude-backed Cursor sessions, not an exact
+widely-available stand-in for Claude-backed agent sessions, not an exact
 match. There is currently no local, real-time surface (Cursor hook, CLI, or
 SDK) that reports actual per-tool-call token usage -- real backend-reported
 counts only exist via the Team-plan Admin API or Enterprise OTel export,
 both at per-turn (not per-tool-call) granularity and neither queryable
 synchronously from a hook.
 
-`report.py` (the on-demand CLI report, not `nightly_learn.py`'s
+`python3 -m engram.maintenance.report` (the on-demand CLI report, not
+`engram-nightly-learn`'s
 LLM-calling pipeline) rolls this up into a "GATEWAY MCP CALL TOKEN USAGE"
 section: total/average tokens, and a per-tool breakdown ranked by token
 consumption. Pure local aggregation over the JSONL file above -- no LLM
@@ -129,9 +131,9 @@ separate experiment until it demonstrates useful semantic reduction on real
 traffic and preserves identifiers, provenance, paths, lines, graph edges,
 diagnostics, and evidence.
 
-### Nightly: Effectiveness Analysis
+### Maintenance: Effectiveness Analysis
 
-The nightly script (`nightly-learn.py`) produces two outputs:
+An `engram-nightly-learn` run produces two outputs:
 
 **Daily report** (`~/.engram/logs/YYYY-MM-DD.json`):
 - Corrections detected per transcript
@@ -203,9 +205,9 @@ python3 -m engram.maintenance.report --csv
   Server                           Calls    Hits  Misses  Hit Rate
   ------------------------------------------------------------------
   hindsight                           45      38       7     84.4%
-  hindsight-docs                      32      28       4     87.5%
-  hindsight-issues                    18      14       4     77.8%
-  gopls                               67      63       4     94.0%
+  engram gateway                      32      28       4     87.5%
+  project code search                 18      14       4     77.8%
+  Serena                              67      63       4     94.0%
   ------------------------------------------------------------------
   TOTAL                              162     143      19     88.3%
 
@@ -251,13 +253,13 @@ python3 -m engram.maintenance.report --csv
   2026-W26           13       0.83     4.2%       0.3100        2.3
   ------------------------------------------------------------------
 
-  RECALL PROBE QUALITY (Nightly Health Check)
+   RECALL PROBE QUALITY (Maintenance Health Check)
   ------------------------------------------------------------------
   Bank                            Probes  Avg Latency  Avg Results
   ------------------------------------------------------------------
   cursor-memory                        7      850ms         22.3
-  kubernaut-docs                      14      1200ms        31.5
-  kubernaut-issues                     7      1900ms         9.0
+  <project>-docs                      14      1200ms        31.5
+  <project>-issues                     7      1900ms         9.0
 
   MENTAL MODELS
   ------------------------------------------------------------------
@@ -265,8 +267,8 @@ python3 -m engram.maintenance.report --csv
   ------------------------------------------------------------------
   cursor-memory             coding-conventions          5838 ch   2026-06-12
   cursor-memory             testing-methodology         8236 ch   2026-06-12
-  kubernaut-docs            ka-architecture             9937 ch   2026-06-12
-  kubernaut-issues          active-priorities           8501 ch   2026-06-13
+  <project>-docs            project-architecture         9937 ch   2026-06-12
+   <project>-issues          active-priorities           8501 ch   2026-06-13
   ------------------------------------------------------------------
   Total synthesized knowledge: 94,174 characters across 9 models
 ======================================================================
@@ -277,7 +279,7 @@ python3 -m engram.maintenance.report --csv
 ### Healthy indicators
 
 - **Hit rate > 70%** for hindsight banks (recall is finding relevant memories)
-- **Hit rate > 90%** for gopls (type queries should almost always succeed)
+- **Hit rate > 90%** for Serena (type queries should almost always succeed)
 - **Correction reduction > 30%** after 2+ weeks of data
 - **Recall adoption > 50%**: The agent is using memory in most sessions
 - **Proactive recall > 30%**: The agent initiates recall without user prompting
@@ -289,27 +291,29 @@ python3 -m engram.maintenance.report --csv
 ### Warning signs
 
 - **Hit rate < 50%**: Queries may be too broad or bank content is stale
-- **Correction rate increasing**: New patterns not being captured — check nightly logs
-- **Recall adoption < 30%**: The Cursor rule may not be triggering — check `alwaysApply` is set
+- **Correction rate increasing**: New patterns not being captured — check maintenance logs
+- **Recall adoption < 30%**: The OpenCode plugin/rule may not be triggering — check its route and policy
 - **Proactive recall 0%**: Agent only recalls when user explicitly asks — rule wording may need strengthening
 - **Rework % > 20%**: Significant tokens going to correction loops — investigate content quality
 - **Productivity density declining week over week**: Agent efficiency is degrading — check for content staleness
 - **First productive turn > 5**: Agent is slow to start work — rule or recall content may need improvement
 - **Latency > 5000ms**: Database may need optimization or bank is too large
-- **Zero gopls calls**: Agent may not be using code intelligence — check rule
+- **Zero Serena calls**: Agent may not be using code intelligence — check the gateway route
 
 ### Actions
 
-- **Low hit rate on hindsight-docs**: Check CocoIndex flow status; for manual recovery, run `python3 -m engram.pipeline.ingest_docs`
-- **Low hit rate on hindsight-issues**: Check CocoIndex flow status; for manual recovery, run `~/.engram/venv/bin/engram-ingest-issues` or check `gh auth status`
+- **Low hit rate on project docs/issues**: Check the configured CocoIndex flow and
+  `gh auth status`; use the [Issue Ingestion](ISSUE_INGESTION.md) guide for a
+  scoped backfill
 - **High corrections with recall active**: Retained patterns may be outdated — run reflect manually
 - **Mental models stale**: Run `python3 -m engram.maintenance.create_mental_models --refresh` to force refresh
-- **Low proactive recall**: Strengthen the `alwaysApply` rule wording, ensure it says "ALWAYS recall before starting work"
-- **gopls not being used**: Check the Serena/OpenCode gateway route and restart the language-server daemon
+- **Low proactive recall**: Strengthen the plugin/rule wording, ensure it says "ALWAYS recall before starting work"
+- **Serena not being used**: Check the Serena/OpenCode gateway route and restart
+  the language-server backend
 
 ## Memory Triage
 
-The nightly pipeline includes a triage phase that identifies and removes low-value
+The maintenance run includes a triage phase that identifies and removes low-value
 memories to keep the knowledge graph clean and retrieval relevant.
 
 ### What gets flagged
@@ -335,7 +339,8 @@ both fully-flagged and mixed documents:
 - **Fully flagged documents** (all memories are noise): deleted outright.
 - **Mixed documents** (some flagged, some valuable): *rearranged* — the
   original document is deleted and only the valuable memories are re-retained
-  using `strategy: 'exact'` (verbatim storage, no LLM re-extraction cost).
+  through the bank's chunks configuration (verbatim storage, with no LLM
+  re-extraction cost).
   Each re-retained memory gets a unique `document_id` to satisfy the batch API
   constraint (no duplicate `document_id` values per batch).
 
@@ -374,7 +379,7 @@ python3 -m engram.maintenance.recover_memories --apply --max-age 30
 The recovery script backs up `watermarks.json` and `retained-hashes.json`
 before resetting them, then re-extracts all corrections and instructions via
 the normal Haiku pipeline. Watermarks are restored after recovery so the
-nightly pipeline doesn't double-process.
+maintenance run doesn't double-process.
 
 ### Healthy indicators
 
@@ -394,7 +399,7 @@ Results are appended to `~/.engram/logs/triage-report.jsonl` with per-run breakd
 
 ## Fallback Extraction Backlog
 
-`nightly-learn.py`'s `retain_windows()` calls hindsight-api to run its
+`engram-nightly-learn`'s `retain_windows()` calls hindsight-api to run its
 server-side (Haiku-based) extraction on every correction/instruction window.
 Before GitHub issue #5, a transient failure of that call (Vertex AI outage,
 timeout, network blip) silently dropped the window — the bare `except
@@ -433,7 +438,7 @@ remain buffered for the next pass.
 
 ### Warning signs
 
-- **Backlog growing across multiple nightly runs**: Vertex AI or
+- **Backlog growing across multiple maintenance runs**: Vertex AI or
   hindsight-api may be down/misconfigured — check hindsight-api's own logs,
   not just this repo's
 - **`--mode reprocess-fallback` leaves `still_failing` unchanged run over
@@ -443,12 +448,12 @@ remain buffered for the next pass.
 
 | File | Content | Written by |
 |------|---------|-----------|
-| `~/.engram/logs/mcp-calls.jsonl` | Real-time MCP call log | Cursor hook |
-| `~/.engram/logs/effectiveness-report.jsonl` | Daily effectiveness metrics | Nightly script |
-| `~/.engram/logs/recall-signals.jsonl` | Bank stats + recall probes | Nightly script |
-| `~/.engram/logs/triage-report.jsonl` | Memory triage results | Nightly script |
-| `~/.engram/logs/fallback-retained.jsonl` | Locally-buffered windows whose retain call to hindsight-api failed transiently | `fallback_extract.py` (via `nightly-learn.py`) |
-| `~/.engram/logs/YYYY-MM-DD.json` | Full daily report | Nightly script |
+| `~/.engram/logs/mcp-calls.jsonl` | Real-time MCP call log | Gateway hook |
+| `~/.engram/logs/effectiveness-report.jsonl` | Effectiveness metrics | `engram-nightly-learn` |
+| `~/.engram/logs/recall-signals.jsonl` | Bank stats + recall probes | `engram-nightly-learn` |
+| `~/.engram/logs/triage-report.jsonl` | Memory triage results | `engram-nightly-learn` |
+| `~/.engram/logs/fallback-retained.jsonl` | Locally-buffered windows whose retain call to hindsight-api failed transiently | `fallback_extract.py` (via `engram-nightly-learn`) |
+| `~/.engram/logs/YYYY-MM-DD.json` | Full run report | `engram-nightly-learn` |
 
 ## CocoIndex-Aware Metrics
 
@@ -480,7 +485,7 @@ To compare modes manually:
 
 **Warning signs:**
 - BM25 returns 0 results for known identifiers: the `search_vector` trigger
-  may not be firing — check `SELECT count(*) FROM cocoindex.code_embeddings WHERE search_vector IS NULL`
+  may not be firing — check `SELECT count(*) FROM cocoindex.<code_table> WHERE search_vector IS NULL`
 - Hybrid results identical to dense-only: BM25 index may be empty — re-run
   `~/.engram/venv/bin/engram-flows-kubernaut --mode backfill`
 
@@ -488,24 +493,24 @@ To compare modes manually:
 
 `avg_staleness_hours` measures the average age of content at the time it is
 recalled. With CocoIndex continuously syncing sources, staleness should be
-significantly lower than with batch ingestion.
+significantly lower than with legacy batch ingestion.
 
 | Source | Target Staleness | Previous (batch) |
 |--------|-----------------|------------------|
 | Docs | < 1 hour | Manual (unbounded) |
-| Issues + PRs | < 5 minutes | ~24 hours (nightly, 500 cap) |
+| Issues + PRs | < 5 minutes | ~24 hours (legacy batch) |
 | Code | < 5 minutes | Not indexed |
-| Transcripts | < 1 hour | ~24 hours (nightly) |
+| Transcripts | < 1 hour | ~24 hours (legacy batch) |
 
 **Warning signs:**
-- `avg_staleness_hours` > 24 for docs/issues: CocoIndex may not be running — check `launchctl list | grep cocoindex`
+- `avg_staleness_hours` > 24 for docs/issues: CocoIndex may not be running — check `launchctl list | grep cocoindex` (or `systemctl --user status engram-cocoindex.service` on Linux)
 - `avg_staleness_hours` > 1 for code: delta processing may be stalled — check `~/.engram/logs/cocoindex-stdout.log`
 
 ### Exploration Efficiency
 
 Measures how quickly the agent finds relevant code context. Without code
-indexing, the agent relies on `gopls` symbol lookups and `SemanticSearch` — both
-effective but limited to known entry points. The code index provides semantic
+indexing, the agent relies on Serena symbol lookups and other semantic search —
+both effective but limited to known entry points. The code index provides semantic
 search across the full codebase, reducing the number of tool calls needed to
 locate unfamiliar code.
 
@@ -525,7 +530,7 @@ locate unfamiliar code.
 ## Exploration Efficiency
 
 Measures whether recall replaces grep/glob/SemanticSearch exploration calls.
-Computed per session in the nightly pipeline and surfaced by
+Computed per session in an `engram-nightly-learn` run and surfaced by
 `python3 -m engram.maintenance.report`.
 
 | Metric | Formula | What it measures |

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import pathlib
 import sys
 from typing import Any
@@ -39,7 +38,10 @@ def _common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--codanna", default="codanna")
     parser.add_argument("--codanna-config", type=pathlib.Path)
     parser.add_argument("--base-manifest", type=pathlib.Path)
-    parser.add_argument("--cocoindex-pg-url", default=os.environ.get("COCOINDEX_PG_URL"))
+    parser.add_argument(
+        "--cocoindex-pg-url",
+        help="Override the deployment defaults.pg_dsn for this one-shot overlay",
+    )
     parser.add_argument("--output", type=pathlib.Path)
 
 

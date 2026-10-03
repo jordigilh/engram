@@ -3,16 +3,33 @@
 ## Overview
 
 CocoIndex is the incremental ingestion engine in the Engram stack. It replaces
-batch scripts (`ingest-docs.py`, `ingest-issues.py`) with continuous, delta-aware
-sync for four source types: documentation, GitHub issues, codebase, and agent
+legacy batch importers with continuous, delta-aware sync for four source types:
+documentation, GitHub issues, codebase, and agent
 transcripts.
 
 For operational configuration of GitHub and Jira issue polling, including
 credentials, LaunchAgents, backfills, and verification, see
 [`ISSUE_INGESTION.md`](ISSUE_INGESTION.md).
 
-CocoIndex runs as a KeepAlive launchd service alongside Hindsight. It watches
-source directories and APIs for changes, processes only the delta, and writes
+## Deployment-local project configuration
+
+Flows, code search, RCA, and maintenance tools read deployment-specific values
+from `~/.engram/projects.toml`. Copy
+[`projects.toml.example`](projects.toml.example) to that path and configure the
+projects used by the deployment. Repository lists, checkout roots, release
+lines, workspace prefixes, service URLs, and database paths belong there; they
+are intentionally not compiled into the package. A missing file is safe for
+library imports, but a live flow with no matching project configuration has no
+deployment sources to ingest.
+
+Use `ENGRAM_PROJECTS_CONFIG=/path/to/projects.toml` only for an explicit test or
+isolated deployment. Do not put credentials in this file: GitHub uses the
+authenticated `gh` CLI, and Jira tokens remain in the operating-system
+credential store.
+
+CocoIndex runs as a KeepAlive launchd service or user-level systemd service
+alongside Hindsight. It watches source directories and APIs for changes, processes
+only the delta, and writes
 results either through the Hindsight retain API (for docs, issues, transcripts)
 or directly into pgvector tables (for the code index).
 
@@ -26,12 +43,12 @@ flowchart LR
     end
 
     subgraph cocoindex["CocoIndex Engine"]
-        flows["engram-flows-kubernaut"]
+        flows["engram-flows-<project>"]
     end
 
     subgraph sinks["Sinks"]
         hindsight["Hindsight retain API"]
-        pgvector["pg0 pgvector (code-index)"]
+        pgvector["configured pgvector code table"]
     end
 
     docs --> flows
@@ -50,9 +67,9 @@ CocoIndex declares four flows, each with a source, transform pipeline, and sink.
 
 | Flow | Source | Transforms | Sink | Frequency |
 |------|--------|-----------|------|-----------|
-| **docs** | Markdown files in `ENGRAM_DOCS_DIR` + repo docs | Split by heading → chunk → embed | Hindsight retain API (`kubernaut-docs` bank) | File-watching (instant) |
-| **issues** | GitHub issues + PRs via `gh` CLI, or Jira REST API | Serialize issue/PR/ticket + comments → chunk → embed | Hindsight retain API (`<project>-issues` bank) | Polling every 5 min (`<PROJECT>_ISSUES_POLL_SECONDS`) |
-| **code** | Go source files in `ENGRAM_CODE_DIR` | tree-sitter AST parse → dense embed + BM25 tsvector | pg0 pgvector hybrid search (`code-index`) | File-watching (instant) |
+| **docs** | Markdown files in the configured project paths | Split by heading → chunk → embed | Hindsight retain API (`<project>-docs` bank) | File-watching (instant) |
+| **issues** | Configured GitHub/Jira repositories | Serialize issue/PR/ticket + comments → chunk → embed | Hindsight retain API (`<project>-issues` bank) | Polling at the configured interval (default 5 min) |
+| **code** | Source files in the configured project paths | tree-sitter AST parse → dense embed + BM25 tsvector | Configured pgvector code table | File-watching (instant) |
 | **transcripts** | `.jsonl` files in Cursor transcripts dir | Extract correction windows → embed | Hindsight retain API (`cursor-memory` bank) | File-watching (instant) |
 
 ### Transform Details
@@ -85,20 +102,22 @@ separate line-range or package-name metadata column.
 A `declare_sql_command_attachment` on the table creates a PostgreSQL trigger
 that auto-populates a `tsvector` column and GIN index from `search_text` — this
 is managed entirely by CocoIndex's lifecycle (setup on create, teardown on
-removal). The result is **hybrid search**: `cocoindex-search.py` queries both
+removal). The result is **hybrid search**: the project's
+`engram-search-<project>` server queries both
 the dense vector index and the BM25 index, then fuses results via Reciprocal
 Rank Fusion (RRF).
 
 **Transcripts flow:** Scans `.jsonl` transcript files for correction windows
-(same regex patterns as `nightly-learn.py`) and retains them through the
-Hindsight API. This supplements — not replaces — the nightly learning pipeline,
+(same regex patterns as `engram-nightly-learn`) and retains them through the
+Hindsight API. This supplements — not replaces — the manual learning pipeline,
 which also runs LLM extraction and reflection.
 
 ---
 
 ## Hybrid Code Search
 
-The code flow produces a table (`cocoindex.code_embeddings`) that supports
+The code flow produces the configured project table (for example,
+`cocoindex.code_embeddings`) that supports
 two retrieval methods simultaneously:
 
 | Method | Column | Index | Best for |
@@ -114,7 +133,7 @@ two retrieval methods simultaneously:
    auto-populates a `tsvector` column from `search_text` on every INSERT/UPDATE,
    plus a GIN index for fast BM25 queries. CocoIndex manages the full lifecycle
    of this infrastructure (setup and teardown).
-3. **At query time**, `cocoindex-search.py` runs both dense and BM25 retrieval
+3. **At query time**, the project's search server runs both dense and BM25 retrieval
    in parallel, then fuses results using **Reciprocal Rank Fusion (RRF)** with
    `k=60`.
 
@@ -144,7 +163,7 @@ The MCP tool `cocoindex_search` accepts a `mode` parameter:
 ## Structural Pattern Search
 
 Hybrid search above answers "find code *about* X" (semantic/lexical). Every
-`*-cocoindex-search.py` script also exposes a second MCP tool for the
+project search server also exposes a second MCP tool for the
 opposite question — "find code *shaped like* X" — via CocoIndex's
 `CodePattern` (tree-sitter-backed by-example structural matching).
 
@@ -192,7 +211,8 @@ Omitting a body/block entirely means "don't care what's inside":
 `(ok bool, err error)` against a search for `(bool, error)`), can't find
 references/callers, has no call graph, and produces no diagnostics. Serena
 (LSP-wrapping — `gopls`/`pyright`/`rust-analyzer`/`typescript-language-server`
-depending on project language, see `docs/NEW_PROJECT_SETUP.md#7-choose-your-code-intelligence-backend`)
+depending on project language, see
+[New Project Setup](NEW_PROJECT_SETUP.md#code-intelligence))
 is the default code-intelligence backend across every onboarded project and
 already covers exactly those type-aware, cross-file needs — adding
 `CodePattern` does not replace it. Its distinct value is answering "find
@@ -238,7 +258,7 @@ parts (caching, branch scoping), not a duplicate of either.
 Structural pattern search above answers "find code shaped like X" within one
 file at a time. Engram's graphify-inspired extension builds on that existing
 CocoIndex `match_code()` primitive; it is not a separate Graphify service or
-dependency. Every onboarded project's `*-search.py` additionally exposes
+dependency. Every onboarded project's `engram-search-<project>` server additionally exposes
 3 MCP tools (plus matching CLI flags) that build a cross-file call graph
 from the same `CodePattern` infrastructure and answer relational questions
 about it:
@@ -275,11 +295,11 @@ always-fresh results, and every measured build stayed comfortably
 interactive (under ~33s even for dcm's 8-repo Go build).
 
 **kubernaut is the one exception**, and requires no extra setup beyond what
-step 16 of `INSTALL.md` already configures: its own repo alone (1,000+ Go
+the CocoIndex setup in `INSTALL.md` already configures: its own repo alone (1,000+ Go
 files) took ~55s to rebuild, too slow to pay on every call, so
-`kubernaut-search.py`'s call-graph tools go through a Postgres-backed cache
+`engram-search-kubernaut`'s call-graph tools go through a Postgres-backed cache
 (`cocoindex.call_graph_cache`, auto-created on first use in the same
-database `COCOINDEX_PG_URL` already points at) instead of rebuilding every
+database configured by `defaults.pg_dsn`) instead of rebuilding every
 time. No TTL: a cache entry is invalidated purely by content fingerprint
 (file count + max mtime across the exact files the build itself walks,
 recomputed on every call) -- an unchanged tree never rebuilds no matter how
@@ -294,7 +314,7 @@ needed once the invalidation policy was fingerprint-based rather than
 time-based (TTL would only add a "rebuild an unchanged tree on some
 arbitrary schedule" cost with no correctness benefit), and (2) Postgres is
 already a hard dependency of every `*_search.py` module
-(`psycopg2`/`COCOINDEX_PG_URL`) and already running for embeddings storage
+(`psycopg2`/the deployment's `defaults.pg_dsn`) and already running for embeddings storage
 -- reusing it for one small `BYTEA` table adds zero new components to
 install, run, or monitor, versus a whole new service to operate on a
 resource-constrained shared host. See `docs/CALL_GRAPH_CLUSTERING.md`'s
@@ -303,13 +323,12 @@ exploration.
 
 ### Branch scoping (kubernaut only)
 
-kubernaut is a multi-branch project: `main` plus `release/vX.Y` lines
-(currently `v1.5`; `v1.6` will activate automatically once cut -- see
-`KUBERNAUT_RELEASE_LINES`). Every kubernaut-family workspace is a dedicated
+kubernaut is a multi-branch project: `main` plus the `release/vX.Y` lines
+configured by `projects.kubernaut.release_lines`. Every kubernaut-family workspace is a dedicated
 clone targeting exactly one of these, so the call-graph tools are
 branch-aware in the same way `cocoindex_search`/`cocoindex_pattern_search`
 already are: by default they auto-detect which line the caller's checkout
-is on (via `KUBERNAUT_LIVE_CLONE_DIR`) and build/cache that line's graph;
+is on (via `projects.kubernaut.paths.live_clone_dir`, when configured) and build/cache that line's graph;
 pass `branch` (e.g. `"v1.5"`) to override, or `"main"` to force main
 regardless of checkout. The Postgres cache key folds in the *resolved*
 release line (not the raw argument), so main and each release line always
@@ -332,13 +351,11 @@ Runs all four flows concurrently using threads:
 - **docs, code, transcripts**: File-watching threads using CocoIndex live mode
   (fsevents on macOS). Changes are detected and processed within seconds.
 - **issues**: Polling thread that fetches all issues + PRs from GitHub every
-  `ENGRAM_ISSUES_POLL_SECONDS` (default: 300s / 5 min).
+  `issues_poll_seconds` in `~/.engram/projects.toml` (default: 300s / 5 min).
 
-This is the mode used by the launchd plist (currently via the
-`~/.engram/cocoindex-flows.py` symlink rather than this console script
-directly — see [INSTALL.md](INSTALL.md) step 16). The `report_to_stdout` flag
+This is the mode used by the project launchd plist. The `report_to_stdout` flag
 is disabled in concurrent mode (CocoIndex only allows one progress reporter),
-so all output goes to `cocoindex-stderr.log`.
+so all output goes to the project-specific stderr log.
 
 ### Backfill mode
 
@@ -377,8 +394,8 @@ tail -30 ~/.engram/logs/cocoindex-stderr.log
 # Check issues poll cycle
 grep "Issues poll:" ~/.engram/logs/cocoindex-stderr.log | tail -5
 
-# Code index table size
-psql -h localhost -p 5432 -U hindsight -d hindsight -c "SELECT count(*) FROM code_embeddings;"
+# Code index table size (replace <code_table> with projects.<project>.code_table)
+psql -h localhost -p 5432 -U hindsight -d hindsight -c "SELECT count(*) FROM <code_table>;"
 
 # Full coverage and freshness report
 python3 -m engram.maintenance.report
@@ -390,7 +407,7 @@ python3 -m engram.maintenance.report
 - All four apps show `Starting` messages at startup (docs, code, transcripts, issues)
 - No repeated errors in stderr log
 - `launchctl list` shows PID (not `-`) for the cocoindex service
-- `report.py` shows all sources as "Healthy" in the DATA FRESHNESS section
+- `python3 -m engram.maintenance.report` shows all sources as "Healthy" in the DATA FRESHNESS section
 
 ---
 
@@ -417,7 +434,7 @@ curl -s http://localhost:8888/health
 
 ### Embedding model mismatch
 
-If you upgrade the embedding model in Hindsight, the CocoIndex code-index
+If you upgrade the embedding model in Hindsight, the CocoIndex code table's
 embeddings (stored separately in pgvector) will use a different vector space.
 
 **Fix:** Run a full backfill to re-embed all code chunks:
@@ -501,7 +518,7 @@ chunks are removed from the sink.
 | tree-sitter parsing | $0 | CPU-only, no external API |
 | GitHub API | $0 | Uses `gh` CLI with authenticated rate limit |
 | Delta processing | $0 | CPU-only incremental reprocessing |
-| Storage | ~50 MB | pgvector table for code-index (scales with codebase size) |
+| Storage | ~50 MB | Configured pgvector code table (scales with codebase size) |
 
 **Total: $0/month** — CocoIndex runs entirely locally with no LLM or external
 API costs. The only resource consumed is CPU time for embedding generation and

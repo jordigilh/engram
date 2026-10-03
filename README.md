@@ -102,8 +102,8 @@ responsibility.
 
 ## Key features
 
-- **Graphify-inspired call-graph extraction + clustering** — CocoIndex's structural matching feeds cross-file graphs that answer relational questions grep/glob can't: blast radius ("what breaks if I change this"), shortest path between two functions, and Leiden-based clustering of related functions. The implementation follows Graphify's precision-over-recall policy for ambiguous edges and uses a Postgres-backed cache for the one repo large enough to need it — see [docs/CALL_GRAPH_DESIGN.md](docs/CALL_GRAPH_DESIGN.md) and [docs/COCOINDEX.md#call-graph-queries](docs/COCOINDEX.md#call-graph-queries)
-- **LSP-backed code intelligence, language-agnostic by construction** — the same tool surface (`find_symbol`/`find_referencing_symbols`/diagnostics) works identically whether the repo is Go, Python, Rust, or TypeScript, wrapping each language's real LSP (`gopls`, `pyright`, `rust-analyzer`, `typescript-language-server`). Includes **semantic refactoring** (`rename_symbol`, `replace_symbol_body`): a rename or body replacement is resolved and applied via the compiler's own understanding of the code, not text search-replace, so every real reference updates correctly and an unrelated same-named match elsewhere is never touched — see [docs/NEW_PROJECT_SETUP.md §7](docs/NEW_PROJECT_SETUP.md#7-choose-your-code-intelligence-backend) for setup
+- **Graphify-inspired call-graph extraction + clustering** — CocoIndex's structural matching feeds cross-file graphs that answer relational questions grep/glob can't: blast radius ("what breaks if I change this"), shortest path between two functions, and Leiden-based clustering of related functions. The implementation follows Graphify's precision-over-recall policy for ambiguous edges and uses a Postgres-backed cache for the one repo large enough to need it — see [docs/CALL_GRAPH_DESIGN.md](docs/CALL_GRAPH_DESIGN.md) and [docs/COCOINDEX.md#graphify-inspired-call-graph-queries](docs/COCOINDEX.md#graphify-inspired-call-graph-queries)
+- **LSP-backed code intelligence, language-agnostic by construction** — the same tool surface (`find_symbol`/`find_referencing_symbols`/diagnostics) works identically whether the repo is Go, Python, Rust, or TypeScript, wrapping each language's real LSP (`gopls`, `pyright`, `rust-analyzer`, `typescript-language-server`). Includes **semantic refactoring** (`rename_symbol`, `replace_symbol_body`): a rename or body replacement is resolved and applied via the compiler's own understanding of the code, not text search-replace, so every real reference updates correctly and an unrelated same-named match elsewhere is never touched — see [docs/NEW_PROJECT_SETUP.md](docs/NEW_PROJECT_SETUP.md#code-intelligence) for setup
 - **Hybrid code search** — tree-sitter AST-aware chunking keeps chunk boundaries on function/type/block nodes instead of arbitrary character offsets; dense embeddings (pgvector) handle semantic queries while BM25 (tsvector + GIN) handles exact identifiers — results fused via Reciprocal Rank Fusion
 - **Structural pattern search** — tree-sitter by-example matching answers "find code shaped like X" (e.g. every function matching a signature) as a distinct MCP tool per project — see docs/COCOINDEX.md
 - **Live sync** — docs, code, and transcripts watch for filesystem changes in real time; issues and PRs poll GitHub every 5 minutes, so nothing reflects a stale snapshot
@@ -128,8 +128,8 @@ cd engram
 Then follow the [Installation Guide](docs/INSTALL.md) (takes ~15 minutes) and
 the [OpenCode/OpenChamber Integration](docs/OPENCODE.md) guide.
 On Linux/Fedora/RHEL, use [`docs/INSTALL-linux.md`](docs/INSTALL-linux.md) instead
-for the platform-specific steps (containerized Hindsight via Podman Quadlets,
-native batch scripts via systemd timers) — the rest of the guide applies
+for the platform-specific steps (containerized Hindsight via Podman Quadlets and
+native ingestion via systemd) — the rest of the guide applies
 unchanged on either platform.
 
 ## Architecture
@@ -167,7 +167,7 @@ graph TB
         coco_svc["cocoindex (KeepAlive)"]
     end
 
-    nightly["nightly-learn.py<br/>(on-demand only, no schedule)"]
+    nightly["engram-nightly-learn<br/>(on-demand only, no schedule)"]
 
     gateway --> api
     gateway --> coco_search

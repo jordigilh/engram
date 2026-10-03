@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,8 +50,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from engram import classify  # noqa: E402
 from engram.maintenance import backfill_memory_tags as bmt  # noqa: E402
 
-HINDSIGHT_URL = "http://localhost:8888"
-AUDIT_LOG = Path(os.path.expanduser("~/.engram/logs/content-classification-audit.jsonl"))
+HINDSIGHT_URL = bmt.HINDSIGHT_URL
+AUDIT_LOG = bmt.LOG_DIR / "content-classification-audit.jsonl"
 
 
 def plan_content_targets(documents: list[dict], resolvable_ids: set[str]) -> list[dict]:

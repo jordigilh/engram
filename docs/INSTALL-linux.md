@@ -2,16 +2,16 @@
 
 This is the Linux counterpart to [`INSTALL.md`](INSTALL.md). It only covers
 the steps that differ by platform: prerequisites, running the Hindsight
-service itself, and scheduling the batch/ingestion scripts. Everything else
-in `INSTALL.md` — Cursor MCP config, the Cursor rule, CocoIndex setup,
-mental models, docs/issues ingestion (steps 1–3 and 7–18) — is
-platform-agnostic Python/Cursor tooling and applies unchanged on Linux.
-Follow this doc for the platform-specific pieces, then jump to `INSTALL.md`
-step 7 onward for the rest.
+service itself, and scheduling the always-on ingestion service. Everything else
+in `INSTALL.md` — OpenCode integration, the rule, CocoIndex setup, mental
+models, and docs/issues ingestion — is platform-agnostic and applies unchanged
+on Linux. Follow this doc for the platform-specific pieces, then continue with
+`INSTALL.md` and `NEW_PROJECT_SETUP.md`.
 
 **Architecture**: unlike macOS (native process, no container), Hindsight
-itself runs **containerized** on Linux via Podman, while the batch scripts
-(`nightly-learn.py`, `cocoindex-flows.py`, `cocoindex-search.py`) run
+itself runs **containerized** on Linux via Podman, while the Engram flow,
+search, and maintenance commands (`engram-flows-*`, `engram-search-*`,
+`engram-nightly-learn`) run
 **natively** via the same hermetic `uv`-managed Python venv the macOS install
 uses — see [FINDINGS.md](FINDINGS.md) 2026-07-29 ("Decided architecture") for
 why the split isn't symmetric, and 2026-07-29 ("#9 Implemented") for what was
@@ -160,56 +160,46 @@ uv venv ~/.engram/venv --python 3.14
 uv pip install --python ~/.engram/venv/bin/python -e ".[dev]"
 uv pip install --python ~/.engram/venv/bin/python 'google-cloud-aiplatform>=1.38'
 uv pip install --python ~/.engram/venv/bin/python cocoindex==1.0.23
-
-ln -sf "$(pwd)/src/engram/pipeline/nightly_learn.py" ~/.engram/nightly-learn.py
-ln -sf "$(pwd)/src/engram/pipeline/ingest_issues.py" ~/.engram/ingest-issues.py
-ln -sf "$(pwd)/src/engram/flows/kubernaut.py" ~/.engram/cocoindex-flows.py
-ln -sf "$(pwd)/src/engram/search/kubernaut.py" ~/.engram/cocoindex-search.py
 ```
 
 `uv pip install -e ".[dev]"` is the one-shot editable install of the whole
 `engram` package (see [`INSTALL.md`](INSTALL.md) step 9) — it makes
 `correction_gate.py`, `contradiction_resolution.py`, `project_scope.py` etc.
 importable as `engram.*` and generates the `engram-flows-kubernaut` /
-`engram-search-kubernaut` / `engram-nightly-learn` / `engram-ingest-issues`
-console scripts in `~/.engram/venv/bin/`, so no per-shared-module symlinks
-or `spike/` path hack are needed here either. The two remaining symlinks
-above are only for the systemd-invoked entry points below (a planned
-follow-up will point those units at the console scripts directly instead
-and retire the symlinks — not yet done).
+`engram-search-kubernaut` / `engram-nightly-learn`
+console scripts in `~/.engram/venv/bin/`; the systemd units invoke those
+console scripts directly.
 
 These run **natively**, not containerized — the host-Python-version concern
 that would justify containerizing them doesn't apply once `uv venv --python
 3.14` is in the picture (identical reasoning to why the macOS install doesn't
 containerize them either; see the top of this doc).
 
-## 8. Schedule with systemd timers
+## 8. Schedule the always-on ingestion service
 
-The Linux equivalents of `launchd/io.vectorize.hindsight.{hourly,nightly}.plist`
-and `io.vectorize.cocoindex.service.plist`:
+The CocoIndex flow runs as a user-level systemd service. LLM learning,
+reflection, and triage remain on-demand rather than scheduled:
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp systemd/engram-hindsight-hourly.{service,timer} ~/.config/systemd/user/
-cp systemd/engram-hindsight-nightly.{service,timer} ~/.config/systemd/user/
 cp systemd/engram-cocoindex.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 
-systemctl --user enable --now engram-hindsight-hourly.timer
-systemctl --user enable --now engram-hindsight-nightly.timer
 systemctl --user enable --now engram-cocoindex.service
 ```
 
-Verify the timers are scheduled and the CocoIndex service is live:
+Verify the CocoIndex service is enabled and live:
 
 ```bash
-systemctl --user list-timers 'engram-*'
+systemctl --user status engram-cocoindex.service
 journalctl --user -u engram-cocoindex.service -f
 ```
 
-> **Add `ENGRAM_DOCS_DIR`, `ENGRAM_CODE_DIR`, etc. to `~/.engram/config.env`**
-> before starting `engram-cocoindex.service` — same as `INSTALL.md` step 16.
-> The systemd unit reads them from there, not from the unit file itself.
+> **Add project paths and repository lists to `~/.engram/projects.toml`**
+> using [`docs/projects.toml.example`](projects.toml.example). Keep
+> `~/.engram/config.env` for service credentials and runtime settings before
+> starting `engram-cocoindex.service`. The service reads them from those files,
+> not from the unit file itself.
 
 > **Lingering sessions**: user-level systemd units (`systemctl --user`) only
 > keep running while a login session exists unless linger is enabled. Run
@@ -220,15 +210,10 @@ journalctl --user -u engram-cocoindex.service -f
 ## 9. (Optional, Repo Families Only) Shared cocoindex-code/Serena Daemons + Serena Multiplex
 
 If you're onboarding a **family of repos under one org that should share one
-code-intelligence backend** instead of spawning a `cocoindex-code`/`serena`/
-`gopls` subprocess per Cursor window per repo — see
-[`NEW_PROJECT_SETUP.md`](NEW_PROJECT_SETUP.md)'s step 8 "Evolution" note and
-step 8a for the full, platform-agnostic rationale (when this is worth the
-added complexity, the "one active project at a time" limitation of a plain
-shared Serena daemon, and why the multiplex wrapper exists). This section is
-just the Linux (`systemd --user`) command sequence; the concepts, `.cursor/
-mcp.json` shapes, and gotchas are identical to the macOS (`launchd`)
-instructions there.
+code-intelligence backend**, use the shared-daemon guidance in
+[`NEW_PROJECT_SETUP.md`](NEW_PROJECT_SETUP.md#optional-integrations) and
+[`OPENCODE.md`](OPENCODE.md). This section is only the Linux
+(`systemd --user`) command sequence.
 
 ```bash
 cp systemd/engram-cocoindex-code-kubernaut-family.service ~/.config/systemd/user/
@@ -252,7 +237,7 @@ unit file's own header comments (and the direct-analog `launchd/*.plist`
 they mirror) for the full per-flag rationale.
 
 > **Postgres reachability gotcha specific to Linux (confirmed via a live
-> spike, 2026-08-13)**: the `cocoindex-code` daemon's `COCOINDEX_PG_URL`
+> spike, 2026-08-13)**: the `cocoindex-code` daemon's `defaults.pg_dsn`
 > needs `localhost:5432` reachable from a **native** host process. On
 > macOS this works because Postgres either runs natively or its embedded
 > `pg0` is otherwise reachable on the host loopback; on Linux, step 5's
@@ -274,7 +259,7 @@ they mirror) for the full per-flag rationale.
 
 Register each family repo's multiplex mount through the OpenCode plugin's
 project route and optional `branchRoutes`, as described in
-`docs/OPENCODE.md`. Do not create per-repo Cursor MCP configuration files.
+`docs/OPENCODE.md`. Keep client routing in the shared OpenCode configuration.
 
 Verify the daemons are up and correctly isolating per project:
 
@@ -283,22 +268,14 @@ systemctl --user status engram-serena-multiplex-kubernaut-family.service
 journalctl --user -u engram-serena-multiplex-kubernaut-family.service -f
 ```
 
-> **Personal git-hook restart scripts are not part of this repo**: on
-> macOS, `~/.engram/git-hooks/_restart-kubernaut-family-daemons.sh`
-> (a personal, uncommitted script — see `NEW_PROJECT_SETUP.md` step 14) uses
-> `launchctl kickstart -k` to restart these 4 daemons after a `git checkout`/
-> `pull`/`rebase` changes files on disk underneath them. If you build the
-> Linux equivalent of that self-healing git-hook family for your own repos,
-> swap the restart calls for `systemctl --user restart
-> <unit-name>.service` — nothing else about the hook logic (detecting HEAD
-> changes, self-provisioning `post-merge`/`reference-transaction`) is
-> platform-specific.
+For self-healing checkout hooks, use the generic or family templates in
+[`git-hooks/README.md`](../git-hooks/README.md). Replace the family restart
+commands with `systemctl --user restart <unit-name>.service` for Linux.
 
 ## Continue with the platform-agnostic steps
 
-Jump to [`INSTALL.md`](INSTALL.md) step 7 ("Configure Cursor MCP") onward —
-Cursor integration, the hindsight-memory rule, docs/issues ingestion, mental
-models, and the test suite are identical on every platform.
+Continue with the platform-agnostic setup in [`INSTALL.md`](INSTALL.md), then
+use [`NEW_PROJECT_SETUP.md`](NEW_PROJECT_SETUP.md) for a new project.
 
 ## Troubleshooting
 
@@ -333,5 +310,5 @@ is the documented, validated fallback.
 
 ### Recall returns empty results
 Same as macOS: the bank needs at least one retained item. Run
-`~/.engram/venv/bin/python3 ~/.engram/nightly-learn.py` manually or
+`~/.engram/venv/bin/engram-nightly-learn` manually or
 retain a test memory.

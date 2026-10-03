@@ -41,11 +41,16 @@ from urllib.request import Request, urlopen
 # (src/engram/maintenance/), three directories below the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from engram import project_scope  # noqa: E402
+from engram.project_config import DEFAULT_HINDSIGHT_URL, load_default_settings  # noqa: E402
 
-HINDSIGHT_URL = "http://localhost:8888"
-TRANSCRIPTS_GLOB = os.path.expanduser(
-    "~/.cursor/projects/*/agent-transcripts/**/*.jsonl"
-)
+DEPLOYMENT_SETTINGS = load_default_settings()
+HINDSIGHT_URL = DEPLOYMENT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+assert HINDSIGHT_URL is not None
+TRANSCRIPTS_ROOT = DEPLOYMENT_SETTINGS.path("transcripts_dir", "~/.cursor/projects")
+assert TRANSCRIPTS_ROOT is not None
+TRANSCRIPTS_GLOB = str(TRANSCRIPTS_ROOT / "*" / "agent-transcripts" / "**" / "*.jsonl")
+LOG_DIR = DEPLOYMENT_SETTINGS.path("log_dir", "~/.engram/logs")
+assert LOG_DIR is not None
 
 
 def build_transcript_workspace_index() -> dict[str, str]:

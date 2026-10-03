@@ -52,6 +52,15 @@ from cocoindex.resources.file import PatternFilePathMatcher
 # be run via `-m`/an installed console script (not yet true in this repo).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 from engram import chunking  # noqa: E402
+from engram.project_config import (  # noqa: E402
+    DEFAULT_HINDSIGHT_URL,
+    DEFAULT_PG_DSN,
+    DEFAULT_POOL_MAX_SIZE,
+    DEFAULT_POOL_MIN_SIZE,
+    default_project_path,
+    load_project_settings,
+    sql_identifier,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,59 +68,54 @@ logging.basicConfig(
 )
 log = logging.getLogger("praxis-cocoindex-flows")
 
-HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
+PROJECT_SETTINGS = load_project_settings("praxis")
+HINDSIGHT_URL = PROJECT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+assert HINDSIGHT_URL is not None
+CODE_TABLE = sql_identifier(
+    PROJECT_SETTINGS.text("code_table", "praxis_code_embeddings") or "praxis_code_embeddings",
+    "project 'praxis' code_table",
+)
 
-PRAXIS_ORG = "praxis-proxy"
-PRAXIS_ORG_DIR = pathlib.Path(os.environ.get(
-    "PRAXIS_ORG_DIR",
-    os.path.expanduser("~/.engram/watch/praxis-proxy"),
-))
+PRAXIS_ORG = PROJECT_SETTINGS.text("organization", "example-org")
+assert PRAXIS_ORG is not None
+PRAXIS_ORG_DIR = PROJECT_SETTINGS.path("org_dir", str(default_project_path("praxis")))
+assert PRAXIS_ORG_DIR is not None
 
 # Manually-curated supplementary docs (e.g. project-overview PDFs) that don't
 # live in any repo checkout -- distinct from PRAXIS_ORG_DIR, which is
 # git-worktree mirrors only. Ingested by process_pdf_file via docs_main,
 # tagged source_tag="praxis-manual-docs" so they're identifiable/filterable
 # separately from repo docs.
-PRAXIS_MANUAL_DOCS_DIR = pathlib.Path(os.environ.get(
-    "PRAXIS_MANUAL_DOCS_DIR",
-    os.path.expanduser("~/.engram/manual-docs/praxis"),
-))
+PRAXIS_MANUAL_DOCS_DIR = PROJECT_SETTINGS.path("manual_docs_dir", "~/.engram/manual-docs/praxis")
+assert PRAXIS_MANUAL_DOCS_DIR is not None
 
 # Single source of truth for docs/code/issues ingestion: (local checkout dir
 # name, upstream "org/repo" name, has Rust code). pingora is deliberately
 # excluded (vendored cloudflare/pingora fork, not team-authored architecture
 # -- see the onboarding plan's "Confirmed scope" section).
 PRAXIS_REPOS: list[tuple[str, str, bool]] = [
-    ("praxis", "praxis-proxy/praxis", True),
-    ("praxis-ai", "praxis-proxy/ai", True),
-    ("praxis-benchmarks", "praxis-proxy/benchmarks", True),
-    ("praxis-conventions", "praxis-proxy/conventions", False),
-    ("praxis-demos", "praxis-proxy/demos", True),
-    ("praxis-enhancements", "praxis-proxy/enhancements", False),
-    ("praxis-experiments", "praxis-proxy/experimental", True),
-    ("praxis-forge", "praxis-proxy/forge", True),
-    ("praxis-grid", "praxis-proxy/grid", True),
-    ("praxis-operator", "praxis-proxy/operator", True),
-    ("praxis-policy", "praxis-proxy/policy", True),
-    ("praxis-proxy.github.io", "praxis-proxy/praxis-proxy.github.io", False),
+    (str(entry["name"]), str(entry["upstream"]), bool(entry.get("rust", False)))
+    for entry in PROJECT_SETTINGS.records("repositories")
 ]
 
-ISSUES_REPOS = os.environ.get(
-    "PRAXIS_ISSUES_REPOS",
-    ",".join(upstream for _, upstream, _ in PRAXIS_REPOS),
-).split(",")
-ISSUES_POLL_INTERVAL = int(os.environ.get("PRAXIS_ISSUES_POLL_SECONDS", "300"))
+ISSUES_REPOS = list(PROJECT_SETTINGS.strings(
+    "issues_repos", tuple(upstream for _, upstream, _ in PRAXIS_REPOS)
+))
+ISSUES_POLL_INTERVAL = PROJECT_SETTINGS.integer("issues_poll_seconds", 300)
 
 # Jira tickets are supplied by a host-local key file. The file contains
 # identifiers only; credentials stay in the macOS Keychain and are read by
 # _jira_token() below.
-PRAXIS_JIRA_SERVER = os.environ.get("PRAXIS_JIRA_SERVER", "https://redhat.atlassian.net")
-PRAXIS_JIRA_EMAIL = os.environ.get("PRAXIS_JIRA_EMAIL", "")
-PRAXIS_JIRA_KEYS_FILE = pathlib.Path(os.environ.get(
-    "PRAXIS_JIRA_KEYS_FILE",
-    os.path.expanduser("~/.engram/scripts/jira-keys.txt"),
-))
-PRAXIS_JIRA_KEYS = os.environ.get("PRAXIS_JIRA_KEYS", "")
+PRAXIS_JIRA_SERVER = PROJECT_SETTINGS.text("jira_server", "https://redhat.atlassian.net")
+assert PRAXIS_JIRA_SERVER is not None
+PRAXIS_JIRA_EMAIL = PROJECT_SETTINGS.get("jira_email", "")
+if not isinstance(PRAXIS_JIRA_EMAIL, str):
+    raise ValueError("project praxis setting 'jira_email' must be a string")
+PRAXIS_JIRA_KEYS_FILE = PROJECT_SETTINGS.path("jira_keys_file", "~/.engram/scripts/jira-keys.txt")
+assert PRAXIS_JIRA_KEYS_FILE is not None
+PRAXIS_JIRA_KEYS = PROJECT_SETTINGS.get("jira_keys", "")
+if not isinstance(PRAXIS_JIRA_KEYS, str):
+    raise ValueError("project praxis setting 'jira_keys' must be a string")
 JIRA_FIELDS = [
     "summary", "description", "status", "issuetype", "priority",
     "labels", "reporter", "created", "updated", "comment",
@@ -127,26 +131,22 @@ JIRA_FIELDS = [
 # a second live watcher -- cocoindex skips unchanged files (~12s per cycle),
 # and freshness stays within CODE_POLL_INTERVAL (default 300s, meeting the
 # <5min code target in docs/README.md). docs_app keeps the one live watcher.
-CODE_POLL_INTERVAL = int(os.environ.get("PRAXIS_CODE_POLL_SECONDS", "300"))
+CODE_POLL_INTERVAL = PROJECT_SETTINGS.integer("code_poll_seconds", 300)
 
 # Known org Project (v2) board numbers, refreshed at startup via
 # _fetch_org_projects() -- this default list is just a fallback if that
 # discovery call fails, not the source of truth.
-_KNOWN_PROJECT_NUMBERS = [2, 3, 4, 5, 7, 8]
+_KNOWN_PROJECT_NUMBERS = [int(value) for value in PROJECT_SETTINGS.get("known_project_numbers", [2, 3, 4, 5, 7, 8])]
 
-PG_DSN = os.environ.get(
-    "COCOINDEX_PG_URL",
-    "postgresql://hindsight:hindsight@localhost:5432/hindsight",
-)
+PG_DSN = PROJECT_SETTINGS.text("pg_dsn", DEFAULT_PG_DSN)
+assert PG_DSN is not None
 # See cocoindex-flows.py's PG_POOL_MIN_SIZE/MAX_SIZE comment (docs/FINDINGS.md
 # 2026-08-03) -- asyncpg's own min_size=10/max_size=10 default is oversized
 # for this pool's light, bursty pgvector-upsert-only workload.
-PG_POOL_MIN_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MIN_SIZE", "2"))
-PG_POOL_MAX_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MAX_SIZE", "5"))
-COCOINDEX_DB = pathlib.Path(os.environ.get(
-    "COCOINDEX_DB",
-    os.path.expanduser("~/.engram/praxis-cocoindex.db"),
-))
+PG_POOL_MIN_SIZE = PROJECT_SETTINGS.integer("pg_pool_min_size", DEFAULT_POOL_MIN_SIZE)
+PG_POOL_MAX_SIZE = PROJECT_SETTINGS.integer("pg_pool_max_size", DEFAULT_POOL_MAX_SIZE)
+COCOINDEX_DB = PROJECT_SETTINGS.path("cocoindex_db", "~/.engram/praxis-cocoindex.db")
+assert COCOINDEX_DB is not None
 
 # Unique per-file ContextKey name -- see engram-cocoindex-flows.py's PG_POOL
 # comment / dcm-cocoindex-flows.py's PG_POOL comment for the full rationale.
@@ -1067,18 +1067,18 @@ async def code_main(org_dir: pathlib.Path) -> None:
         },
     )
     table = await postgres.mount_table_target(
-        PG_POOL, "praxis_code_embeddings", schema, pg_schema_name="cocoindex",
+        PG_POOL, CODE_TABLE, schema, pg_schema_name="cocoindex",
     )
     table.declare_vector_index(column="embedding", metric="cosine")
 
     table.declare_sql_command_attachment(
         name="fts_search_vector",
-        setup_sql="""
-            ALTER TABLE cocoindex.praxis_code_embeddings
+        setup_sql=f"""
+            ALTER TABLE cocoindex.{CODE_TABLE}
                 ADD COLUMN IF NOT EXISTS search_vector tsvector;
 
-            CREATE INDEX IF NOT EXISTS idx_praxis_code_embeddings_fts
-                ON cocoindex.praxis_code_embeddings USING gin(search_vector);
+            CREATE INDEX IF NOT EXISTS idx_{CODE_TABLE}_fts
+                ON cocoindex.{CODE_TABLE} USING gin(search_vector);
 
             CREATE OR REPLACE FUNCTION cocoindex.update_praxis_code_search_vector()
             RETURNS trigger AS $$
@@ -1090,24 +1090,24 @@ async def code_main(org_dir: pathlib.Path) -> None:
             $$ LANGUAGE plpgsql;
 
             DROP TRIGGER IF EXISTS trg_praxis_code_search_vector
-                ON cocoindex.praxis_code_embeddings;
+                ON cocoindex.{CODE_TABLE};
             CREATE TRIGGER trg_praxis_code_search_vector
                 BEFORE INSERT OR UPDATE OF search_text, filepath
-                ON cocoindex.praxis_code_embeddings
+                ON cocoindex.{CODE_TABLE}
                 FOR EACH ROW
                 EXECUTE FUNCTION cocoindex.update_praxis_code_search_vector();
 
-            UPDATE cocoindex.praxis_code_embeddings
+            UPDATE cocoindex.{CODE_TABLE}
             SET search_vector = to_tsvector('simple',
                 coalesce(search_text, code, '') || ' ' || coalesce(filepath, ''))
             WHERE search_vector IS NULL;
         """,
-        teardown_sql="""
+        teardown_sql=f"""
             DROP TRIGGER IF EXISTS trg_praxis_code_search_vector
-                ON cocoindex.praxis_code_embeddings;
+                ON cocoindex.{CODE_TABLE};
             DROP FUNCTION IF EXISTS cocoindex.update_praxis_code_search_vector();
-            DROP INDEX IF EXISTS cocoindex.idx_praxis_code_embeddings_fts;
-            ALTER TABLE cocoindex.praxis_code_embeddings
+            DROP INDEX IF EXISTS cocoindex.idx_{CODE_TABLE}_fts;
+            ALTER TABLE cocoindex.{CODE_TABLE}
                 DROP COLUMN IF EXISTS search_vector;
         """,
     )

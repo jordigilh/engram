@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from dataclasses import asdict
 from pathlib import Path
 
+from engram.project_config import load_project_settings
 from engram.incident.service import triage_test_failure as build_triage_context
 from engram.incident.ondemand import generate_rca as build_rca_ondemand
 from engram.incident.normalize import iter_evidence
@@ -22,6 +22,15 @@ from engram.incident.postgres_retention import (
     failure_history_pg,
     incident_timeline_pg,
     promote_incident_pg,
+)
+
+
+PROJECT_SETTINGS = load_project_settings("kubernaut")
+DEFAULT_RCA_PROJECT = PROJECT_SETTINGS.text("rca_project", "kubernaut")
+assert DEFAULT_RCA_PROJECT is not None
+DEFAULT_RCA_REPOSITORY = PROJECT_SETTINGS.text("rca_repository")
+RCA_PROJECTS = PROJECT_SETTINGS.strings(
+    "rca_projects", (DEFAULT_RCA_PROJECT,)
 )
 
 
@@ -71,11 +80,12 @@ def _run_mcp_server(
     contexts: dict[tuple[str, str], dict] = {}
     roots: dict[tuple[str, str], Path] = {}
     dossiers_by_scope: dict[tuple[str, str], list[dict]] = {}
-    retention_path = db_path or Path(os.environ.get("KUBERNAUT_RCA_DB", "~/.engram/kubernaut-rca.sqlite3")).expanduser()
+    retention_path = db_path or PROJECT_SETTINGS.path("rca_db", "~/.engram/kubernaut-rca.sqlite3")
+    assert retention_path is not None
     changes_by_scope: dict[tuple[str, str], list[dict]] = {}
 
     def scope_key(project: str, branch: str) -> tuple[str, str]:
-        if project not in {"kubernaut", "kubernaut-operator"}:
+        if project not in RCA_PROJECTS:
             raise ValueError("RCA service is restricted to the Kubernaut project family")
         return project, normalize_branch(branch)
 
@@ -87,7 +97,7 @@ def _run_mcp_server(
         repository: str | None = None,
         workflow: str | None = None,
         branch: str = "main",
-        project: str = "kubernaut",
+        project: str = DEFAULT_RCA_PROJECT,
     ) -> str:
         """Download and index one GitHub Actions job log and must-gather artifact.
 
@@ -116,7 +126,7 @@ def _run_mcp_server(
     @mcp.tool()
     def promote_incident(
         branch: str = "main",
-        project: str = "kubernaut",
+        project: str = DEFAULT_RCA_PROJECT,
         validated_by: str | None = None,
         resolution: str | None = None,
         changes: list[dict] | None = None,
@@ -139,7 +149,7 @@ def _run_mcp_server(
 
     @mcp.tool()
     def get_failure_history(
-        branch: str = "main", project: str = "kubernaut", failure_family: str | None = None
+        branch: str = "main", project: str = DEFAULT_RCA_PROJECT, failure_family: str | None = None
     ) -> str:
         """Return promoted incidents in one recurring failure family."""
         signature = failure_family
@@ -152,7 +162,7 @@ def _run_mcp_server(
         return json.dumps({"family_signature": signature, "incidents": incidents}, default=str)
 
     @mcp.tool()
-    def get_incident_timeline(incident_id: str, branch: str = "main", project: str = "kubernaut") -> str:
+    def get_incident_timeline(incident_id: str, branch: str = "main", project: str = DEFAULT_RCA_PROJECT) -> str:
         """Return a promoted incident and its linked changes."""
         normalized_branch = normalize_branch(branch)
         expected_prefix = f"incident-{project}-{normalized_branch}-"
@@ -169,7 +179,7 @@ def _run_mcp_server(
         failure_text: str,
         rr_id: str | None = None,
         branch: str = "main",
-        project: str = "kubernaut",
+        project: str = DEFAULT_RCA_PROJECT,
         max_tokens: int = 12000,
     ) -> str:
         """Return a bounded RCA dossier correlated by Kubernaut RR ID."""
@@ -189,7 +199,7 @@ def _run_mcp_server(
         return json.dumps(context, default=str)
 
     @mcp.tool()
-    def get_evidence(evidence_id: str, branch: str = "main", project: str = "kubernaut") -> str:
+    def get_evidence(evidence_id: str, branch: str = "main", project: str = DEFAULT_RCA_PROJECT) -> str:
         """Return one evidence item from the most recent triage dossier."""
         context = contexts.get(scope_key(project, branch))
         if not context:
@@ -207,7 +217,7 @@ def _run_mcp_server(
         return json.dumps({"error": f"unknown evidence id: {evidence_id}"})
 
     @mcp.tool()
-    def get_related_events(evidence_id: str, branch: str = "main", project: str = "kubernaut") -> str:
+    def get_related_events(evidence_id: str, branch: str = "main", project: str = DEFAULT_RCA_PROJECT) -> str:
         """Return timeline records related to one evidence item."""
         context = contexts.get(scope_key(project, branch))
         if not context:
@@ -224,9 +234,9 @@ def _run_mcp_server(
     def generate_rca(
         run_id: str | None = None,
         job_id: str | None = None,
-        repository: str = "jordigilh/kubernaut",
+        repository: str | None = DEFAULT_RCA_REPOSITORY,
         branch: str = "main",
-        project: str = "kubernaut",
+        project: str = DEFAULT_RCA_PROJECT,
         test_log_url: str | None = None,
         must_gather_url: str | None = None,
         artifact_hint: str | None = None,
@@ -293,12 +303,14 @@ def _run_mcp_server(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=Path(os.environ.get("KUBERNAUT_MUST_GATHER", ".")))
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8897)
+    root = PROJECT_SETTINGS.path("must_gather_dir", ".")
+    assert root is not None
+    parser.add_argument("--root", type=Path, default=root)
+    parser.add_argument("--host", default=PROJECT_SETTINGS.text("rca_host", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=PROJECT_SETTINGS.integer("rca_port", 8897))
     parser.add_argument("--transport", choices=["stdio", "streamable-http"], default="stdio")
     parser.add_argument("--db", type=Path, default=None)
-    parser.add_argument("--pg-url", default=os.environ.get("KUBERNAUT_RCA_PG_URL"))
+    parser.add_argument("--pg-url", default=PROJECT_SETTINGS.text("rca_pg_url"))
     args = parser.parse_args()
     _run_mcp_server(args.root, args.host, args.port, args.transport, args.db, args.pg_url)
 

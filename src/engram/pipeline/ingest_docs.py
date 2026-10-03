@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
-"""Ingest kubernaut-docs into Hindsight knowledge bank.
+"""Ingest a configured documentation tree into Hindsight.
 
-Creates a 'kubernaut-docs' bank with chunks extraction mode (zero LLM cost)
-and ingests all markdown files from the kubernaut-docs repository.
+Creates the configured documentation bank with chunks extraction mode (zero
+LLM cost) and ingests all markdown files from its configured tree.
 
 Usage:
     python3 ingest-docs.py [--docs-dir PATH] [--hindsight-url URL]
 """
 
 import json
-import os
 import sys
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
+from engram.project_config import DEFAULT_HINDSIGHT_URL, load_project_settings
+
+PROJECT_SETTINGS = load_project_settings("kubernaut")
+HINDSIGHT_URL = PROJECT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+assert HINDSIGHT_URL is not None
 BANK_ID = "kubernaut-docs"
-DEFAULT_DOCS_DIR = os.path.expanduser("~/go/src/github.com/jordigilh/kubernaut-docs/docs")
+_docs_dir = PROJECT_SETTINGS.path("docs_dir")
+DEFAULT_DOCS_DIR = str(_docs_dir) if _docs_dir is not None else None
 
 
 def api_request(method, path, payload=None):
@@ -93,15 +97,17 @@ def ingest(docs_dir: Path):
 def main():
     global HINDSIGHT_URL
     import argparse
-    parser = argparse.ArgumentParser(description="Ingest kubernaut-docs into Hindsight")
+    parser = argparse.ArgumentParser(description="Ingest configured documentation into Hindsight")
     parser.add_argument("--docs-dir", default=DEFAULT_DOCS_DIR,
-                        help="Path to kubernaut-docs/docs/ directory")
+                        help="Path to the documentation tree (defaults to projects.toml)")
     parser.add_argument("--hindsight-url", default=HINDSIGHT_URL,
                         help="Hindsight API URL")
     args = parser.parse_args()
 
     HINDSIGHT_URL = args.hindsight_url
 
+    if not args.docs_dir:
+        parser.error("configure projects.kubernaut.paths.docs_dir or pass --docs-dir")
     docs_dir = Path(args.docs_dir)
     if not docs_dir.exists():
         print(f"Error: docs directory not found: {docs_dir}", file=sys.stderr)

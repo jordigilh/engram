@@ -14,13 +14,22 @@ Usage:
 
 import argparse
 import json
-import os
 import sys
 import time
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-_config = {"hindsight_url": os.environ.get("HINDSIGHT_URL", "http://localhost:8888")}
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from engram.project_config import (  # noqa: E402
+    DEFAULT_HINDSIGHT_URL,
+    load_default_settings,
+    load_project_configs,
+)
+
+DEPLOYMENT_SETTINGS = load_default_settings()
+HINDSIGHT_URL = DEPLOYMENT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+assert HINDSIGHT_URL is not None
 
 MENTAL_MODELS = [
     # cursor-memory: behavioral patterns (delta, auto-refresh after consolidation)
@@ -388,9 +397,20 @@ MENTAL_MODELS = [
     },
 ]
 
+PROJECT_CONFIGS = load_project_configs()
+_CONFIGURED_MODEL_IDS = {
+    (bank, model_id)
+    for config in PROJECT_CONFIGS.values()
+    for bank, model_ids in config["mental_models"].items()
+    for model_id in model_ids
+}
+MENTAL_MODELS = [
+    model for model in MENTAL_MODELS if (model["bank"], model["id"]) in _CONFIGURED_MODEL_IDS
+]
+
 
 def api_request(method, path, payload=None):
-    url = f"{_config['hindsight_url']}{path}"
+    url = f"{HINDSIGHT_URL}{path}"
     data = json.dumps(payload).encode() if payload else None
     req = Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
     try:
@@ -433,7 +453,7 @@ def refresh_model(bank: str, model_id: str) -> bool:
 
 
 def list_models():
-    banks = ["cursor-memory", "kubernaut-docs", "kubernaut-issues", "dcm-docs", "dcm-issues", "engram-docs", "koku-docs", "koku-issues", "praxis-docs", "praxis-issues", "rhdh-plugins-docs", "rhdh-plugins-issues", "kuadrant-docs", "kuadrant-issues"]
+    banks = sorted({bank for config in PROJECT_CONFIGS.values() for bank in config["banks"]})
     for bank in banks:
         result = api_request("GET", f"/v1/default/banks/{bank}/mental-models")
         items = result.get("items", [])
@@ -476,14 +496,15 @@ def wait_for_refresh(banks_models: list[tuple[str, str]], timeout: int = 300):
 
 
 def main():
+    global HINDSIGHT_URL
     parser = argparse.ArgumentParser(description="Create and refresh Hindsight mental models")
     parser.add_argument("--list", action="store_true", help="List existing mental models")
     parser.add_argument("--refresh", action="store_true", help="Refresh existing models (skip creation)")
     parser.add_argument("--no-wait", action="store_true", help="Don't wait for refresh to complete")
-    parser.add_argument("--hindsight-url", default=_config["hindsight_url"], help="Hindsight API URL")
+    parser.add_argument("--hindsight-url", default=HINDSIGHT_URL, help="Hindsight API URL")
     args = parser.parse_args()
 
-    _config["hindsight_url"] = args.hindsight_url
+    HINDSIGHT_URL = args.hindsight_url
 
     if args.list:
         list_models()

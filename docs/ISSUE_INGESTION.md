@@ -20,27 +20,27 @@ gh auth login
 ```
 
 The account must be able to read every configured repository, including
-private repositories. Configure the repository list and interval in
-`~/.engram/config.env` using the prefix implemented by the flow:
+private repositories. Configure the repository list and interval in the
+project's `~/.engram/projects.toml` table:
 
 ```bash
-<PROJECT>_ISSUES_REPOS=owner/repo,owner/another-repo
-<PROJECT>_ISSUES_POLL_SECONDS=300
+[projects.<project>]
+issues_repos = ["owner/repo", "owner/another-repo"]
+issues_poll_seconds = 300
 ```
 
 For the shipped flows, the relevant settings are:
 
 | Flow | GitHub setting | Notes |
 |------|----------------|-------|
-| `kubernaut` | `ENGRAM_ISSUES_REPOS` | Issues and pull requests |
-| `praxis` | `PRAXIS_ISSUES_REPOS` | Issues and pull requests; Jira keys are also supported |
-| `kuadrant` | `KUADRANT_ISSUES_REPOS` | Issues and pull requests |
-| `dcm` | `DCM_ISSUES_REPOS` | Issues and pull requests |
-| `koku` | `KOKU_PR_REPOS` | Pull requests only; its work items come from Jira |
+| `kubernaut` | `projects.kubernaut.issues_repos` | Issues and pull requests |
+| `praxis` | `projects.praxis.issues_repos` | Issues and pull requests; Jira keys are also supported |
+| `kuadrant` | `projects.kuadrant.issues_repos` | Issues and pull requests |
+| `dcm` | `projects.dcm.issues_repos` | Issues and pull requests |
+| `koku` | `projects.koku.pr_repos` | Pull requests only; its work items come from Jira |
 
-An unset repository variable uses the flow's built-in default. For a new flow,
-make the repository list an environment variable rather than editing the
-source after deployment.
+An unset project table leaves that deployment source unconfigured. For a new
+flow, add a project table rather than editing source after deployment.
 
 ## Jira
 
@@ -88,9 +88,9 @@ Use the settings supported by the selected flow:
 
 | Flow | Jira scope | Settings |
 |------|------------|----------|
-| `praxis` | Explicit tracked keys | `PRAXIS_JIRA_KEYS_FILE`, `PRAXIS_JIRA_KEYS`, `PRAXIS_JIRA_SERVER`, `PRAXIS_JIRA_EMAIL` |
-| `koku` | Jira project, capped to recent work | `KOKU_JIRA_PROJECT`, `KOKU_JIRA_SERVER`, `KOKU_JIRA_EMAIL`, `KOKU_JIRA_LIMIT` |
-| `rhdh-plugins` | Jira epic and its children | `RHDH_PLUGINS_JIRA_EPIC`, `RHDH_PLUGINS_JIRA_SERVER`, `RHDH_PLUGINS_JIRA_EMAIL` |
+| `praxis` | Explicit tracked keys | `projects.praxis.paths.jira_keys_file`, `projects.praxis.jira_keys`, `projects.praxis.jira_server`, `projects.praxis.jira_email` |
+| `koku` | Jira project, capped to recent work | `projects.koku.jira_project`, `projects.koku.jira_server`, `projects.koku.jira_email`, `projects.koku.jira_limit` |
+| `rhdh-plugins` | Jira epic and its children | `projects.rhdh-plugins.jira_epic`, `projects.rhdh-plugins.jira_server`, `projects.rhdh-plugins.jira_email` |
 
 Use a narrow JQL scope for a new Jira integration. Do not ingest an entire
 large Jira project when only one epic or workstream is relevant.
@@ -139,9 +139,10 @@ launchctl kickstart -k "gui/$(id -u)/io.vectorize.cocoindex.<project>"
 ```
 
 The plist should run the installed `engram-flows-<project>` console script via
-`~/.engram/with-config-env.sh`, set the project's Hindsight/Postgres values,
-and pass `--apps issues` or the full app set. Deployment-specific paths and
-source mirror configuration belong under `~/.engram`, not in this repository.
+`~/.engram/with-config-env.sh` may still provide service credentials, but the
+project's Hindsight/Postgres values and paths come from `projects.toml`; pass
+`--apps issues` or the full app set. Deployment-specific paths and source
+mirror configuration belong under `~/.engram`, not in this repository.
 
 ## Verify
 

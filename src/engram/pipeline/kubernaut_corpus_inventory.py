@@ -13,8 +13,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from engram.incident.artifact_selection import is_must_gather
+from engram.project_config import load_project_settings
 
 DOWNSTREAM_JOB_RE = re.compile(r"summary|merge.?gate|report", re.IGNORECASE)
+PROJECT_SETTINGS = load_project_settings("kubernaut")
+DEFAULT_REPOSITORY = PROJECT_SETTINGS.text("rca_repository")
 
 
 @dataclass(frozen=True)
@@ -131,11 +134,13 @@ class GitHubActionsClient:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", default="jordigilh/kubernaut")
+    parser.add_argument("--repo", default=DEFAULT_REPOSITORY)
     parser.add_argument("--limit", type=int, default=25)
     parser.add_argument("--run-id", type=int, default=None)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if not args.repo:
+        parser.error("configure projects.kubernaut.rca_repository or pass --repo")
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
         parser.error("GH_TOKEN or GITHUB_TOKEN is required")

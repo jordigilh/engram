@@ -62,6 +62,15 @@ from cocoindex.resources.file import PatternFilePathMatcher
 # be run via `-m`/an installed console script (not yet true in this repo).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
 from engram import chunking  # noqa: E402
+from engram.project_config import (  # noqa: E402
+    DEFAULT_HINDSIGHT_URL,
+    DEFAULT_PG_DSN,
+    DEFAULT_POOL_MAX_SIZE,
+    DEFAULT_POOL_MIN_SIZE,
+    default_project_path,
+    load_project_settings,
+    sql_identifier,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -69,12 +78,16 @@ logging.basicConfig(
 )
 log = logging.getLogger("kuadrant-cocoindex-flows")
 
-HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
+PROJECT_SETTINGS = load_project_settings("kuadrant")
+HINDSIGHT_URL = PROJECT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+assert HINDSIGHT_URL is not None
+CODE_TABLE = sql_identifier(
+    PROJECT_SETTINGS.text("code_table", "kuadrant_code_embeddings") or "kuadrant_code_embeddings",
+    "project 'kuadrant' code_table",
+)
 
-KUADRANT_ORG_DIR = pathlib.Path(os.environ.get(
-    "KUADRANT_ORG_DIR",
-    os.path.expanduser("~/go/src/github.com/Kuadrant"),
-))
+KUADRANT_ORG_DIR = PROJECT_SETTINGS.path("org_dir", str(default_project_path("kuadrant")))
+assert KUADRANT_ORG_DIR is not None
 
 # Single source of truth for docs/code/issues ingestion: (local checkout dir
 # name, upstream "org/repo" name, language). language is "go"/"rust" for
@@ -82,22 +95,14 @@ KUADRANT_ORG_DIR = pathlib.Path(os.environ.get(
 # (RFC/design-doc repo with no source code at all -- contributes to docs and
 # issues only).
 KUADRANT_REPOS: list[tuple[str, str, str | None]] = [
-    ("kuadrant-operator", "Kuadrant/kuadrant-operator", "go"),
-    ("limitador", "Kuadrant/limitador", "rust"),
-    ("wasm-shim", "Kuadrant/wasm-shim", "rust"),
-    ("architecture", "Kuadrant/architecture", None),
-    ("authorino", "Kuadrant/authorino", "go"),
-    ("dns-operator", "Kuadrant/dns-operator", "go"),
-    ("authorino-operator", "Kuadrant/authorino-operator", "go"),
-    ("limitador-operator", "Kuadrant/limitador-operator", "go"),
-    ("mcp-gateway", "Kuadrant/mcp-gateway", "go"),
+    (str(entry["name"]), str(entry["upstream"]), entry.get("language"))
+    for entry in PROJECT_SETTINGS.records("repositories")
 ]
 
-ISSUES_REPOS = os.environ.get(
-    "KUADRANT_ISSUES_REPOS",
-    ",".join(upstream for _, upstream, _ in KUADRANT_REPOS),
-).split(",")
-ISSUES_POLL_INTERVAL = int(os.environ.get("KUADRANT_ISSUES_POLL_SECONDS", "300"))
+ISSUES_REPOS = list(PROJECT_SETTINGS.strings(
+    "issues_repos", tuple(upstream for _, upstream, _ in KUADRANT_REPOS)
+))
+ISSUES_POLL_INTERVAL = PROJECT_SETTINGS.integer("issues_poll_seconds", 300)
 
 # docs_main and code_main walk the SAME repo roots (every KUADRANT_REPOS dir,
 # recursively). Running both with live=True registers two macOS FSEvents
@@ -109,27 +114,23 @@ ISSUES_POLL_INTERVAL = int(os.environ.get("KUADRANT_ISSUES_POLL_SECONDS", "300")
 # therefore runs as a periodic fingerprint scan instead of a second live
 # watcher -- cocoindex skips unchanged files, and freshness stays within
 # CODE_POLL_INTERVAL. docs_app keeps the one live watcher.
-CODE_POLL_INTERVAL = int(os.environ.get("KUADRANT_CODE_POLL_SECONDS", "300"))
+CODE_POLL_INTERVAL = PROJECT_SETTINGS.integer("code_poll_seconds", 300)
 
 # How often to `git pull --ff-only` every checkout under KUADRANT_ORG_DIR --
 # see module docstring. 6h default: frequent enough that "kept up to date"
 # is true in practice, infrequent enough not to hammer GitHub across 9 repos
 # on every gateway restart.
-GIT_SYNC_INTERVAL_SECONDS = int(os.environ.get("KUADRANT_GIT_SYNC_SECONDS", str(6 * 3600)))
+GIT_SYNC_INTERVAL_SECONDS = PROJECT_SETTINGS.integer("git_sync_seconds", 6 * 3600)
 
-PG_DSN = os.environ.get(
-    "COCOINDEX_PG_URL",
-    "postgresql://hindsight:hindsight@localhost:5432/hindsight",
-)
+PG_DSN = PROJECT_SETTINGS.text("pg_dsn", DEFAULT_PG_DSN)
+assert PG_DSN is not None
 # See cocoindex-flows.py's PG_POOL_MIN_SIZE/MAX_SIZE comment (docs/FINDINGS.md
 # 2026-08-03) -- asyncpg's own min_size=10/max_size=10 default is oversized
 # for this pool's light, bursty pgvector-upsert-only workload.
-PG_POOL_MIN_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MIN_SIZE", "2"))
-PG_POOL_MAX_SIZE = int(os.environ.get("COCOINDEX_PG_POOL_MAX_SIZE", "5"))
-COCOINDEX_DB = pathlib.Path(os.environ.get(
-    "COCOINDEX_DB",
-    os.path.expanduser("~/.engram/kuadrant-cocoindex.db"),
-))
+PG_POOL_MIN_SIZE = PROJECT_SETTINGS.integer("pg_pool_min_size", DEFAULT_POOL_MIN_SIZE)
+PG_POOL_MAX_SIZE = PROJECT_SETTINGS.integer("pg_pool_max_size", DEFAULT_POOL_MAX_SIZE)
+COCOINDEX_DB = PROJECT_SETTINGS.path("cocoindex_db", "~/.engram/kuadrant-cocoindex.db")
+assert COCOINDEX_DB is not None
 
 # Unique per-file ContextKey name -- see engram-cocoindex-flows.py's PG_POOL
 # comment / dcm-cocoindex-flows.py's PG_POOL comment for the full rationale.
@@ -481,18 +482,18 @@ async def code_main(org_dir: pathlib.Path) -> None:
         },
     )
     table = await postgres.mount_table_target(
-        PG_POOL, "kuadrant_code_embeddings", schema, pg_schema_name="cocoindex",
+        PG_POOL, CODE_TABLE, schema, pg_schema_name="cocoindex",
     )
     table.declare_vector_index(column="embedding", metric="cosine")
 
     table.declare_sql_command_attachment(
         name="fts_search_vector",
-        setup_sql="""
-            ALTER TABLE cocoindex.kuadrant_code_embeddings
+        setup_sql=f"""
+            ALTER TABLE cocoindex.{CODE_TABLE}
                 ADD COLUMN IF NOT EXISTS search_vector tsvector;
 
-            CREATE INDEX IF NOT EXISTS idx_kuadrant_code_embeddings_fts
-                ON cocoindex.kuadrant_code_embeddings USING gin(search_vector);
+            CREATE INDEX IF NOT EXISTS idx_{CODE_TABLE}_fts
+                ON cocoindex.{CODE_TABLE} USING gin(search_vector);
 
             CREATE OR REPLACE FUNCTION cocoindex.update_kuadrant_code_search_vector()
             RETURNS trigger AS $$
@@ -504,24 +505,24 @@ async def code_main(org_dir: pathlib.Path) -> None:
             $$ LANGUAGE plpgsql;
 
             DROP TRIGGER IF EXISTS trg_kuadrant_code_search_vector
-                ON cocoindex.kuadrant_code_embeddings;
+                ON cocoindex.{CODE_TABLE};
             CREATE TRIGGER trg_kuadrant_code_search_vector
                 BEFORE INSERT OR UPDATE OF search_text, filepath
-                ON cocoindex.kuadrant_code_embeddings
+                ON cocoindex.{CODE_TABLE}
                 FOR EACH ROW
                 EXECUTE FUNCTION cocoindex.update_kuadrant_code_search_vector();
 
-            UPDATE cocoindex.kuadrant_code_embeddings
+            UPDATE cocoindex.{CODE_TABLE}
             SET search_vector = to_tsvector('simple',
                 coalesce(search_text, code, '') || ' ' || coalesce(filepath, ''))
             WHERE search_vector IS NULL;
         """,
-        teardown_sql="""
+        teardown_sql=f"""
             DROP TRIGGER IF EXISTS trg_kuadrant_code_search_vector
-                ON cocoindex.kuadrant_code_embeddings;
+                ON cocoindex.{CODE_TABLE};
             DROP FUNCTION IF EXISTS cocoindex.update_kuadrant_code_search_vector();
-            DROP INDEX IF EXISTS cocoindex.idx_kuadrant_code_embeddings_fts;
-            ALTER TABLE cocoindex.kuadrant_code_embeddings
+            DROP INDEX IF EXISTS cocoindex.idx_{CODE_TABLE}_fts;
+            ALTER TABLE cocoindex.{CODE_TABLE}
                 DROP COLUMN IF EXISTS search_vector;
         """,
     )

@@ -12,8 +12,8 @@
     </array>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>COCOINDEX_PG_URL</key>
-        <string>postgresql://hindsight:hindsight@localhost:5432/hindsight</string>
+        <!-- Project paths and database settings are loaded from
+             __HOME__/.engram/projects.toml. -->
         <key>PATH</key>
         <string>__HOME__/.engram/venv/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
         <key>HOME</key>

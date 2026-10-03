@@ -8,7 +8,7 @@ For the chronological story — the spike, the bugs found, per-language findings
 precision measurements, and per-org rollout numbers — see
 [`docs/CALL_GRAPH_CLUSTERING.md`](CALL_GRAPH_CLUSTERING.md) instead. For setup,
 running modes, and operational concerns (caching setup, branch scoping), see
-[`docs/COCOINDEX.md`'s Call-Graph Queries section](COCOINDEX.md#call-graph-queries).
+[`docs/COCOINDEX.md`'s Call-Graph Queries section](COCOINDEX.md#graphify-inspired-call-graph-queries).
 
 All of this lives in one module: `src/engram/callgraph.py`.
 

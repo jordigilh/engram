@@ -1,4 +1,4 @@
-# systemd unit (native, Linux) -- runs the full nightly-learn.py pass
+# systemd unit (native, Linux) -- runs the full engram-nightly-learn pass
 # (correction extraction, contradiction resolution, consolidation).
 # Direct analog of launchd/io.vectorize.hindsight.nightly.plist.
 #
@@ -20,6 +20,6 @@ Type=oneshot
 WorkingDirectory=%h/.engram
 EnvironmentFile=%h/.engram/config.env
 Environment=GOOGLE_APPLICATION_CREDENTIALS=%h/.config/gcloud/application_default_credentials.json
-ExecStart=%h/.engram/venv/bin/python3 %h/.engram/nightly-learn.py --mode nightly
+ExecStart=%h/.engram/venv/bin/engram-nightly-learn --mode nightly
 StandardOutput=append:%h/.engram/logs/launchd-stdout.log
 StandardError=append:%h/.engram/logs/launchd-stderr.log

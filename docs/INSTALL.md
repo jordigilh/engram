@@ -3,9 +3,9 @@
 > **On Linux/Fedora/RHEL?** This guide covers the macOS-native install
 > (Hindsight runs as a bare process, no container). See
 > [`INSTALL-linux.md`](INSTALL-linux.md) instead for the platform-specific
-> steps (containerized Hindsight via Podman Quadlets, batch scripts via
-> systemd timers) — steps 1–3 and 7 onward below are identical on both
-> platforms and that guide links back here for them.
+> steps (containerized Hindsight via Podman Quadlets and native Engram services
+> via systemd) — the platform-agnostic sections below apply on both platforms,
+> and that guide links back here for them.
 
 ## Prerequisites
 
@@ -19,7 +19,7 @@
 - Google Cloud SDK (`gcloud`) with Application Default Credentials configured
 - Vertex AI API enabled on your GCP project
 - Claude models enabled on Vertex AI (Haiku 4.5 + Sonnet 4.6)
-- Cursor IDE
+- OpenCode/OpenChamber (Cursor rules/hooks remain optional)
 
 ## 1. Clone the project
 
@@ -48,9 +48,10 @@ Edit `~/.engram/config.env` and fill in your GCP project ID:
 $EDITOR ~/.engram/config.env
 ```
 
-> **Important**: `~/.engram/config.env` contains your real project IDs and stays
-> local. It is never committed to this repo. The pre-commit hook will block any
-> attempt to commit actual project IDs.
+> **Important**: `~/.engram/config.env` contains runtime credentials, secrets,
+> and LLM settings and stays local. Deployment paths, repositories, index policy,
+> and RCA settings belong in `~/.engram/projects.toml`; neither populated file
+> is committed to this repo.
 
 ## 4. Install Hindsight (native)
 
@@ -72,7 +73,7 @@ By default `hindsight-api` starts, stops, and health-checks its own embedded
 Postgres (`pg0`) as part of its own process lifecycle. This is fine for a
 quick single-user trial, but on a machine running CocoIndex too (which shares
 this same Postgres instance/database for its pgvector tables — see
-`COCOINDEX_PG_URL` in step 16) and running `hindsight-api` as an unattended
+`defaults.pg_dsn` in `~/.engram/projects.toml`) and running `hindsight-api` as an unattended
 launchd service (step 5), it couples Postgres's uptime to two independent
 failure modes that have nothing to do with Postgres itself: a `pg0` liveness
 check that can false-positive on a stale/reused PID, and any future script
@@ -120,9 +121,9 @@ This sources `~/.engram/config.env` and runs the native `hindsight-api` binary.
 
 For production, install as a launchd service (auto-start on login, auto-restart
 on crash). First install the shared env wrapper — **every** launchd plist that
-runs a process needing LLM config (`hindsight-api` itself, `nightly-learn.py`,
-`cocoindex-flows.py`, `prefilter-shadow-trial.py`) launches through this wrapper
-instead of having `VERTEXAI_PROJECT`/`GOOGLE_CLOUD_PROJECT`/model names baked into
+runs a process needing LLM config (`hindsight-api`, `engram-nightly-learn`,
+`engram-flows-*`, and `prefilter-shadow-trial.py`) launches through this wrapper
+instead of having deployment-specific credentials or project IDs baked into
 the plist:
 
 ```bash
@@ -130,10 +131,11 @@ cp with-config-env.sh ~/.engram/with-config-env.sh
 chmod +x ~/.engram/with-config-env.sh
 ```
 
-> **Why not hardcode it into the plist?** `~/.engram/config.env` is the only
-> place these values should ever live — plists under `launchd/` are committed to
-> this (public) repo, so nothing project/LLM-specific gets baked in at generation
-> time. `with-config-env.sh` sources `config.env` fresh into the process
+> **Why not hardcode it into the plist?** `~/.engram/config.env` and
+> `~/.engram/projects.toml` are the only places these deployment values should
+> live — plists under `launchd/` are committed to this (public) repo, so nothing
+> project/LLM-specific gets baked in at generation time. `with-config-env.sh`
+> sources `config.env` fresh into the process
 > environment every time launchd starts the job, so it's read once, in one
 > place, always current. See [FINDINGS.md](FINDINGS.md) 2026-07-27 for the
 > production incident this replaced (launchd jobs silently running against a
@@ -142,8 +144,8 @@ chmod +x ~/.engram/with-config-env.sh
 
 `hindsight-api` runs as a **blue/green pair** behind a small always-on proxy,
 not as a single service — this is what lets the nightly heap-reclaim restart
-(step 15 below) happen without ever dropping Cursor's MCP connection to port
-8888 (see [FINDINGS.md](FINDINGS.md) 2026-08-02 for why). Symlink the proxy
+(step 15 below) happen without ever dropping the gateway-backed MCP connection to port
+8888 (see [FINDINGS.md](FINDINGS.md) 2026-08-02 for why). Install the proxy
 and swap script, then install all three plists (proxy + both colors):
 
 ```bash
@@ -154,7 +156,7 @@ mkdir -p ~/.engram/state
 for name in proxy service-blue service-green; do
   sed "s|__HOME__|$HOME|g" \
       "launchd/io.vectorize.hindsight.${name}.plist" \
-      > "~/Library/LaunchAgents/io.vectorize.hindsight.${name}.plist"
+       > "$HOME/Library/LaunchAgents/io.vectorize.hindsight.${name}.plist"
 done
 
 # "blue" (internal port 18888) is the initial active color.
@@ -166,7 +168,7 @@ launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.proxy.plist
 
 > **Why not just one `service.plist`?** A single process bound directly to
 > 8888 means the nightly restart has to unbind that port for the ~15-20s it
-> takes to come back up — and Cursor's HTTP MCP client doesn't auto-retry
+> takes to come back up — and an HTTP MCP client doesn't auto-retry
 > after a drop, so every restart silently disabled the hindsight MCP tools
 > until a manual reload. With the proxy owning 8888 permanently and
 > `hindsight-blue-green-restart.sh` starting a fresh instance on the
@@ -217,8 +219,8 @@ curl -s -X POST http://localhost:8888/v1/default/banks/cursor-memory/memories/re
 ## 7. Configure OpenCode
 
 Configure the OpenCode plugin and unified Engram gateway as described in
-[`OPENCODE.md`](OPENCODE.md). Engram no longer ships or supports Cursor MCP
-configuration files.
+[`OPENCODE.md`](OPENCODE.md). Keep one project-scoped gateway route and let the
+plugin own the backend connections.
 
 ## 8. Install Cursor rule
 
@@ -242,7 +244,7 @@ python3 check-rule-sync.py --fix    # copies canonical -> deployed on drift
 ## 9. Install the engram package
 
 Everything under `src/engram/` (shared modules, per-project CocoIndex flows/
-search, the nightly-learn pipeline, maintenance scripts) is a real, pip-
+search, the learning pipeline, maintenance scripts) is a real, pip-
 installable package now — one editable install replaces the old per-module
 symlinking (`correction_gate.py`, `contradiction_resolution.py`,
 `project_scope.py`, and a `spike/` path hack are no longer symlinked
@@ -255,76 +257,29 @@ uv pip install --python ~/.engram/venv/bin/python -e .
 uv pip install --python ~/.engram/venv/bin/python 'google-cloud-aiplatform>=1.38'
 ```
 
-This also generates 13 console scripts in `~/.engram/venv/bin/` for the
-launchd-invoked entry points: `engram-flows-*` (one per onboarded project),
-`engram-search-*`, `engram-nightly-learn`, `engram-ingest-issues`, and
-`engram-hindsight-proxy`. Manual/on-demand tools (`ingest-docs`, `report`,
-`review-contradictions`, the `backfill-*`/`purge-*` scripts, etc.) aren't
-console scripts — invoke those as `python3 -m engram.<subpackage>.<module>`,
-e.g. `python3 -m engram.maintenance.report` (step 18/[METRICS.md](METRICS.md)).
+This generates the console scripts used by the launchd templates:
+`engram-flows-*`, `engram-search-*`, `engram-nightly-learn`, and the shared
+service entry points. Manual tools such as reports and backfills can be run as
+`python3 -m engram.<subpackage>.<module>`.
 
-The launchd plists installed in the next step still invoke the older
-`~/.engram/nightly-learn.py` / `ingest-issues.py` symlink paths rather
-than these new console scripts directly (a planned follow-up will switch
-them over and retire the symlinks — not yet done), so keep those two
-symlinks pointed at the package's new location:
+Project source paths and transcript prefixes are deployment settings. Add them
+to `~/.engram/projects.toml`; do not edit `project_scope.py` or add path
+environment variables for a new project.
 
-```bash
-ln -sf "$(pwd)/src/engram/pipeline/nightly_learn.py" ~/.engram/nightly-learn.py
-ln -sf "$(pwd)/src/engram/pipeline/ingest_issues.py" ~/.engram/ingest-issues.py
-```
+## 10. Schedule always-on services with launchd
 
-> **Customize for your projects**: `engram.project_scope`'s
-> `ALLOWED_WORKSPACE_PREFIXES` hardcodes which Cursor workspaces feed the
-> shared `cursor-memory` retain pipeline (currently kubernaut/dcm/engram/koku/
-> praxis). Edit `src/engram/project_scope.py` to match your own project(s)
-> before deploying — otherwise the nightly pipeline and the `engram-flows-*`
-> scripts will retain nothing (or the wrong projects' transcripts) from your
-> workspaces. See [FINDINGS.md](../docs/FINDINGS.md) 2026-07-13 for why this
-> allowlist exists.
-
-## 10. Schedule with launchd
-
-Install the plist (replacing `__HOME__` with your home directory):
-
-```bash
-sed "s|__HOME__|$HOME|g" launchd/io.vectorize.hindsight.nightly.plist \
-  > ~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist
-
-launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist
-```
-
-Do the same for the hourly retain-only job:
-
-```bash
-sed "s|__HOME__|$HOME|g" launchd/io.vectorize.hindsight.hourly.plist \
-  > ~/Library/LaunchAgents/io.vectorize.hindsight.hourly.plist
-
-launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.hourly.plist
-```
-
-> **Note:** both the hourly and nightly plists run `~/.engram/nightly-learn.py`
-> (a symlink into `src/engram/pipeline/nightly_learn.py` -- see step 9) under
-> `~/.engram/venv/bin/python3`, not the macOS system Python. This is
-> required because `engram.correction_gate` (via `engram.classify`) calls
-> `litellm`, which is only installed in the Hindsight venv. If you ever
-> revert to `ENGRAM_CORRECTION_DETECTOR=regex` full-time, the venv requirement
-> goes away, but there's no harm in leaving it pointed at the venv either way.
-> **Planned follow-up**: these plists will eventually be switched to invoke
-> the `engram-nightly-learn` console script (generated by step 9's install)
-> directly instead of this symlink -- tracked as its own change, not yet done.
+The Hindsight service and the project-specific CocoIndex flow are the
+always-on services. LLM learning, reflection, and triage are intentionally
+on-demand; do not enable the legacy hourly/nightly learning plists by default.
+Use `engram-nightly-learn` manually when a deliberate maintenance run is
+wanted.
 
 ## 11. Ingest project documentation (Knowledge RAG)
 
-This creates a `kubernaut-docs` knowledge bank and ingests the published documentation
-for embedding-based recall (zero LLM cost):
-
-```bash
-python3 -m engram.pipeline.ingest_docs --docs-dir ~/go/src/github.com/jordigilh/kubernaut-docs/docs
-```
-
-The script creates the bank, configures `chunks` extraction mode, and ingests all
-markdown files. This only needs to be run once (or re-run when docs are updated).
+Documentation is owned by the project's CocoIndex flow. For a new project, use
+the [backfill-before-live checklist](NEW_PROJECT_SETUP.md#install-backfill-and-start-the-flow)
+or run the configured flow with `--mode backfill --apps docs`; do not use a
+standalone importer for the normal deployment path.
 
 ## 12. Ingest issues (Knowledge RAG)
 
@@ -333,28 +288,7 @@ GitHub/Jira configuration, credential setup, immediate backfill, LaunchAgent
 startup, and verification procedure is documented in
 [`ISSUE_INGESTION.md`](ISSUE_INGESTION.md).
 
-For the legacy standalone Kubernaut GitHub importer only, the old command is:
-
-```bash
-~/.engram/venv/bin/engram-ingest-issues
-```
-
-Options:
-- `--open-only` — skip closed issues
-- `--days 180` — include closed issues from last 180 days (default: 90)
-- `--repo org/other-repo` — target a different repository
-
-This legacy command is not the normal path for a CocoIndex-managed project.
-Re-run periodically only when maintaining that legacy deployment. The script
-uses `document_id` per issue, so re-ingestion is idempotent. To schedule it
-nightly (daily at 1:00 AM):
-
-```bash
-sed "s|__HOME__|$HOME|g" launchd/io.vectorize.hindsight.issues.plist \
-  > ~/Library/LaunchAgents/io.vectorize.hindsight.issues.plist
-
-launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.issues.plist
-```
+Do not use the retired standalone importer for a CocoIndex-managed project.
 
 ## 13. Create mental models (Knowledge Graph)
 
@@ -366,34 +300,30 @@ for the agent to synthesize scattered individual facts at query time.
 python3 -m engram.maintenance.create_mental_models
 ```
 
-This creates 9 mental models across all three banks and triggers initial refresh
-(~$0.50 total, one-time Sonnet 4.6 cost). To check status:
+This creates and refreshes the models configured for the deployment (the
+reference Kubernaut setup has 9 models; initial refresh costs about $0.50 with
+Sonnet 4.6). To check status:
 
 ```bash
 python3 -m engram.maintenance.create_mental_models --list
 ```
 
-Behavioral models (in `cursor-memory`) auto-refresh after nightly consolidation.
-Issues-bank models refresh nightly (after issue ingestion at 1:00 AM). Docs-bank
-models refresh manually when documentation is updated:
+Behavioral, issue, and docs models refresh during an explicit maintenance run.
+Refresh them manually after documentation or issue scope changes:
 
 ```bash
 python3 -m engram.maintenance.create_mental_models --refresh
 ```
 
-## 14. Install gopls MCP for Go code intelligence
-
-```bash
-go install golang.org/x/tools/gopls@latest
-```
+## 14. Configure code intelligence
 
 Type-aware code intelligence is provided by the gateway's Serena backend through
-the OpenCode plugin; do not configure a separate Cursor MCP `gopls` entry.
+the OpenCode plugin. Do not configure a separate `gopls` entry; see
+[OpenCode Integration](OPENCODE.md).
 
 ## 15. Install the observability hook
 
-This hook logs every MCP call (hindsight, hindsight-docs, hindsight-issues, gopls)
-for effectiveness monitoring:
+This hook logs MCP calls through the Engram gateway for effectiveness monitoring:
 
 ```bash
 mkdir -p ~/.cursor/hooks
@@ -402,10 +332,10 @@ chmod +x ~/.cursor/hooks/log-mcp-calls.sh
 sed "s|__HOME__|$HOME|g" cursor/hooks.json > ~/.cursor/hooks.json
 ```
 
-## 16. CocoIndex Setup
+## 16. CocoIndex Setup (macOS launchd)
 
-CocoIndex replaces the batch ingestion scripts (`ingest-docs.py`, `ingest-issues.py`)
-with continuous, incremental sync for docs, issues, code, and transcripts.
+CocoIndex replaces legacy batch importers with continuous, incremental sync for
+docs, issues, code, and transcripts.
 
 ### Install CocoIndex into the Engram venv
 
@@ -424,40 +354,37 @@ undeclared transitive dependency:
 uv pip install --python ~/.engram/venv/bin/python pdfplumber
 ```
 
-### Symlink flow and search scripts (for launchd)
+### Configure and backfill
 
-```bash
-ln -sf "$(pwd)/src/engram/flows/kubernaut.py" ~/.engram/cocoindex-flows.py
-ln -sf "$(pwd)/src/engram/search/kubernaut.py" ~/.engram/cocoindex-search.py
-```
-
-The launchd plist installed further down invokes these by their `~/.engram/`
-symlink path, not the `engram-flows-kubernaut`/`engram-search-kubernaut`
-console scripts step 9's install already generated in
-`~/.engram/venv/bin/` -- use those console scripts directly for any manual
-runs (e.g. the backfill command below), and keep this symlink pair current
-for the launchd-managed continuous-sync job. (A planned follow-up will
-switch the plist itself to invoke the console script directly and retire
-this symlink -- not yet done.) `engram.flows.kubernaut` imports
-`engram.correction_gate`, `engram.contradiction_resolution`,
-`engram.project_scope`, and `engram.chunking` (the shared, content-stable
-chunking module — heading-anchored doc splitting, comment-ordinal issue/PR
-splitting — that replaced each flow's own positional-offset `_split_text()`
-on 2026-08-03 to stop cascading re-embeds; see
-[FINDINGS.md](../docs/FINDINGS.md) 2026-08-03) all as ordinary package
-imports now, so — unlike before the package restructure — there's no risk
-of a `ModuleNotFoundError` from a forgotten shared-module symlink.
+The launchd templates invoke the installed `engram-flows-*` and
+`engram-search-*` console scripts directly; no flow or search symlinks are
+needed. Configure source paths in `~/.engram/projects.toml`, run a backfill,
+then install the matching continuous-sync plist. For a new project, use
+[`NEW_PROJECT_SETUP.md`](NEW_PROJECT_SETUP.md).
 
 ### Configure source directories
 
-Add the following to `~/.engram/config.env`:
+Copy `docs/projects.toml.example` to `~/.engram/projects.toml` and configure the
+`[projects.kubernaut.paths]` table:
 
-```bash
-ENGRAM_DOCS_DIR=~/go/src/github.com/jordigilh/kubernaut-docs/docs
-ENGRAM_CODE_DIR=~/go/src/github.com/jordigilh/kubernaut
-# Optional: issues poll interval in seconds (default: 300 = 5 min)
-# ENGRAM_ISSUES_POLL_SECONDS=300
+```toml
+[projects.kubernaut]
+issues_repos = [
+  "jordigilh/kubernaut",
+  "jordigilh/kubernaut-operator",
+  "jordigilh/kubernaut-console",
+  "jordigilh/kubernaut-demo-scenarios",
+  "jordigilh/kubernaut-docs",
+]
+issues_poll_seconds = 300
+
+[projects.kubernaut.paths]
+docs_dir = "~/.engram/watch/kubernaut-docs/docs"
+code_dir = "~/go/src/github.com/jordigilh/kubernaut"
 ```
+
+Keep `~/.engram/config.env` for service credentials and Hindsight runtime
+settings; repository paths and project routing belong in `projects.toml`.
 
 ### Run initial backfill
 
@@ -469,6 +396,10 @@ This processes all existing docs, issues, code, and transcripts. Subsequent runs
 use delta processing (only changed content is re-ingested).
 
 ### Install launchd plist (continuous sync)
+
+On Linux, use the `engram-cocoindex.service` systemd unit from
+[`INSTALL-linux.md`](INSTALL-linux.md#8-schedule-the-always-on-ingestion-service)
+instead of installing this launchd plist.
 
 ```bash
 sed "s|__HOME__|$HOME|g" launchd/io.vectorize.cocoindex.service.plist \
@@ -496,54 +427,29 @@ issue poll cycles completing with the full count of issues + PRs. See
 > call-graph queries) alongside `--query`/`--pattern` above -- no extra setup
 > needed, they reuse the same live checkout. kubernaut specifically caches
 > its (larger, slower-to-build) graph in Postgres rather than rebuilding on
-> every call, using the `COCOINDEX_PG_URL` connection already configured
+> every call, using the `defaults.pg_dsn` connection already configured
 > above -- no new service to install. See
-> [CocoIndex Operations](COCOINDEX.md#call-graph-queries) for why Postgres
+> [CocoIndex Operations](COCOINDEX.md#graphify-inspired-call-graph-queries) for why Postgres
 > was chosen over a dedicated cache service, and for kubernaut's
 > `main`/`release-vX.Y` branch-scoping behavior.
 
-> **Onboarding additional projects**: the steps above cover the original
-> kubernaut project's `engram.flows.kubernaut` / `engram.search.kubernaut`
-> pair. Each additional onboarded project gets its own
-> `src/engram/flows/<project>.py` / `src/engram/search/<project>.py` module
-> pair (see `src/engram/flows/engram.py` / `src/engram/search/engram.py` for
-> a real example), a matching `engram-flows-<project>` /
-> `engram-search-<project>` console-script entry in `pyproject.toml`, a
-> `~/.engram/<project>-cocoindex-flows.py` / `-search.py` symlink pair
-> (same reasoning as the kubernaut symlinks above -- launchd needs these
-> until the plist cutover), and its own `launchd` plist. See
-> [NEW_PROJECT_SETUP.md](NEW_PROJECT_SETUP.md) for the full walkthrough,
-> including a lighter tag-scoped-recall variant for sub-repos of an
-> already-onboarded project that don't need a fully separate pipeline.
+> **Onboarding additional projects**: each project gets its own flow/search
+> modules, console-script entries, deployment table, and flow plist. There is
+> no per-project flow or search symlink. See
+> [NEW_PROJECT_SETUP.md](NEW_PROJECT_SETUP.md) for the checklist, including
+> the tag-scoped variant for sub-repos that do not need a separate pipeline.
 
-## 17. Migration from Old Scripts
+## 17. Reload the client
 
-After verifying CocoIndex is syncing successfully, the old batch ingestion
-scripts are no longer needed:
-
-```bash
-# Unload the old issues ingestion plist
-launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.issues.plist
-rm ~/Library/LaunchAgents/io.vectorize.hindsight.issues.plist
-```
-
-The old scripts (`engram.pipeline.ingest_docs` and `engram.pipeline.ingest_issues`)
-remain in the package for reference but are superseded by CocoIndex flows. You
-can verify data parity by comparing recall results before and after migration —
-CocoIndex ingests the same content through the Hindsight retain API, so recall
-quality should be identical or better (due to continuous freshness).
-
-## 18. Restart Cursor
-
-Reload the Cursor window (or restart the app) so it picks up the new MCP config,
-rule, and hook.
+Reload the OpenCode/OpenChamber host after changing the gateway route, plugin,
+rule, or hook configuration.
 
 ## Verification
 
-After restarting Cursor, open a new chat. The agent should now call `recall_memory`
-before responding.
+After restarting the OpenCode/OpenChamber host, open a new chat. The agent
+should now call `recall_memory` before responding.
 
-To manually test the nightly pipeline:
+To manually test a maintenance run:
 
 ```bash
 ~/.engram/venv/bin/engram-nightly-learn
@@ -623,10 +529,12 @@ tail -50 ~/.engram/logs/hindsight-stderr.log
 ```
 
 ### Recall returns empty results
-The memory bank needs at least one retained item. Run the nightly script manually or retain a test memory.
+The memory bank needs at least one retained item. Run `engram-nightly-learn`
+manually or retain a test memory.
 
 ### Retain fails with "Could not resolve project_id"
-Ensure `VERTEXAI_PROJECT` and `GOOGLE_CLOUD_PROJECT` are set in `~/.engram/config.env`.
+Ensure `defaults.gcp_project` is set in `~/.engram/projects.toml`, or set
+`VERTEXAI_PROJECT` and `GOOGLE_CLOUD_PROJECT` in `~/.engram/config.env`.
 
 ### Reflect returns 404
 Sonnet 4.6 on the global endpoint requires the model name WITHOUT a version suffix. Use `vertex_ai/claude-sonnet-4-6`, not `vertex_ai/claude-sonnet-4-6@20250929`.
@@ -661,7 +569,7 @@ uv pip install --python ~/.engram/hindsight-venv/bin/python 'hindsight-api==0.10
 
 The blue/green swap above starts the new package version on the standby
 color, health-checks it, then cuts over — so the upgrade itself never drops
-Cursor's MCP connection either.
+the gateway-backed client connection either.
 
 Verify after upgrade:
 
@@ -674,7 +582,7 @@ curl -s http://localhost:8888/health | python3 -m json.tool
 ## Customizing the Rule
 
 The included `hindsight-memory.mdc` rule is tailored for kubernaut (a Go operator
-project with CocoIndex code search and gopls). Adapt it for your own project
+project with CocoIndex search and gateway-provided Serena). Adapt it for your own project
 by copying one of the ready-made examples below and tweaking the domain triggers.
 
 ### Ready-made examples
@@ -685,7 +593,7 @@ already wired in:
 
 | Example | Stack | File |
 |---------|-------|------|
-| Go operator | Go, K8s, CRDs, gopls, CocoIndex | [`cursor/examples/go-operator.mdc`](../cursor/examples/go-operator.mdc) |
+| Go operator | Go, K8s, CRDs, Serena, CocoIndex | [`cursor/examples/go-operator.mdc`](../cursor/examples/go-operator.mdc) |
 | Python web app | Python, Django/Flask/FastAPI, CocoIndex | [`cursor/examples/python-web.mdc`](../cursor/examples/python-web.mdc) |
 | Rust systems | Rust, unsafe, traits, crates, CocoIndex | [`cursor/examples/rust-systems.mdc`](../cursor/examples/rust-systems.mdc) |
 | TypeScript/React | TS, React, components, hooks, CocoIndex | [`cursor/examples/typescript-react.mdc`](../cursor/examples/typescript-react.mdc) |
@@ -717,24 +625,24 @@ the kubernaut project:
    conventions
 4. **Code search via CocoIndex** — directs the agent to use `cocoindex_search`
    for semantic code exploration (finding code by concept/meaning) instead of
-   relying on Grep/SemanticSearch. Requires CocoIndex setup (step 16 above)
+   relying on Grep/SemanticSearch. Requires the CocoIndex setup above.
 5. **Phase-based triggers** — recall the right bank or call `cocoindex_search`
    when transitioning to a new phase (planning, testing, API design, debugging,
    code exploration, refactoring)
 6. **Skip criteria** — prevents recall spam on trivial follow-ups
-7. **Do NOT retain** — blocks in-session retain calls (extraction runs nightly)
+7. **Do NOT retain** — blocks in-session retain calls (extraction is an explicit maintenance action)
 
 ### Adapting an example
 
 When customizing, change:
 
 1. **Domain triggers** — replace language/framework mentions with your stack
-2. **Banks** — adjust which banks exist (`hindsight` is always present; add
-   `hindsight-docs` and `hindsight-issues` if you ingest docs/issues)
+2. **Banks** — adjust the project banks configured in `projects.toml`
+   (`<project>-docs` and `<project>-issues` when those sources are enabled)
 3. **Phase-based queries** — tailor query focus to your project's terminology
    (e.g., "pytest fixtures" vs "table-driven tests")
-4. **Language tooling** — add your language's MCP if available (gopls for Go,
-   rust-analyzer for Rust, etc.)
+4. **Language tooling** — select the project language for the gateway's Serena
+   backend; do not add a separate client MCP entry
 
 ### Key principles
 
@@ -758,8 +666,6 @@ launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.service-blue.plis
 launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.service-green.plist
 launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.proxy.plist
 launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.restart.plist
-launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist
-launchctl unload ~/Library/LaunchAgents/io.vectorize.hindsight.issues.plist
 launchctl unload ~/Library/LaunchAgents/io.vectorize.cocoindex.service.plist
 rm ~/Library/LaunchAgents/io.vectorize.hindsight.*.plist
 rm ~/Library/LaunchAgents/io.vectorize.cocoindex.*.plist
@@ -767,7 +673,7 @@ rm ~/Library/LaunchAgents/io.vectorize.cocoindex.*.plist
 # Remove data and runtime
 rm -rf ~/.engram ~/.pg0
 
-# Remove Cursor integration
+# Remove optional Cursor rule/hook integration
 rm ~/.cursor/rules/hindsight-memory.mdc
 rm ~/.cursor/hooks.json
 rm -rf ~/.cursor/hooks/log-mcp-calls.sh

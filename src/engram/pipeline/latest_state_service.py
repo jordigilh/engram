@@ -3,19 +3,24 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 
+from engram.project_config import DEFAULT_HINDSIGHT_URL, load_default_settings
 from engram.pipeline.latest_state_view import (
     FieldRule,
     ScopeDefinition,
     ViewDefinition,
     project_latest_state,
 )
+
+
+DEPLOYMENT_SETTINGS = load_default_settings()
+DEFAULT_HINDSIGHT_BASE_URL = DEPLOYMENT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+assert DEFAULT_HINDSIGHT_BASE_URL is not None
 
 
 DEFAULT_VIEW = ViewDefinition(
@@ -214,7 +219,7 @@ def _run_mcp_server(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base-url", default=os.environ.get("HINDSIGHT_URL", "http://localhost:8888"))
+    parser.add_argument("--base-url", default=DEFAULT_HINDSIGHT_BASE_URL)
     parser.add_argument("--bank-id", required=True)
     parser.add_argument("--view-config", type=Path)
     parser.add_argument("--scope-name", default="default")

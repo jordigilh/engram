@@ -554,6 +554,25 @@ def route_call(tool_name: str, catalog: dict[str, tuple[str, str]]) -> tuple[str
     return catalog.get(tool_name)
 
 
+def _managed_zvec_arguments(tool: str, arguments: dict) -> dict:
+    """Require managed zvec searches to finish their freshness barrier.
+
+    zvec-grep's eventual mode can return the current index while scheduling a
+    background refresh. That is useful for latency-sensitive direct clients,
+    but Engram's managed code-search route promises results from the workspace
+    the caller just asked about. Keep the policy at the gateway call boundary
+    so every configured repository gets the same behavior without changing
+    zvec-grep's defaults for unrelated clients.
+    """
+    if tool != "zvec_grep_search":
+        return arguments
+    return {
+        **arguments,
+        "autoUpdate": True,
+        "freshness": "wait_for_fresh",
+    }
+
+
 # Tools rarely exercised by the documented recall/retain/reflect/mental-model
 # workflow (hindsight-memory.mdc) or by Serena's symbol/search/edit tools
 # (local-mcp-tool-preference.mdc) get dropped from the aggregated catalog
@@ -774,7 +793,7 @@ async def handle_tools_call(
         return _jsonrpc_error_result(message_id, f"Backend {backend_key!r} for tool {tool_name!r} is not wired up")
 
     try:
-        result = await adapter.call_tool(raw_name, arguments)
+        result = await adapter.call_tool(raw_name, _managed_zvec_arguments(raw_name, arguments))
     except Exception as exc:  # noqa: BLE001 - degrade to a clean tool error, don't crash the gateway
         log.warning("backend %r failed on tools/call(%r): %s", backend_key, raw_name, exc)
         _log_gateway_call(

@@ -505,6 +505,13 @@ duplicate tools and bypass the gateway's isolation and routing. OpenChamber
 should connect to the OpenCode server's resolved configuration rather than
 adding a second Engram entry in its MCP settings.
 
+For managed zvec-grep code routes, no additional per-project refresh job is
+needed. The gateway forces `zvec_grep_search` to use `autoUpdate: true` and
+`freshness: "wait_for_fresh"`, so a query refreshes only its requested
+workspace and waits for indexing to finish before returning. Do not add a
+continuous watcher solely to keep unused repositories fresh; direct zvec-grep
+clients that bypass the gateway retain zvec-grep's eventual mode.
+
 > **Legacy native-backend note**: the shared-daemon notes below apply only
 > when deliberately running individual backend processes instead of the
 > aggregating gateway. The packaged image and the native gateway both require

@@ -66,6 +66,23 @@ intentional: Hindsight 0.10.0 requires a patched LiteLLM/protobuf combination
 that cannot coexist with Engram's Vertex AI environment. Data persists at
 `~/.pg0/instances/hindsight/data/`.
 
+### Bound local reranking CPU
+
+The example configuration sets
+`HINDSIGHT_API_RERANKER_MAX_CANDIDATES=50`. Hindsight's upstream default is
+300, but the local cross-encoder scores every candidate on the CPU before the
+final token budget is applied. A cap of 50 keeps a useful reranking pool while
+bounding latency and CPU for interactive, single-user recalls; it does not set
+the final response count, which remains controlled by the recall budget and
+token limit.
+
+The cap is a deployment default, not a correctness requirement. Increase it
+for workloads that need more recall from broad or ambiguous queries, or lower
+it further when latency matters more than reranking depth. Apply the same
+setting in `~/.engram/config.env` for an existing installation and restart
+Hindsight after changing it. The Linux/container setup reads this same config
+file; see [`INSTALL-linux.md`](INSTALL-linux.md).
+
 ### Recommended for always-on/multi-project setups: decouple Postgres
 
 By default `hindsight-api` starts, stops, and health-checks its own embedded

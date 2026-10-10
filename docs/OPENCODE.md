@@ -140,6 +140,13 @@ disconnected is not missed. The canonical checkout is left unchanged. Each
 sibling worktree gets its own `.zvec-grep` index; the local embedding setting
 keeps source code on the host.
 
+The managed zvec search route also requests `freshness: "wait_for_fresh"` with
+`autoUpdate: true`. A search therefore refreshes only its requested workspace
+and waits for the pending index work to finish before returning results; Engram
+does not keep every managed repository continuously fresh. Direct zvec-grep
+clients that bypass the Engram gateway retain zvec-grep's normal eventual
+freshness default.
+
 ZG's manifest does not record Git branch or commit provenance. After a
 successful setup, the plugin therefore writes an Engram-owned
 `.zvec-grep/engram-git-provenance.json` sidecar. A missing sidecar, a changed

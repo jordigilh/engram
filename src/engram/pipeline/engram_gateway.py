@@ -1029,6 +1029,25 @@ ZVEC_SHADOWED_TOOLS = {
 MAX_PENDING_ZVEC_SHADOWS = 8
 
 
+def _managed_zvec_arguments(tool: str, arguments: dict) -> dict:
+    """Require managed workspace searches to finish their freshness barrier.
+
+    zvec-grep's eventual mode can return the current index while scheduling a
+    background refresh. That is useful for latency-sensitive direct clients,
+    but Engram's managed code-search route promises results from the checkout
+    the caller just asked about. Keep the policy at the gateway boundary so
+    every configured repository and worktree gets the same behavior without
+    changing zvec-grep's defaults for unrelated clients.
+    """
+    if tool != "zvec_grep_search":
+        return arguments
+    return {
+        **arguments,
+        "autoUpdate": True,
+        "freshness": "wait_for_fresh",
+    }
+
+
 def _git_workspace_metadata(root: pathlib.Path) -> dict[str, Any]:
     metadata: dict[str, Any] = {"workspace": str(root), "branch": None, "commit": None, "dirty": None}
     for key, command in (
@@ -1362,11 +1381,12 @@ def _compare_shadow_responses(tool: str, primary: dict, shadow: dict, repo: str)
 
 
 class ZvecShadowRelayAdapter:
-    """Forward zvec-grep tools unchanged and compare selected calls in the background.
+    """Forward managed zvec-grep calls and compare selected calls in the background.
 
     The primary backend owns the client-visible tool catalog and response. CocoIndex
     is only called for matching, indexed live roots; failures are recorded and never
-    alter the zvec-grep result.
+    alter the zvec-grep result. Search calls use zvec-grep's wait-for-fresh policy
+    before the primary response is returned.
     """
 
     def __init__(
@@ -1393,8 +1413,9 @@ class ZvecShadowRelayAdapter:
         return await self.primary.list_tools()
 
     async def call_tool(self, name: str, arguments: dict) -> dict:
+        forwarded_arguments = _managed_zvec_arguments(name, arguments)
         started = time.perf_counter()
-        primary = await self.primary.call_tool(name, arguments)
+        primary = await self.primary.call_tool(name, forwarded_arguments)
         primary_elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
         if (
             name in ZVEC_SHADOWED_TOOLS
@@ -1402,7 +1423,7 @@ class ZvecShadowRelayAdapter:
             and len(self._shadow_tasks) < MAX_PENDING_ZVEC_SHADOWS
         ):
             task = asyncio.create_task(
-                self._run_shadow(name, dict(arguments), primary, primary_elapsed_ms)
+                self._run_shadow(name, dict(forwarded_arguments), primary, primary_elapsed_ms)
             )
             self._shadow_tasks.add(task)
             task.add_done_callback(self._shadow_tasks.discard)

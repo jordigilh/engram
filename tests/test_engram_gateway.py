@@ -376,6 +376,38 @@ class TestAggregateToolsList:
 
 
 class TestHandleToolsCall:
+    def test_managed_zvec_search_waits_for_fresh_index(self, engram_gateway):
+        primary_result = {"content": [{"type": "text", "text": "fresh"}], "isError": True}
+        code = FakeAdapter(call_results={"zvec_grep_search": primary_result})
+        catalog = {"zvec_grep_search": ("code", "zvec_grep_search")}
+        message = {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {
+                "name": "zvec_grep_search",
+                "arguments": {
+                    "root": "/workspaces/project",
+                    "query": "workflow",
+                    "freshness": "eventual",
+                    "autoUpdate": False,
+                },
+            },
+        }
+
+        result = asyncio.run(engram_gateway.handle_tools_call(message, catalog, {"code": code}))
+
+        assert result["result"] is primary_result
+        assert code.call_log == [(
+            "zvec_grep_search",
+            {
+                "root": "/workspaces/project",
+                "query": "workflow",
+                "freshness": "wait_for_fresh",
+                "autoUpdate": True,
+            },
+        )]
+
     def test_routes_prefixed_call_and_strips_prefix_before_calling_backend(self, engram_gateway):
         docs = FakeAdapter(call_results={"recall": {"content": [{"type": "text", "text": "found it"}], "isError": False}})
         catalog = {"docs_recall": ("docs", "recall")}

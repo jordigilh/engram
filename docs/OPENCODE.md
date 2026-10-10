@@ -111,6 +111,12 @@ Users do not register Hindsight, CocoIndex, or Serena separately. Do not add a
 second gateway entry through OpenChamber's Settings -> MCP; OpenChamber should
 use the OpenCode server's resolved configuration.
 
+Managed zvec-grep searches use `autoUpdate: true` with
+`freshness: "wait_for_fresh"`. Each query refreshes only its requested
+workspace and waits for indexing to finish before returning results; Engram
+does not continuously refresh unused repositories. Direct zvec-grep clients
+that bypass the gateway retain zvec-grep's eventual freshness behavior.
+
 ## Project Identity
 
 `project` is the exact gateway route and must match a registered project. The

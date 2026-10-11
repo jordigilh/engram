@@ -479,12 +479,19 @@ Mount the registry read-only and expose the gateway port:
 mkdir -p ~/.engram/runtime
 $EDITOR ~/.engram/runtime/<project>.toml
 
+podman pull --policy=always quay.io/jordigilh/engram:runtime-latest
 podman run --rm \
   --add-host host.containers.internal:host-gateway \
   -v "$HOME/.engram/runtime/<project>.toml:/etc/engram/instances.toml:ro" \
   -p 127.0.0.1:8896:8896 \
+  --pull=never \
   quay.io/jordigilh/engram:runtime-latest
 ```
+
+Pull the image explicitly so a restart never silently serves a cached tag. The
+separate pull/run form is also required on Podman 5.8, where `podman run
+--pull=always` can pull a multi-architecture manifest but fail to resolve the
+same reference for the container.
 
 The image is stateless and non-root. It validates backend URLs, rejects
 credentials embedded in URLs, queries configured backends concurrently, and

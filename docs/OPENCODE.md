@@ -179,6 +179,15 @@ If OpenChamber is connected to a remote OpenCode/OpenChamber server,
 machine running the OpenCode server, not merely from the browser or mobile
 client.
 
+After restarting `io.vectorize.engram-runtime` or the native gateway, reconnect
+the Engram MCP entry from `/mcps` (or reload the OpenCode session). Existing
+client sessions do not automatically recover their process-bound MCP
+connection. A subsequent `MCP server "engram" is not connected` or
+`ConnectionRefused` from a tool call is therefore a stale client-session
+condition, not the original zvec-grep `backend 'host' failed:` result. First
+verify `POST /mcp/<project-route>` with `tools/list`, then reconnect the
+client.
+
 ## Recall Output
 
 The gateway normalizes Hindsight `recall` results before returning them to the

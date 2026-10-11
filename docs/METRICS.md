@@ -303,7 +303,7 @@ python3 -m engram.maintenance.report --csv
 - **Low hit rate on hindsight-docs**: Check CocoIndex flow status; for manual recovery, run `python3 -m engram.pipeline.ingest_docs`
 - **Low hit rate on hindsight-issues**: Check CocoIndex flow status; for manual recovery, run `~/.engram/venv/bin/engram-ingest-issues` or check `gh auth status`
 - **High corrections with recall active**: Retained patterns may be outdated — run reflect manually
-- **Mental models stale**: Run `python3 -m engram.maintenance.create_mental_models --refresh` to force refresh
+- **Mental models stale**: Have the agent recall current facts, regenerate the Markdown, and replace it with `docs_manual_mental_model` or `issues_manual_mental_model`
 - **Low proactive recall**: Strengthen the `alwaysApply` rule wording, ensure it says "ALWAYS recall before starting work"
 - **gopls not being used**: Check the Serena/OpenCode gateway route and restart the language-server daemon
 

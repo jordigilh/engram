@@ -9,7 +9,7 @@ and "is this still true" from scratch every session, via long chains of
 grep/glob/read sweeps, or worse, from stale training data that doesn't
 reflect what's actually in the repo today. Engram closes that gap: a
 call graph and knowledge graph built directly from your live corpus (code,
-docs, issues, and past corrections), synthesized into mental models and
+docs, issues, and past corrections), curated into mental models and
 surfaced automatically — so reviews and new features are grounded in what's
 *actually* true right now, not an approximation.
 
@@ -108,7 +108,7 @@ responsibility.
 - **Structural pattern search** — tree-sitter by-example matching answers "find code shaped like X" (e.g. every function matching a signature) as a distinct MCP tool per project — see docs/COCOINDEX.md
 - **Live sync** — docs, code, and transcripts watch for filesystem changes in real time; issues and PRs poll GitHub every 5 minutes, so nothing reflects a stale snapshot
 - **Hindsight knowledge graph** — entities link across sessions for richer retrieval
-- **Mental models** — pre-synthesized documents (not scattered facts)
+- **Mental models** — agent-authored, curated documents (not scattered facts)
 - **Learns from corrections** — detects when you correct the agent, extracts the lesson
 - **Zero-cost recall** — local vector search, no tokens consumed during work
 - **Multi-bank architecture** — behavioral memory + project docs + GitHub issues/PRs + code index

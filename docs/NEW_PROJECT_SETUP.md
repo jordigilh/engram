@@ -67,9 +67,10 @@ a fully separate bank/table/pipeline (e.g. `kubernaut-operator`/
 `kubernaut-console`, which are still ingested into the shared `kubernaut-docs`
 bank / `code_embeddings` table, already tagged by repo at ingestion time). No
 new bank, no new CocoIndex app, no new launchd service — just:
-1. `create_mental_model` with a `tags: ["<repo>"]` filter, scoped to the
-   existing shared bank (see `engram.maintenance.create_mental_models`'s
-   `operator-architecture`/`console-architecture` entries).
+1. Have the agent recall the repo-tagged source material, generate the complete
+   Markdown itself, and store it with the gateway's manual mental-model tool
+   using `tags: ["<repo>"]`. Do not delegate creation or refresh to
+   Hindsight's LLM-backed `create_mental_model`/`refresh_mental_model` tools.
 2. An optional `repo` parameter on `engram.search.kubernaut`'s `search_code()` /
    `cocoindex_search` MCP tool, which adds a `filepath LIKE '<repo>/%'` filter
    to scope code search the same way.

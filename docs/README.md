@@ -139,7 +139,7 @@ graph TB
 | Nightly script | `nightly-learn.py` (symlinked to `~/.engram/`) | Processes transcripts, extracts patterns |
 | Doc ingestion | `ingest-docs.py` | One-time doc ingestion (deprecated — use CocoIndex) |
 | Issue ingestion | `ingest-issues.py` | Manual issues ingestion (deprecated — use CocoIndex) |
-| Mental models | `create-mental-models.py` | Create/refresh mental models across all banks |
+| Mental models | `docs_manual_mental_model` / `issues_manual_mental_model` | Store agent-authored Markdown without delegating synthesis to Hindsight |
 | Memory triage | `triage-memories.py` | Nightly cleanup of low-value memories (ephemeral, stale, duplicate) |
 | Memory recovery | `recover-memories.py` | One-time full reprocessing of all transcripts to rebuild the bank |
 | Effectiveness report | `report.py` | Metrics aggregation, token analysis, mental model stats |
@@ -350,7 +350,10 @@ Hindsight automatically builds a knowledge graph through entity extraction on ev
 
 ### Mental Models
 
-Mental models are persistent, LLM-synthesized documents that sit above raw facts. They solve the problem of scattered individual memories — instead of returning 15 separate facts about "KA rate limiting" that the agent must synthesize mid-response, a mental model provides a pre-built document like:
+Mental models are persistent, curated documents that sit above raw facts. The
+agent creates or updates their Markdown from recalled evidence — instead of
+returning 15 separate facts about "KA rate limiting" that the agent must
+synthesize mid-response, a mental model provides a pre-built document like:
 
 > "KA Architecture: rate limiting uses per-IP sliding window with Redis, denials emit audit events, correlation_id is generated at ingress..."
 
@@ -373,9 +376,11 @@ Mental models are persistent, LLM-synthesized documents that sit above raw facts
 The unified gateway exposes `docs_manual_mental_model` and
 `issues_manual_mental_model` for caller-generated Markdown. Each call replaces
 the prior `manual-mental-model-<model-id>` canonical memory through `retain`,
-without invoking `refresh_mental_model` or its Sonnet-backed synthesis path.
-This is a replacement memory, not an overwrite of Hindsight's pinned
-mental-model record; the upstream API does not expose a content setter.
+without invoking Hindsight's `create_mental_model` or `refresh_mental_model`
+LLM-backed synthesis path. The agent is responsible for generating and
+reviewing the complete Markdown before storing it. This is a replacement
+memory, not an overwrite of Hindsight's pinned mental-model record; the
+upstream API does not expose a content setter.
 
 #### Cross-Bank Association
 
@@ -385,12 +390,14 @@ True cross-bank entity linking is not natively supported (entities are per-bank)
 - When the agent recalls a topic, it hits mental models in multiple banks simultaneously
 - The Cursor rule instructs recall from all three banks in parallel
 
-The entity graph within each bank handles intra-bank association. Mental models lift this into cross-bank coherence by synthesizing the same topic from different angles (behavior vs. docs vs. issues).
+The entity graph within each bank handles intra-bank association. Mental models
+lift this into cross-bank coherence by curating the same topic from different
+angles (behavior vs. docs vs. issues).
 
 #### Cost
 
-- **Creation**: ~$0.50 one-time (9 models × Sonnet 4.6 reflect call)
-- **Delta refresh**: ~$0.02 per refresh (only new facts since last refresh)
+- **Creation/updates**: Agent-authored Markdown is stored through the manual
+  gateway writer; Hindsight's mental-model synthesis call is not used
 - **Recall benefit**: one coherent block replaces many scattered facts → fewer total tokens in agent context
 
 ---

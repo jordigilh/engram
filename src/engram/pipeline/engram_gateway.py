@@ -590,15 +590,12 @@ def _managed_zvec_arguments(tool: str, arguments: dict) -> dict:
 # practice; the dropped administrative tools remain reachable via a direct
 # curl against hindsight-api / the serena daemon if ever genuinely needed.
 #
-# `create_mental_model` added back 2026-08-26: until this repo's own
-# `engram.maintenance.create_mental_models` admin script was the only way to
-# mint a new mental model, project teams (first raised by praxis, wanting a
-# "processes and policies" model none of the 3 pre-seeded praxis-docs models
-# covered) had no self-serve path at all. Re-adding it to every onboarded
-# project's docs/issues surface (not just praxis -- same gap applies
-# everywhere) costs 2 tools per project (docs + issues, where both are
-# wired); kubernaut-family, the highest today at 33, has ample headroom
-# under the ~40 ceiling.
+# Hindsight's `create_mental_model` and `refresh_mental_model` delegate mental
+# model content generation to its configured LLM. That delegation is not a
+# supported gateway capability. The tools are deliberately absent from the
+# catalog, while `reflect` remains available for general analysis. Agents
+# generate finished mental-model Markdown themselves and use the gateway-owned
+# `*_manual_mental_model` tool to store it instead.
 RELEVANT_HINDSIGHT_TOOLS = frozenset(
     {
         "retain",
@@ -607,8 +604,6 @@ RELEVANT_HINDSIGHT_TOOLS = frozenset(
         "reflect",
         "list_mental_models",
         "get_mental_model",
-        "create_mental_model",
-        "refresh_mental_model",
     }
 )
 
@@ -617,7 +612,7 @@ RELEVANT_HINDSIGHT_TOOLS = frozenset(
 # for recall from *other* projects' workspaces, not something anyone
 # retains into, reflects on, or manages mental models for from a praxis
 # window -- that admin/curation work happens wherever the ingestion itself
-# runs. Cross-mounting the full RELEVANT_HINDSIGHT_TOOLS set (8 tools x 2
+# runs. Cross-mounting the full RELEVANT_HINDSIGHT_TOOLS set (6 tools x 2
 # backends = 16) into every praxis-* repo on top of that repo's own ~33-35
 # tools would reliably blow past Cursor's ~40-tool ceiling (see
 # RELEVANT_HINDSIGHT_TOOLS's own comment above); trimming to just `recall`
@@ -919,7 +914,8 @@ MANUAL_MENTAL_MODEL_TOOL = {
     "description": (
         "Store caller-generated Markdown as a canonical replacement memory for a mental model. "
         "This does not refresh or overwrite Hindsight's pinned mental-model record; it replaces "
-        "the previous manual document for the same model_id and avoids the LLM-backed refresh path."
+        "the previous manual document for the same model_id. The caller must provide the complete "
+        "Markdown; the gateway does not invoke Hindsight's LLM-backed synthesis path."
     ),
     "inputSchema": {
         "type": "object",

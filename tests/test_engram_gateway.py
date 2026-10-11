@@ -158,24 +158,35 @@ class TestFilterRelevantTools:
 
         assert {t["name"] for t in filtered} == {"recall", "retain"}
 
-    def test_hindsight_backend_keeps_create_mental_model(self, engram_gateway):
-        """2026-08-26: project teams need self-serve mental model creation
-        (previously only possible via this repo's own admin-side
-        `engram.maintenance.create_mental_models` script), so this tool was
-        added back to the relevant set alongside the pre-existing
-        get/list/refresh trio -- update/delete/clear remain filtered out."""
-        tools = [_tool("create_mental_model"), _tool("update_mental_model"), _tool("delete_mental_model")]
+    def test_hindsight_backend_removes_llm_synthesis_tools(self, engram_gateway):
+        """The gateway must not delegate model content generation to Hindsight.
+
+        Agents provide finished Markdown through the gateway-owned manual
+        writer instead; general reflection and model inventory/reads remain
+        available.
+        """
+        tools = [
+            _tool("reflect"),
+            _tool("create_mental_model"),
+            _tool("refresh_mental_model"),
+            _tool("list_mental_models"),
+            _tool("get_mental_model"),
+        ]
 
         filtered = engram_gateway.filter_relevant_tools("docs", tools)
 
-        assert {t["name"] for t in filtered} == {"create_mental_model"}
+        assert {t["name"] for t in filtered} == {
+            "reflect",
+            "list_mental_models",
+            "get_mental_model",
+        }
 
     def test_issues_backend_uses_the_same_relevant_set_as_docs(self, engram_gateway):
-        tools = [_tool("reflect"), _tool("list_directives")]
+        tools = [_tool("recall"), _tool("reflect"), _tool("list_directives")]
 
         filtered = engram_gateway.filter_relevant_tools("issues", tools)
 
-        assert {t["name"] for t in filtered} == {"reflect"}
+        assert {t["name"] for t in filtered} == {"recall", "reflect"}
 
     def test_serena_backend_keeps_only_relevant_tools(self, engram_gateway):
         tools = [_tool("find_symbol"), _tool("write_memory"), _tool("open_dashboard")]
@@ -310,6 +321,30 @@ class TestAggregateToolsList:
         names = {t["name"] for t in tool_defs}
         assert names == {"docs_recall", "issues_recall", "praxis_code_search", "find_symbol"}
         assert catalog["docs_recall"] == ("docs", "recall")
+        assert errors == {}
+
+    def test_exposes_agent_authored_writer_but_not_hindsight_model_generation(self, engram_gateway):
+        docs = FakeAdapter(tools=[
+            _tool("reflect"),
+            _tool("list_mental_models"),
+            _tool("get_mental_model"),
+            _tool("create_mental_model"),
+            _tool("refresh_mental_model"),
+        ])
+        docs_manual = engram_gateway.ManualMentalModelAdapter(FakeAdapter())
+
+        tool_defs, catalog, errors = asyncio.run(
+            engram_gateway.aggregate_tools_list({"docs": docs, "docs_manual": docs_manual})
+        )
+
+        names = {tool["name"] for tool in tool_defs}
+        assert names == {
+            "docs_reflect",
+            "docs_list_mental_models",
+            "docs_get_mental_model",
+            "docs_manual_mental_model",
+        }
+        assert catalog["docs_manual_mental_model"] == ("docs_manual", "manual_mental_model")
         assert errors == {}
 
     def test_cocoindex_graph_tools_are_exposed_unprefixed(self, engram_gateway):

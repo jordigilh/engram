@@ -186,6 +186,13 @@ are on-demand only, triggered explicitly in-chat (see docs/findings/2026-08.md,
 and bounded until there's a stable, well-understood cost baseline for
 background extraction.
 
+The gateway does not expose Hindsight's `create_mental_model` or
+`refresh_mental_model` tools because those delegate mental-model content
+generation to Hindsight's LLM. `reflect` remains available for general
+analysis. When a mental model needs to be created or updated, the agent must
+generate the complete Markdown itself and store it through the gateway's
+manual mental-model tool.
+
 **Suggest, don't call silently.** When you notice one of the following during
 a session, propose it to the user and wait for confirmation before calling
 the tool:
@@ -193,10 +200,13 @@ the tool:
 - **Retain** — an explicit correction, a decision, a stated preference, or a
   hard-won discovery (e.g. a root cause that took real effort to find) worth
   recalling in a future session.
-- **Reflect** — several related retains have accumulated on the same topic,
-  you're about to lean on a mental model that looks stale, or the user
-  directly points out staleness.
+- **Reflect** — reasoned analysis is needed across several memories; do not use
+  it to create or update a mental-model document.
+- **Manual mental model** — the user asks to create or update a mental model,
+  or an existing model is stale. Recall the relevant facts and/or current
+  model first, generate the complete Markdown in the agent, then use
+  `docs_manual_mental_model` or `issues_manual_mental_model` with that content.
 
-Only call `retain`/`sync_retain`/`reflect` after the user confirms, or when
-they ask for it directly ("retain this", "update the mental model", etc.).
-Never call them proactively or as a matter of routine.
+Only call `retain`/`sync_retain`/`reflect` or a manual mental-model tool after
+the user confirms, or when they ask for it directly. Never call them
+proactively or as a matter of routine.

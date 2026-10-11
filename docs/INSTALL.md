@@ -375,28 +375,17 @@ launchctl load ~/Library/LaunchAgents/io.vectorize.hindsight.issues.plist
 
 ## 13. Create mental models (Knowledge Graph)
 
-Mental models are LLM-synthesized documents that sit above raw facts in the recall
-hierarchy. They provide pre-digested, coherent context blocks — reducing the need
-for the agent to synthesize scattered individual facts at query time.
+Mental-model content is authored by the agent. The gateway keeps model listing
+and retrieval available, but does not expose Hindsight's LLM-backed creation or
+refresh delegation. Recall the relevant facts, generate the complete Markdown,
+and call the appropriate manual writer:
 
-```bash
-python3 -m engram.maintenance.create_mental_models
-```
+- `docs_manual_mental_model` for a docs bank
+- `issues_manual_mental_model` for an issues bank
 
-This creates 9 mental models across all three banks and triggers initial refresh
-(~$0.50 total, one-time Sonnet 4.6 cost). To check status:
-
-```bash
-python3 -m engram.maintenance.create_mental_models --list
-```
-
-Behavioral models (in `cursor-memory`) auto-refresh after nightly consolidation.
-Issues-bank models refresh nightly (after issue ingestion at 1:00 AM). Docs-bank
-models refresh manually when documentation is updated:
-
-```bash
-python3 -m engram.maintenance.create_mental_models --refresh
-```
+Pass a stable `model_id` and complete `content`; include project tags and a
+`source_query` when useful. The writer replaces the prior manual document and
+does not invoke Hindsight's synthesis backend.
 
 ## 14. Install gopls MCP for Go code intelligence
 

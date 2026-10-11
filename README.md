@@ -45,7 +45,10 @@ flowchart LR
     end
 ```
 
-**Recall is local and free** — embeddings and reranking run on-device (~600ms).
+**Recall is local and free** — embeddings and reranking run on-device. The
+default local configuration caps cross-encoder reranking at 50 candidates to
+bound CPU and interactive latency; increase it when deeper reranking is worth
+the cost.
 Retain/reflect/triage's LLM calls are on-demand only, triggered explicitly
 in-chat or by hand — there is no scheduled background job spending tokens
 automatically. This was a deliberate reversal (2026-08-13): the original

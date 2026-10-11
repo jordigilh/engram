@@ -2,6 +2,11 @@
 # Keep the image-backed gateway running across Podman machine restarts.
 # launchd supervises this script; the script supervises the foreground
 # container and waits for Podman to become usable again after a VM restart.
+# Every container start pulls the configured image first; a registry failure
+# retries instead of silently serving a cached runtime revision. The pull and
+# run are deliberately separate: Podman 5.8 can pull a multi-architecture
+# manifest successfully but fail to resolve that same reference in
+# `podman run --pull=always`.
 
 set -u
 
@@ -55,9 +60,11 @@ while [ "$stopping" -eq 0 ]; do
     continue
   fi
 
-  # Refresh the mutable channel when the service starts, but keep using the
-  # cached image if Quay is temporarily unavailable during a Podman restart.
-  "$PODMAN" pull "$IMAGE" >/dev/null 2>&1 || true
+  if ! "$PODMAN" pull --policy=always --quiet "$IMAGE" >/dev/null; then
+    printf 'engram-runtime: could not pull image %s; retrying in %ss\n' "$IMAGE" "$RETRY_SECONDS" >&2
+    sleep "$RETRY_SECONDS"
+    continue
+  fi
 
   "$PODMAN" run \
     --rm \

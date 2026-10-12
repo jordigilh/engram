@@ -1,12 +1,13 @@
 import { execFile } from "node:child_process"
 import { existsSync } from "node:fs"
-import { access, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises"
+import { access, mkdir, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import * as path from "node:path"
 
 export const DEFAULT_ZVEC_EMBEDDING = "local/potion-code-16m-v2"
 const ZVEC_PROVENANCE_FILE = "engram-git-provenance.json"
-const ZVEC_PROVENANCE_VERSION = 1
+const ZVEC_PROVENANCE_VERSION = 2
+const MAX_READINESS_ATTEMPTS = 3
 
 interface WorktreeEntry {
   directory: string
@@ -20,6 +21,8 @@ interface WorktreeUpdatedEvent {
 export interface ZvecGitRevision {
   branch: string | null
   commit: string
+  /** Whether tracked or untracked checkout content differed at inspection time. */
+  dirty: boolean
 }
 
 export interface ZvecIndexProvenance extends ZvecGitRevision {
@@ -35,6 +38,10 @@ export interface WorktreeIndexerOptions {
   embedding?: string
   /** Optional environment setting required by local zvec builds (for example Jieba dictionaries). */
   jiebaDictionary?: string
+  /** Additional exact roots authorized for zvec indexing (for example aggregates). */
+  allowedRoots?: readonly string[]
+  /** Authorized roots whose freshness is managed by an external aggregate index. */
+  aggregateRoots?: readonly string[]
   runIndex?: (directory: string, rebuild: boolean) => Promise<void>
   hasManifest?: (directory: string) => Promise<boolean>
   getRevision?: (directory: string) => Promise<ZvecGitRevision | undefined>
@@ -51,6 +58,10 @@ export interface WorktreeIndexPolicy {
   embedding?: string
   /** Optional environment setting required by local zvec builds (for example Jieba dictionaries). */
   jiebaDictionary?: string
+  /** Exact absolute roots permitted in zvec workspace-read tool arguments. */
+  allowedRoots?: string[]
+  /** Explicit non-Git roots with an aggregate zvec manifest. */
+  aggregateRoots?: string[]
   /** Block the first prompt in a session until Engram and zvec-grep are ready. */
   gateSessions?: boolean
 }
@@ -147,12 +158,34 @@ function readGitValue(directory: string, args: string[]): Promise<string | undef
 
 /** Read the Git identity that was visible when a worktree was indexed. */
 export async function getZvecGitRevision(directory: string): Promise<ZvecGitRevision | undefined> {
-  const [branch, commit] = await Promise.all([
+  const [branch, commit, dirty] = await Promise.all([
     readGitValue(directory, ["rev-parse", "--abbrev-ref", "HEAD"]),
     readGitValue(directory, ["rev-parse", "HEAD"]),
+    readGitDirty(directory),
   ])
-  if (!commit) return undefined
-  return { branch: branch && branch !== "HEAD" ? branch : null, commit }
+  if (!commit || dirty === undefined) return undefined
+  return { branch: branch && branch !== "HEAD" ? branch : null, commit, dirty }
+}
+
+function readGitDirty(directory: string): Promise<boolean | undefined> {
+  return new Promise((resolve) => {
+    execFile(
+      "git",
+      ["status", "--porcelain=v1", "--untracked-files=all"],
+      { cwd: directory, timeout: 5000, encoding: "utf8" },
+      (error, stdout) => {
+        if (error) {
+          resolve(undefined)
+          return
+        }
+        const dirtyPaths = String(stdout || "")
+          .split(/\r?\n/)
+          .map((line) => line.slice(3).trim().split(" -> ").pop() || "")
+          .filter((value) => value && value !== ".zvec-grep" && !value.startsWith(".zvec-grep/"))
+        resolve(dirtyPaths.length > 0)
+      },
+    )
+  })
 }
 
 function provenancePath(directory: string): string {
@@ -176,7 +209,8 @@ export async function readZvecProvenance(directory: string): Promise<ZvecIndexPr
       value.version !== ZVEC_PROVENANCE_VERSION ||
       value.root !== path.resolve(directory) ||
       typeof value.commit !== "string" ||
-      (value.branch !== null && typeof value.branch !== "string")
+      (value.branch !== null && typeof value.branch !== "string") ||
+      typeof value.dirty !== "boolean"
     ) {
       return undefined
     }
@@ -200,6 +234,7 @@ export async function writeZvecProvenance(
     root: path.resolve(directory),
     branch: revision.branch,
     commit: revision.commit,
+    dirty: revision.dirty,
   }
   try {
     await mkdir(path.dirname(target), { recursive: true })
@@ -212,7 +247,16 @@ export async function writeZvecProvenance(
 }
 
 function revisionsMatch(left: ZvecGitRevision, right: ZvecIndexProvenance): boolean {
-  return left.branch === right.branch && left.commit === right.commit
+  return left.branch === right.branch && left.commit === right.commit && left.dirty === right.dirty
+}
+
+async function realpathOrResolved(directory: string): Promise<string> {
+  try {
+    return await realpath(directory)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return path.resolve(directory)
+    throw error
+  }
 }
 
 export function runZvecIndex(
@@ -263,6 +307,17 @@ export function runZvecIndex(
  */
 export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
   const canonicalDirectory = path.resolve(options.canonicalDirectory)
+  const authorizedRoots = new Map<string, string>()
+  const aggregateRoots = new Set<string>()
+  const rememberRoot = (directory: string, aggregate = false): void => {
+    if (!path.isAbsolute(directory)) return
+    const normalized = path.resolve(directory)
+    authorizedRoots.set(normalized, normalized)
+    if (aggregate) aggregateRoots.add(normalized)
+  }
+  rememberRoot(canonicalDirectory)
+  for (const directory of options.allowedRoots || []) rememberRoot(directory)
+  for (const directory of options.aggregateRoots || []) rememberRoot(directory, true)
   const rebuildAfterRun = new Set<string>()
   const log = options.log || ((message: string) => console.error(`[engram-plugin] ${message}`))
   const hasManifest = options.hasManifest || hasZvecManifest
@@ -285,6 +340,41 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
   let indexQueue: Promise<void> = Promise.resolve()
   const pendingPromises = new Map<string, Promise<void>>()
 
+  async function refreshAuthorizedRoots(): Promise<void> {
+    let entries: readonly WorktreeEntry[]
+    try {
+      entries = await options.listWorktrees()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      log(`could not refresh authorized worktree roots: ${message}`)
+      return
+    }
+    for (const entry of entries) {
+      if (entry && typeof entry.directory === "string" && path.isAbsolute(entry.directory)) {
+        rememberRoot(entry.directory)
+      }
+    }
+    for (const [normalized] of authorizedRoots) {
+      authorizedRoots.set(normalized, await realpathOrResolved(normalized))
+    }
+  }
+
+  async function authorizeRoot(directory: string): Promise<{ normalized: string; aggregate: boolean }> {
+    await refreshAuthorizedRoots()
+    const requested = path.resolve(directory)
+    const requestedReal = await realpathOrResolved(requested)
+    for (const [configured, real] of authorizedRoots) {
+      if (configured !== requested && real !== requested && real !== requestedReal) continue
+      return {
+        normalized: requestedReal,
+        aggregate: aggregateRoots.has(configured),
+      }
+    }
+    throw new Error(
+      `zvec root is not authorized: ${requested}; configure worktreeIndex.allowedRoots or aggregateRoots`,
+    )
+  }
+
   type IndexDecision = {
     shouldIndex: boolean
     rebuild: boolean
@@ -292,7 +382,7 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
     reason: "missing" | "missing-provenance" | "git-revision-changed" | "git-revision-unavailable" | "non-git-manifest"
   }
 
-  async function decideIndex(directory: string): Promise<IndexDecision> {
+  async function decideIndex(directory: string, aggregate = false): Promise<IndexDecision> {
     if (!(await hasManifest(directory))) {
       return { shouldIndex: true, rebuild: false, reason: "missing" }
     }
@@ -313,11 +403,13 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
         log(`could not determine whether ${directory} is a Git worktree: ${message}`)
       }
       if (!gitWorktree) {
-        // OpenChamber can expose an aggregate directory containing several
-        // ephemeral checkouts. It is a valid zvec root even though Git cannot
-        // provide branch provenance for the aggregate itself. Once its
-        // manifest exists, keep serving it instead of rebuilding on every
-        // root-scoped search.
+        if (!aggregate) {
+          throw new Error(
+            `non-Git zvec root ${directory} is not authorized; declare it in worktreeIndex.aggregateRoots`,
+          )
+        }
+        // Explicit aggregate roots can legitimately have no Git provenance.
+        // Their own zvec manifest is the readiness/freshness contract.
         return { shouldIndex: false, rebuild: false, reason: "non-git-manifest" }
       }
       log(`could not determine Git revision for ${directory}; rebuilding from the current worktree`)
@@ -340,7 +432,7 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
     return { shouldIndex: false, rebuild: false, revision, reason: "missing" }
   }
 
-  function enqueueIndex(directory: string, rebuild = false): Promise<void> {
+  function enqueueIndex(directory: string, rebuild = false, aggregate = false): Promise<void> {
     const normalized = path.resolve(directory)
     if (disposed) return Promise.resolve()
     const existing = pendingPromises.get(normalized)
@@ -351,7 +443,7 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
 
     const task = indexQueue.then(async () => {
       if (disposed) return
-      const decision = await decideIndex(normalized)
+      const decision = await decideIndex(normalized, aggregate)
       if (!decision.shouldIndex) return
       const revisionBefore = decision.revision
       const operation = decision.rebuild ? "rebuild" : "index"
@@ -365,11 +457,11 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
       // progress. Never record the old revision as fresh in that case;
       // schedule a second explicit rebuild after this serialized operation.
       const revisionAfter = await getRevision(normalized).catch(() => undefined)
-      if (
-        revisionBefore &&
-        revisionAfter &&
-        (revisionBefore.branch !== revisionAfter.branch || revisionBefore.commit !== revisionAfter.commit)
-      ) {
+      if (revisionBefore && revisionAfter && !revisionsMatch(revisionBefore, {
+        version: ZVEC_PROVENANCE_VERSION,
+        root: normalized,
+        ...revisionAfter,
+      })) {
         rebuildAfterRun.add(normalized)
         log(`Git revision changed during zg ${operation} for ${normalized}; scheduling a fresh rebuild`)
       } else if (revisionAfter) {
@@ -378,7 +470,10 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           log(`could not persist Engram ZG provenance for ${normalized}: ${message}`)
+          throw new Error(`could not persist Engram ZG provenance for ${normalized}: ${message}`, { cause: error })
         }
+      } else if (!aggregate) {
+        throw new Error(`could not prove Git freshness for ${normalized}; refusing to mark zvec ready`)
       }
       log(`finished zg index for worktree ${normalized}`)
     })
@@ -404,14 +499,15 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
 
   /** Ensure one checkout has a complete index before prompt admission. */
   async function ensureIndexed(directory: string): Promise<void> {
-    const normalized = path.resolve(directory)
+    const authorization = await authorizeRoot(directory)
+    const normalized = authorization.normalized
     if (disposed) throw new Error("worktree indexer is disposed")
 
-    while (true) {
+    for (let attempt = 1; attempt <= MAX_READINESS_ATTEMPTS; attempt += 1) {
       const pendingIndex = pendingPromises.get(normalized)
       if (pendingIndex) await pendingIndex
 
-      const decision = await decideIndex(normalized)
+      const decision = await decideIndex(normalized, authorization.aggregate)
       if (!decision.shouldIndex) {
         // An event can enqueue a rebuild between decideIndex and this return.
         // Observe it before declaring the session ready.
@@ -423,14 +519,20 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
         return
       }
 
-      await enqueueIndex(normalized, decision.rebuild)
+      await enqueueIndex(normalized, decision.rebuild, authorization.aggregate)
 
       // A non-Git checkout cannot carry Engram provenance. The manifest is
       // still a valid readiness signal, but do not loop forever trying to
       // rebuild an index whose revision can never be recorded.
       const revision = await getRevision(normalized).catch(() => undefined)
-      if (!revision && (await hasManifest(normalized))) return
+      if (!revision) {
+        if (authorization.aggregate && (await hasManifest(normalized))) return
+        throw new Error(`could not prove Git freshness for ${normalized}; refusing to mark zvec ready`)
+      }
     }
+    throw new Error(
+      `worktree ${normalized} changed during ${MAX_READINESS_ATTEMPTS} zvec index attempts; retry after the checkout settles`,
+    )
   }
 
   async function scan(): Promise<void> {
@@ -450,14 +552,15 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
       if (directory === canonicalDirectory) continue
       let decision: IndexDecision
       try {
-        decision = await decideIndex(directory)
+        const authorization = await authorizeRoot(directory)
+        decision = await decideIndex(authorization.normalized, authorization.aggregate)
         if (!decision.shouldIndex) continue
+        enqueueIndex(authorization.normalized, decision.rebuild, authorization.aggregate)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         log(`could not inspect ZG setup for ${directory}: ${message}`)
         continue
       }
-      enqueueIndex(directory, decision.rebuild)
     }
   }
 

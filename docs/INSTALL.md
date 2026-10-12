@@ -281,6 +281,20 @@ This generates the console scripts used by the launchd templates:
 as reports and backfills can be run as
 `python3 -m engram.<subpackage>.<module>`.
 
+Install the repository-owned process supervisor used by the Serena LaunchAgents
+and verify that the deployed copy is present before loading those plists:
+
+```bash
+mkdir -p ~/.engram/scripts
+install -m 0644 scripts/serena-launchd-supervisor.py \
+  ~/.engram/scripts/serena-launchd-supervisor.py
+test -r ~/.engram/scripts/serena-launchd-supervisor.py
+```
+
+The launchd templates intentionally reference this installed copy so a
+package-manager wrapper cannot outlive launchd and leave an orphaned Serena
+process holding its port.
+
 Project source paths and transcript prefixes are deployment settings. Add them
 to `~/.engram/projects.toml`; do not edit `project_scope.py` or add path
 environment variables for a new project.

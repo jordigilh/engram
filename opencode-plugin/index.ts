@@ -16,6 +16,7 @@
 // checkout directory.
 import { Plugin } from "@opencode/plugin"
 import { execFile } from "node:child_process"
+import * as path from "node:path"
 import {
   buildMcpServerConfigV2,
   deriveIdentity,
@@ -100,6 +101,12 @@ function hasConfiguredIdentity(directoryBasename: string, options: EngramPluginO
   )
 }
 
+/** Derive a repository name using the host platform's path separator. */
+export function repositoryDirectoryBasename(directory: string): string {
+  const normalized = (directory || ".").replaceAll("\\", "/")
+  return path.basename(path.resolve(normalized)) || "unknown-project"
+}
+
 interface EngramState {
   identity: ResolvedIdentity
   gatewayUrl?: string
@@ -107,7 +114,7 @@ interface EngramState {
 }
 
 async function resolveEngramState(directory: string, options: EngramPluginOptions): Promise<EngramState> {
-  const directoryBasename = (directory || "").split("/").filter(Boolean).pop() || "unknown-project"
+  const directoryBasename = repositoryDirectoryBasename(directory)
   const gitWorktree = await isGitWorktree(directory)
   const branch = await detectBranch(directory)
   const remotes = await detectRemotes(directory)
@@ -137,18 +144,18 @@ function metricsPath(): string {
 }
 
 function makeLogMetric(): (event: MetricEvent) => void {
-  const path = metricsPath()
+  const metricFile = metricsPath()
   return (event: MetricEvent): void => {
     import("node:fs/promises")
       .then(async (fs) => {
         const line = `${JSON.stringify(event)}\n`
         try {
-          await fs.appendFile(path, line, "utf-8")
+          await fs.appendFile(metricFile, line, "utf-8")
         } catch {
-          const dir = path.split("/").slice(0, -1).join("/") || "."
+          const dir = path.dirname(metricFile)
           try {
             await fs.mkdir(dir, { recursive: true })
-            await fs.appendFile(path, line, "utf-8")
+            await fs.appendFile(metricFile, line, "utf-8")
           } catch {
             /* metrics must never break the session */
           }
@@ -340,13 +347,17 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
         binary: worktreePolicy.binary,
         embedding: worktreePolicy.embedding || DEFAULT_ZVEC_EMBEDDING,
         jiebaDictionary: worktreePolicy.jiebaDictionary,
+        allowedRoots: worktreePolicy.allowedRoots,
+        aggregateRoots: worktreePolicy.aggregateRoots,
       })
     : undefined
 
   const pendingSessionReadiness = new Map<string, Promise<void>>()
+  const readySessions = new Set<string>()
   const sessionIndexer = worktreeIndexer
   if (sessionIndexer && gateSessions && gatewayUrl) {
     await ctx.session.hook("prompt", (event) => {
+      if (readySessions.has(event.sessionID)) return Promise.resolve()
       const existing = pendingSessionReadiness.get(event.sessionID)
       if (existing) return existing
 
@@ -356,6 +367,10 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
       }).finally(() => {
         pendingSessionReadiness.delete(event.sessionID)
       })
+      void readiness.then(
+        () => readySessions.add(event.sessionID),
+        () => {},
+      )
       pendingSessionReadiness.set(event.sessionID, readiness)
       return readiness
     })
@@ -390,6 +405,8 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
   return () => {
     controller.abort()
     worktreeIndexer?.dispose()
+    readySessions.clear()
+    pendingSessionReadiness.clear()
   }
 }
 

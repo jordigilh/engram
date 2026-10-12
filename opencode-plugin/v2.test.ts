@@ -275,7 +275,11 @@ describe("v2 setup", () => {
     ctx.options = {
       project: "service-api",
       gatewayUrl: "http://127.0.0.1:8896",
-      worktreeIndex: { projects: ["service-api"], binary: fakeZg },
+      worktreeIndex: {
+        projects: ["service-api"],
+        binary: fakeZg,
+        aggregateRoots: [requestedRoot],
+      },
     }
     ctx.worktree = { list: async () => [] }
 

@@ -129,12 +129,14 @@ project receives automatic indexing implicitly; list each route explicitly:
 
 ```json
 {
-  "worktreeIndex": {
-    "projects": ["<project-route>"],
-    "binary": "~/bin/zg",
-    "embedding": "local/potion-code-16m-v2",
-    "jiebaDictionary": "/path/to/zvec-grep/node_modules/@zvec/bindings-darwin-arm64/jieba_dict",
-    "gateSessions": true
+    "worktreeIndex": {
+      "projects": ["<project-route>"],
+      "binary": "~/bin/zg",
+      "embedding": "local/potion-code-16m-v2",
+      "jiebaDictionary": "/path/to/zvec-grep/node_modules/@zvec/bindings-darwin-arm64/jieba_dict",
+      "allowedRoots": ["/absolute/path/to/authorized-checkout"],
+      "aggregateRoots": ["/absolute/path/to/authorized/worktree-pool"],
+      "gateSessions": true
   }
 }
 ```
@@ -149,10 +151,13 @@ keeps source code on the host.
 
 For configured routes, every zvec workspace-read tool also performs a
 synchronous readiness check for its requested absolute `root` immediately
-before the MCP call. This closes the startup race for a newly-created
-worktree and covers OpenChamber aggregate worktree directories that are not
-present in the project inventory. The explicit index tool is not intercepted;
-routes without `worktreeIndex` configuration remain unchanged.
+before the MCP call. The root must be the canonical checkout, a worktree
+returned by OpenCode's project inventory, or an exact path in
+`worktreeIndex.allowedRoots`. Non-Git aggregate roots must additionally be
+listed in `aggregateRoots`; arbitrary paths, symlink escapes, bare repositories,
+and unconfigured OpenChamber storage directories fail closed. The explicit
+index tool is not intercepted; routes without `worktreeIndex` configuration
+remain unchanged.
 
 The managed zvec search route also requests `freshness: "wait_for_fresh"` with
 `autoUpdate: true`. A search therefore refreshes only its requested workspace
@@ -179,13 +184,15 @@ Session gating is opt-in. Listing a route in `projects` continues to enable
 background worktree indexing, but does not make an optional Engram or zvec-grep
 failure block model requests.
 
-ZG's manifest does not record Git branch or commit provenance. After a
-successful setup, the plugin therefore writes an Engram-owned
+ZG's manifest does not record Git branch, commit, or dirty-worktree provenance.
+After a successful setup, the plugin therefore writes an Engram-owned
 `.zvec-grep/engram-git-provenance.json` sidecar. A missing sidecar, a changed
-branch/commit, or a provenance record for another root invokes
+branch/commit/dirty state, or a provenance record for another root invokes
 `zg --index <worktree> --rebuild` before the worktree is considered ready.
 Index operations are serialized and a checkout that changes during a rebuild
 gets a follow-up rebuild rather than being marked fresh with the old revision.
+Readiness has a finite retry budget and provenance persistence failures reject
+the gate instead of retrying forever.
 
 The default executable is `~/bin/zg` when present, otherwise `zg` from `PATH`.
 Set `binary` or `embedding` in the deployment-local policy when needed. An
@@ -196,6 +203,15 @@ Some host builds of `zg` also require the Jieba dictionary directory for their
 FTS tokenizer. Set `jiebaDictionary` to the installed `jieba_dict` directory
 when `zg --index` reports `JiebaTokenizer: jieba_dict_dir not configured`; the
 plugin passes it only to the indexing child as `ZVEC_JIEBA_DICT_DIR`.
+
+The container supervisor uses mutable `latest` as the update channel but does
+not trust the tag by itself. Set `ZVEC_GREP_TRUSTED_DIGEST_FILE` (the launchd
+template defaults it to `~/.engram/zvec-grep/trusted-digests.env`) with verified
+`ZVEC_GREP_IMAGE_DIGEST` and `ZVEC_GREP_PROXY_IMAGE_DIGEST` values. Startup
+pulls first, verifies the digests, health-checks the replacement, and restores
+the previous local image IDs if the replacement is unhealthy. See
+`docs/zvec-grep-trusted-digests.env.example`; update the file only after an
+authorized image publication has been independently verified.
 
 ```jsonc
 {
@@ -274,6 +290,11 @@ The gateway normally runs on `127.0.0.1:8896` under the
 image is the public front door; the native `io.vectorize.engram-gateway-native`
 service listens privately on `127.0.0.1:8898` for host-only stdio backends. The
 Hindsight API and backend daemons remain behind both gateway layers.
+
+The loopback/no-OAuth configuration is a single-user host boundary, not an
+authorization mechanism for a shared workstation or remotely reachable
+OpenCode server. Keep all three listeners on loopback or add an authenticated
+reverse proxy and an OS-level service account boundary before exposing them.
 
 If OpenChamber is connected to a remote OpenCode/OpenChamber server,
 `127.0.0.1` refers to that server. The gateway must be reachable from the

@@ -1148,6 +1148,65 @@ class TestBuildBackendAdapters:
 
 
 class TestZvecShadowRelayAdapter:
+    def test_managed_graph_reads_wait_for_fresh_index_too(self, engram_gateway):
+        arguments = engram_gateway._managed_zvec_arguments(
+            "zvec_grep_callgraph_blast_radius", {"root": "/workspace", "function": "main"}
+        )
+
+        assert arguments["autoUpdate"] is True
+        assert arguments["freshness"] == "wait_for_fresh"
+
+    def test_rejects_a_root_outside_the_gateway_allowlist(self, engram_gateway, tmp_path):
+        async def scenario():
+            root = tmp_path / "authorized"
+            root.mkdir()
+            primary = FakeAdapter(call_results={"zvec_grep_search": {"isError": False}})
+            adapter = engram_gateway.ZvecShadowRelayAdapter(
+                primary,
+                FakeAdapter(),
+                log_path=tmp_path / "shadow.jsonl",
+                shadow_timeout_seconds=0.1,
+                allowed_roots=frozenset({root}),
+            )
+
+            result = await adapter.call_tool(
+                "zvec_grep_search", {"root": str(tmp_path / "unauthorized"), "query": "secret"}
+            )
+
+            assert result["isError"] is True
+            assert primary.call_log == []
+
+        asyncio.run(scenario())
+
+    def test_shadow_log_redacts_queries_and_responses_and_sets_private_mode(
+        self, engram_gateway, tmp_path
+    ):
+        async def scenario():
+            root = tmp_path.resolve()
+            log_path = tmp_path / "shadow.jsonl"
+            primary_result = {
+                "content": [{"type": "text", "text": "source secret"}],
+                "isError": False,
+            }
+            adapter = engram_gateway.ZvecShadowRelayAdapter(
+                FakeAdapter(call_results={"zvec_grep_search": primary_result}),
+                FakeAdapter(call_results={"cocoindex_search": {"content": [], "isError": False}}),
+                log_path=log_path,
+                shadow_timeout_seconds=0.1,
+                source_roots={"repo": root},
+            )
+
+            await adapter.call_tool("zvec_grep_search", {"root": str(root), "query": "private source"})
+            await asyncio.gather(*tuple(adapter._shadow_tasks))
+
+            entry = json.loads(log_path.read_text())
+            assert entry["redaction"] == "query-and-response-content-v1"
+            assert entry["arguments"]["query"]["redacted"] is True
+            assert entry["primary"]["response"]["redacted"] is True
+            assert log_path.stat().st_mode & 0o777 == 0o600
+
+        asyncio.run(scenario())
+
     def test_managed_search_waits_for_fresh_index_before_returning(self, engram_gateway, tmp_path):
         async def scenario():
             primary_result = {"content": [{"type": "text", "text": "fresh"}], "isError": True}
@@ -1319,8 +1378,8 @@ class TestZvecShadowRelayAdapter:
             assert entry["branch"] is None
             assert entry["commit"] is None
             assert entry["workspace"] == str(root)
-            assert entry["primary"]["response"] == primary_result
-            assert entry["shadow"]["response"]["content"][0]["text"] == "cocoindex ranked chunks"
+            assert entry["primary"]["response"] == {"redacted": True, "items": 3}
+            assert entry["shadow"]["response"] == {"redacted": True, "items": 2}
             assert entry["comparison"]["reference_engine"] == "cocoindex"
             assert entry["comparison"]["zvec_only_top_k"] == ["pkg/workflow.go"]
 
@@ -1520,6 +1579,7 @@ callgraph_repos = ["code"]
             "shadow_log": str(tmp_path / "shadow.jsonl"),
             "shared_key": "kubernaut-zvec-shadow",
             "source_roots": {"code": str(tmp_path)},
+            "allowed_roots": [str(tmp_path)],
             "callgraph_repos": ["code"],
         }
 

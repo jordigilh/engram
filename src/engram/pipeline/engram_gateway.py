@@ -88,6 +88,12 @@ log = logging.getLogger("engram-gateway")
 
 from engram import mcp_compat  # noqa: E402  (mcp 1.x/2.x Tool compat)
 from engram.project_config import load_default_settings  # noqa: E402
+from engram.pipeline.zvec_policy import (  # noqa: E402
+    ZVEC_WORKSPACE_READ_TOOLS,
+    append_shadow_jsonl as _append_shadow_jsonl,
+    authorized_zvec_root as _authorized_zvec_root,
+    managed_zvec_arguments as _managed_zvec_arguments,
+)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8896
@@ -1049,25 +1055,6 @@ ZVEC_SHADOWED_TOOLS = {
 MAX_PENDING_ZVEC_SHADOWS = 8
 
 
-def _managed_zvec_arguments(tool: str, arguments: dict) -> dict:
-    """Require managed workspace searches to finish their freshness barrier.
-
-    zvec-grep's eventual mode can return the current index while scheduling a
-    background refresh. That is useful for latency-sensitive direct clients,
-    but Engram's managed code-search route promises results from the checkout
-    the caller just asked about. Keep the policy at the gateway boundary so
-    every configured repository and worktree gets the same behavior without
-    changing zvec-grep's defaults for unrelated clients.
-    """
-    if tool != "zvec_grep_search":
-        return arguments
-    return {
-        **arguments,
-        "autoUpdate": True,
-        "freshness": "wait_for_fresh",
-    }
-
-
 def _git_workspace_metadata(root: pathlib.Path) -> dict[str, Any]:
     metadata: dict[str, Any] = {"workspace": str(root), "branch": None, "commit": None, "dirty": None}
     for key, command in (
@@ -1147,12 +1134,6 @@ def _zvec_shadow_arguments(
     else:
         payload = {"function": arguments.get("function")}
     return shadow_tool, {**payload, **common}
-
-
-def _append_shadow_jsonl(path: pathlib.Path, entry: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps(entry, default=str, separators=(",", ":")) + "\n")
 
 
 def _tool_result_text(result: dict) -> str:
@@ -1418,6 +1399,7 @@ class ZvecShadowRelayAdapter:
         shadow_timeout_seconds: float,
         source_roots: dict[str, pathlib.Path] | None = None,
         callgraph_repos: frozenset[str] | None = None,
+        allowed_roots: frozenset[pathlib.Path] | None = None,
     ) -> None:
         self.primary = primary
         self.shadow = shadow
@@ -1425,6 +1407,7 @@ class ZvecShadowRelayAdapter:
         self.shadow_timeout_seconds = shadow_timeout_seconds
         self.source_roots = source_roots or {}
         self.callgraph_repos = callgraph_repos or frozenset()
+        self.allowed_roots = allowed_roots or frozenset()
         self._shadow_tasks: set[asyncio.Task[None]] = set()
         self._shadow_semaphore = asyncio.Semaphore(1)
         self._log_lock = asyncio.Lock()
@@ -1432,8 +1415,23 @@ class ZvecShadowRelayAdapter:
     async def list_tools(self) -> list[dict]:
         return await self.primary.list_tools()
 
+    def add_allowed_roots(self, roots: frozenset[pathlib.Path]) -> None:
+        """Extend a shared adapter's exact root authorization set."""
+        self.allowed_roots = frozenset({*self.allowed_roots, *roots})
+
     async def call_tool(self, name: str, arguments: dict) -> dict:
         forwarded_arguments = _managed_zvec_arguments(name, arguments)
+        if self.allowed_roots and name in ZVEC_WORKSPACE_READ_TOOLS:
+            authorized_root = _authorized_zvec_root(forwarded_arguments.get("root"), self.allowed_roots)
+            if authorized_root is None:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": "zvec-grep root is missing or outside the configured workspace allowlist",
+                    }],
+                    "isError": True,
+                }
+            forwarded_arguments = {**forwarded_arguments, "root": str(authorized_root)}
         started = time.perf_counter()
         primary = await self.primary.call_tool(name, forwarded_arguments)
         primary_elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
@@ -2055,6 +2053,18 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
                 raise ValueError(
                     f"Backend {instance!r}/{backend!r} source_roots must be a string-to-string table"
                 )
+            allowed_roots = settings.get("allowed_roots", list(source_roots.values()))
+            if not isinstance(allowed_roots, list) or any(
+                not isinstance(root, str) or not root.strip() or not pathlib.Path(root).expanduser().is_absolute()
+                for root in allowed_roots
+            ):
+                raise ValueError(
+                    f"Backend {instance!r}/{backend!r} allowed_roots must be an array of absolute paths"
+                )
+            if not allowed_roots:
+                raise ValueError(
+                    f"Backend {instance!r}/{backend!r} requires allowed_roots or source_roots for zvec isolation"
+                )
             callgraph_repos = settings.get("callgraph_repos", [])
             if not isinstance(callgraph_repos, list) or any(
                 not isinstance(repo, str) or not repo.strip() for repo in callgraph_repos
@@ -2069,6 +2079,7 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
                 "shadow_timeout_seconds": float(shadow_timeout),
                 "shadow_log": shadow_log,
                 "source_roots": dict(source_roots),
+                "allowed_roots": list(allowed_roots),
                 "callgraph_repos": list(callgraph_repos),
             })
             if shared_key is not None:
@@ -2186,7 +2197,16 @@ def build_backend_adapters(registry: dict[str, dict[str, dict]]) -> dict[str, di
         for backend_key, spec in specs.items():
             if spec["kind"] == "shadow_http":
                 shared_key = spec.get("shared_key")
+                source_roots = {
+                    repo: pathlib.Path(root).expanduser().resolve()
+                    for repo, root in spec.get("source_roots", {}).items()
+                }
+                allowed_roots = frozenset(
+                    pathlib.Path(root).expanduser().resolve()
+                    for root in spec.get("allowed_roots", list(source_roots.values()))
+                )
                 if shared_key is not None and shared_key in shared_shadow_cache:
+                    shared_shadow_cache[shared_key].add_allowed_roots(allowed_roots)
                     adapters[project][backend_key] = shared_shadow_cache[shared_key]
                     continue
                 primary = HttpRelayAdapter(
@@ -2195,10 +2215,6 @@ def build_backend_adapters(registry: dict[str, dict[str, dict]]) -> dict[str, di
                 shadow = HttpRelayAdapter(
                     spec["shadow_url"], timeout_seconds=spec["shadow_timeout_seconds"]
                 )
-                source_roots = {
-                    repo: pathlib.Path(root).expanduser().resolve()
-                    for repo, root in spec.get("source_roots", {}).items()
-                }
                 adapter = ZvecShadowRelayAdapter(
                     primary,
                     shadow,
@@ -2206,6 +2222,7 @@ def build_backend_adapters(registry: dict[str, dict[str, dict]]) -> dict[str, di
                     shadow_timeout_seconds=spec["shadow_timeout_seconds"],
                     source_roots=source_roots,
                     callgraph_repos=frozenset(spec.get("callgraph_repos", [])),
+                    allowed_roots=allowed_roots,
                 )
                 if shared_key is not None:
                     shared_shadow_cache[shared_key] = adapter

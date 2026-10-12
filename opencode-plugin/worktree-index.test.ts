@@ -2,9 +2,12 @@ import { describe, expect, test } from "bun:test"
 import {
   buildZvecIndexArgs,
   createWorktreeIndexer,
+  isZvecWorkspaceReadTool,
+  shouldGateSessions,
   shouldAutoIndexWorktrees,
   type ZvecGitRevision,
   type ZvecIndexProvenance,
+  buildZvecIndexEnvironment,
 } from "./worktree-index"
 
 describe("worktree indexing policy", () => {
@@ -16,6 +19,10 @@ describe("worktree indexing policy", () => {
     expect(shouldAutoIndexWorktrees("service-api-v1.5", { projects: ["service-api"] })).toBe(false)
     expect(shouldAutoIndexWorktrees("engram")).toBe(false)
     expect(shouldAutoIndexWorktrees("engram", { enabled: true })).toBe(true)
+    expect(shouldGateSessions("service-api", { projects: ["service-api"] })).toBe(false)
+    expect(shouldGateSessions("service-ui")).toBe(false)
+    expect(shouldGateSessions("service-ui", { gateSessions: true })).toBe(true)
+    expect(shouldGateSessions("service-api", { projects: ["service-api"], gateSessions: false })).toBe(false)
   })
 
   test("uses auto mode and the configured local embedding for a new worktree", () => {
@@ -39,6 +46,23 @@ describe("worktree indexing policy", () => {
       "--embedding",
       "local/potion-code-16m-v2",
     ])
+  })
+
+  test("passes an optional local Jieba dictionary only to the index child", () => {
+    const environment = buildZvecIndexEnvironment(" /opt/zvec/jieba_dict ")
+    expect(environment.ZVEC_JIEBA_DICT_DIR).toBe("/opt/zvec/jieba_dict")
+  })
+
+  test("does not add a Jieba override when it is not configured", () => {
+    const environment = buildZvecIndexEnvironment("   ")
+    expect(environment).not.toHaveProperty("ZVEC_JIEBA_DICT_DIR")
+  })
+
+  test("recognizes zvec workspace reads without matching the explicit index tool", () => {
+    expect(isZvecWorkspaceReadTool("engram_zvec_grep_search")).toBe(true)
+    expect(isZvecWorkspaceReadTool("mcp:engram:zvec_grep_callgraph_cluster")).toBe(true)
+    expect(isZvecWorkspaceReadTool("zvec_grep_index")).toBe(false)
+    expect(isZvecWorkspaceReadTool("grep")).toBe(false)
   })
 })
 
@@ -73,6 +97,63 @@ describe("createWorktreeIndexer", () => {
 
     expect(calls).toEqual(["/worktrees/fix-123"])
     expect(logs).toContain("finished zg index for worktree /worktrees/fix-123")
+    indexer.dispose()
+  })
+
+  test("ensureIndexed waits for and verifies the current checkout index", async () => {
+    let indexed = false
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
+      listWorktrees: async () => [],
+      hasManifest: async () => indexed,
+      runIndex: async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 5))
+        indexed = true
+      },
+      log: () => {},
+    })
+
+    await indexer.ensureIndexed("/worktrees/current")
+    expect(indexed).toBe(true)
+    indexer.dispose()
+  })
+
+  test("ensureIndexed propagates an indexing failure to the session gate", async () => {
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
+      listWorktrees: async () => [],
+      hasManifest: async () => false,
+      runIndex: async () => {
+        throw new Error("Jieba dictionary unavailable")
+      },
+      log: () => {},
+    })
+
+    await expect(indexer.ensureIndexed("/worktrees/current")).rejects.toThrow("Jieba dictionary unavailable")
+    indexer.dispose()
+  })
+
+  test("does not rebuild a manifest for a non-Git aggregate root", async () => {
+    let runCount = 0
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
+      listWorktrees: async () => [],
+      hasManifest: async () => true,
+      getRevision: async () => undefined,
+      isGitWorktree: async () => false,
+      runIndex: async () => {
+        runCount += 1
+      },
+      log: () => {},
+    })
+
+    await indexer.ensureIndexed("/worktree-pool")
+    await indexer.ensureIndexed("/worktree-pool")
+
+    expect(runCount).toBe(0)
     indexer.dispose()
   })
 

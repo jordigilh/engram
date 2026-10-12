@@ -21,6 +21,7 @@
   "worktreeIndex": {
     "projects": ["<project-route>"],
     "binary": "~/bin/zg",
-    "embedding": "local/potion-code-16m-v2"
+    "embedding": "local/potion-code-16m-v2",
+    "gateSessions": true
   }
 }

@@ -46,8 +46,11 @@ import {
 import {
   createWorktreeIndexer,
   DEFAULT_ZVEC_EMBEDDING,
+  isZvecWorkspaceReadTool,
+  shouldGateSessions,
   shouldAutoIndexWorktrees,
 } from "./worktree-index"
+import { ensureEngramSessionReady } from "./session-readiness"
 import { resolveEngramOptions } from "./user-config"
 
 function runGit(args: string[], directory: string, timeoutMs = 5000): Promise<string> {
@@ -83,6 +86,20 @@ async function detectRemotes(directory: string): Promise<string[]> {
   }
 }
 
+async function isGitWorktree(directory: string): Promise<boolean> {
+  const out = await runGit(["rev-parse", "--is-inside-work-tree"], directory)
+  return out.trim() === "true"
+}
+
+function hasConfiguredIdentity(directoryBasename: string, options: EngramPluginOptions): boolean {
+  return Boolean(
+    options.project ||
+      options.family ||
+      options.branchRoutes ||
+      options.repositories?.directories?.[directoryBasename],
+  )
+}
+
 interface EngramState {
   identity: ResolvedIdentity
   gatewayUrl?: string
@@ -91,12 +108,20 @@ interface EngramState {
 
 async function resolveEngramState(directory: string, options: EngramPluginOptions): Promise<EngramState> {
   const directoryBasename = (directory || "").split("/").filter(Boolean).pop() || "unknown-project"
+  const gitWorktree = await isGitWorktree(directory)
   const branch = await detectBranch(directory)
   const remotes = await detectRemotes(directory)
   const identityOptions = resolveRepositoryOptions(directoryBasename, remotes, options)
 
   const identity = deriveIdentity({ directoryBasename, branch, options: identityOptions })
-  const mcpV2 = buildMcpServerConfigV2(identity, options)
+  // A global plugin is also initialized for OpenChamber's home/chat roots.
+  // Those locations are not Engram projects, so deriving a route from an
+  // arbitrary directory name would create a guaranteed gateway 404. A plain
+  // Git checkout keeps the zero-mapping convention; non-Git roots need an
+  // explicit directory/project mapping or an explicit plugin identity.
+  const mcpV2 = gitWorktree || hasConfiguredIdentity(directoryBasename, options)
+    ? buildMcpServerConfigV2(identity, options)
+    : undefined
   return {
     identity,
     gatewayUrl: mcpV2?.url,
@@ -205,6 +230,8 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
   const probeCache = new ProbeCache()
   const pendingProbe = new Set<string>()
   const logMetric = makeLogMetric()
+  type WorktreeIndexer = ReturnType<typeof createWorktreeIndexer>
+  let worktreeIndexer: WorktreeIndexer | undefined
 
   logProjectLine(identity, directory)
 
@@ -235,6 +262,26 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
     const input = event.input as { command?: unknown } | undefined
     const hit = shouldNudgeMcp(event.tool, input?.command)
     if (hit) console.error(`[engram-plugin] ${buildMcpNudgeMessage(hit)}`)
+    if (worktreeIndexer && isZvecWorkspaceReadTool(event.tool)) {
+      const toolInput = event.input as { root?: unknown } | undefined
+      const requestedRoot = typeof toolInput?.root === "string" && toolInput.root.trim()
+        ? toolInput.root
+        : directory
+      // The MCP tool's root is authoritative. This also covers OpenChamber
+      // aggregate worktree directories that are not returned by the
+      // project-level worktree inventory. Keep unrelated hooks synchronous;
+      // OpenCode treats an async return as a blocking hook.
+      return worktreeIndexer.ensureIndexed(requestedRoot)
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error)
+          throw new Error(`[engram-plugin] zvec-grep is not ready for ${requestedRoot}: ${message}`)
+        })
+        .then(() => {
+          if (isEngramTool(event.tool)) {
+            logMetric(buildEngramToolUseEvent(event.sessionID, event.tool))
+          }
+        })
+    }
     if (isEngramTool(event.tool)) {
       logMetric(buildEngramToolUseEvent(event.sessionID, event.tool))
     }
@@ -277,24 +324,46 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
 
   // OpenCode/OpenChamber worktree operations publish worktree.updated on the
   // canonical project. Indexing is opt-in per deployment-configured route;
-  // every sibling worktree receives an independent local zvec index.
+  // every sibling worktree receives an independent local zvec index. A gated
+  // route also blocks prompt admission until the current checkout is ready.
   const worktreePolicy = options.worktreeIndex || {}
-  const worktreeIndexer = shouldAutoIndexWorktrees(
+  const autoIndex = shouldAutoIndexWorktrees(
     worktreeProjectIdentity.project,
     worktreePolicy,
   )
+  const gateSessions = shouldGateSessions(worktreeProjectIdentity.project, worktreePolicy)
+  worktreeIndexer = (autoIndex || gateSessions)
     ? createWorktreeIndexer({
         projectID: ctx.location.project.id,
         canonicalDirectory,
         listWorktrees: () => ctx.worktree.list({ projectID: ctx.location.project.id }),
         binary: worktreePolicy.binary,
         embedding: worktreePolicy.embedding || DEFAULT_ZVEC_EMBEDDING,
+        jiebaDictionary: worktreePolicy.jiebaDictionary,
       })
     : undefined
 
+  const pendingSessionReadiness = new Map<string, Promise<void>>()
+  const sessionIndexer = worktreeIndexer
+  if (sessionIndexer && gateSessions && gatewayUrl) {
+    await ctx.session.hook("prompt", (event) => {
+      const existing = pendingSessionReadiness.get(event.sessionID)
+      if (existing) return existing
+
+      const readiness = ensureEngramSessionReady({
+        listMcp: () => ctx.mcp.list(),
+        ensureIndex: () => sessionIndexer.ensureIndexed(directory),
+      }).finally(() => {
+        pendingSessionReadiness.delete(event.sessionID)
+      })
+      pendingSessionReadiness.set(event.sessionID, readiness)
+      return readiness
+    })
+  }
+
   // Also reconcile roots that were created just before the plugin started or
-  // while OpenCode was reconnecting its event stream. This runs in the
-  // background and never delays session startup.
+  // while OpenCode was reconnecting its event stream. This starts in the
+  // background; prompt admission waits for the current root when gated.
   if (worktreeIndexer) void worktreeIndexer.refresh()
 
   // Post-compaction observer: low-risk, never blocks.

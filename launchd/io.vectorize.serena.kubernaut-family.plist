@@ -20,12 +20,11 @@
          (find/rename/replace_symbol_body/etc.) -- switchable at runtime instead
          of being fixed to one repo for the daemon's lifetime.
 
-         --add-mode query-projects additionally exposes query_project /
-         list_queryable_projects, letting an agent read (READ-ONLY only --
-         Serena hard-asserts this, confirmed empirically) symbols/references from
-         any *other* registered project without switching the active one --
-         useful for a quick cross-repo lookup that shouldn't disturb the
-         session's actual active project.
+         --add-mode query-projects is intentionally omitted. The optional
+         cross-project path can scan an entire unrelated worktree and was
+         observed reading multi-gigabyte CI image artifacts. Cross-repository
+         semantic lookup is provided by the Engram/zvec backend; this daemon
+         retains activate_project for normal Serena read/write work.
 
          Known accepted limitation: only ONE project can be "active" (fully
          read+write) on this daemon at a time. If two Cursor windows have two
@@ -37,6 +36,8 @@
          as a defensive re-assertion. -->
     <key>ProgramArguments</key>
     <array>
+        <string>__HOME__/.engram/venv/bin/python3</string>
+        <string>__HOME__/.engram/scripts/serena-launchd-supervisor.py</string>
         <string>__HOME__/.local/bin/uvx</string>
         <string>--from</string>
         <string>git+https://github.com/oraios/serena@1bbe53546124c00e4238972f1599a91fbf8c6539</string>
@@ -46,8 +47,6 @@
         <string>ide</string>
         <string>--add-mode</string>
         <string>no-memories</string>
-        <string>--add-mode</string>
-        <string>query-projects</string>
         <string>--open-web-dashboard</string>
         <string>false</string>
         <string>--transport</string>
@@ -77,5 +76,21 @@
     </dict>
     <key>RunAtLoad</key>
     <true/>
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+    <key>ExitTimeOut</key>
+    <integer>10</integer>
+    <key>AbandonProcessGroup</key>
+    <false/>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>ResidentSetSize</key>
+        <integer>2147483648</integer>
+    </dict>
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>ResidentSetSize</key>
+        <integer>2147483648</integer>
+    </dict>
 </dict>
 </plist>

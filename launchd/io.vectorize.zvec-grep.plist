@@ -23,9 +23,9 @@
         <key>ZVEC_GREP_CONTAINER_RUNTIME</key>
         <string>__HOME__/go/bin/docker</string>
         <key>ZVEC_GREP_CONTAINER_IMAGE</key>
-        <string>quay.io/jordigilh/zvec-grep:zg-v0.0.1-test.3</string>
+        <string>quay.io/jordigilh/zvec-grep:strict-c440800</string>
         <key>ZVEC_GREP_PROXY_IMAGE</key>
-        <string>localhost/zg-loopback-proxy:local</string>
+        <string>quay.io/jordigilh/zg-loopback-proxy:strict-c440800</string>
     </dict>
     <!-- ZG keeps several RocksDB/vector index files open across the shared
          workspace pool. launchd's default soft limit is 256, which causes

@@ -9,11 +9,21 @@
 set -euo pipefail
 
 RUNTIME="${ZVEC_GREP_CONTAINER_RUNTIME:-${HOME}/go/bin/docker}"
-ZG_IMAGE="${ZVEC_GREP_CONTAINER_IMAGE:-quay.io/jordigilh/zvec-grep:zg-v0.0.1-test.3}"
-PROXY_IMAGE="${ZVEC_GREP_PROXY_IMAGE:-localhost/zg-loopback-proxy:local}"
+ZG_IMAGE="${ZVEC_GREP_CONTAINER_IMAGE:-quay.io/jordigilh/zvec-grep:strict-c440800}"
+PROXY_IMAGE="${ZVEC_GREP_PROXY_IMAGE:-quay.io/jordigilh/zg-loopback-proxy:strict-c440800}"
 ZG_NAME="${ZVEC_GREP_CONTAINER_NAME:-engram-zvec-grep}"
 PROXY_NAME="${ZVEC_GREP_PROXY_NAME:-engram-zvec-grep-proxy}"
 STATE_DIR="${ZVEC_GREP_STATE_DIR:-${HOME}/.engram/zvec-grep}"
+
+# OpenCode creates temporary worktrees under macOS /private/var/folders. The
+# normal HOME bind mount cannot expose those paths to the container, even
+# though the host-side path is valid. Keep this optional so the same wrapper
+# remains usable on hosts without that macOS temporary-directory hierarchy.
+MACOS_TEMP_ROOT=/private/var/folders
+MACOS_TEMP_MOUNT_ARGS=()
+if [[ -d "$MACOS_TEMP_ROOT" ]]; then
+    MACOS_TEMP_MOUNT_ARGS=(--volume "$MACOS_TEMP_ROOT:$MACOS_TEMP_ROOT:rw")
+fi
 
 if [[ ! -x "$RUNTIME" ]]; then
     echo "zvec-grep container runtime is not executable: $RUNTIME" >&2
@@ -34,6 +44,12 @@ trap 'exit 143' HUP INT TERM
 # behind by a launchd restart after the wrapper was interrupted.
 cleanup
 
+# Pull explicitly so the deployed digest is refreshed before startup. Keep the
+# subsequent runs offline and deterministic; Podman 5.8 can otherwise resolve
+# a multi-architecture registry reference differently between pull and run.
+"$RUNTIME" pull --policy=always "$ZG_IMAGE"
+"$RUNTIME" pull --policy=always "$PROXY_IMAGE"
+
 "$RUNTIME" run \
     --pull=never \
     --detach \
@@ -45,6 +61,7 @@ cleanup
     --env ZVEC_GREP_HOME=/var/lib/zg \
     --volume "$STATE_DIR:/var/lib/zg:rw" \
     --volume "$HOME:$HOME:rw" \
+    "${MACOS_TEMP_MOUNT_ARGS[@]}" \
     "$ZG_IMAGE" \
     --server run \
     --listen 127.0.0.1:7999 \

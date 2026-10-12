@@ -35,4 +35,5 @@ args = ["start-mcp-server", "--project", "/path/to/my-project"]
 # shadow_timeout_seconds = 180
 # shadow_log = "~/.engram/logs/code-shadow.jsonl"
 # source_roots = { my-project = "/path/to/my-project" }
+# allowed_roots = ["/path/to/my-project"]
 # callgraph_repos = ["my-project"]

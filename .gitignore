@@ -5,6 +5,9 @@ __pycache__/
 .DS_Store
 config.env
 node_modules/
+.zvec-grep/
+coverage/
+.coverage
 
 # Local OpenCode/Codex configuration and Cursor hook installation. These files
 # contain machine-specific localhost endpoints and absolute home-directory

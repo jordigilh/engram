@@ -9,8 +9,8 @@
 set -euo pipefail
 
 RUNTIME="${ZVEC_GREP_CONTAINER_RUNTIME:-${HOME}/go/bin/docker}"
-ZG_IMAGE="${ZVEC_GREP_CONTAINER_IMAGE:-quay.io/jordigilh/zvec-grep:strict-c440800}"
-PROXY_IMAGE="${ZVEC_GREP_PROXY_IMAGE:-quay.io/jordigilh/zg-loopback-proxy:strict-c440800}"
+ZG_IMAGE="${ZVEC_GREP_CONTAINER_IMAGE:-quay.io/jordigilh/zvec-grep:latest}"
+PROXY_IMAGE="${ZVEC_GREP_PROXY_IMAGE:-quay.io/jordigilh/zg-loopback-proxy:latest}"
 ZG_NAME="${ZVEC_GREP_CONTAINER_NAME:-engram-zvec-grep}"
 PROXY_NAME="${ZVEC_GREP_PROXY_NAME:-engram-zvec-grep-proxy}"
 STATE_DIR="${ZVEC_GREP_STATE_DIR:-${HOME}/.engram/zvec-grep}"

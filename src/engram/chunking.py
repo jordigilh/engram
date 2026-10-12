@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Shared, content-stable chunking helpers for CocoIndex ingestion flows.
 
-Used by cocoindex-flows.py, engram-cocoindex-flows.py, koku-cocoindex-flows.py,
-and dcm-cocoindex-flows.py to turn a doc/issue's text into one or more
-hindsight_retain() calls.
+Used by the configuration-driven ingestion flow to turn a doc/issue's text
+into one or more hindsight_retain() calls.
 
 Why this exists (see docs/FINDINGS.md 2026-08-03): the original per-flow
 `_split_text()` sliced content at fixed character offsets and named each
@@ -175,7 +174,7 @@ def find_code_files(
 
     A missing root returns an empty list rather than raising -- a
     project whose live checkout isn't present locally (e.g. running from a
-    machine that only has some of kubernaut/koku/dcm/engram cloned) should
+    machine that only has some of the supported projects cloned) should
     degrade to "no matches" for that one root, not crash the whole query.
     """
     if not root.is_dir():

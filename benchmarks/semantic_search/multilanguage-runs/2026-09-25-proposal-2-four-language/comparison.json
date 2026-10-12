@@ -1,0 +1,578 @@
+{
+  "schema_version": 1,
+  "languages": {
+    "go": {
+      "typescript": {
+        "baseline": {
+          "ndcg@10": 0.5887735493745122,
+          "mrr@10": 0.7333333333333333,
+          "recall@10": 0.6770833333333334,
+          "precision@10": 0.25
+        },
+        "candidate": {
+          "ndcg@10": 0.5887735493745122,
+          "mrr@10": 0.7333333333333333,
+          "recall@10": 0.6770833333333334,
+          "precision@10": 0.25
+        },
+        "delta": {
+          "ndcg@10": 0.0,
+          "mrr@10": 0.0,
+          "recall@10": 0.0,
+          "precision@10": 0.0
+        },
+        "per_query_delta": {
+          "record-discovered-membership": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "reject-undiscovered-workflow": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "forward-labels-to-discovery": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "preserve-membership-on-retry": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "interactive-selection-guard": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "validate-workflow-parameters": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "empty-discovery-fails-closed": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "copy-selected-workflow-details": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          }
+        }
+      },
+      "rust": {
+        "baseline": {
+          "ndcg@10": 0.47101296779840396,
+          "mrr@10": 0.6678571428571428,
+          "recall@10": 0.6208333333333333,
+          "precision@10": 0.225
+        },
+        "candidate": {
+          "ndcg@10": 0.4642209576711445,
+          "mrr@10": 0.6636904761904762,
+          "recall@10": 0.6208333333333333,
+          "precision@10": 0.225
+        },
+        "delta": {
+          "ndcg@10": -0.00679201012725944,
+          "mrr@10": -0.004166666666666652,
+          "recall@10": 0.0,
+          "precision@10": 0.0
+        },
+        "per_query_delta": {
+          "record-discovered-membership": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "reject-undiscovered-workflow": {
+            "ndcg@10": -0.01509791800200011,
+            "mrr@10": -0.033333333333333354,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "forward-labels-to-discovery": {
+            "ndcg@10": -0.0392381630160753,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "preserve-membership-on-retry": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "interactive-selection-guard": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "validate-workflow-parameters": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "empty-discovery-fails-closed": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "copy-selected-workflow-details": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          }
+        }
+      }
+    },
+    "python": {
+      "typescript": {
+        "baseline": {
+          "ndcg@10": 0.5465207178647487,
+          "mrr@10": 0.5479166666666667,
+          "recall@10": 0.6895833333333333,
+          "precision@10": 0.25
+        },
+        "candidate": {
+          "ndcg@10": 0.5465207178647487,
+          "mrr@10": 0.5479166666666667,
+          "recall@10": 0.6895833333333333,
+          "precision@10": 0.25
+        },
+        "delta": {
+          "ndcg@10": 0.0,
+          "mrr@10": 0.0,
+          "recall@10": 0.0,
+          "precision@10": 0.0
+        },
+        "per_query_delta": {
+          "record-discovered-membership": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "reject-undiscovered-workflow": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "forward-labels-to-discovery": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "preserve-membership-on-retry": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "interactive-selection-guard": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "validate-workflow-parameters": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "empty-discovery-fails-closed": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "copy-selected-workflow-details": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          }
+        }
+      },
+      "rust": {
+        "baseline": {
+          "ndcg@10": 0.5303623711576944,
+          "mrr@10": 0.54375,
+          "recall@10": 0.6395833333333333,
+          "precision@10": 0.225
+        },
+        "candidate": {
+          "ndcg@10": 0.527688048931038,
+          "mrr@10": 0.5263888888888889,
+          "recall@10": 0.6395833333333333,
+          "precision@10": 0.225
+        },
+        "delta": {
+          "ndcg@10": -0.0026743222266563116,
+          "mrr@10": -0.01736111111111105,
+          "recall@10": 0.0,
+          "precision@10": 0.0
+        },
+        "per_query_delta": {
+          "record-discovered-membership": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "reject-undiscovered-workflow": {
+            "ndcg@10": -0.11204824936754415,
+            "mrr@10": -0.1388888888888889,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "forward-labels-to-discovery": {
+            "ndcg@10": 0.09065367155429405,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "preserve-membership-on-retry": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "interactive-selection-guard": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "validate-workflow-parameters": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "empty-discovery-fails-closed": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "copy-selected-workflow-details": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          }
+        }
+      }
+    },
+    "rust": {
+      "typescript": {
+        "baseline": {
+          "ndcg@10": 0.4163304175242697,
+          "mrr@10": 0.45555555555555555,
+          "recall@10": 0.5604166666666667,
+          "precision@10": 0.2
+        },
+        "candidate": {
+          "ndcg@10": 0.4163304175242697,
+          "mrr@10": 0.45555555555555555,
+          "recall@10": 0.5604166666666667,
+          "precision@10": 0.2
+        },
+        "delta": {
+          "ndcg@10": 0.0,
+          "mrr@10": 0.0,
+          "recall@10": 0.0,
+          "precision@10": 0.0
+        },
+        "per_query_delta": {
+          "record-discovered-membership": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "reject-undiscovered-workflow": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "forward-labels-to-discovery": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "preserve-membership-on-retry": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "interactive-selection-guard": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "validate-workflow-parameters": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "empty-discovery-fails-closed": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "copy-selected-workflow-details": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          }
+        }
+      },
+      "rust": {
+        "baseline": {
+          "ndcg@10": 0.430053048748796,
+          "mrr@10": 0.4357142857142857,
+          "recall@10": 0.5854166666666667,
+          "precision@10": 0.2125
+        },
+        "candidate": {
+          "ndcg@10": 0.4430705268855448,
+          "mrr@10": 0.4982142857142857,
+          "recall@10": 0.5854166666666667,
+          "precision@10": 0.2125
+        },
+        "delta": {
+          "ndcg@10": 0.013017478136748806,
+          "mrr@10": 0.0625,
+          "recall@10": 0.0,
+          "precision@10": 0.0
+        },
+        "per_query_delta": {
+          "record-discovered-membership": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "reject-undiscovered-workflow": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "forward-labels-to-discovery": {
+            "ndcg@10": 0.10413982509399067,
+            "mrr@10": 0.5,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "preserve-membership-on-retry": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "interactive-selection-guard": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "validate-workflow-parameters": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "empty-discovery-fails-closed": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "copy-selected-workflow-details": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          }
+        }
+      }
+    },
+    "typescript": {
+      "typescript": {
+        "baseline": {
+          "ndcg@10": 0.42679147362817854,
+          "mrr@10": 0.5916666666666667,
+          "recall@10": 0.55,
+          "precision@10": 0.2
+        },
+        "candidate": {
+          "ndcg@10": 0.42679147362817854,
+          "mrr@10": 0.5916666666666667,
+          "recall@10": 0.55,
+          "precision@10": 0.2
+        },
+        "delta": {
+          "ndcg@10": 0.0,
+          "mrr@10": 0.0,
+          "recall@10": 0.0,
+          "precision@10": 0.0
+        },
+        "per_query_delta": {
+          "record-discovered-membership": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "reject-undiscovered-workflow": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "forward-labels-to-discovery": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "preserve-membership-on-retry": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "interactive-selection-guard": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "validate-workflow-parameters": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "empty-discovery-fails-closed": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "copy-selected-workflow-details": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          }
+        }
+      },
+      "rust": {
+        "baseline": {
+          "ndcg@10": 0.32070927830842,
+          "mrr@10": 0.32395833333333335,
+          "recall@10": 0.5708333333333333,
+          "precision@10": 0.2
+        },
+        "candidate": {
+          "ndcg@10": 0.34495321698950654,
+          "mrr@10": 0.40014880952380955,
+          "recall@10": 0.5708333333333333,
+          "precision@10": 0.2
+        },
+        "delta": {
+          "ndcg@10": 0.02424393868108654,
+          "mrr@10": 0.0761904761904762,
+          "recall@10": 0.0,
+          "precision@10": 0.0
+        },
+        "per_query_delta": {
+          "record-discovered-membership": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "reject-undiscovered-workflow": {
+            "ndcg@10": -0.04643915453670705,
+            "mrr@10": -0.05714285714285716,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "forward-labels-to-discovery": {
+            "ndcg@10": 0.2403906639853992,
+            "mrr@10": 0.6666666666666667,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "preserve-membership-on-retry": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "interactive-selection-guard": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "validate-workflow-parameters": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "empty-discovery-fails-closed": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          },
+          "copy-selected-workflow-details": {
+            "ndcg@10": 0.0,
+            "mrr@10": 0.0,
+            "recall@10": 0.0,
+            "precision@10": 0.0
+          }
+        }
+      }
+    }
+  },
+  "run_policy": {
+    "scores_are_language_specific": true,
+    "cross_language_macro_average": "not computed",
+    "baseline_candidate_pairs": "same implementation, fixture, qrels, model, device, query protocol"
+  }
+}

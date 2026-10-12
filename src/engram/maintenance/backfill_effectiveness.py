@@ -16,13 +16,13 @@ inputs that would have been visible that night:
   - transcripts, filtered by mtime to [original_run_time - 24h, original_run_time]
   - mcp-calls.jsonl, filtered by `ts` to the same window
 
-The original run time is reconstructed from each project's launchd
+The original run time is reconstructed from the project's launchd
 StartCalendarInterval schedule (hindsight.nightly.plist runs kubernaut at
-2:01am, hindsight.nightly-dcm.plist runs dcm at 2:31am) combined with the
-file's own "date" field — NOT the file's mtime. mtime is destroyed the first
-time this script writes the file, which silently corrupts the window on any
-second run (every backfilled file would then look like it ran "now"). The
-schedule-based timestamp is stable and makes this script safely idempotent.
+2:01am) combined with the file's own "date" field — NOT the file's mtime.
+mtime is destroyed the first time this script writes the file, which silently
+corrupts the window on any second run (every backfilled file would then look
+like it ran "now"). The schedule-based timestamp is stable and makes this
+script safely idempotent.
 
 Usage:
     python3 backfill-effectiveness.py [--dry-run] [--since YYYY-MM-DD]
@@ -50,11 +50,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from engram.pipeline import nightly_learn as nl  # noqa: E402
 
-# (hour, minute) each project's nightly launchd job is scheduled to start,
-# per ~/Library/LaunchAgents/io.vectorize.hindsight.nightly{,-dcm}.plist.
+# (hour, minute) the nightly launchd job is scheduled to start, per
+# ~/Library/LaunchAgents/io.vectorize.hindsight.nightly.plist.
 NIGHTLY_RUN_TIME = {
     "kubernaut": (2, 1),
-    "dcm": (2, 31),
 }
 
 
@@ -168,7 +167,7 @@ def main():
         with open(nl.EFFECTIVENESS_LOG) as f:
             pre_backfill_line_count = sum(1 for _ in f)
 
-    for project in ("kubernaut", "dcm"):
+    for project in ("kubernaut",):
         suffix = nl.PROJECT_CONFIGS[project]["log_suffix"]
         print(f"\n=== {project} ===")
         d = since

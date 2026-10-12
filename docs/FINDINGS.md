@@ -27,6 +27,10 @@ recall-quality benchmark is built against.
 
 ## Index
 
+### October 2026 (1 entry)
+
+- [2026-10-02: Migrated the shared Hindsight bank from `cursor-memory` to `shared-memory`](findings/2026-10.md#2026-10-02-migrated-the-shared-hindsight-bank-from-cursor-memory-to-shared-memory)
+
 ### September 2026 (4 entries)
 
 - [2026-09-12: OpenCode Hooks Spike — Methodology Survives Compaction, Probe-Once Code-Search Nudge, Code-Backend Compat Fix; % Auto-Compact Parked Upstream](findings/2026-09.md#2026-09-12-opencode-hooks-spike--methodology-survives-compaction-probe-once-code-search-nudge-code-backend-compat-fix--auto-compact-parked-upstream)

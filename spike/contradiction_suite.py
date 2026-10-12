@@ -2,7 +2,7 @@
 
 Validates the contradiction-check prompt (Config A: Sonnet, see classify.py
 check_contradiction) in isolation, before it is ever pointed at real
-cursor-memory content. Several cases are drawn from real project facts found
+shared-memory content. Several cases are drawn from real project facts found
 in spike/ground_truth.py to keep them realistic rather than purely
 artificial; a few are deliberately adversarial (high lexical overlap but no
 real conflict, or a "blanket rule vs. narrow exception" case flagged as a

@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "run_id": "2026-09-24-zvec-sense-lexical-baseline",
+  "fixture_id": "rust-workflow-discovery-v1",
+  "language": "rust",
+  "source": {
+    "repository": "synthetic/rust-workflow-discovery",
+    "revision": "fixture-v1",
+    "root": ".",
+    "include": [
+      "**/*.rs"
+    ],
+    "exclude": [
+      "**/*_test.rs"
+    ],
+    "snapshot_sha256": "eb8b41c271aa13160a1ba7ce63af7c8ea35461f3f1bfa8248a3845d19d44c98a",
+    "files": 14,
+    "bytes": 8073
+  },
+  "queries": 8,
+  "units": 39,
+  "qrels_status": "adjudicated",
+  "candidate_pool_complete": true,
+  "implementation": {
+    "backend": "zvec-grep TypeScript",
+    "source_commit": "196a73015bf4ca42b1bb0adae56338d9ab156af7",
+    "working_tree_dirty": true,
+    "working_tree_patch_sha256": "f5d233e328639f5720cd997fd5f181e0a8f928fbcfff0e983e8491669424a869",
+    "binary": "/Users/jgil/go/src/github.com/jordigilh/zvec-grep-fork/dist/cli/index.js",
+    "binary_sha256": "817ff1c4ff0b57b0c27eb9c3d8869f9a4db32d1765267798e77c3be6d1b49f6f"
+  },
+  "index": {
+    "index_version": 2,
+    "embedding_model": "local/potion-code-16m-v2",
+    "device": "cpu",
+    "root": "/private/var/folders/r7/gktmmltd1zq7wqhsjjslwsm80000gn/T/opencode/zvec-sense-baseline-rust",
+    "files_indexed": 14,
+    "entities_indexed": 42,
+    "selection": {
+      "repository": "synthetic/rust-workflow-discovery",
+      "revision": "fixture-v1",
+      "root": ".",
+      "include": [
+        "**/*.rs"
+      ],
+      "exclude": [
+        "**/*_test.rs"
+      ]
+    },
+    "model_cache": "/var/folders/r7/gktmmltd1zq7wqhsjjslwsm80000gn/T/opencode/zvec-sense-baseline-model-cache"
+  },
+  "search": {
+    "route": "hybrid",
+    "mode": "direct",
+    "refresh": "off",
+    "limit": 10,
+    "normalized_cutoff": 10,
+    "normalization": "source-unit@10"
+  },
+  "metrics_at_10": {
+    "ndcg@10": 0.4163304175242697,
+    "mrr@10": 0.45555555555555555,
+    "recall@10": 0.5604166666666667,
+    "precision@10": 0.2
+  },
+  "qrels_overlay": {
+    "description": "Added six source-authored grade-0 module-declaration units for Rust .rs files that are included in the frozen source snapshot but absent from the original 33-symbol unit manifest.",
+    "added_unit_ids": [
+      "src/discovery/mod.rs::module-declarations",
+      "src/execution/mod.rs::module-declarations",
+      "src/lib.rs::module-declarations",
+      "src/metrics/mod.rs::module-declarations",
+      "src/selection/mod.rs::module-declarations",
+      "src/tools/mod.rs::module-declarations"
+    ],
+    "canonical_qrels_units": 33,
+    "overlay_qrels_units": 39
+  }
+}

@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
+import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import * as path from "node:path"
 import pluginDefault, { appendV2Nudge } from "./index"
 import { buildMcpServerConfigV2, mergeMcpEditor } from "./identity"
+import "./test-config"
 
 function fakeEditor(initial: Record<string, unknown> = {}) {
   const store = new Map<string, unknown>(Object.entries(initial))
@@ -34,6 +38,7 @@ function fakeV2Ctx(mcpInitial: Record<string, unknown> = {}) {
         cb(editor)
         return { dispose: async () => {} }
       },
+      list: async () => ({ data: [{ name: "engram", status: "connected" }] }),
     },
     session: {
       hook: async (name: string, cb: (event: any) => void | Promise<void>) => {
@@ -64,12 +69,16 @@ describe("V2 plugin export", () => {
 
 describe("buildMcpServerConfigV2", () => {
   test("emits a native V2 remote entry with OAuth disabled", () => {
-    const cfg = buildMcpServerConfigV2({ project: "service-api-v1.5" })
+    const cfg = buildMcpServerConfigV2(
+      { project: "service-api-v1.5" },
+      { gatewayUrl: "http://127.0.0.1:8896" },
+    )
     expect(cfg).toEqual({
       type: "remote",
       url: "http://127.0.0.1:8896/mcp/service-api-v1.5",
       oauth: false,
       disabled: false,
+      codemode: false,
     })
   })
 
@@ -77,12 +86,16 @@ describe("buildMcpServerConfigV2", () => {
     const cfg = buildMcpServerConfigV2({ project: "myrepo" }, { gatewayUrl: "http://localhost:9999/" })
     expect(cfg.url).toBe("http://localhost:9999/mcp/myrepo")
   })
+
+  test("does not invent a gateway endpoint when deployment config is absent", () => {
+    expect(buildMcpServerConfigV2({ project: "service-api" })).toBeUndefined()
+  })
 })
 
 describe("mergeMcpEditor", () => {
   test("adds the generated route when none exists", () => {
     const editor = fakeEditor()
-    const generated = buildMcpServerConfigV2({ project: "engram" })
+    const generated = buildMcpServerConfigV2({ project: "engram" }, { gatewayUrl: "http://127.0.0.1:8896" })!
     mergeMcpEditor(editor as never, generated)
     expect(editor.store.get("engram")).toEqual(generated)
   })
@@ -90,7 +103,10 @@ describe("mergeMcpEditor", () => {
   test("never overwrites an explicit route", () => {
     const explicit = { type: "remote", url: "http://127.0.0.1:8896/mcp/dcm", oauth: false, disabled: false }
     const editor = fakeEditor({ engram: explicit })
-    mergeMcpEditor(editor as never, buildMcpServerConfigV2({ project: "other" }))
+    mergeMcpEditor(
+      editor as never,
+      buildMcpServerConfigV2({ project: "other" }, { gatewayUrl: "http://127.0.0.1:8896" })!,
+    )
     expect(editor.store.get("engram")).toEqual(explicit)
   })
 })
@@ -98,6 +114,7 @@ describe("mergeMcpEditor", () => {
 describe("v2 setup", () => {
   test("registers a fallback engram MCP entry", async () => {
     const { ctx, editor } = fakeV2Ctx()
+    ctx.options = { gatewayUrl: "http://127.0.0.1:8896", project: "engram" }
     const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
     const cleanup = await def.setup(ctx)
     expect(editor.store.get("engram")).toEqual({
@@ -105,9 +122,20 @@ describe("v2 setup", () => {
       url: "http://127.0.0.1:8896/mcp/engram",
       oauth: false,
       disabled: false,
+      codemode: false,
     })
     expect(typeof cleanup).toBe("function")
     ;(cleanup as () => void)()
+  })
+
+  test("does not invent a route for an unconfigured non-repository location", async () => {
+    const { ctx, editor } = fakeV2Ctx()
+    ctx.location = { directory: "/workspace/openchamber-chat" }
+    ctx.options = { gatewayUrl: "http://127.0.0.1:8896" }
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    await def.setup(ctx)
+
+    expect(editor.store.has("engram")).toBe(false)
   })
 
   test("preserves an explicit engram route from config", async () => {
@@ -116,6 +144,15 @@ describe("v2 setup", () => {
     const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
     await def.setup(ctx)
     expect(editor.store.get("engram")).toEqual(explicit)
+  })
+
+  test("keeps hooks active without inventing a route when gateway config is absent", async () => {
+    const { ctx, editor, sessionHooks } = fakeV2Ctx()
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    await def.setup(ctx)
+
+    expect(editor.store.has("engram")).toBe(false)
+    expect(sessionHooks["context"]?.length).toBe(1)
   })
 
   test("context hook re-applies methodology recall to every request", async () => {
@@ -138,6 +175,124 @@ describe("v2 setup", () => {
     expect(toolHooks["execute.after"]?.length).toBe(1)
     await toolHooks["execute.before"][0]({ tool: "bash", sessionID: "s1", input: { command: "engram recall" } })
     await toolHooks["execute.before"][0]({ tool: "read", sessionID: "s1", input: {} })
+  })
+
+  test("configured worktree indexing uses the canonical route and handles worktree.updated", async () => {
+    const { ctx } = fakeV2Ctx()
+    ctx.location = {
+      directory: "/worktrees/fix-123",
+      project: { id: "project-service-api", canonical: "/repos/service-api" },
+    }
+    ctx.options = { worktreeIndex: { projects: ["service-api"] } }
+    let listCalls = 0
+    let resolveSecondList: (() => void) | undefined
+    const secondList = new Promise<void>((resolve) => {
+      resolveSecondList = resolve
+    })
+    ctx.worktree = {
+      list: async ({ projectID }: { projectID: string }) => {
+        expect(projectID).toBe("project-service-api")
+        listCalls += 1
+        if (listCalls >= 2) resolveSecondList?.()
+        return []
+      },
+    }
+    ctx.event.subscribe = async function* () {
+      yield { type: "worktree.updated", data: { projectID: "project-service-api" } }
+    }
+
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const timeoutPromise = new Promise<void>((_resolve, reject) => {
+      timeout = setTimeout(
+        () => reject(new Error("worktree.updated did not trigger an inventory refresh")),
+        1000,
+      )
+    })
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    let cleanup: (() => void) | void = undefined
+    try {
+      cleanup = await def.setup(ctx)
+      await Promise.race([secondList, timeoutPromise])
+      expect(listCalls).toBeGreaterThanOrEqual(2)
+    } finally {
+      if (timeout) clearTimeout(timeout)
+      if (typeof cleanup === "function") cleanup()
+    }
+  })
+
+  test("does not gate prompts merely because background indexing is configured", async () => {
+    const { ctx, sessionHooks } = fakeV2Ctx()
+    ctx.location = {
+      directory: "/worktrees/fix-123",
+      project: { id: "project-service-api", canonical: "/repos/service-api" },
+    }
+    ctx.options = { worktreeIndex: { projects: ["service-api"] } }
+    ctx.worktree = { list: async () => [] }
+
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    const cleanup = await def.setup(ctx)
+    expect(sessionHooks["prompt"]).toBeUndefined()
+    if (typeof cleanup === "function") cleanup()
+  })
+
+  test("registers a prompt gate only when explicitly configured", async () => {
+    const { ctx, sessionHooks } = fakeV2Ctx()
+    ctx.location = {
+      directory: "/worktrees/fix-123",
+      project: { id: "project-service-api", canonical: "/repos/service-api" },
+    }
+    ctx.options = {
+      project: "service-api",
+      gatewayUrl: "http://127.0.0.1:8896",
+      worktreeIndex: { projects: ["service-api"], gateSessions: true },
+    }
+    ctx.worktree = {
+      list: async () => [],
+    }
+
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    const cleanup = await def.setup(ctx)
+    expect(sessionHooks["prompt"]?.length).toBe(1)
+    if (typeof cleanup === "function") cleanup()
+  })
+
+  test("preflights the exact root supplied to a zvec workspace read", async () => {
+    const fixture = await mkdtemp(path.join(tmpdir(), "engram-zvec-preflight-"))
+    const requestedRoot = path.join(fixture, "openchamber-worktree-pool")
+    const fakeZg = path.join(fixture, "fake-zg")
+    await mkdir(requestedRoot)
+    await writeFile(
+      fakeZg,
+      "#!/bin/sh\nmkdir -p \"$2/.zvec-grep\"\nprintf '{}\\n' > \"$2/.zvec-grep/manifest.json\"\n",
+    )
+    await chmod(fakeZg, 0o755)
+
+    const { ctx, toolHooks } = fakeV2Ctx()
+    ctx.location = {
+      directory: fixture,
+      project: { id: "project-service-api", canonical: fixture },
+    }
+    ctx.options = {
+      project: "service-api",
+      gatewayUrl: "http://127.0.0.1:8896",
+      worktreeIndex: { projects: ["service-api"], binary: fakeZg },
+    }
+    ctx.worktree = { list: async () => [] }
+
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    let cleanup: (() => void) | void = undefined
+    try {
+      cleanup = await def.setup(ctx)
+      await toolHooks["execute.before"][0]({
+        tool: "engram_zvec_grep_search",
+        sessionID: "session-zvec-preflight",
+        input: { root: requestedRoot, query: "worktree" },
+      })
+      expect(await Bun.file(path.join(requestedRoot, ".zvec-grep", "manifest.json")).exists()).toBe(true)
+    } finally {
+      if (typeof cleanup === "function") cleanup()
+      await rm(fixture, { recursive: true, force: true })
+    }
   })
 })
 

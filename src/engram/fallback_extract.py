@@ -27,10 +27,13 @@ import json
 import os
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
-LOG_DIR = Path.home() / ".engram" / "logs"
+from engram.project_config import load_default_settings
+
+DEPLOYMENT_SETTINGS = load_default_settings()
+LOG_DIR = DEPLOYMENT_SETTINGS.path("log_dir", "~/.engram/logs")
+assert LOG_DIR is not None
 FALLBACK_LOG_PATH = LOG_DIR / "fallback-retained.jsonl"
 
 # Entity candidates: CamelCase/PascalCase words (e.g. "CocoIndex"),

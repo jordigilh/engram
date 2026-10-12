@@ -6,9 +6,9 @@ How to add a new GitHub organization/project to the Engram knowledge system with
 
 Each project gets:
 - **Dedicated Hindsight banks**: `<project>-docs` and `<project>-issues` for isolated memory
-- **Shared `cursor-memory` bank**: Behavioral corrections and coding conventions are universal
+- **Shared memory bank (`shared-memory`)**: Behavioral corrections and coding conventions are universal
 - **Dedicated pgvector table**: `cocoindex.<project>_code_embeddings` for code search isolation
-- **Dedicated CocoIndex flows**: Separate ingestion script with its own state database
+- **Configured CocoIndex instance**: The shared generic adapter with its own state database
 - **Dedicated launchd service**: Independent process lifecycle
 - **OpenCode plugin configuration**: `opencode.json` loads the unified gateway plugin and derives the project route
 - **Optional stateless runtime image**: A containerized gateway can aggregate
@@ -24,9 +24,10 @@ Each project gets:
 > rationale (recurring Cursor MCP client flakiness with 4 separate connections
 > per repo) and the current registry of every onboarded repo. The gateway can
 > run natively under launchd or as the stateless `Dockerfile.engram` runtime
-> image. New project onboarding should use the image's generic
-> `[instances.<project>.backends.<name>]` TOML tables when possible; native
-> deployments add the equivalent route to `build_project_registry()`.
+> image. New project onboarding must use a deployment-local TOML registry;
+> adding a project must never require editing `src/engram/` or registering a
+> new source-code entrypoint. Native and container deployments consume the
+> same registry format.
 > In either case, the client points at one route:
 > `http://127.0.0.1:8896/mcp/<project>`. Kubernaut RCA is the only intentionally
 > project-specific optional backend; all other gateway and runtime configuration
@@ -54,12 +55,9 @@ tracking to ingest (e.g. this repo, `engram`, which tracks bugs/decisions in
 GitHub issues, but only for forward-looking enhancement proposals, a
 separate and non-overlapping use case that still doesn't need an
 `<project>-issues` bank): skip the `<project>-issues` bank entirely, skip
-the `issues_app` in the
-CocoIndex flow file, and omit `issues_repos` from the project's
-`PROJECT_CONFIGS` entry in both `engram.pipeline.nightly_learn` and
-`engram.maintenance.report` (both modules' `collect_ingestion_coverage()`/probe logic treat a missing
-`issues_repos` key as "contributes nothing to the total," not an error —
-verified by `tests/test_report.py::TestCollectIngestionCoverageProjectScoping::test_engram_project_contributes_nothing_to_issues_total`).
+the `issues` app in the generic flow, and omit `issues_repos` from the
+project's `~/.engram/projects.toml` table; a missing `issues_repos` key simply
+means no GitHub issue source is configured.
 
 **Tag-scoped mental model variant** — for a sub-repo of an *already-onboarded*
 project that wants its own focused recall/search view without the overhead of
@@ -92,54 +90,25 @@ from the full pattern:
 1. Step 1 (fork/clone) is usually just a single `git clone` of one existing
    checkout, not an org-wide fork loop — the target is often a single
    monorepo, not a multi-repo org.
-2. Step 4's `issues_app` in the CocoIndex flow authenticates against Jira's
-   REST API instead of `gh`. Shell out to `security find-generic-password`
-   to reuse the same Keychain entry the `jira` CLI already has configured
-   (see "Jira authentication" gotcha below) rather than prompting for a new
-   token or expecting one in an env var — do **not** invoke the `jira` CLI
-   itself as a subprocess for ingestion; its JQL/output flags are meant for
-   interactive use and are awkward to script reliably (e.g. it rejects a
-   trailing `ORDER BY` in some query forms, and silently mis-scopes cross-
-   project queries unless `-p <PROJECT>` is explicit — both hit during the
-   `rhdh-plugins` spike). Call the REST API directly instead, and flatten
-   Jira's Atlassian Document Format (ADF) rich-text fields to plain text
-   before ingestion (see `engram.flows.rhdh_plugins._adf_to_text`).
+2. Set `issue_provider = "jira"` and configure a narrow JQL scope under
+   `[projects.<project>.jira]`. Jira credentials and endpoint access are
+   prerequisites for Jira consumption; provision them through the deployment's
+   own authentication and secret-management process. The generic flow calls
+   Jira's REST API directly and flattens Atlassian Document Format (ADF) to
+   plain text.
 3. Scope the JQL to the target epic and its children explicitly (e.g.
-   `parent = <EPIC> OR key = <EPIC> order by created asc`, see
-   `engram.flows.rhdh_plugins._fetch_epic_and_children`), not a broad
+   `parent = <EPIC> OR key = <EPIC> order by created asc`), not a broad
    `project = <PROJECT>` — the latter would pull in every issue in the
-   tracker, defeating the whole point of narrow-scope onboarding. No upper
-   result `LIMIT` is needed here (unlike koku's whole-project ingestion,
-   which caps via `KOKU_JIRA_LIMIT`) since one epic's subtree is expected to
-   be a handful of issues, not thousands.
-4. Omit `issues_repos` from the project's `PROJECT_CONFIGS` entry in both
-   `engram.pipeline.nightly_learn` and `engram.maintenance.report`, same as
-   the no-issues-bank variant above — `issues_repos` specifically means
-   "GitHub repos to total issues/PRs across via `gh`," which doesn't apply
-   to a Jira-sourced bank. The `<project>-issues` Hindsight bank and its
-   mental model(s) still exist and still work normally for `recall`; only
-   the GitHub-specific totals in `report.py` are skipped.
-5. Also narrow the **code** app's scope to match the epic's actual footprint
-   (e.g. one workspace/package directory inside a monorepo, not every
-   package) — a Jira-scoped issues bank paired with a whole-monorepo code
-   index would defeat the same narrow-scope goal from the code side instead.
-
-> **Jira authentication gotcha**: don't require a separate Jira API token
-> setup for ingestion if the machine already has the `jira` CLI
-> (`github.com/ankitpokhrel/jira-cli` or similar) configured and
-> authenticated — its token lives in the macOS Keychain under a
-> predictable service/account name. Read it with the same `-a <account>
-> -s <service>` pair the CLI itself uses (e.g.
-> `security find-generic-password -a jira-cli -s jira-cloud-api-token -w` —
-> see `engram.flows.rhdh_plugins._jira_token`) instead of asking the user
-> for a fresh token; this was the approach the user explicitly chose over
-> prompting for new credentials during the `rhdh-plugins` onboarding. Also
-> prefer calling Jira's REST API (`/rest/api/3/search/jql`) directly with
-> that token over shelling out to the `jira` CLI for ingestion —
-> `jira-cli`'s `--paginate` has a real bug against Jira Cloud's newer
-> `/search/jql` endpoint (see koku's `_jira_token()` docstring for the full
-> history), and its query/output flags are meant for interactive use, not
-> scripted ingestion.
+   tracker, defeating the whole point of narrow-scope onboarding. The generic
+   adapter paginates the REST response without a hard-coded project limit.
+4. Omit `issues_repos` from the project's `~/.engram/projects.toml` table — it
+   specifically means "GitHub repos to total issues/PRs via `gh`," which does
+   not apply to Jira. The `<project>-issues` bank and mental models still work
+   normally for recall; only GitHub-specific totals are skipped.
+5. Also narrow the **code** source patterns in `~/.engram/projects.toml` to
+   match the epic's actual footprint (e.g. one workspace/package directory
+   inside a monorepo, not every package) — a Jira-scoped issues bank paired
+   with a whole-monorepo code index would defeat the same narrow-scope goal.
 
 ## Steps
 
@@ -212,9 +181,9 @@ curl -X PUT http://localhost:8888/v1/default/banks/<project>-issues \
 > TF-IDF keywords. Same bytes always yield the same synthesis (verified by
 > test + double-run diff), it runs in milliseconds per document, and it is
 > stored as chunk retain metadata (`key_sentences`, `keywords` — plain
-> strings, since `MemoryItem.metadata` is `dict[str, str]`). Wire it into a
-> flow's `process_doc_file` (see `engram.flows.kubernaut`'s `synth_meta`)
-> when onboarding a docs bank. This is compression by statistics, not
+> strings, since `MemoryItem.metadata` is `dict[str, str]`). The generic
+> configured flow does this automatically for every configured docs source.
+> This is compression by statistics, not
 > comprehension — abstraction and judgment remain manual LLM operations.
 
 ### 3. Create Mental Models
@@ -230,86 +199,100 @@ Use the Hindsight API or MCP to create mental models for each bank:
 - `active-priorities`: Trigger on open issues, priorities, project direction
 - `known-bugs`: Trigger on known bugs, root causes, workarounds
 
-### 4. Create CocoIndex Flows
+## Add the project adapters
 
-Create `src/engram/flows/<project>.py` from the closest generic flow module
-(for example, `src/engram/flows/engram.py`) rather than copying a
-project-specific flow:
+The adapters are already generic. Do **not** create
+`src/engram/flows/<project>.py`, `src/engram/search/<project>.py`, a
+project-specific `[project.scripts]` entry, or a source-code registry branch.
+Those are precisely the changes this setup is designed to avoid.
 
-- Three apps: docs, issues, code
-- Banks: `<project>-docs`, `<project>-issues`
-- pgvector table: `cocoindex.<project>_code_embeddings` (isolated from other projects)
-- Separate CocoIndex state DB: `~/.engram/<project>-cocoindex.db`
-- Environment variables prefixed with `<PROJECT>_*`
+Copy [`projects.toml.example`](projects.toml.example) to
+`~/.engram/projects.toml` and add one `[projects.<project>]` table plus one
+`[[projects.<project>.sources]]` record for each repository/workspace. The
+configuration supplies banks, the code table, source roots, file patterns,
+issue repositories, workspace prefixes, and the per-project CocoIndex state
+database. The generic entrypoints are installed once with Engram:
 
-Add an `engram-flows-<project> = "engram.flows.<project>:main"` entry under
-`[project.scripts]` in `pyproject.toml`, then re-run
-`uv pip install --python ~/.engram/venv/bin/python -e .` to generate the
-console script.
+```bash
+uv pip install --python ~/.engram/venv/bin/python -e .
+```
 
-> **Gotcha**: give the Postgres pool `coco.ContextKey(...)` a name unique
-> across *every* flow module in this package, not just this project's own
-> module (e.g. `"<project>_repo_pg_pool"`). CocoIndex registers `ContextKey`s
-> process-globally and raises `ValueError` on a same-name second
-> registration — harmless in production (each flow module runs as its own
-> `launchd` process), but it means the pytest suite will crash at collection
-> time if it ever loads two flow modules with colliding key names into one
-> process. `engram.flows.engram`'s `PG_POOL` (`"engram_repo_pg_pool"`)
-> is the reference example; see `tests/test_engram_cocoindex_flows.py::TestModuleLoadsWithoutContextKeyCollision`
-> for the regression guard.
+Run the same adapter for every project by changing only the project key:
 
-### 5. Create Code Search Server
+```bash
+~/.engram/venv/bin/engram-flows-configured \
+  --project <project> --config ~/.engram/projects.toml \
+  --mode backfill --apps docs code issues
+~/.engram/venv/bin/engram-search-configured \
+  --project <project> --config ~/.engram/projects.toml
+```
 
-Create `src/engram/search/<project>.py` from the generic
-`src/engram/search/engram.py` search-server pattern rather than copying
-project-specific behavior:
+Omit an app whose corresponding bank/source is not configured. The only
+project-specific files are deployment-local configuration and rendered service
+files; the repository's Python source remains unchanged for each new project.
 
-- Queries `cocoindex.<project>_code_embeddings` table
-- MCP server name: `<project>-code`
-- Tool name: `<project>_code_search`
-- Same hybrid search (dense + BM25 + RRF fusion)
+### 4. Configure the project sources
 
-Add a matching `engram-search-<project> = "engram.search.<project>:main"`
-entry under `[project.scripts]` alongside the flows one from step 4, then
-re-run the same `pip install -e .` (it's idempotent to run twice).
+At minimum, configure a documentation/code source and its bank/table, or an
+issues bank with `issues_repos`:
 
-### 6. Create launchd Service
+```toml
+[projects.<project>]
+docs_bank = "<project>-docs"
+issues_bank = "<project>-issues" # omit when issues are out of scope
+code_table = "<project>_code_embeddings"
+issues_repos = ["<org>/<repo>"]
 
-Create `launchd/io.vectorize.cocoindex.<project>.plist`:
+[projects.<project>.paths]
+cocoindex_db = "~/.engram/<project>-cocoindex.db"
 
-- Runs the `engram-flows-<project>` console script (from step 4) directly in
-  live mode via `~/.engram/with-config-env.sh` (the shared wrapper that
-  sources `~/.engram/config.env` for secrets/URLs at runtime instead of
-  hardcoding them in the plist) — **not** a `~/.engram/<project>-
-  cocoindex-flows.py` symlink. Pre-Phase-8 (before 2026-08-12) every
-  project's plist went through such a symlink because there was no
-  installed package to point `ProgramArguments` at yet; that phase is done
-  for every existing project (see docs/findings/2026-08.md's Phase 8 entry)
-  and no new project should reintroduce the symlink pattern. Use an existing
-  plist (e.g. `launchd/io.vectorize.cocoindex.rhdh-plugins.plist`) as the
-  template, not an older one predating Phase 8.
-- Environment variables for all repo paths
-- Separate log files: `~/.engram/logs/cocoindex-<project>-{stdout,stderr}.log`
-  (project name last, not first — matches every existing plist's actual
-  `StandardOutPath`/`StandardErrorPath`, e.g. `cocoindex-koku-stderr.log`)
-- KeepAlive: true
+[[projects.<project>.sources]]
+tag = "<repo>"
+root = "~/go/src/github.com/<org>/<repo>"
+docs_include = ["**/*.md"]
+code_include = ["**/*.go", "**/*.py"]
+code_exclude = ["**/.git/**", "**/vendor/**", "**/node_modules/**"]
+```
+
+Add more `sources` records when a project contains multiple repositories; they
+share the configured bank/table while retaining their source tag in document
+metadata and indexed paths.
+
+> **Gotcha**: use the configuration-driven entrypoint rather than copying a
+> flow module. It owns one stable `coco.ContextKey` for all projects, so a
+> project's name never becomes process-global Python state and cannot create a
+> new ContextKey collision.
+
+### 5. Create the banks and models
+
+Create only the banks named by the project table. The generic flow writes to
+those banks and the generic search adapter reads the configured code table;
+neither requires a source edit.
+
+### 6. Create the deployment service
+
+Render the generic `launchd/io.vectorize.cocoindex.configured.plist` template.
+It invokes `engram-flows-configured --project <project>` and reads all paths
+from `~/.engram/projects.toml`; it does not need a new source file or a new
+console script:
 
 Install and start (no flow/search symlinking needed — the console scripts
 from steps 4/5 are already on `PATH` inside `~/.engram/venv/bin/`):
 
 ```bash
-# Replace __HOME__ with actual home directory
-sed "s|__HOME__|$HOME|g" launchd/io.vectorize.cocoindex.<project>.plist \
-  > ~/Library/LaunchAgents/io.vectorize.cocoindex.<project>.plist
+# Replace both deployment placeholders.
+sed -e "s|__HOME__|$HOME|g" -e "s|__PROJECT__|<project>|g" \
+  launchd/io.vectorize.cocoindex.configured.plist \
+  > "$HOME/Library/LaunchAgents/io.vectorize.cocoindex.<project>.plist"
 
-launchctl load ~/Library/LaunchAgents/io.vectorize.cocoindex.<project>.plist
+launchctl bootstrap "gui/$(id -u)" \
+  "$HOME/Library/LaunchAgents/io.vectorize.cocoindex.<project>.plist"
 ```
 
-If you're not ready to run the new project's ingestion live yet (e.g. mid
-scale-down, or still validating the flow file with a manual `--mode backfill`
-run first), it's fine to create the plist in `launchd/` and commit it without
-this `load` step — `engram`'s own plist shipped this way initially. Nothing
-else in this guide depends on the service actually being loaded.
+If you're not ready to run the new project's ingestion live yet, validate the
+generic flow with its manual backfill first and defer bootstrapping this
+deployment-local rendered plist. Nothing else in this guide depends on the
+service already being loaded.
 
 ### Deployment-local mirror configuration
 
@@ -530,7 +513,7 @@ clients that bypass the gateway retain zvec-grep's eventual mode.
 > repos as N separate OpenCode sessions can still spawn N
 > `cocoindex-code`/`serena` subprocesses (loading the same ~855-package Go
 > module N times). If that's a real resource concern, run
-> `engram-search-<project>`/`serena start-mcp-server` once each as permanent
+> `engram-search-configured --project <project>`/`serena start-mcp-server` once each as permanent
 > `launchd` daemons (`--transport streamable-http`, fixed host/port) instead,
 > and register their project routes through the OpenCode plugin. See
 > `launchd/io.vectorize.cocoindex-code.kubernaut-family.plist`,
@@ -708,56 +691,11 @@ RULE_PAIRS: dict[str, tuple[Path, Path]] = {
 `python3 check-rule-sync.py` (no `--pair`) checks every registered pair;
 `--pair <project>` checks just one.
 
-### 11. Update Nightly Pipeline
+### 11. Nightly reporting
 
-In `src/engram/pipeline/nightly_learn.py`:
-- Add `<project>-docs` and `<project>-issues` to `BANKS` list
-- Add a new entry to `PROJECT_CONFIGS[<project>]` with `banks`, `mental_models`, `probes`, `recall_banks`, `log_suffix`
-- Add mental model refresh entries to `models_to_refresh`
-- Add observability probes for new banks
-- **Add `workspace_prefixes`** to the new `PROJECT_CONFIGS` entry (see 11a — easy to miss, since nothing errors if you skip it)
-
-In `src/engram/maintenance/report.py`:
-- Add new banks to `collect_mental_model_stats()` bank list
-- Add new bank coverage to `collect_ingestion_coverage()`
-- Add new pgvector table to code chunk count queries
-
-### 11a. Scope Transcript-Derived Analytics Per Project (do not skip)
-
-**Why this matters:** Bank/table/CocoIndex isolation (above) only covers *ingested content*
-(docs, issues, code). It does **not** automatically isolate the nightly report's
-*session analytics* — `effectiveness` (session distribution, weekly trend, recall
-session stats, token signals, exploration efficiency) and `mcp_usage` (raw MCP call
-counts/hit-rates). Those are derived from Cursor agent transcripts and an MCP hook
-log that span **every** workspace on the machine, not just this project's repos.
-
-If you add a new project without scoping these, its nightly report will silently
-embed byte-identical global stats instead of project-specific ones — the numbers
-look plausible (non-zero, well-formed) so this is easy to miss for weeks. This
-happened when DCM was first added: both `kubernaut` and `dcm` nightly reports had
-identical `effectiveness` blocks because `find_recent_transcripts()` had no
-per-project filter.
-
-To scope correctly:
-
-1. Add `"workspace_prefixes": ["Users-jgil-go-src-github-com-<org>-<repo-prefix>"]`
-   to the project's `PROJECT_CONFIGS` entry in `src/engram/pipeline/nightly_learn.py`. This should match
-   the `~/.cursor/projects/<name>/` directory name(s) for the project's repos —
-   run `ls ~/.cursor/projects/ | grep <org>` to find the actual prefix once at least
-   one repo has been opened in Cursor.
-2. `find_recent_transcripts(hours, workspace_prefixes=...)` filters transcripts by
-   that prefix before they're used for effectiveness analysis. The **retain/corrections
-   pipeline stays unfiltered on purpose** (`cursor-memory` is an intentionally shared,
-   cross-project bank for coding-hygiene lessons) — only pass `workspace_prefixes`
-   into the effectiveness/analytics call sites, not the retain call sites.
-3. `mcp_usage` scoping additionally requires the `afterMCPExecution` hook
-   (`~/.cursor/hooks/log-mcp-calls.sh`) to tag each logged call with a `project_dir`
-   field (derived from `transcript_path` in the hook payload) — `analyze_mcp_effectiveness()`
-   filters on that field. This field is only present on log lines written *after* the
-   hook was updated to record it; older lines are silently excluded from scoped views.
-4. Verify by comparing the `effectiveness` block across two projects' daily JSON
-   reports (`~/.engram/logs/<date>.json` vs `<date>-dcm.json`) — they should differ,
-   not match byte-for-byte.
+Nightly learning and reporting are not currently supported onboarding features.
+Do not add project entries to `nightly_learn.py`, `report.py`, or related
+transcript analytics configuration.
 
 ### 12. Verify End-to-End
 
@@ -823,7 +761,7 @@ Three hooks, sharing one per-session marker:
   `Write|StrReplace|Shell|EditNotebook`) — on the first matched tool call
   after a plan is confirmed, consumes that marker and runs a real
   `contradiction_resolution.resolve()` check (in a subprocess under a hard
-  45s wall-clock watchdog) against the target project's `cursor-memory`
+  45s wall-clock watchdog) against the target project's `shared-memory`
   bank. A genuine contradiction hard-blocks the call with
   `permission: deny` and a `user_message` explaining the conflict; the
   model can then retry (same or revised) and pass through cleanly — this is
@@ -967,9 +905,12 @@ self-healing to fire first. Use the **family** variant instead of generic
 
 | File | Purpose |
 |------|---------|
-| `src/engram/flows/<project>.py` | Ingestion (docs, issues, code) |
-| `src/engram/search/<project>.py` | Code search MCP server |
-| `launchd/io.vectorize.cocoindex.<project>.plist` | macOS service |
+| `~/.engram/projects.toml` | Deployment-local project and source configuration |
+| `docs/projects.toml.example` | Canonical configuration template |
+| `src/engram/flows/configured.py` | Shared configuration-driven ingestion adapter |
+| `src/engram/search/configured.py` | Shared configuration-driven code search adapter |
+| `launchd/io.vectorize.cocoindex.configured.plist` | Generic macOS service template |
+| `launchd/io.vectorize.engram-gateway-configured.plist` | Generic native gateway service template |
 | `cursor/projects/<project>.vars` | Template variables for cursor rule generation |
 | `cursor/hindsight-memory.mdc.tmpl` | Shared template (do not edit per-project) |
 | `cursor/generate-mdc.sh` | Generates .mdc from template + vars |
@@ -999,12 +940,9 @@ self-healing to fire first. Use the **family** variant instead of generic
   (tag-scoped variant)
 - **CocoIndex state**: Separate SQLite databases (`cocoindex.db` vs `<project>-cocoindex.db`)
   (full variant only — the tag-scoped variant adds no new CocoIndex app at all)
-- **MCP routing**: One workspace route maps to the project's native registry or mounted TOML `instances` entry; the optional Kubernaut RCA backend is the only project-specific gateway exception
-- **Nightly analytics**: `effectiveness` and `mcp_usage` are isolated per project **only if**
-  `workspace_prefixes` is set on the `PROJECT_CONFIGS` entry (step 11a) — this is not
-  automatic and does not fail loudly if skipped
-- **GitHub issues/PRs totals**: scoped per project via `PROJECT_CONFIGS[project]["issues_repos"]`
-  in both `engram.pipeline.nightly_learn` and `engram.maintenance.report` — a project with no `issues_repos` key
+- **MCP routing**: One workspace route maps to the project's mounted TOML `instances` entry; the optional Kubernaut RCA backend is configured as data, not a new gateway branch
+- **GitHub issues/PRs totals**: scoped per project via `issues_repos` in
+  `~/.engram/projects.toml` — a project with no `issues_repos` key
   (e.g. the no-issues-bank variant) simply contributes nothing to any total, rather
   than defaulting to one hardcoded repo (the pre-2026-07-15 behavior; see FINDINGS.md)
-- **Shared**: `cursor-memory` bank (behavioral corrections), Hindsight API instance, PostgreSQL
+- **Shared**: `shared-memory` bank (behavioral corrections), Hindsight API instance, PostgreSQL

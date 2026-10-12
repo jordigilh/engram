@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import pathlib
+import subprocess
 
 import pytest
 
@@ -58,6 +59,14 @@ class FakeAdapter:
 
 def _tool(name: str, description: str = "") -> dict:
     return {"name": name, "description": description, "inputSchema": {"type": "object", "properties": {}}}
+
+
+def test_parse_sse_json_skips_empty_data_prelude(engram_gateway):
+    result = engram_gateway._parse_sse_json(
+        b'data: \nid: 0\nretry: 3000\n\ndata: {"jsonrpc":"2.0","id":2,"result":{"tools":[]}}\n\n'
+    )
+
+    assert result == {"jsonrpc": "2.0", "id": 2, "result": {"tools": []}}
 
 
 class TestPrefixedToolName:
@@ -142,6 +151,25 @@ class TestRouteCall:
 
     def test_unknown_tool_returns_none(self, engram_gateway):
         assert engram_gateway.route_call("nonexistent_tool", {}) is None
+
+
+class TestExceptionFormatting:
+    def test_empty_exception_keeps_type_and_explicit_no_message_marker(self, engram_gateway):
+        detail = engram_gateway._format_exception(RuntimeError())
+
+        assert detail == "RuntimeError: <no message>"
+
+    def test_exception_chain_keeps_cause_type_and_message(self, engram_gateway):
+        try:
+            raise ValueError("upstream socket closed")
+        except ValueError:
+            try:
+                raise RuntimeError()
+            except RuntimeError as exc:
+                detail = engram_gateway._format_exception(exc)
+
+        assert "RuntimeError: <no message>" in detail
+        assert "context ValueError: upstream socket closed" in detail
 
 
 class TestFilterRelevantTools:
@@ -386,7 +414,7 @@ class TestAggregateToolsList:
     def test_backend_failure_is_excluded_but_others_still_returned(self, engram_gateway):
         backends = {
             "docs": FakeAdapter(tools=[_tool("recall")]),
-            "code": FakeAdapter(list_error=RuntimeError("engram-search-praxis crashed")),
+            "code": FakeAdapter(list_error=RuntimeError("configured code search crashed")),
         }
 
         tool_defs, catalog, errors = asyncio.run(engram_gateway.aggregate_tools_list(backends))
@@ -517,12 +545,171 @@ class TestHandleToolsCall:
         assert result["result"]["isError"] is True
         assert "subprocess exited" in result["result"]["content"][0]["text"]
 
+    def test_empty_backend_exception_returns_diagnostic_type(self, engram_gateway):
+        dead = FakeAdapter(call_error=RuntimeError())
+        catalog = {"docs_recall": ("host", "docs_recall")}
+        message = {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {"name": "docs_recall", "arguments": {"query": "foo"}},
+        }
+
+        result = asyncio.run(engram_gateway.handle_tools_call(message, catalog, {"host": dead}))
+
+        text = result["result"]["content"][0]["text"]
+        assert "backend 'host' failed" in text
+        assert "RuntimeError: <no message>" in text
+
     def test_non_tools_call_method_returns_none_so_caller_can_forward_generically(self, engram_gateway):
         message = {"jsonrpc": "2.0", "method": "notifications/initialized"}
 
         result = asyncio.run(engram_gateway.handle_tools_call(message, {}, {}))
 
         assert result is None
+
+
+class TestHttpRelayAdapter:
+    @staticmethod
+    def _response(payload, *, status_code=200, session_id=None):
+        import httpx
+
+        headers = {"content-type": "application/json"}
+        if session_id:
+            headers["mcp-session-id"] = session_id
+        return httpx.Response(
+            status_code,
+            headers=headers,
+            content=json.dumps(payload).encode(),
+            request=httpx.Request("POST", "http://upstream/mcp"),
+        )
+
+    def test_retries_recall_after_transient_transport_failure(self, engram_gateway, monkeypatch):
+        import httpx
+
+        monkeypatch.setattr(engram_gateway, "HTTP_RETRY_DELAY_S", 0)
+        calls = []
+        tool_call_count = 0
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, url, json, headers):
+                nonlocal tool_call_count
+                calls.append(json["method"])
+                if json["method"] == "initialize":
+                    return self._response(
+                        {"jsonrpc": "2.0", "id": 1, "result": {}},
+                        session_id=f"session-{calls.count('initialize')}",
+                    )
+                if json["method"] == "notifications/initialized":
+                    return self._response({}, status_code=202)
+                tool_call_count += 1
+                if tool_call_count == 1:
+                    raise httpx.ReadError(
+                        "upstream disconnected",
+                        request=httpx.Request("POST", url),
+                    )
+                return self._response(
+                    {"jsonrpc": "2.0", "id": 2, "result": {"content": [], "isError": False}},
+                )
+
+            async def delete(self, url, headers):
+                return self._response({}, status_code=200)
+
+            _response = staticmethod(TestHttpRelayAdapter._response)
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: FakeClient())
+        adapter = engram_gateway.HttpRelayAdapter("http://upstream/mcp")
+
+        result = asyncio.run(adapter.call_tool("docs_recall", {"query": "x"}))
+
+        assert result == {"content": [], "isError": False}
+        assert tool_call_count == 2
+        assert calls.count("initialize") == 2
+
+    def test_does_not_retry_non_idempotent_write_after_transport_failure(self, engram_gateway, monkeypatch):
+        import httpx
+
+        monkeypatch.setattr(engram_gateway, "HTTP_RETRY_DELAY_S", 0)
+        calls = []
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, url, json, headers):
+                calls.append(json["method"])
+                if json["method"] == "initialize":
+                    return httpx.Response(
+                        200,
+                        headers={"mcp-session-id": "session-1"},
+                        content=b'{"jsonrpc":"2.0","id":1,"result":{}}',
+                        request=httpx.Request("POST", url),
+                    )
+                if json["method"] == "notifications/initialized":
+                    return httpx.Response(202, request=httpx.Request("POST", url))
+                raise httpx.ReadError("upstream disconnected", request=httpx.Request("POST", url))
+
+            async def delete(self, url, headers):
+                return httpx.Response(200, request=httpx.Request("DELETE", url))
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: FakeClient())
+        adapter = engram_gateway.HttpRelayAdapter("http://upstream/mcp")
+
+        with pytest.raises(httpx.ReadError):
+            asyncio.run(adapter.call_tool("retain", {"content": "do not duplicate"}))
+
+        assert calls == ["initialize", "notifications/initialized", "tools/call"]
+
+    def test_tools_list_retries_transient_http_status(self, engram_gateway, monkeypatch):
+        import httpx
+
+        monkeypatch.setattr(engram_gateway, "HTTP_RETRY_DELAY_S", 0)
+        initialize_count = 0
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, url, json, headers):
+                nonlocal initialize_count
+                if json["method"] == "initialize":
+                    initialize_count += 1
+                    return httpx.Response(
+                        200,
+                        headers={"mcp-session-id": f"session-{initialize_count}"},
+                        content=b'{"jsonrpc":"2.0","id":1,"result":{}}',
+                        request=httpx.Request("POST", url),
+                    )
+                if json["method"] == "notifications/initialized":
+                    return httpx.Response(202, request=httpx.Request("POST", url))
+                if initialize_count == 1:
+                    return httpx.Response(503, request=httpx.Request("POST", url))
+                return httpx.Response(
+                    200,
+                    content=b'{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"recall"}]}}',
+                    request=httpx.Request("POST", url),
+                )
+
+            async def delete(self, url, headers):
+                return httpx.Response(200, request=httpx.Request("DELETE", url))
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: FakeClient())
+        adapter = engram_gateway.HttpRelayAdapter("http://upstream/mcp")
+
+        assert asyncio.run(adapter.list_tools()) == [{"name": "recall"}]
+        assert initialize_count == 2
 
 
 class TestRecallResponseNormalization:
@@ -600,6 +787,19 @@ class TestRecallResponseNormalization:
             {"id": "memory-1", "tags": ["engram"], "summary": "kept"}
         ]
         assert "kept" in result["result"]["content"][0]["text"]
+
+    def test_recall_normalization_is_idempotent_for_source_summaries(self, engram_gateway):
+        original = {
+            "content": [{"type": "text", "text": '{"results":[{"id":"memory-1","text":"source text"}]}'}],
+            "isError": False,
+        }
+
+        normalized = engram_gateway._normalize_recall_result(original)
+        normalized_again = engram_gateway._normalize_recall_result(normalized)
+
+        assert normalized_again == normalized
+        assert normalized_again["structuredContent"]["results"][0]["summary"] == "source text"
+        assert "source text" in normalized_again["content"][0]["text"]
 
     def test_non_recall_or_malformed_payload_passes_through(self, engram_gateway):
         original = {"content": [{"type": "text", "text": '{"items":[1,2]}'}], "isError": False}
@@ -862,236 +1062,12 @@ class TestGatewayCallMetricsLogging:
         assert len(lines) == 2
 
 
-class TestBuildProjectRegistry:
-    """Pure config -- no I/O, no adapter instantiation -- covering the full
-    rollout across every onboarded repo (see docs/findings/2026-08.md,
-    2026-08-21 rollout entry). Backend heterogeneity is real and must be
-    preserved exactly, not normalized away: kubernaut-family already has
-    everything on shared HTTP daemons (as of 2026-08-25, kubernaut-console
-    included -- it was the one family member missing a serena entry despite
-    already being a registered project on the shared daemon, see
-    test_kubernaut_console_has_serena_scoped_to_its_own_repo below); koku-
-    family's cocoindex-code is still stdio while its docs/issues/serena are
-    HTTP; dcm/praxis/rhdh-plugins/koku-insights-onprem run cocoindex-code and
-    serena as per-family-shared / per-repo stdio respectively; kubernaut-docs
-    has no cocoindex-code and engram itself has neither issues nor serena --
-    the registry must reflect exactly what each repo already has today, never
-    add a backend that isn't already configured for it."""
-
-    def test_covers_every_onboarded_project(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert len(registry) == 37  # includes exact routes for DCM review workspaces
-        assert "kubernaut-v1.6" not in registry
-        assert "rhdh-plugins" not in registry  # decommissioned 2026-09-09
-
-    def test_kubernaut_demo_scenarios_has_shared_code_and_scoped_serena(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert set(registry["kubernaut-demo-scenarios"]) == {"docs", "issues", "code", "serena"}
-        assert registry["kubernaut-demo-scenarios"]["code"] == {
-            "kind": "http",
-            "url": "http://127.0.0.1:8891/mcp",
-            "timeout_seconds": 180,
-        }
-        assert registry["kubernaut-demo-scenarios"]["serena"] == {
-            "kind": "http",
-            "url": "http://127.0.0.1:8893/mcp/kubernaut-demo-scenarios",
-        }
-
-    def test_dcm_review_workspaces_have_exact_routes(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert "dcm" in registry
-        assert "control-plane" in registry
-        assert registry["dcm"]["code"] == registry["dcm-cli"]["code"]
-        assert registry["control-plane"]["code"] == registry["dcm-cli"]["code"]
-        assert registry["dcm"]["serena"]["args"][-1] == "false"
-        assert registry["control-plane"]["serena"]["args"][-1] == "false"
-        assert registry["dcm"]["serena"]["args"][5].endswith("/dcm-project/dcm")
-        assert registry["control-plane"]["serena"]["args"][5].endswith("/dcm-project/control-plane")
-
-    def test_kubernaut_family_is_fully_http_already(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        spec = registry["kubernaut-operator"]
-        assert spec["docs"] == {"kind": "http", "url": "http://localhost:8888/mcp/kubernaut-docs/"}
-        assert spec["issues"] == {"kind": "http", "url": "http://localhost:8888/mcp/kubernaut-issues/"}
-        assert spec["code"] == {
-            "kind": "http",
-            "url": "http://127.0.0.1:8891/mcp",
-            "timeout_seconds": 180,
-        }
-        assert spec["rca"] == {"kind": "http", "url": "http://127.0.0.1:8897/mcp"}
-        assert spec["serena"] == {"kind": "http", "url": "http://127.0.0.1:8893/mcp/kubernaut-operator"}
-
-    def test_current_kubernaut_route_uses_cocoindex_with_graph_timeout(self, engram_gateway):
-        """The Kubernaut main route exposes the shared CocoIndex MCP server;
-        its cold Go graph build needs more than the generic 60-second relay
-        timeout."""
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert set(registry["kubernaut"]) == {"docs", "issues", "code", "rca", "serena"}
-        assert registry["kubernaut"]["code"] == {
-            "kind": "http",
-            "url": "http://127.0.0.1:8891/mcp",
-            "timeout_seconds": 180,
-        }
-        assert "code" in registry["kubernaut-operator"]
-
-    def test_rca_backend_is_kubernaut_only(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert "rca" in registry["kubernaut"]
-        assert "rca" not in registry["koku"]
-
-    def test_kubernaut_console_has_serena_scoped_to_its_own_repo(self, engram_gateway):
-        """Added 2026-08-25: kubernaut-console was the only kubernaut-family
-        repo with no serena entry, even though serena_multiplex.py's
-        KUBERNAUT_FAMILY_PROJECTS already lists "kubernaut-console" as a
-        registered project on the shared daemon. Its mount pins
-        activate_project to "kubernaut-console" for scoped tool calls
-        (find_symbol, replace_symbol_body, ...), while query_project/
-        list_queryable_projects stay project-agnostic (see
-        serena_multiplex.py's PROJECT_AGNOSTIC_TOOLS) and forward untouched --
-        so this same mount also gives kubernaut-console read-only lookups
-        into kubernaut/kubernaut-operator without any extra registry entry."""
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert set(registry["kubernaut-console"]) == {"docs", "issues", "code", "serena"}
-        assert registry["kubernaut-console"]["serena"] == {
-            "kind": "http",
-            "url": "http://127.0.0.1:8893/mcp/kubernaut-console",
-        }
-
-    def test_kubernaut_console_code_backend_is_shared_kubernaut_http_daemon(self, engram_gateway):
-        """Regression guard: kubernaut-console's "code" backend previously
-        pointed at a flat `~/.engram/cocoindex-search.py` stdio script that
-        the 2026-08-12 package restructuring (src/engram/search/kubernaut.py +
-        console-script rename) had already deleted 9 days before this
-        registry entry was even authored -- so it was dead on arrival, and
-        (being single-repo/no-args, unlike engram-search-kubernaut) would only
-        ever have searched kubernaut-console's own code even if it had run,
-        never kubernaut/kubernaut-operator upstream. The shared
-        :8891 daemon (`engram-search-kubernaut` / src/engram/search/
-        kubernaut.py) already indexes all three repos into one
-        cocoindex.code_embeddings table and defaults `cocoindex_search` to
-        whole-platform results -- the same daemon kubernaut/kubernaut-operator
-        already use -- so pointing kubernaut-console at it too is what actually
-        gives it operator + kubernaut-upstream code search."""
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert registry["kubernaut-console"]["code"] == {
-            "kind": "http",
-            "url": "http://127.0.0.1:8891/mcp",
-            "timeout_seconds": 180,
-        }
-
-    def test_kubernaut_docs_has_no_cocoindex_code(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert set(registry["kubernaut-docs"]) == {"docs", "issues", "serena"}
-
-    def test_engram_itself_has_only_docs_and_code(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert set(registry["engram"]) == {"docs", "code"}
-        assert registry["engram"]["docs"]["url"] == "http://localhost:8888/mcp/engram-docs/"
-
-    def test_koku_family_code_is_stdio_but_serena_is_http(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        spec = registry["koku-service-operator"]
-        assert spec["code"]["kind"] == "stdio"
-        assert spec["code"]["shared_key"] == "koku-code"
-        assert spec["serena"] == {"kind": "http", "url": "http://127.0.0.1:8895/mcp/koku-service-operator"}
-
-    def test_koku_insights_onprem_serena_is_still_standalone_stdio(self, engram_gateway):
-        """Confirmed unmigrated (see docs/findings/2026-08.md) -- must not
-        be silently upgraded to an HTTP multiplex URL it doesn't have."""
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        spec = registry["koku-insights-onprem"]
-        assert spec["serena"]["kind"] == "stdio"
-        assert "shared_key" not in spec["serena"]
-
-    def test_dcm_repos_share_one_cocoindex_backend_but_each_has_its_own_serena(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        cli_spec = registry["dcm-cli"]
-        utilities_spec = registry["dcm-utilities"]
-        assert cli_spec["code"]["shared_key"] == "dcm-code"
-        assert utilities_spec["code"]["shared_key"] == "dcm-code"
-        assert cli_spec["code"] == utilities_spec["code"]
-        assert cli_spec["serena"]["args"][cli_spec["serena"]["args"].index("--project") + 1] == "/home/u/go/src/github.com/dcm-project/cli"
-        assert utilities_spec["serena"]["args"][utilities_spec["serena"]["args"].index("--project") + 1] == "/home/u/go/src/github.com/dcm-project/utilities"
-
-    def test_praxis_repos_share_one_cocoindex_backend(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert registry["praxis-grid"]["code"]["shared_key"] == "praxis-code"
-        assert registry["praxis-ai"]["code"]["shared_key"] == "praxis-code"
-        assert registry["praxis-benchmarks"]["code"]["shared_key"] == "praxis-code"
-
-    def test_praxis_repos_without_serena_omit_it(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert "serena" not in registry["praxis-conventions"]
-        assert "serena" not in registry["praxis-proxy-github-io"]
-        assert "serena" in registry["praxis-grid"]
-        # praxis-experiments is Rust (experimental upstream) and
-        # praxis-benchmarks is Rust -- both get serena (2026-09-11).
-        assert "serena" in registry["praxis-experiments"]
-        assert "serena" in registry["praxis-benchmarks"]
-
-    def test_rhdh_plugins_registry_only_covers_the_four_engram_backends(self, engram_gateway):
-        """rhdh-plugins decommissioned 2026-09-09: the registry must no
-        longer contain it at all (previously asserted the entry covered
-        only the four engram-owned backends, excluding the repo's own
-        jira/argocd/gitea/kubernetes entries)."""
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert "rhdh-plugins" not in registry
-
-    def test_dcm_code_backend_sets_hf_hub_offline(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert registry["dcm-cli"]["code"]["env"]["HF_HUB_OFFLINE"] == "1"
-
-    def test_kuadrant_is_one_entry_not_one_per_repo(self, engram_gateway):
-        """2026-08-27: unlike every other family, Kuadrant's repos (9 as of
-        2026-08-28's mcp-gateway addition) are ingestion-only prior-art
-        (nobody opens them as a Cursor workspace), so they collapse into a
-        single "kuadrant" registry entry meant to be cross-mounted into
-        praxis-* repos, not one per-repo entry each."""
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert "kuadrant" in registry
-        for repo in ("kuadrant-operator", "limitador", "wasm-shim", "architecture", "authorino", "mcp-gateway"):
-            assert repo not in registry
-
-    def test_kuadrant_has_no_serena(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        assert set(registry["kuadrant"]) == {"kuadrant_docs", "kuadrant_issues", "kuadrant_code"}
-
-    def test_kuadrant_backends_point_at_their_own_banks_and_search_server(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
-
-        spec = registry["kuadrant"]
-        assert spec["kuadrant_docs"] == {"kind": "http", "url": "http://localhost:8888/mcp/kuadrant-docs/"}
-        assert spec["kuadrant_issues"] == {"kind": "http", "url": "http://localhost:8888/mcp/kuadrant-issues/"}
-        assert spec["kuadrant_code"]["kind"] == "stdio"
-        assert spec["kuadrant_code"]["command"] == "/home/u/.engram/venv/bin/engram-search-kuadrant"
-
-
 class TestBuildBackendAdapters:
     """Real adapter instantiation from registry specs -- still no I/O
     (adapters connect lazily), but this is where shared-stdio-backend
-    de-duplication actually happens: engram-search-praxis (etc.) is
-    spawned ONCE and reused across every project that references the same
-    shared_key, since it's a stateless, family-wide code index unlike
-    per-repo-bound serena."""
+    de-duplication happens: one configured code backend is spawned ONCE and
+    reused across every project that references the same shared_key, since it
+    is a stateless, family-wide code index unlike per-repo-bound serena."""
 
     def test_http_spec_becomes_http_relay_adapter(self, engram_gateway):
         registry = {"kubernaut": {"docs": {"kind": "http", "url": "http://x/mcp/kubernaut-docs/"}}}
@@ -1102,6 +1078,28 @@ class TestBuildBackendAdapters:
         assert adapters["kubernaut"]["docs"].url == "http://x/mcp/kubernaut-docs/"
         assert isinstance(adapters["kubernaut"]["docs_manual"], engram_gateway.ManualMentalModelAdapter)
         assert adapters["kubernaut"]["docs_manual"].hindsight_adapter is adapters["kubernaut"]["docs"]
+
+    def test_shadow_http_builds_a_shared_zvec_primary_adapter(self, engram_gateway, tmp_path):
+        spec = {
+            "kind": "shadow_http",
+            "url": "http://127.0.0.1:7999/mcp",
+            "shadow_url": "http://127.0.0.1:8891/mcp",
+            "timeout_seconds": 300.0,
+            "shadow_timeout_seconds": 180.0,
+            "shadow_log": str(tmp_path / "shadow.jsonl"),
+            "shared_key": "kubernaut-zvec-shadow",
+        }
+        adapters = engram_gateway.build_backend_adapters({
+            "kubernaut": {"code": spec},
+            "kubernaut-operator": {"code": dict(spec)},
+        })
+
+        primary = adapters["kubernaut"]["code"]
+        assert isinstance(primary, engram_gateway.ZvecShadowRelayAdapter)
+        assert adapters["kubernaut-operator"]["code"] is primary
+        assert primary.primary.url == spec["url"]
+        assert primary.shadow.url == spec["shadow_url"]
+        assert primary.log_path == pathlib.Path(spec["shadow_log"])
 
     def test_manual_tools_are_added_for_each_writable_hindsight_bank(self, engram_gateway):
         registry = {
@@ -1149,33 +1147,250 @@ class TestBuildBackendAdapters:
         assert adapters["praxis-grid"]["code"] is not adapters["dcm-cli"]["code"]
 
 
-class TestGatewayIdentityRegistry:
-    def test_identity_registry_covers_every_route_and_derives_shared_banks(self, engram_gateway):
-        registry = engram_gateway.build_project_registry("/home/u")
+class TestZvecShadowRelayAdapter:
+    def test_managed_search_waits_for_fresh_index_before_returning(self, engram_gateway, tmp_path):
+        async def scenario():
+            primary_result = {"content": [{"type": "text", "text": "fresh"}], "isError": True}
+            primary = FakeAdapter(call_results={"zvec_grep_search": primary_result})
+            adapter = engram_gateway.ZvecShadowRelayAdapter(
+                primary,
+                FakeAdapter(),
+                log_path=tmp_path / "shadow.jsonl",
+                shadow_timeout_seconds=0.1,
+            )
 
-        identities = engram_gateway.build_gateway_identity_registry(registry)
+            result = await adapter.call_tool(
+                "zvec_grep_search",
+                {
+                    "root": str(tmp_path),
+                    "query": "workflow",
+                    "freshness": "eventual",
+                    "autoUpdate": False,
+                },
+            )
 
-        assert set(identities) == set(registry)
-        assert identities["kubernaut-operator"] == {
-            "project": "kubernaut-operator",
-            "family": "kubernaut",
-            "docs_bank": "kubernaut-docs",
-            "issues_bank": "kubernaut-issues",
+            assert result is primary_result
+            assert primary.call_log == [(
+                "zvec_grep_search",
+                {
+                    "root": str(tmp_path),
+                    "query": "workflow",
+                    "freshness": "wait_for_fresh",
+                    "autoUpdate": True,
+                },
+            )]
+
+        asyncio.run(scenario())
+
+    def test_workspace_metadata_reports_untracked_worktree_content(self, engram_gateway, tmp_path):
+        subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True)
+        (tmp_path / "untracked.go").write_text("package sample\n")
+
+        metadata = engram_gateway._git_workspace_metadata(tmp_path)
+
+        assert metadata["workspace"] == str(tmp_path)
+        assert metadata["branch"]
+        assert metadata["commit"] is None
+        assert metadata["dirty"] is True
+
+    def test_semantic_comparison_uses_cocoindex_as_reference_and_reports_file_drift(
+        self, engram_gateway
+    ):
+        primary = {
+            "content": [{
+                "type": "text",
+                "text": (
+                    "#1 [group_coverage: Q1] matchedBy=fts+vector pkg/a.go:1-4\n"
+                    "#2 [global_fill] matchedBy=fts pkg/b.go:8-9\n"
+                ),
+            }]
         }
-        assert identities["engram"]["docs_bank"] == "engram-docs"
-        assert identities["engram"]["issues_bank"] is None
+        shadow = {
+            "content": [{
+                "type": "text",
+                "text": (
+                    "[1] kubernaut/pkg/a.go (score: 0.9)\n"
+                    "[2] kubernaut/pkg/c.go (score: 0.8)\n"
+                ),
+            }]
+        }
 
-    def test_identity_registry_rejects_missing_docs_backend(self, engram_gateway):
-        registry = {"broken": {"code": {"kind": "stdio", "command": "x", "args": [], "env": None}}}
+        comparison = engram_gateway._compare_shadow_responses(
+            "zvec_grep_search", primary, shadow, "kubernaut"
+        )
 
-        with pytest.raises(ValueError, match="no HTTP docs backend"):
-            engram_gateway.validate_gateway_identity_registry(registry)
+        assert comparison["reference_engine"] == "cocoindex"
+        assert comparison["source_of_truth"] == "cocoindex"
+        assert comparison["cocoindex_only_top_k"] == ["pkg/c.go"]
+        assert comparison["zvec_only_top_k"] == ["pkg/b.go"]
+        assert comparison["shared_file_rank_deltas"] == [{
+            "path": "pkg/a.go",
+            "cocoindex_rank": 1,
+            "zvec_rank": 1,
+            "zvec_minus_cocoindex": 0,
+        }]
+        assert comparison["file_order_matches_reference"] is False
 
-    def test_identity_registry_rejects_non_bank_docs_url(self, engram_gateway):
-        registry = {"broken": {"docs": {"kind": "http", "url": "http://localhost:8888/health"}}}
+    def test_graph_comparison_reports_cocoindex_reference_callers(self, engram_gateway):
+        primary = {
+            "structuredContent": {
+                "callers_by_depth": [["pkg/a.go::caller"], ["pkg/b.go::parent"]],
+                "unresolved_calls": 42,
+                "total_calls": 100,
+                "ambiguous_calls": 11,
+            }
+        }
+        shadow = {
+            "content": [{
+                "type": "text",
+                "text": (
+                    "Blast radius for kubernaut/pkg/a.go::target:\n"
+                    "  depth 1: kubernaut/pkg/a.go::caller\n"
+                    "  depth 2: kubernaut/pkg/c.go::parent\n"
+                    "\n(name-based resolution, no type info -- 35/90 calls in this repo could not be "
+                    "resolved to a known definition, and 9 matched 2+ candidates and were dropped)"
+                ),
+            }]
+        }
 
-        with pytest.raises(ValueError, match="no MCP bank path"):
-            engram_gateway.validate_gateway_identity_registry(registry)
+        comparison = engram_gateway._compare_shadow_responses(
+            "zvec_grep_callgraph_blast_radius", primary, shadow, "kubernaut"
+        )
+
+        assert comparison["reference_engine"] == "cocoindex"
+        assert comparison["source_of_truth"] == "cocoindex"
+        assert comparison["cocoindex_only_by_depth"] == [[], ["pkg/c.go::parent"]]
+        assert comparison["zvec_only_by_depth"] == [[], ["pkg/b.go::parent"]]
+        assert comparison["callers_match_reference"] is False
+        assert comparison["zvec_minus_cocoindex_resolution_counts"] == {
+            "unresolved_calls": 7,
+            "total_calls": 10,
+            "ambiguous_calls": 2,
+        }
+
+    def test_primary_returns_before_shadow_and_logs_same_root_ranked_comparison(
+        self, engram_gateway, tmp_path
+    ):
+        class BlockingShadow(FakeAdapter):
+            def __init__(self):
+                super().__init__()
+                self.started = asyncio.Event()
+                self.release = asyncio.Event()
+
+            async def call_tool(self, name, arguments):
+                self.call_log.append((name, arguments))
+                self.started.set()
+                await self.release.wait()
+                return {"content": [{"type": "text", "text": "cocoindex ranked chunks"}], "isError": False}
+
+        async def scenario():
+            root = tmp_path.resolve()
+            primary_result = {
+                "content": [{"type": "text", "text": "zvec ranked chunks"}],
+                "structuredContent": {"items": [{"rank": 1, "path": "pkg/workflow.go"}]},
+                "isError": False,
+            }
+            primary = FakeAdapter(call_results={"zvec_grep_search": primary_result})
+            shadow = BlockingShadow()
+            log_path = tmp_path / "zvec-cocoindex-shadow.jsonl"
+            adapter = engram_gateway.ZvecShadowRelayAdapter(
+                primary,
+                shadow,
+                log_path=log_path,
+                shadow_timeout_seconds=1,
+                source_roots={"kubernaut": root},
+            )
+
+            arguments = {"root": str(root), "query": "workflow selection membership", "limit": 7}
+            result = await asyncio.wait_for(adapter.call_tool("zvec_grep_search", arguments), timeout=0.1)
+            assert result is primary_result
+            await asyncio.wait_for(shadow.started.wait(), timeout=0.2)
+            assert not log_path.exists(), "the shadow has not been released or logged yet"
+
+            shadow.release.set()
+            await asyncio.gather(*tuple(adapter._shadow_tasks))
+            entry = json.loads(log_path.read_text().strip())
+
+            assert shadow.call_log == [(
+                "cocoindex_search",
+                {"query": "workflow selection membership", "limit": 7, "repo": "kubernaut", "branch": "main"},
+            )]
+            assert entry["schema_version"] == "zvec-cocoindex-shadow.v1"
+            assert entry["branch"] is None
+            assert entry["commit"] is None
+            assert entry["workspace"] == str(root)
+            assert entry["primary"]["response"] == primary_result
+            assert entry["shadow"]["response"]["content"][0]["text"] == "cocoindex ranked chunks"
+            assert entry["comparison"]["reference_engine"] == "cocoindex"
+            assert entry["comparison"]["zvec_only_top_k"] == ["pkg/workflow.go"]
+
+        asyncio.run(scenario())
+
+    def test_graph_tools_map_to_cocoindex_with_root_branch_and_repo_scope(self, engram_gateway, tmp_path):
+        root = tmp_path / "kubernaut-v1.5"
+        root.mkdir()
+        tool, arguments = engram_gateway._zvec_shadow_arguments(
+            "zvec_grep_callgraph_blast_radius",
+            {"root": str(root), "function": "Reconcile", "depth": 3},
+            repo="kubernaut",
+            root=root,
+            branch="fix/123-branch",
+        )
+
+        assert tool == "cocoindex_call_graph_blast_radius"
+        assert arguments == {
+            "function": "Reconcile",
+            "depth": 3,
+            "repo": "kubernaut",
+            "branch": "v1.5",
+        }
+
+    def test_shadow_failure_is_logged_without_changing_primary_result(self, engram_gateway, tmp_path):
+        async def scenario():
+            root = tmp_path.resolve()
+            primary_result = {"content": [{"type": "text", "text": "primary"}], "isError": False}
+            adapter = engram_gateway.ZvecShadowRelayAdapter(
+                FakeAdapter(call_results={"zvec_grep_search": primary_result}),
+                FakeAdapter(call_error=RuntimeError("CocoIndex unavailable")),
+                log_path=tmp_path / "shadow.jsonl",
+                shadow_timeout_seconds=0.1,
+                source_roots={"kubernaut": root},
+            )
+
+            result = await adapter.call_tool(
+                "zvec_grep_search", {"root": str(root), "query": "workflow"}
+            )
+            await asyncio.gather(*tuple(adapter._shadow_tasks))
+            entry = json.loads((tmp_path / "shadow.jsonl").read_text().strip())
+            assert result is primary_result
+            assert entry["shadow"]["error"] == "RuntimeError: CocoIndex unavailable"
+
+        asyncio.run(scenario())
+
+    def test_typescript_worktree_does_not_call_the_go_only_cocoindex_graph(self, engram_gateway, tmp_path):
+        async def scenario():
+            root = tmp_path.resolve()
+            primary_result = {"content": [{"type": "text", "text": "zvec graph"}], "isError": False}
+            shadow = FakeAdapter()
+            adapter = engram_gateway.ZvecShadowRelayAdapter(
+                FakeAdapter(call_results={"zvec_grep_callgraph_cluster": primary_result}),
+                shadow,
+                log_path=tmp_path / "shadow.jsonl",
+                shadow_timeout_seconds=0.1,
+                source_roots={"typescript-project": root},
+            )
+
+            result = await adapter.call_tool(
+                "zvec_grep_callgraph_cluster",
+                {"root": str(root), "function": "resolveTheme"},
+            )
+            await asyncio.gather(*tuple(adapter._shadow_tasks))
+            entry = json.loads((tmp_path / "shadow.jsonl").read_text().strip())
+            assert result is primary_result
+            assert shadow.call_log == []
+            assert entry["shadow"]["skipped"] == "cocoindex_callgraph_not_configured_for_source"
+
+        asyncio.run(scenario())
 
 
 class TestBuildApp:
@@ -1197,6 +1412,11 @@ class TestBuildApp:
 
 
 class TestLoadInstanceRegistry:
+    def test_native_gateway_defaults_to_deployment_local_config(self, engram_gateway, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        assert engram_gateway.default_native_config_path() == tmp_path / ".engram" / "runtime" / "native-instances.toml"
+
     def test_generic_runtime_example_is_valid_for_the_registry_loader(self, engram_gateway):
         example = pathlib.Path(__file__).parents[1] / "docs" / "runtime-instances.toml.example"
 
@@ -1206,6 +1426,16 @@ class TestLoadInstanceRegistry:
         assert set(registry["my-project"]) == {"docs", "issues", "code", "serena"}
         assert all(spec["kind"] == "http" for spec in registry["my-project"].values())
         assert registry["my-project"]["code"]["timeout_seconds"] == 180
+
+    def test_native_runtime_example_is_valid_for_the_registry_loader(self, engram_gateway):
+        example = pathlib.Path(__file__).parents[1] / "docs" / "native-instances.toml.example"
+
+        registry = engram_gateway.load_instance_registry(example)
+
+        assert set(registry) == {"my-project"}
+        assert set(registry["my-project"]) == {"docs", "issues", "code", "serena"}
+        assert registry["my-project"]["code"]["kind"] == "stdio"
+        assert registry["my-project"]["serena"]["args"][-1] == "/path/to/my-project"
 
     def test_loads_http_host_adapter_instances(self, engram_gateway, tmp_path):
         config = tmp_path / "instances.toml"
@@ -1261,6 +1491,37 @@ url = "http://host.containers.internal:8897/mcp"
         adapters = engram_gateway.build_backend_adapters(registry)
         assert adapters["kubernaut"]["code"].headers == {"Host": "localhost:8891"}
         assert adapters["kubernaut"]["code"].timeout_seconds == 180
+
+    def test_loads_shadow_http_backend_with_independent_timeouts(self, engram_gateway, tmp_path):
+        config = tmp_path / "instances.toml"
+        config.write_text(
+            f"""
+[instances.kubernaut.backends.code]
+kind = "shadow_http"
+url = "http://127.0.0.1:7999/mcp"
+shadow_url = "http://127.0.0.1:8891/mcp"
+timeout_seconds = 300
+shadow_timeout_seconds = 180
+shadow_log = "{tmp_path / 'shadow.jsonl'}"
+shared_key = "kubernaut-zvec-shadow"
+source_roots = {{ code = "{tmp_path}" }}
+callgraph_repos = ["code"]
+"""
+        )
+
+        registry = engram_gateway.load_instance_registry(config)
+
+        assert registry["kubernaut"]["code"] == {
+            "kind": "shadow_http",
+            "url": "http://127.0.0.1:7999/mcp",
+            "shadow_url": "http://127.0.0.1:8891/mcp",
+            "timeout_seconds": 300.0,
+            "shadow_timeout_seconds": 180.0,
+            "shadow_log": str(tmp_path / "shadow.jsonl"),
+            "shared_key": "kubernaut-zvec-shadow",
+            "source_roots": {"code": str(tmp_path)},
+            "callgraph_repos": ["code"],
+        }
 
     def test_loads_stdio_backend_with_environment_and_shared_key(self, engram_gateway, tmp_path):
         config = tmp_path / "instances.toml"

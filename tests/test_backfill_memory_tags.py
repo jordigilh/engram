@@ -1,6 +1,6 @@
 """Tests for backfill-memory-tags.py's plan_retags(): the pure
 document-to-project resolution logic used to retag the pre-existing,
-untagged cursor-memory backlog (2026-07-27 fix, see docs/FINDINGS.md).
+untagged shared-memory backlog (2026-07-27 fix, see docs/FINDINGS.md).
 """
 from __future__ import annotations
 

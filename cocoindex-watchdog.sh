@@ -28,7 +28,7 @@ log() {
 declare -a SERVICES=(
     "io.vectorize.cocoindex.service"
     "io.vectorize.cocoindex.engram"
-    "io.vectorize.cocoindex.koku"
+    "io.vectorize.cocoindex.kuadrant"
     "io.vectorize.cocoindex.praxis"
 )
 

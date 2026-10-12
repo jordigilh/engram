@@ -1,24 +1,19 @@
 #!/usr/bin/env python3
-"""Generic MCP gateway with optional project-specific legacy configuration.
+"""Generic MCP gateway driven by deployment-local instance configuration.
 
-The config-driven runtime aggregates any configured HTTP or stdio MCP backends
-behind one client-facing HTTP mount per project. The no-config native mode
-retains the historical static registry for this installation's onboarded
-projects; that registry is compatibility configuration, not gateway behavior.
+The runtime aggregates any configured HTTP or stdio MCP backends behind one
+client-facing HTTP mount per project. Routes, backend endpoints, subprocess
+commands, and workspace paths are deployment configuration loaded from TOML;
+the gateway does not contain an installation-specific project registry.
 
 The original use case aggregated hindsight-docs, hindsight-issues,
 cocoindex-code, and serena behind ONE Cursor-facing MCP HTTP mount per repo,
 instead of the 3-4 separate `.cursor/mcp.json` server entries every onboarded
 repo had before this module existed.
 
-Graduated from a single-repo (`praxis-grid`) spike on 2026-08-21 to cover
-every onboarded repo across all families (kubernaut, koku, dcm, praxis,
-rhdh-plugins, engram itself, and -- as a single cross-mounted recall-only
-entry rather than one-mount-per-repo, see its own registry comment --
-kuadrant) after the spike found no fundamental blocker --
-see docs/findings/2026-08.md's 2026-08-21 entries for the spike results and
-the full-rollout survey/decisions. `build_project_registry()` below is the
-single source of truth for what each repo gets.
+The native host gateway and the container runtime use the same generic loader;
+the native process defaults to `~/.engram/runtime/native-instances.toml` and
+the container still receives an explicit mounted config path.
 
 Background (see the "Engram unified MCP gateway spike" plan and
 docs/findings/2026-08.md's many "MCP shows Disabled" entries): most of this
@@ -74,10 +69,12 @@ import functools
 import json
 import logging
 import math
-import os
 import pathlib
 import re
+import subprocess
 import sys
+import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Protocol
 from urllib.parse import urlparse
@@ -90,11 +87,33 @@ logging.basicConfig(
 log = logging.getLogger("engram-gateway")
 
 from engram import mcp_compat  # noqa: E402  (mcp 1.x/2.x Tool compat)
+from engram.project_config import load_default_settings  # noqa: E402
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8896
+DEFAULT_NATIVE_CONFIG = pathlib.Path("~/.engram/runtime/native-instances.toml")
 FORWARD_TIMEOUT_S = 60.0
 MAX_FORWARD_TIMEOUT_S = 600.0
+
+# A fresh MCP session is cheap compared with losing a client request, but a
+# retry is only safe when the operation is known to be read-only.  In
+# particular, never blindly replay every `tools/call`: `retain` and the other
+# write-shaped Hindsight tools may have completed upstream before a broken
+# response reached us.
+HTTP_RETRY_ATTEMPTS = 2
+HTTP_RETRY_DELAY_S = 0.25
+HTTP_RETRYABLE_STATUS_CODES = frozenset({502, 503, 504})
+HTTP_READ_ONLY_RETRYABLE_TOOLS = frozenset(
+    {
+        "recall",
+        "docs_recall",
+        "issues_recall",
+        "kuadrant_docs_recall",
+        "kuadrant_issues_recall",
+        "list_mental_models",
+        "get_mental_model",
+    }
+)
 
 # Hindsight recall returns both a text JSON envelope and an equivalent
 # `structuredContent` object. The raw envelope is useful for debugging but is
@@ -123,7 +142,10 @@ MAX_SERENA_PATTERN_RESULT_CHARS = 6000
 # confirmed no Cursor hook or CLI surface carries real per-call token
 # counts locally (Team/Enterprise usage APIs report at turn granularity,
 # not per tool call, and require a paid plan).
-GATEWAY_CALLS_LOG = pathlib.Path(os.path.expanduser("~/.engram/logs/gateway-calls.jsonl"))
+DEPLOYMENT_SETTINGS = load_default_settings()
+GATEWAY_LOG_DIR = DEPLOYMENT_SETTINGS.path("log_dir", "~/.engram/logs")
+assert GATEWAY_LOG_DIR is not None
+GATEWAY_CALLS_LOG = GATEWAY_LOG_DIR / "gateway-calls.jsonl"
 
 
 @functools.lru_cache(maxsize=1)
@@ -149,6 +171,48 @@ def _estimate_tokens(text: str) -> int:
     except Exception:
         log.warning("tiktoken estimation failed, falling back to chars/4 heuristic", exc_info=True)
         return len(text) // 4
+
+
+def _format_exception(exc: BaseException) -> str:
+    """Render an exception without losing diagnostics when ``str(exc)`` is empty.
+
+    HTTP client exceptions are sometimes constructed without a message (and
+    chained exceptions often hold the useful transport detail in
+    ``__cause__``/``__context__``).  Returning only ``str(exc)`` turned those
+    failures into the unhelpful ``backend 'host' failed:`` seen by clients.
+    Keep the chain bounded by object identity so a malformed exception cannot
+    make error handling recursive forever.
+    """
+    parts: list[str] = []
+    current: BaseException | None = exc
+    relation: str | None = None
+    seen: set[int] = set()
+
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        exception_type = type(current)
+        type_name = exception_type.__name__
+        if exception_type.__module__ not in {"builtins", "__main__"}:
+            type_name = f"{exception_type.__module__}.{type_name}"
+        message = str(current).strip()
+        detail = f"{type_name}: {message or '<no message>'}"
+        notes = getattr(current, "__notes__", None)
+        if notes:
+            detail += f" (notes: {'; '.join(str(note) for note in notes)})"
+        parts.append(f"{relation} {detail}" if relation else detail)
+
+        if current.__cause__ is not None:
+            relation = "caused by"
+            current = current.__cause__
+        elif not current.__suppress_context__ and current.__context__ is not None:
+            relation = "context"
+            current = current.__context__
+        else:
+            current = None
+
+    if current is not None:
+        parts.append("exception chain contained a cycle")
+    return "; ".join(parts)
 
 
 def _extract_result_text(result: dict) -> str:
@@ -208,13 +272,16 @@ def _normalize_recall_record(record: object) -> dict | None:
             normalized[key] = value
 
     metadata = record.get("metadata")
-    if isinstance(metadata, dict):
-        summary = metadata.get("key_sentences")
+    summary = record.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        if isinstance(metadata, dict):
+            summary = metadata.get("key_sentences")
         if not isinstance(summary, str) or not summary.strip():
             summary = record.get("text")
-        if isinstance(summary, str):
-            normalized["summary"] = _bounded_text(summary, MAX_RECALL_SUMMARY_CHARS)
+    if isinstance(summary, str):
+        normalized["summary"] = _bounded_text(summary, MAX_RECALL_SUMMARY_CHARS)
 
+    if isinstance(metadata, dict):
         keywords = metadata.get("keywords")
         if isinstance(keywords, str):
             compact_keywords = [keyword.strip() for keyword in keywords.split(",") if keyword.strip()]
@@ -230,8 +297,6 @@ def _normalize_recall_record(record: object) -> dict | None:
         }
         if compact_metadata:
             normalized["metadata"] = compact_metadata
-    elif isinstance(record.get("text"), str):
-        normalized["summary"] = _bounded_text(record["text"], MAX_RECALL_SUMMARY_CHARS)
 
     scores = record.get("scores")
     if isinstance(scores, dict):
@@ -474,14 +539,9 @@ def _log_gateway_call(
 # passes through unprefixed -- verified empirically that their tool names
 # don't collide with each other or with docs/issues (see plan).
 #
-# kuadrant_docs/kuadrant_issues added 2026-08-27: the "kuadrant" project
-# entry is cross-mounted as a *second* MCP server into every praxis-*
-# repo's .cursor/mcp.json (see build_project_registry()'s "kuadrant" entry
-# and RELEVANT_TOOLS_BY_BACKEND below) alongside that repo's own "engram"
-# mount -- two independent MCP servers both offering a bare "recall" tool
-# would collide client-side, so these get project-qualified names
-# (kuadrant_docs_recall, kuadrant_issues_recall) instead of the usual
-# docs_recall/issues_recall.
+# A deployment may mount a second docs/issues family beside a route's primary
+# family. Those backend keys use project-qualified names so two bare `recall`
+# tools cannot collide in the client catalog.
 PREFIXED_BACKENDS = frozenset({
     "docs",
     "issues",
@@ -625,11 +685,10 @@ RELEVANT_HINDSIGHT_TOOLS = frozenset(
 # keeps the added footprint to 1 tool per backend.
 RECALL_ONLY_HINDSIGHT_TOOLS = frozenset({"recall"})
 
-# Same rationale as RECALL_ONLY_HINDSIGHT_TOOLS, for kuadrant's code-search
-# backend: only the semantic/BM25 search tool is exposed cross-project,
-# not pattern-search or the call-graph tools (impact-analysis tooling for
-# a codebase nobody here refactors) -- see engram.search.kuadrant's module
-# docstring.
+# Same rationale as RECALL_ONLY_HINDSIGHT_TOOLS, for the Kuadrant
+# code-search backend: only the semantic/BM25 search tool is exposed
+# cross-project, not pattern-search or call-graph tools (impact-analysis
+# tooling for a read-only reference corpus).
 RECALL_ONLY_CODE_TOOLS = frozenset({"kuadrant_code_search"})
 
 MANUAL_MENTAL_MODEL_TOOLS = frozenset({"manual_mental_model"})
@@ -732,8 +791,9 @@ async def aggregate_tools_list(
     errors: dict[str, str] = {}
     for backend_key, outcome in results:
         if isinstance(outcome, Exception):
-            errors[backend_key] = str(outcome)
-            log.warning("backend %r failed to list tools: %s", backend_key, outcome)
+            detail = _format_exception(outcome)
+            errors[backend_key] = detail
+            log.warning("backend %r failed to list tools: %s", backend_key, detail)
             continue
         per_backend_tools[backend_key] = filter_relevant_tools(backend_key, outcome)
 
@@ -796,12 +856,13 @@ async def handle_tools_call(
     try:
         result = await adapter.call_tool(raw_name, _managed_zvec_arguments(raw_name, arguments))
     except Exception as exc:  # noqa: BLE001 - degrade to a clean tool error, don't crash the gateway
-        log.warning("backend %r failed on tools/call(%r): %s", backend_key, raw_name, exc)
+        detail = _format_exception(exc)
+        log.warning("backend %r failed on tools/call(%r): %s", backend_key, raw_name, detail)
         _log_gateway_call(
             project=project, backend=backend_key, tool=tool_name,
             is_error=True, result_chars=0, est_tokens=0,
         )
-        return _jsonrpc_error_result(message_id, f"backend {backend_key!r} failed: {exc}")
+        return _jsonrpc_error_result(message_id, f"backend {backend_key!r} failed: {detail}")
 
     # The legacy single-endpoint runtime registry forwards already-prefixed
     # names (for example, ``docs_recall``) through a host gateway. Newer
@@ -835,7 +896,9 @@ def _parse_sse_json(body: bytes) -> dict:
     text = body.decode("utf-8", errors="replace").strip()
     for line in text.splitlines():
         if line.startswith("data:"):
-            return json.loads(line[len("data:") :].strip())
+            payload = line[len("data:") :].strip()
+            if payload:
+                return json.loads(payload)
     return json.loads(text)
 
 
@@ -844,7 +907,13 @@ class HttpRelayAdapter:
     hindsight-issues). Each call is a fresh one-shot MCP session
     (initialize -> notifications/initialized -> the real call -> delete),
     matching serena_multiplex.py's "POST-only, never GET/SSE" design to
-    avoid the upstream mcp/fastmcp SSE-reconnect bug documented there."""
+    avoid the upstream mcp/fastmcp SSE-reconnect bug documented there.
+
+    ``tools/list`` and the explicitly allowlisted read-only tools get one
+    fresh-session retry for transient HTTP transport/5xx failures. Writes do
+    not retry: after a dropped response it is impossible to know whether the
+    upstream applied the write, so replaying it would be worse than surfacing
+    the diagnostic error to the caller."""
 
     def __init__(
         self,
@@ -856,7 +925,27 @@ class HttpRelayAdapter:
         self.headers = dict(headers or {})
         self.timeout_seconds = timeout_seconds
 
-    async def _roundtrip(self, method: str, params: dict | None = None) -> dict:
+    @staticmethod
+    def _is_retryable_tool_call(name: str) -> bool:
+        """Return whether replaying this MCP tool call is safe.
+
+        The legacy host route passes one of the explicitly listed prefixed
+        recall names while direct per-backend routes pass the raw ``recall``
+        name.  Do not broaden this to every search-looking name: the
+        allowlist is an intentional guard against replaying a future write
+        tool whose name happens to contain ``search`` or ``recall``.
+        """
+        return name in HTTP_READ_ONLY_RETRYABLE_TOOLS
+
+    @staticmethod
+    def _is_transient_failure(exc: BaseException) -> bool:
+        import httpx
+
+        if isinstance(exc, httpx.RequestError):
+            return True
+        return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in HTTP_RETRYABLE_STATUS_CODES
+
+    async def _roundtrip_once(self, method: str, params: dict | None = None) -> dict:
         import httpx
 
         # Some local MCP adapters route by the HTTP Host header and reject the
@@ -868,51 +957,593 @@ class HttpRelayAdapter:
             "Accept": "application/json, text/event-stream",
         }
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            init_resp = await client.post(
-                self.url,
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {},
-                        "clientInfo": {"name": "engram-gateway", "version": "0.0.1"},
+            session_id = None
+            try:
+                init_resp = await client.post(
+                    self.url,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {},
+                            "clientInfo": {"name": "engram-gateway", "version": "0.0.1"},
+                        },
                     },
-                },
-                headers=headers,
-            )
-            init_resp.raise_for_status()
-            session_id = init_resp.headers.get("mcp-session-id")
-            session_headers = {**headers, "mcp-session-id": session_id} if session_id else headers
+                    headers=headers,
+                )
+                init_resp.raise_for_status()
+                session_id = init_resp.headers.get("mcp-session-id")
+                session_headers = {**headers, "mcp-session-id": session_id} if session_id else headers
 
-            await client.post(
-                self.url,
-                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
-                headers=session_headers,
-            )
+                initialized_resp = await client.post(
+                    self.url,
+                    json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                    headers=session_headers,
+                )
+                initialized_resp.raise_for_status()
 
-            call_resp = await client.post(
-                self.url,
-                json={"jsonrpc": "2.0", "id": 2, "method": method, "params": params or {}},
-                headers=session_headers,
-            )
-            call_resp.raise_for_status()
-            result = _parse_sse_json(call_resp.content)
+                call_resp = await client.post(
+                    self.url,
+                    json={"jsonrpc": "2.0", "id": 2, "method": method, "params": params or {}},
+                    headers=session_headers,
+                )
+                call_resp.raise_for_status()
+                result = _parse_sse_json(call_resp.content)
 
-            if session_id:
-                await client.delete(self.url, headers=session_headers)
+                if "error" in result:
+                    raise RuntimeError(f"{method} failed: {result['error']}")
+                return result.get("result", {})
+            finally:
+                if session_id:
+                    try:
+                        await client.delete(self.url, headers=session_headers)
+                    except Exception as exc:  # noqa: BLE001 - cleanup must not mask the request failure
+                        log.debug("could not close HTTP MCP session: %s", _format_exception(exc))
 
-        if "error" in result:
-            raise RuntimeError(f"{method} failed: {result['error']}")
-        return result.get("result", {})
+    async def _roundtrip(
+        self,
+        method: str,
+        params: dict | None = None,
+        *,
+        retryable: bool = False,
+    ) -> dict:
+        attempts = HTTP_RETRY_ATTEMPTS if retryable else 1
+        for attempt in range(attempts):
+            try:
+                return await self._roundtrip_once(method, params)
+            except Exception as exc:  # noqa: BLE001 - retry only known transient HTTP failures
+                if attempt + 1 >= attempts or not self._is_transient_failure(exc):
+                    raise
+                log.warning(
+                    "transient HTTP MCP failure for %s at %s; retrying attempt %d/%d: %s",
+                    method,
+                    self.url,
+                    attempt + 2,
+                    attempts,
+                    _format_exception(exc),
+                )
+                if HTTP_RETRY_DELAY_S > 0:
+                    await asyncio.sleep(HTTP_RETRY_DELAY_S)
+
 
     async def list_tools(self) -> list[dict]:
-        result = await self._roundtrip("tools/list")
+        result = await self._roundtrip("tools/list", retryable=True)
         return result.get("tools", [])
 
     async def call_tool(self, name: str, arguments: dict) -> dict:
-        return await self._roundtrip("tools/call", {"name": name, "arguments": arguments})
+        return await self._roundtrip(
+            "tools/call",
+            {"name": name, "arguments": arguments},
+            retryable=self._is_retryable_tool_call(name),
+        )
+
+
+ZVEC_SHADOWED_TOOLS = {
+    "zvec_grep_search": "cocoindex_search",
+    "zvec_grep_callgraph_blast_radius": "cocoindex_call_graph_blast_radius",
+    "zvec_grep_callgraph_shortest_path": "cocoindex_call_graph_shortest_path",
+    "zvec_grep_callgraph_cluster": "cocoindex_call_graph_get_cluster",
+}
+MAX_PENDING_ZVEC_SHADOWS = 8
+
+
+def _managed_zvec_arguments(tool: str, arguments: dict) -> dict:
+    """Require managed workspace searches to finish their freshness barrier.
+
+    zvec-grep's eventual mode can return the current index while scheduling a
+    background refresh. That is useful for latency-sensitive direct clients,
+    but Engram's managed code-search route promises results from the checkout
+    the caller just asked about. Keep the policy at the gateway boundary so
+    every configured repository and worktree gets the same behavior without
+    changing zvec-grep's defaults for unrelated clients.
+    """
+    if tool != "zvec_grep_search":
+        return arguments
+    return {
+        **arguments,
+        "autoUpdate": True,
+        "freshness": "wait_for_fresh",
+    }
+
+
+def _git_workspace_metadata(root: pathlib.Path) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"workspace": str(root), "branch": None, "commit": None, "dirty": None}
+    for key, command in (
+        ("branch", ["git", "-C", str(root), "branch", "--show-current"]),
+        ("commit", ["git", "-C", str(root), "rev-parse", "HEAD"]),
+    ):
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=3)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if result.returncode == 0:
+            metadata[key] = result.stdout.strip() or None
+    try:
+        tracked_changes = []
+        for command in (
+            ["git", "-C", str(root), "diff", "--quiet"],
+            ["git", "-C", str(root), "diff", "--cached", "--quiet"],
+        ):
+            tracked_changes.append(
+                subprocess.run(command, capture_output=True, text=True, check=False, timeout=5)
+            )
+        untracked = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard", "--directory"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+        if all(result.returncode in {0, 1} for result in tracked_changes) and untracked.returncode == 0:
+            metadata["dirty"] = any(result.returncode == 1 for result in tracked_changes) or bool(
+                untracked.stdout.strip()
+            )
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return metadata
+
+
+def _cocoindex_branch(repo: str, root: pathlib.Path, branch: str | None) -> str:
+    release = re.search(r"-v(\d+\.\d+)$", root.name)
+    if release:
+        return f"v{release.group(1)}"
+    if branch and (match := re.match(r"^release/v(\d+\.\d+)$", branch)):
+        return f"v{match.group(1)}"
+    return "main"
+
+
+def _zvec_shadow_arguments(
+    tool: str,
+    arguments: dict,
+    *,
+    repo: str,
+    root: pathlib.Path,
+    branch: str | None,
+) -> tuple[str, dict] | None:
+    shadow_tool = ZVEC_SHADOWED_TOOLS[tool]
+    common = {"repo": repo, "branch": _cocoindex_branch(repo, root, branch)}
+    if tool == "zvec_grep_search":
+        query = arguments.get("query")
+        if not isinstance(query, str) or not query.strip():
+            for key in ("queries", "fts", "vector"):
+                value = arguments.get(key)
+                values = [value] if isinstance(value, str) else value if isinstance(value, list) else []
+                query = " ".join(item.strip() for item in values if isinstance(item, str) and item.strip())
+                if query:
+                    break
+        if not isinstance(query, str) or not query.strip():
+            return None
+        limit = arguments.get("limit", 10)
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            limit = 10
+        return shadow_tool, {"query": query, "limit": min(max(limit, 1), 20), **common}
+
+    if tool == "zvec_grep_callgraph_blast_radius":
+        payload = {key: arguments[key] for key in ("function", "depth") if key in arguments}
+    elif tool == "zvec_grep_callgraph_shortest_path":
+        payload = {key: arguments[key] for key in ("source", "target") if key in arguments}
+    else:
+        payload = {"function": arguments.get("function")}
+    return shadow_tool, {**payload, **common}
+
+
+def _append_shadow_jsonl(path: pathlib.Path, entry: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(entry, default=str, separators=(",", ":")) + "\n")
+
+
+def _tool_result_text(result: dict) -> str:
+    return "\n".join(
+        block.get("text", "")
+        for block in result.get("content", [])
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
+def _normalize_comparison_path(path: str, repo: str) -> str:
+    path = path.strip().replace("\\", "/")
+    while path.startswith("./"):
+        path = path[2:]
+    for prefix in (f"{repo}/", f"{repo}@release-"):
+        if path.startswith(prefix):
+            if prefix.endswith("release-"):
+                _release, separator, relative = path.partition("/")
+                return relative if separator else path
+            return path[len(prefix):]
+    return path
+
+
+def _ranked_search_paths(result: dict, *, engine: str, repo: str) -> list[dict[str, Any]]:
+    structured = result.get("structuredContent", result.get("structured_content"))
+    if engine == "zvec-grep" and isinstance(structured, dict):
+        items = structured.get("items")
+        if isinstance(items, list):
+            paths: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for position, item in enumerate(items, start=1):
+                if not isinstance(item, dict):
+                    continue
+                raw_path = next(
+                    (item[key] for key in ("path", "relative_path", "relativePath", "filepath")
+                     if isinstance(item.get(key), str)),
+                    None,
+                )
+                if raw_path is None:
+                    continue
+                path = _normalize_comparison_path(raw_path, repo)
+                if path not in seen:
+                    seen.add(path)
+                    paths.append({"rank": item.get("rank", position), "path": path})
+            if paths:
+                return paths
+
+    text = _tool_result_text(result)
+    paths = []
+    seen = set()
+    if engine == "zvec-grep":
+        pattern = re.compile(r"^#(?P<rank>\d+)(?:\s+\[[^\]]+\])?\s+matchedBy=[^\s]+\s+(?P<location>.+?):\d+(?:-\d+)?$")
+        for line in text.splitlines():
+            match = pattern.match(line.strip())
+            if not match:
+                continue
+            path = _normalize_comparison_path(match.group("location"), repo)
+            if path not in seen:
+                seen.add(path)
+                paths.append({"rank": int(match.group("rank")), "path": path})
+    else:
+        pattern = re.compile(r"^\[(?P<rank>\d+)\]\s+(?P<path>.+?)\s+\(score:")
+        for line in text.splitlines():
+            match = pattern.match(line.strip())
+            if not match:
+                continue
+            path = _normalize_comparison_path(match.group("path"), repo)
+            if path not in seen:
+                seen.add(path)
+                paths.append({"rank": int(match.group("rank")), "path": path})
+    return paths
+
+
+def _graph_callers(result: dict, *, engine: str, repo: str) -> list[list[str]]:
+    if engine == "zvec-grep":
+        structured = result.get("structuredContent", result.get("structured_content"))
+        if isinstance(structured, dict) and isinstance(structured.get("callers_by_depth"), list):
+            return [
+                [_normalize_comparison_path(path, repo) for path in level if isinstance(path, str)]
+                for level in structured["callers_by_depth"]
+            ]
+    text = _tool_result_text(result)
+    depth_callers: dict[int, list[str]] = {}
+    for line in text.splitlines():
+        match = re.match(r"^\s*depth\s+(\d+):\s*(.*)$", line)
+        if match:
+            depth = int(match.group(1))
+            callers = [value.strip() for value in match.group(2).split(",") if value.strip()]
+            depth_callers[depth] = [_normalize_comparison_path(value, repo) for value in callers]
+    if not depth_callers:
+        return []
+    return [depth_callers[key] for key in range(1, max(depth_callers) + 1)]
+
+
+def _graph_path(result: dict, *, engine: str, repo: str) -> list[str] | None:
+    if engine == "zvec-grep":
+        structured = result.get("structuredContent", result.get("structured_content"))
+        if isinstance(structured, dict):
+            path = structured.get("path")
+            if path is None:
+                return None
+            if isinstance(path, list):
+                return [_normalize_comparison_path(item, repo) for item in path if isinstance(item, str)]
+    text = _tool_result_text(result)
+    if "No call path found" in text:
+        return None
+    for line in text.splitlines():
+        value = line.strip()
+        if line.startswith("  ") and " -> " in value:
+            return [_normalize_comparison_path(item, repo) for item in value.split(" -> ")]
+    return None
+
+
+def _graph_cluster_members(result: dict, *, engine: str, repo: str) -> list[str]:
+    if engine == "zvec-grep":
+        structured = result.get("structuredContent", result.get("structured_content"))
+        if isinstance(structured, dict) and isinstance(structured.get("members"), list):
+            return [
+                _normalize_comparison_path(member, repo)
+                for member in structured["members"]
+                if isinstance(member, str)
+            ]
+    members: list[str] = []
+    for line in _tool_result_text(result).splitlines():
+        if line.startswith("  ") and line.strip():
+            members.append(_normalize_comparison_path(line.strip(), repo))
+    return members
+
+
+def _graph_resolution_counts(result: dict, *, engine: str) -> dict[str, int] | None:
+    if engine == "zvec-grep":
+        structured = result.get("structuredContent", result.get("structured_content"))
+        if isinstance(structured, dict):
+            values = ("unresolved_calls", "total_calls", "ambiguous_calls")
+            if all(isinstance(structured.get(key), int) for key in values):
+                return {key: structured[key] for key in values}
+    match = re.search(
+        r"(?P<unresolved>[\d,]+)/(?P<total>[\d,]+) calls.*?and "
+        r"(?P<ambiguous>[\d,]+) matched 2\+ candidates",
+        _tool_result_text(result),
+        re.DOTALL,
+    )
+    if not match:
+        return None
+    return {
+        "unresolved_calls": int(match.group("unresolved").replace(",", "")),
+        "total_calls": int(match.group("total").replace(",", "")),
+        "ambiguous_calls": int(match.group("ambiguous").replace(",", "")),
+    }
+
+
+def _compare_shadow_responses(tool: str, primary: dict, shadow: dict, repo: str) -> dict[str, Any]:
+    comparison: dict[str, Any] = {
+        "reference_engine": "cocoindex",
+        "source_of_truth": "cocoindex",
+        "candidate_engine": "zvec-grep",
+        "evaluation_note": "CocoIndex is the comparison reference; rankings are not adjudicated relevance labels.",
+    }
+    if tool == "zvec_grep_search":
+        reference = _ranked_search_paths(shadow, engine="cocoindex", repo=repo)
+        candidate = _ranked_search_paths(primary, engine="zvec-grep", repo=repo)
+        freshness = {}
+        for line in _tool_result_text(primary).splitlines():
+            key, separator, value = line.partition(":")
+            if separator and key in {"freshness", "results", "background_refresh"}:
+                freshness[key] = value.strip()
+        reference_ranks = {item["path"]: item["rank"] for item in reference}
+        candidate_ranks = {item["path"]: item["rank"] for item in candidate}
+        comparison.update({
+            "comparison_type": "unique_file_rank_overlap",
+            "zvec_provenance": freshness,
+            "cocoindex_ranked_files": reference,
+            "zvec_ranked_files": candidate,
+            "cocoindex_only_top_k": [item["path"] for item in reference if item["path"] not in candidate_ranks],
+            "zvec_only_top_k": [item["path"] for item in candidate if item["path"] not in reference_ranks],
+            "shared_file_rank_deltas": [
+                {
+                    "path": path,
+                    "cocoindex_rank": reference_ranks[path],
+                    "zvec_rank": candidate_ranks[path],
+                    "zvec_minus_cocoindex": candidate_ranks[path] - reference_ranks[path],
+                }
+                for path in sorted(
+                    reference_ranks.keys() & candidate_ranks.keys(),
+                    key=lambda value: reference_ranks[value],
+                )
+            ],
+        })
+        comparison["file_order_matches_reference"] = [item["path"] for item in reference] == [
+            item["path"] for item in candidate
+        ]
+    elif tool == "zvec_grep_callgraph_blast_radius":
+        reference = _graph_callers(shadow, engine="cocoindex", repo=repo)
+        candidate = _graph_callers(primary, engine="zvec-grep", repo=repo)
+        comparison.update({
+            "comparison_type": "callers_by_depth",
+            "cocoindex_callers_by_depth": reference,
+            "zvec_callers_by_depth": candidate,
+            "cocoindex_only_by_depth": [
+                [name for name in reference[level] if level >= len(candidate) or name not in candidate[level]]
+                for level in range(len(reference))
+            ],
+            "zvec_only_by_depth": [
+                [name for name in candidate[level] if level >= len(reference) or name not in reference[level]]
+                for level in range(len(candidate))
+            ],
+        })
+        comparison["callers_match_reference"] = reference == candidate
+        reference_counts = _graph_resolution_counts(shadow, engine="cocoindex")
+        candidate_counts = _graph_resolution_counts(primary, engine="zvec-grep")
+        if reference_counts is not None:
+            comparison["cocoindex_resolution_counts"] = reference_counts
+        if candidate_counts is not None:
+            comparison["zvec_resolution_counts"] = candidate_counts
+        if reference_counts is not None and candidate_counts is not None:
+            comparison["zvec_minus_cocoindex_resolution_counts"] = {
+                key: candidate_counts[key] - reference_counts[key]
+                for key in reference_counts
+            }
+    elif tool == "zvec_grep_callgraph_shortest_path":
+        reference = _graph_path(shadow, engine="cocoindex", repo=repo)
+        candidate = _graph_path(primary, engine="zvec-grep", repo=repo)
+        comparison.update({
+            "comparison_type": "shortest_call_path",
+            "cocoindex_path": reference,
+            "zvec_path": candidate,
+            "path_matches_reference": reference == candidate,
+        })
+    elif tool == "zvec_grep_callgraph_cluster":
+        reference = _graph_cluster_members(shadow, engine="cocoindex", repo=repo)
+        candidate = _graph_cluster_members(primary, engine="zvec-grep", repo=repo)
+        reference_set = set(reference)
+        candidate_set = set(candidate)
+        comparison.update({
+            "comparison_type": "callgraph_cluster_members",
+            "cocoindex_members": reference,
+            "zvec_members": candidate,
+            "cocoindex_only_members": sorted(reference_set - candidate_set),
+            "zvec_only_members": sorted(candidate_set - reference_set),
+            "members_match_reference": reference_set == candidate_set,
+        })
+    else:
+        comparison["comparison_type"] = "raw_result_only"
+        comparison["status"] = "no_ranked-comparison-parser"
+    return comparison
+
+
+class ZvecShadowRelayAdapter:
+    """Forward managed zvec-grep calls and compare selected calls in the background.
+
+    The primary backend owns the client-visible tool catalog and response. CocoIndex
+    is only called for matching, indexed live roots; failures are recorded and never
+    alter the zvec-grep result. Search calls use zvec-grep's wait-for-fresh policy
+    before the primary response is returned.
+    """
+
+    def __init__(
+        self,
+        primary: BackendAdapter,
+        shadow: BackendAdapter,
+        *,
+        log_path: pathlib.Path,
+        shadow_timeout_seconds: float,
+        source_roots: dict[str, pathlib.Path] | None = None,
+        callgraph_repos: frozenset[str] | None = None,
+    ) -> None:
+        self.primary = primary
+        self.shadow = shadow
+        self.log_path = log_path.expanduser()
+        self.shadow_timeout_seconds = shadow_timeout_seconds
+        self.source_roots = source_roots or {}
+        self.callgraph_repos = callgraph_repos or frozenset()
+        self._shadow_tasks: set[asyncio.Task[None]] = set()
+        self._shadow_semaphore = asyncio.Semaphore(1)
+        self._log_lock = asyncio.Lock()
+
+    async def list_tools(self) -> list[dict]:
+        return await self.primary.list_tools()
+
+    async def call_tool(self, name: str, arguments: dict) -> dict:
+        forwarded_arguments = _managed_zvec_arguments(name, arguments)
+        started = time.perf_counter()
+        primary = await self.primary.call_tool(name, forwarded_arguments)
+        primary_elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+        if (
+            name in ZVEC_SHADOWED_TOOLS
+            and not primary.get("isError", primary.get("is_error", False))
+            and len(self._shadow_tasks) < MAX_PENDING_ZVEC_SHADOWS
+        ):
+            task = asyncio.create_task(
+                self._run_shadow(name, dict(forwarded_arguments), primary, primary_elapsed_ms)
+            )
+            self._shadow_tasks.add(task)
+            task.add_done_callback(self._shadow_tasks.discard)
+        elif name in ZVEC_SHADOWED_TOOLS and len(self._shadow_tasks) >= MAX_PENDING_ZVEC_SHADOWS:
+            log.warning("dropping CocoIndex shadow for %s: %d comparisons already pending", name, len(self._shadow_tasks))
+        return primary
+
+    async def _run_shadow(
+        self,
+        name: str,
+        arguments: dict,
+        primary: dict,
+        primary_elapsed_ms: float,
+    ) -> None:
+        started = time.perf_counter()
+        raw_root = arguments.get("root")
+        root: pathlib.Path | None = None
+        if isinstance(raw_root, str) and raw_root.strip():
+            try:
+                root = pathlib.Path(raw_root).expanduser().resolve(strict=True)
+            except OSError:
+                root = None
+        metadata = await asyncio.to_thread(_git_workspace_metadata, root) if root else {
+            "workspace": raw_root, "branch": None, "commit": None, "dirty": None,
+        }
+        entry: dict[str, Any] = {
+            "schema_version": "zvec-cocoindex-shadow.v1",
+            "id": str(uuid.uuid4()),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "tool": name,
+            "arguments": arguments,
+            "primary": {
+                "engine": "zvec-grep",
+                "elapsed_ms": primary_elapsed_ms,
+                "response": primary,
+            },
+            "shadow": {"engine": "cocoindex"},
+            "comparison_reference": "cocoindex",
+            **metadata,
+        }
+        indexed_repo = next(
+            (repo for repo, indexed_root in self.source_roots.items() if root == indexed_root),
+            None,
+        )
+        if root is None:
+            entry["shadow"].update({"skipped": "missing_or_unavailable_absolute_root"})
+        elif indexed_repo is None:
+            entry["shadow"].update({"skipped": "root_is_not_a_configured_cocoindex_source"})
+        elif name.startswith("zvec_grep_callgraph_") and indexed_repo not in self.callgraph_repos:
+            entry["shadow"].update({"skipped": "cocoindex_callgraph_not_configured_for_source"})
+        else:
+            call = _zvec_shadow_arguments(
+                name, arguments, repo=indexed_repo, root=root, branch=metadata.get("branch")
+            )
+            if call is None:
+                entry["shadow"].update({"skipped": "no_text_query_to_compare"})
+            else:
+                shadow_tool, shadow_arguments = call
+                entry["shadow"].update({"tool": shadow_tool, "arguments": shadow_arguments})
+                try:
+                    async with self._shadow_semaphore:
+                        result = await asyncio.wait_for(
+                            self.shadow.call_tool(shadow_tool, shadow_arguments),
+                            timeout=self.shadow_timeout_seconds,
+                        )
+                    entry["shadow"].update({
+                        "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
+                        "response": result,
+                        "is_error": bool(result.get("isError", result.get("is_error", False))),
+                    })
+                    if entry["shadow"]["is_error"]:
+                        entry["comparison"] = {
+                            "reference_engine": "cocoindex",
+                            "status": "reference_tool_error",
+                        }
+                    else:
+                        entry["comparison"] = _compare_shadow_responses(name, primary, result, indexed_repo)
+                except Exception as exc:  # noqa: BLE001 - shadow errors must not affect primary
+                    entry["shadow"].update({
+                        "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
+                        "error": _format_exception(exc),
+                    })
+                    entry["comparison"] = {
+                        "reference_engine": "cocoindex",
+                        "status": "reference_call_failed",
+                    }
+                    log.warning("CocoIndex shadow failed for %s: %s", name, _format_exception(exc))
+
+        if "comparison" not in entry:
+            entry["comparison"] = {
+                "reference_engine": "cocoindex",
+                "status": "skipped",
+                "reason": entry["shadow"].get("skipped", "not_compared"),
+            }
+
+        try:
+            async with self._log_lock:
+                await asyncio.to_thread(_append_shadow_jsonl, self.log_path, entry)
+        except Exception:  # noqa: BLE001 - logging must not affect primary
+            log.warning("failed to write zvec/CocoIndex shadow log %s", self.log_path, exc_info=True)
 
 
 MANUAL_MENTAL_MODEL_TOOL = {
@@ -1344,260 +1975,8 @@ def build_app(projects: dict[str, dict[str, BackendAdapter]]):
 
 
 # ---------------------------------------------------------------------------
-# Legacy native registry (2026-08-21): every onboarded repo, config only (no
-# I/O, no adapter instantiation -- see `build_backend_adapters` for that).
-# The portable runtime path uses `load_instance_registry()` instead and does
-# not depend on this installation-specific project list.
-# Deliberately preserves each repo's *existing* backend set exactly rather
-# than normalizing towards a uniform 4-backend shape: several repos are
-# missing one or more backends today (kubernaut-console has no serena,
-# kubernaut-docs has no cocoindex-code, engram itself has neither issues nor
-# serena) and this registry must keep reflecting that, not silently add
-# capabilities a repo never had. See docs/findings/2026-08.md's 2026-08-21
-# rollout entry for the full survey this was built from.
-#
-# Explicitly excluded (see that entry for why): the two kubernaut-fix-1995-*
-# scratch worktrees (serena still points directly at the raw upstream daemon
-# on :8892 rather than through the :8893 multiplex, a stale/pre-multiplex
-# config on what look like abandoned one-off branch-fix clones -- not guessed
-# at here).
+# Deployment-local registry
 # ---------------------------------------------------------------------------
-
-_HINDSIGHT_BASE = "http://localhost:8888"
-_PG_URL = "postgresql://hindsight:hindsight@localhost:5432/hindsight"
-
-DCM_REPOS = [
-    "udlm",
-    "k8s-container-service-provider",
-    "three-tier-app-demo-service-provider",
-    "quadlet-deploy",
-    "acm-cluster-service-provider",
-    "shared-workflows",
-    "kubevirt-service-provider",
-    "cli",
-    "utilities",
-    "osac-service-provider",
-    "enhancements",
-    "dcm-project.github.io",
-]
-PRAXIS_REPOS_WITH_SERENA = [
-    "praxis",
-    "praxis-ai",
-    "praxis-benchmarks",
-    "praxis-demos",
-    "praxis-experiments",
-    "praxis-forge",
-    "praxis-grid",
-    "praxis-operator",
-    "praxis-policy",
-]
-PRAXIS_REPOS_WITHOUT_SERENA = ["praxis-conventions", "praxis-enhancements", "praxis-proxy.github.io"]
-
-
-def _hindsight(bank: str) -> dict:
-    return {"kind": "http", "url": f"{_HINDSIGHT_BASE}/mcp/{bank}/"}
-
-
-def _http(
-    url: str,
-    headers: dict[str, str] | None = None,
-    timeout_seconds: float | None = None,
-) -> dict:
-    spec = {"kind": "http", "url": url}
-    if headers:
-        spec["headers"] = headers
-    if timeout_seconds is not None:
-        spec["timeout_seconds"] = timeout_seconds
-    return spec
-
-
-def _stdio(command: str, args: list[str] | None = None, env: dict | None = None, shared_key: str | None = None) -> dict:
-    spec = {"kind": "stdio", "command": command, "args": args or [], "env": env}
-    if shared_key is not None:
-        spec["shared_key"] = shared_key
-    return spec
-
-
-def _serena_stdio(home: str, workspace: str) -> dict:
-    return _stdio(
-        f"{home}/.local/bin/uvx",
-        [
-            "--from",
-            "git+https://github.com/oraios/serena@1bbe53546124c00e4238972f1599a91fbf8c6539",
-            "serena",
-            "start-mcp-server",
-            "--project",
-            workspace,
-            "--context",
-            "ide",
-            "--add-mode",
-            "no-memories",
-            "--open-web-dashboard",
-            "false",
-        ],
-    )
-
-
-def build_project_registry(home: str) -> dict[str, dict[str, dict]]:
-    """project_name -> {backend_key: backend_spec}, pure config derived from
-    the 2026-08-21 survey of every onboarded repo's actual .cursor/mcp.json.
-    `home` is injected (rather than read from `os.path.expanduser` here) so
-    this stays a pure, easily-testable function."""
-    venv_bin = f"{home}/.engram/venv/bin"
-    registry: dict[str, dict[str, dict]] = {}
-
-    # Kubernaut's cold Go call-graph build takes around 70s on the live corpus;
-    # keep it within the single request's forwarding budget instead of
-    # timing out just before the fingerprinted cache is populated.
-    kubernaut_http_code = _http("http://127.0.0.1:8891/mcp", timeout_seconds=180)
-    kubernaut_rca = _http("http://127.0.0.1:8897/mcp")
-
-    def kubernaut_serena(project: str) -> dict:
-        return _http(f"http://127.0.0.1:8893/mcp/{project}")
-
-    # `kubernaut` is the current main/v1.6 line. Route it through the shared
-    # CocoIndex backend like the other Kubernaut-family workspaces so semantic,
-    # structural-pattern, and Graphify-style call-graph tools are available
-    # through the single Engram MCP route.
-    registry["kubernaut"] = {
-        "docs": _hindsight("kubernaut-docs"),
-        "issues": _hindsight("kubernaut-issues"),
-        "code": kubernaut_http_code,
-        "rca": kubernaut_rca,
-        "serena": kubernaut_serena("kubernaut"),
-    }
-    for name in ("kubernaut-operator", "kubernaut-v1.5"):
-        registry[name] = {
-            "docs": _hindsight("kubernaut-docs"),
-            "issues": _hindsight("kubernaut-issues"),
-            "code": kubernaut_http_code,
-            "rca": kubernaut_rca,
-            "serena": kubernaut_serena(name),
-        }
-    registry["kubernaut-demo-scenarios"] = {
-        "docs": _hindsight("kubernaut-docs"),
-        "issues": _hindsight("kubernaut-issues"),
-        "code": kubernaut_http_code,
-        "serena": kubernaut_serena("kubernaut-demo-scenarios"),
-    }
-    registry["kubernaut-console"] = {
-        "docs": _hindsight("kubernaut-docs"),
-        "issues": _hindsight("kubernaut-issues"),
-        # Shared with kubernaut/kubernaut-operator, NOT a standalone stdio
-        # process (fixed 2026-08-25): this used to spawn
-        # `~/.engram/cocoindex-search.py`, a flat symlink the 2026-08-12
-        # src/engram/ package restructuring had already deleted 9 days
-        # before this registry entry was even authored, so it was dead on
-        # arrival -- kubernaut-console's `code` tools silently dropped from
-        # its aggregated catalog every time (see engram_gateway.py's
-        # per-backend degradation). Even had that path still existed, it
-        # was a bare single-repo invocation (no --repo scoping args), so it
-        # could only ever have searched kubernaut-console's own code, never
-        # kubernaut/kubernaut-operator upstream. `kubernaut_http_code`
-        # (engram-search-kubernaut / src/engram/search/kubernaut.py) already
-        # indexes all three repos into one cocoindex.code_embeddings table
-        # and defaults `cocoindex_search`/`cocoindex_pattern_search` to
-        # whole-platform results -- wiring kubernaut-console to it too is
-        # what actually restores operator + kubernaut-upstream code search.
-        "code": kubernaut_http_code,
-        # Added 2026-08-25: kubernaut-console was the only kubernaut-family
-        # repo with no serena entry at all (see this function's module-level
-        # survey comment), despite `KUBERNAUT_FAMILY_PROJECTS` in
-        # serena_multiplex.py already listing "kubernaut-console" as a
-        # registered project on the shared daemon. Wiring it up like every
-        # other family member gives it both symbol-level tools scoped to its
-        # own repo AND read-only cross-repo lookups into kubernaut/
-        # kubernaut-operator via query_project/list_queryable_projects
-        # (project-agnostic tools, forwarded untouched -- see
-        # serena_multiplex.py's PROJECT_AGNOSTIC_TOOLS), with no extra
-        # registry work needed for the "all go repos" half of the ask.
-        "serena": kubernaut_serena("kubernaut-console"),
-    }
-    registry["kubernaut-docs"] = {
-        "docs": _hindsight("kubernaut-docs"),
-        "issues": _hindsight("kubernaut-issues"),
-        "serena": kubernaut_serena("kubernaut-docs"),
-    }
-
-    koku_code_stdio = _stdio(f"{venv_bin}/engram-search-koku", env={"COCOINDEX_PG_URL": _PG_URL}, shared_key="koku-code")
-    for name in ("koku", "koku-service-operator"):
-        registry[name] = {
-            "docs": _hindsight("koku-docs"),
-            "issues": _hindsight("koku-issues"),
-            "code": koku_code_stdio,
-            "serena": _http(f"http://127.0.0.1:8895/mcp/{name}"),
-        }
-    registry["koku-insights-onprem"] = {
-        "docs": _hindsight("koku-docs"),
-        "issues": _hindsight("koku-issues"),
-        "code": koku_code_stdio,
-        "serena": _serena_stdio(home, f"{home}/go/src/github.com/insights-onprem/koku"),
-    }
-
-    dcm_code_stdio = _stdio(
-        f"{venv_bin}/engram-search-dcm", env={"COCOINDEX_PG_URL": _PG_URL, "HF_HUB_OFFLINE": "1"}, shared_key="dcm-code"
-    )
-    # The architecture and control-plane checkouts are the two DCM review
-    # workspaces whose old MCP links predate the unified gateway. Keep their
-    # exact directory names as routes so the plugin can derive them without a
-    # special alias; the remaining DCM routes retain their established
-    # dcm-<repo> names.
-    for repo in (*DCM_REPOS, "dcm", "control-plane"):
-        route = repo if repo in {"dcm", "control-plane"} else f"dcm-{repo}"
-        registry[route] = {
-            "docs": _hindsight("dcm-docs"),
-            "issues": _hindsight("dcm-issues"),
-            "code": dcm_code_stdio,
-            "serena": _serena_stdio(home, f"{home}/go/src/github.com/dcm-project/{repo}"),
-        }
-
-    praxis_code_stdio = _stdio(f"{venv_bin}/engram-search-praxis", env={"COCOINDEX_PG_URL": _PG_URL}, shared_key="praxis-code")
-    for repo in PRAXIS_REPOS_WITH_SERENA:
-        registry[repo] = {
-            "docs": _hindsight("praxis-docs"),
-            "issues": _hindsight("praxis-issues"),
-            "code": praxis_code_stdio,
-            "serena": _serena_stdio(home, f"{home}/go/src/github.com/praxis-proxy/{repo}"),
-        }
-    for repo in PRAXIS_REPOS_WITHOUT_SERENA:
-        registry[repo.replace(".", "-")] = {
-            "docs": _hindsight("praxis-docs"),
-            "issues": _hindsight("praxis-issues"),
-            "code": praxis_code_stdio,
-        }
-
-    # rhdh-plugins: DISABLED -- no longer contributing to this project
-    # (2026-09-09). Registry entry removed so the gateway no longer spawns
-    # engram-search-rhdh-plugins / serena subprocesses for it, and the
-    # launchd job io.vectorize.cocoindex.rhdh-plugins has been booted out
-    # with its installed plist removed. Source modules
-    # (flows/search rhdh_plugins) and launchd/io.vectorize.cocoindex.rhdh-plugins.plist
-    # remain in the repo for reference only.
-
-    registry["engram"] = {
-        "docs": _hindsight("engram-docs"),
-        "code": _stdio(f"{venv_bin}/engram-search-engram", env={"COCOINDEX_PG_URL": _PG_URL}),
-    }
-
-    # kuadrant: ingestion-only prior-art reference for praxis-proxy (2026-08-27
-    # onboarding, extended to 9 repos 2026-08-28 with mcp-gateway) -- no repo
-    # is ever opened as its own Cursor workspace (hence no serena, and this
-    # is the only registry entry not named after a local checkout dir), so
-    # this single entry aggregates all 9 repos' docs/issues/code and is
-    # meant to be cross-mounted as a *second* MCP server into
-    # every praxis-* repo's .cursor/mcp.json alongside its own "engram" entry.
-    # Uses "kuadrant_docs"/"kuadrant_issues"/"kuadrant_code" backend keys
-    # (not the usual "docs"/"issues"/"code") so RELEVANT_TOOLS_BY_BACKEND can
-    # apply the narrower recall-only/search-only filter without affecting any
-    # other project's own docs/issues/code backends.
-    registry["kuadrant"] = {
-        "kuadrant_docs": _hindsight("kuadrant-docs"),
-        "kuadrant_issues": _hindsight("kuadrant-issues"),
-        "kuadrant_code": _stdio(f"{venv_bin}/engram-search-kuadrant", env={"COCOINDEX_PG_URL": _PG_URL}),
-    }
-
-    return registry
-
 
 def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
     """Validate and normalize one backend from the container registry."""
@@ -1605,10 +1984,10 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
         raise ValueError(f"Backend {instance!r}/{backend!r} must be a TOML table")
 
     kind = settings.get("kind")
-    if kind not in {"http", "stdio"}:
-        raise ValueError(f"Backend {instance!r}/{backend!r} kind must be 'http' or 'stdio'")
+    if kind not in {"http", "shadow_http", "stdio"}:
+        raise ValueError(f"Backend {instance!r}/{backend!r} kind must be 'http', 'shadow_http', or 'stdio'")
 
-    if kind == "http":
+    if kind in {"http", "shadow_http"}:
         endpoint = settings.get("url")
         if not isinstance(endpoint, str) or not endpoint:
             raise ValueError(f"Backend {instance!r}/{backend!r} requires a non-empty url")
@@ -1643,6 +2022,57 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
             spec["headers"] = dict(headers)
         if timeout_seconds is not None:
             spec["timeout_seconds"] = float(timeout_seconds)
+        if kind == "shadow_http":
+            shadow_endpoint = settings.get("shadow_url")
+            if not isinstance(shadow_endpoint, str) or not shadow_endpoint:
+                raise ValueError(f"Backend {instance!r}/{backend!r} requires a non-empty shadow_url")
+            shadow_parsed = urlparse(shadow_endpoint)
+            if shadow_parsed.scheme not in {"http", "https"} or not shadow_parsed.netloc:
+                raise ValueError(
+                    f"Backend {instance!r}/{backend!r} shadow_url must be an HTTP(S) URL: {shadow_endpoint!r}"
+                )
+            if shadow_parsed.username is not None or shadow_parsed.password is not None:
+                raise ValueError(f"Backend {instance!r}/{backend!r} shadow_url must not contain credentials")
+            shadow_timeout = settings.get("shadow_timeout_seconds", 60.0)
+            if (
+                isinstance(shadow_timeout, bool)
+                or not isinstance(shadow_timeout, (int, float))
+                or not math.isfinite(shadow_timeout)
+                or not 1 <= shadow_timeout <= MAX_FORWARD_TIMEOUT_S
+            ):
+                raise ValueError(
+                    f"Backend {instance!r}/{backend!r} shadow_timeout_seconds must be between 1 and "
+                    f"{MAX_FORWARD_TIMEOUT_S:g}"
+                )
+            shadow_log = settings.get("shadow_log")
+            if not isinstance(shadow_log, str) or not shadow_log.strip():
+                raise ValueError(f"Backend {instance!r}/{backend!r} requires a non-empty shadow_log")
+            source_roots = settings.get("source_roots", {})
+            if not isinstance(source_roots, dict) or any(
+                not isinstance(key, str) or not key or not isinstance(value, str) or not value.strip()
+                for key, value in source_roots.items()
+            ):
+                raise ValueError(
+                    f"Backend {instance!r}/{backend!r} source_roots must be a string-to-string table"
+                )
+            callgraph_repos = settings.get("callgraph_repos", [])
+            if not isinstance(callgraph_repos, list) or any(
+                not isinstance(repo, str) or not repo.strip() for repo in callgraph_repos
+            ):
+                raise ValueError(f"Backend {instance!r}/{backend!r} callgraph_repos must be a string array")
+            shared_key = settings.get("shared_key")
+            if shared_key is not None and (not isinstance(shared_key, str) or not shared_key):
+                raise ValueError(f"Backend {instance!r}/{backend!r} shared_key must be a non-empty string")
+            spec.update({
+                "kind": "shadow_http",
+                "shadow_url": shadow_endpoint,
+                "shadow_timeout_seconds": float(shadow_timeout),
+                "shadow_log": shadow_log,
+                "source_roots": dict(source_roots),
+                "callgraph_repos": list(callgraph_repos),
+            })
+            if shared_key is not None:
+                spec["shared_key"] = shared_key
         return spec
 
     command = settings.get("command")
@@ -1672,7 +2102,7 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
 
 
 def load_instance_registry(path: str | pathlib.Path) -> dict[str, dict[str, dict]]:
-    """Load the container runtime registry from a TOML file.
+    """Load a deployment-local gateway registry from a TOML file.
 
     The original ``endpoint`` form remains valid as a compatibility shim for
     a host adapter. New configs use ``backends`` to aggregate multiple HTTP or
@@ -1734,61 +2164,9 @@ def load_instance_registry(path: str | pathlib.Path) -> dict[str, dict[str, dict
     return registry
 
 
-def _bank_name_from_spec(spec: dict, suffix: str) -> str:
-    """Extract a Hindsight bank name from one of the registry's HTTP specs."""
-    url = spec.get("url", "")
-    marker = "/mcp/"
-    if marker not in url:
-        raise ValueError(f"Hindsight backend URL has no MCP bank path: {url!r}")
-    bank = url.split(marker, 1)[1].rstrip("/")
-    if not bank.endswith(suffix):
-        raise ValueError(f"Expected Hindsight bank suffix {suffix!r}, got {bank!r}")
-    return bank
-
-
-def build_gateway_identity_registry(
-    registry: dict[str, dict[str, dict]],
-) -> dict[str, dict[str, str | None]]:
-    """Build the legacy Hindsight project/family identity view.
-
-    The gateway route is the project key. Backend specs remain authoritative for
-    actual routing, while this derived view validates the historical native
-    registry's Hindsight bank relationship. Config-driven runtime registries
-    are intentionally not required to use Hindsight or these bank suffixes.
-    """
-    identities: dict[str, dict[str, str | None]] = {}
-    for project, backends in registry.items():
-        if not project or "/" in project:
-            raise ValueError(f"Invalid gateway project route: {project!r}")
-        docs_key = "docs" if "docs" in backends else "kuadrant_docs"
-        docs_spec = backends.get(docs_key)
-        if not docs_spec or docs_spec.get("kind") != "http":
-            raise ValueError(f"Gateway project {project!r} has no HTTP docs backend")
-
-        docs_bank = _bank_name_from_spec(docs_spec, "-docs")
-        issues_key = "issues" if "issues" in backends else "kuadrant_issues"
-        issues_spec = backends.get(issues_key)
-        issues_bank = (
-            _bank_name_from_spec(issues_spec, "-issues")
-            if issues_spec
-            else None
-        )
-        identities[project] = {
-            "project": project,
-            "family": docs_bank.removesuffix("-docs"),
-            "docs_bank": docs_bank,
-            "issues_bank": issues_bank,
-        }
-    return identities
-
-
-def validate_gateway_identity_registry(
-    registry: dict[str, dict[str, dict]],
-) -> None:
-    """Fail startup early when a gateway route has an invalid identity binding."""
-    identities = build_gateway_identity_registry(registry)
-    if set(identities) != set(registry):
-        raise ValueError("Gateway identity registry does not cover every project route")
+def default_native_config_path() -> pathlib.Path:
+    """Return the deployment-local native gateway registry path."""
+    return DEFAULT_NATIVE_CONFIG.expanduser()
 
 
 def build_backend_adapters(registry: dict[str, dict[str, dict]]) -> dict[str, dict[str, BackendAdapter]]:
@@ -1800,11 +2178,39 @@ def build_backend_adapters(registry: dict[str, dict[str, dict]]) -> dict[str, di
     unlike serena, which is bound to one repo's filesystem via `--project`
     and can never be shared."""
     shared_stdio_cache: dict[str, StdioSubprocessAdapter] = {}
+    shared_shadow_cache: dict[str, ZvecShadowRelayAdapter] = {}
     adapters: dict[str, dict[str, BackendAdapter]] = {}
 
     for project, specs in registry.items():
         adapters[project] = {}
         for backend_key, spec in specs.items():
+            if spec["kind"] == "shadow_http":
+                shared_key = spec.get("shared_key")
+                if shared_key is not None and shared_key in shared_shadow_cache:
+                    adapters[project][backend_key] = shared_shadow_cache[shared_key]
+                    continue
+                primary = HttpRelayAdapter(
+                    spec["url"], spec.get("headers"), spec.get("timeout_seconds", FORWARD_TIMEOUT_S)
+                )
+                shadow = HttpRelayAdapter(
+                    spec["shadow_url"], timeout_seconds=spec["shadow_timeout_seconds"]
+                )
+                source_roots = {
+                    repo: pathlib.Path(root).expanduser().resolve()
+                    for repo, root in spec.get("source_roots", {}).items()
+                }
+                adapter = ZvecShadowRelayAdapter(
+                    primary,
+                    shadow,
+                    log_path=pathlib.Path(spec["shadow_log"]),
+                    shadow_timeout_seconds=spec["shadow_timeout_seconds"],
+                    source_roots=source_roots,
+                    callgraph_repos=frozenset(spec.get("callgraph_repos", [])),
+                )
+                if shared_key is not None:
+                    shared_shadow_cache[shared_key] = adapter
+                adapters[project][backend_key] = adapter
+                continue
             if spec["kind"] == "http":
                 adapters[project][backend_key] = HttpRelayAdapter(
                     spec["url"], spec.get("headers"), spec.get("timeout_seconds", FORWARD_TIMEOUT_S)
@@ -1837,16 +2243,12 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=pathlib.Path,
-        help="TOML instance config for container mode; without it, use the legacy static registry",
+        default=None,
+        help="TOML instance config; defaults to ~/.engram/runtime/native-instances.toml",
     )
     args = parser.parse_args()
 
-    if args.config is None:
-        home = os.path.expanduser("~")
-        registry = build_project_registry(home)
-        validate_gateway_identity_registry(registry)
-    else:
-        registry = load_instance_registry(args.config)
+    registry = load_instance_registry(args.config or default_native_config_path())
     projects = build_backend_adapters(registry)
     log.info("starting on %s:%d, %d projects: %s", args.host, args.port, len(projects), sorted(projects))
     app = build_app(projects)

@@ -1,4 +1,4 @@
-# systemd unit (native, Linux) -- runs nightly-learn.py in retain-only mode
+# systemd unit (native, Linux) -- runs engram-nightly-learn in retain-only mode
 # every hour. Direct analog of launchd/io.vectorize.hindsight.hourly.plist.
 #
 # Runs NATIVELY, not containerized -- unlike hindsight.container (the
@@ -34,6 +34,6 @@ EnvironmentFile=%h/.engram/config.env
 # account key path) that doesn't exist on this machine. A later
 # Environment= line overrides the same key from EnvironmentFile=.
 Environment=GOOGLE_APPLICATION_CREDENTIALS=%h/.config/gcloud/application_default_credentials.json
-ExecStart=%h/.engram/venv/bin/python3 %h/.engram/nightly-learn.py --mode hourly
+ExecStart=%h/.engram/venv/bin/engram-nightly-learn --mode hourly
 StandardOutput=append:%h/.engram/logs/hourly-stdout.log
 StandardError=append:%h/.engram/logs/hourly-stderr.log

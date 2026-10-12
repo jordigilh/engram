@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "run_id": "2026-09-24-zvec-sense-lexical-baseline",
+  "backend": "zvec-grep TypeScript with Sense-inspired lexical metadata/name decomposition",
+  "source_commit": "196a73015bf4ca42b1bb0adae56338d9ab156af7",
+  "working_tree_patch_sha256": "f5d233e328639f5720cd997fd5f181e0a8f928fbcfff0e983e8491669424a869",
+  "embedding_model": "local/potion-code-16m-v2",
+  "device": "cpu",
+  "normalized_cutoff": 10,
+  "fixture_languages": [
+    "go",
+    "python",
+    "typescript",
+    "rust"
+  ],
+  "per_language": {
+    "go": {
+      "ndcg@10": 0.5887735493745122,
+      "mrr@10": 0.7333333333333333,
+      "recall@10": 0.6770833333333334,
+      "precision@10": 0.25
+    },
+    "python": {
+      "ndcg@10": 0.5465207178647487,
+      "mrr@10": 0.5479166666666667,
+      "recall@10": 0.6895833333333333,
+      "precision@10": 0.25
+    },
+    "typescript": {
+      "ndcg@10": 0.42679147362817854,
+      "mrr@10": 0.5916666666666667,
+      "recall@10": 0.55,
+      "precision@10": 0.2
+    },
+    "rust": {
+      "ndcg@10": 0.4163304175242697,
+      "mrr@10": 0.45555555555555555,
+      "recall@10": 0.5604166666666667,
+      "precision@10": 0.2
+    }
+  },
+  "macro_average_across_language_fixtures": {
+    "ndcg@10": 0.49460403959792726,
+    "mrr@10": 0.5821180555555555,
+    "recall@10": 0.6192708333333333,
+    "precision@10": 0.225
+  },
+  "notes": [
+    "Each language is scored against its own frozen adjudicated qrels; the macro average weights each fixture equally.",
+    "Rust required a temporary source-authored qrels overlay adding six grade-0 module-declaration units from files included in its source snapshot but omitted from its original 33-symbol manifest. The canonical Rust fixture/qrels were left unchanged.",
+    "This is a synthetic four-language baseline, not a real-repository generalization claim."
+  ]
+}

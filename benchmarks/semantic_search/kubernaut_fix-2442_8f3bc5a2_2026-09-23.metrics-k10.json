@@ -1,0 +1,492 @@
+{
+  "cutoff": 10,
+  "qrels_status": "adjudicated",
+  "runs": [
+    {
+      "backend": "cocoindex",
+      "query_count": 11,
+      "overall": {
+        "ndcg@10": 0.5071509283842685,
+        "mrr@10": 0.7909090909090909,
+        "recall@10": 0.36531725849907665,
+        "precision@10": 0.2818181818181818
+      },
+      "by_category": {
+        "behavior / outcome": {
+          "ndcg@10": 0.5454778822625073,
+          "mrr@10": 0.5,
+          "recall@10": 0.42857142857142855,
+          "precision@10": 0.3
+        },
+        "data flow / semantic behavior": {
+          "ndcg@10": 0.3741951954449399,
+          "mrr@10": 0.2,
+          "recall@10": 0.3333333333333333,
+          "precision@10": 0.3
+        },
+        "exact implementation / interactive guard": {
+          "ndcg@10": 0.6109984981235498,
+          "mrr@10": 1.0,
+          "recall@10": 0.3333333333333333,
+          "precision@10": 0.2
+        },
+        "exact symbol / identifier anchor": {
+          "ndcg@10": 0.6814581046882917,
+          "mrr@10": 1.0,
+          "recall@10": 0.375,
+          "precision@10": 0.3
+        },
+        "implementation / data flow": {
+          "ndcg@10": 0.5049904054338514,
+          "mrr@10": 1.0,
+          "recall@10": 0.5,
+          "precision@10": 0.2
+        },
+        "multi-hop state / retry flow": {
+          "ndcg@10": 0.2912036183184181,
+          "mrr@10": 0.5,
+          "recall@10": 0.19230769230769232,
+          "precision@10": 0.25
+        },
+        "multi-symbol data flow": {
+          "ndcg@10": 0.6755295690540716,
+          "mrr@10": 1.0,
+          "recall@10": 0.6666666666666666,
+          "precision@10": 0.4
+        },
+        "policy constraint / paraphrase": {
+          "ndcg@10": 0.35865391117867357,
+          "mrr@10": 1.0,
+          "recall@10": 0.3,
+          "precision@10": 0.3
+        },
+        "policy-check / semantic behavior": {
+          "ndcg@10": 0.6167813470439758,
+          "mrr@10": 1.0,
+          "recall@10": 0.36363636363636365,
+          "precision@10": 0.4
+        },
+        "specific check / semantic paraphrase": {
+          "ndcg@10": 0.6281680623602549,
+          "mrr@10": 1.0,
+          "recall@10": 0.3333333333333333,
+          "precision@10": 0.2
+        }
+      },
+      "per_query": [
+        {
+          "id": "reject-undiscovered-catalog-workflow",
+          "category": "policy-check / semantic behavior",
+          "ndcg@10": 0.6167813470439758,
+          "mrr@10": 1.0,
+          "recall@10": 0.36363636363636365,
+          "precision@10": 0.4
+        },
+        {
+          "id": "discovered-state-flow-to-validation",
+          "category": "multi-symbol data flow",
+          "ndcg@10": 0.6755295690540716,
+          "mrr@10": 1.0,
+          "recall@10": 0.6666666666666666,
+          "precision@10": 0.4
+        },
+        {
+          "id": "record-listed-workflow-ids",
+          "category": "implementation / data flow",
+          "ndcg@10": 0.5049904054338514,
+          "mrr@10": 1.0,
+          "recall@10": 0.5,
+          "precision@10": 0.2
+        },
+        {
+          "id": "restrict-selection-to-discovered-workflows",
+          "category": "policy constraint / paraphrase",
+          "ndcg@10": 0.35865391117867357,
+          "mrr@10": 1.0,
+          "recall@10": 0.3,
+          "precision@10": 0.3
+        },
+        {
+          "id": "outcome-for-undiscovered-selection",
+          "category": "behavior / outcome",
+          "ndcg@10": 0.5454778822625073,
+          "mrr@10": 0.5,
+          "recall@10": 0.42857142857142855,
+          "precision@10": 0.3
+        },
+        {
+          "id": "detected-labels-to-discovery-filters",
+          "category": "data flow / semantic behavior",
+          "ndcg@10": 0.3741951954449399,
+          "mrr@10": 0.2,
+          "recall@10": 0.3333333333333333,
+          "precision@10": 0.3
+        },
+        {
+          "id": "membership-across-self-correction-retries",
+          "category": "multi-hop state / retry flow",
+          "ndcg@10": 0.05975293425355203,
+          "mrr@10": 0.0,
+          "recall@10": 0.0,
+          "precision@10": 0.0
+        },
+        {
+          "id": "validator-identifier-anchor",
+          "category": "exact symbol / identifier anchor",
+          "ndcg@10": 0.6814581046882917,
+          "mrr@10": 1.0,
+          "recall@10": 0.375,
+          "precision@10": 0.3
+        },
+        {
+          "id": "catalog-valid-undiscovered-validator-check",
+          "category": "specific check / semantic paraphrase",
+          "ndcg@10": 0.6281680623602549,
+          "mrr@10": 1.0,
+          "recall@10": 0.3333333333333333,
+          "precision@10": 0.2
+        },
+        {
+          "id": "discovery-membership-through-retry",
+          "category": "multi-hop state / retry flow",
+          "ndcg@10": 0.5226543023832843,
+          "mrr@10": 1.0,
+          "recall@10": 0.38461538461538464,
+          "precision@10": 0.5
+        },
+        {
+          "id": "selection-result-discovery-guard",
+          "category": "exact implementation / interactive guard",
+          "ndcg@10": 0.6109984981235498,
+          "mrr@10": 1.0,
+          "recall@10": 0.3333333333333333,
+          "precision@10": 0.2
+        }
+      ]
+    },
+    {
+      "backend": "zvec-git",
+      "query_count": 11,
+      "overall": {
+        "ndcg@10": 0.5846854055400924,
+        "mrr@10": 0.8181818181818182,
+        "recall@10": 0.5294092271364998,
+        "precision@10": 0.4090909090909091
+      },
+      "by_category": {
+        "behavior / outcome": {
+          "ndcg@10": 0.563837599974952,
+          "mrr@10": 0.5,
+          "recall@10": 0.42857142857142855,
+          "precision@10": 0.3
+        },
+        "data flow / semantic behavior": {
+          "ndcg@10": 0.5117452449657012,
+          "mrr@10": 0.5,
+          "recall@10": 0.3333333333333333,
+          "precision@10": 0.3
+        },
+        "exact implementation / interactive guard": {
+          "ndcg@10": 0.5398020752845778,
+          "mrr@10": 1.0,
+          "recall@10": 0.5,
+          "precision@10": 0.3
+        },
+        "exact symbol / identifier anchor": {
+          "ndcg@10": 0.9462958943926083,
+          "mrr@10": 1.0,
+          "recall@10": 1.0,
+          "precision@10": 0.8
+        },
+        "implementation / data flow": {
+          "ndcg@10": 0.7059993201477499,
+          "mrr@10": 0.5,
+          "recall@10": 0.75,
+          "precision@10": 0.3
+        },
+        "multi-hop state / retry flow": {
+          "ndcg@10": 0.6051012760154401,
+          "mrr@10": 1.0,
+          "recall@10": 0.4951923076923077,
+          "precision@10": 0.55
+        },
+        "multi-symbol data flow": {
+          "ndcg@10": 0.3368501158832826,
+          "mrr@10": 1.0,
+          "recall@10": 0.5,
+          "precision@10": 0.3
+        },
+        "policy constraint / paraphrase": {
+          "ndcg@10": 0.29053663233651417,
+          "mrr@10": 0.5,
+          "recall@10": 0.2,
+          "precision@10": 0.2
+        },
+        "policy-check / semantic behavior": {
+          "ndcg@10": 0.6177226975535851,
+          "mrr@10": 1.0,
+          "recall@10": 0.45454545454545453,
+          "precision@10": 0.5
+        },
+        "specific check / semantic paraphrase": {
+          "ndcg@10": 0.708547328371166,
+          "mrr@10": 1.0,
+          "recall@10": 0.6666666666666666,
+          "precision@10": 0.4
+        }
+      },
+      "per_query": [
+        {
+          "id": "reject-undiscovered-catalog-workflow",
+          "category": "policy-check / semantic behavior",
+          "ndcg@10": 0.6177226975535851,
+          "mrr@10": 1.0,
+          "recall@10": 0.45454545454545453,
+          "precision@10": 0.5
+        },
+        {
+          "id": "discovered-state-flow-to-validation",
+          "category": "multi-symbol data flow",
+          "ndcg@10": 0.3368501158832826,
+          "mrr@10": 1.0,
+          "recall@10": 0.5,
+          "precision@10": 0.3
+        },
+        {
+          "id": "record-listed-workflow-ids",
+          "category": "implementation / data flow",
+          "ndcg@10": 0.7059993201477499,
+          "mrr@10": 0.5,
+          "recall@10": 0.75,
+          "precision@10": 0.3
+        },
+        {
+          "id": "restrict-selection-to-discovered-workflows",
+          "category": "policy constraint / paraphrase",
+          "ndcg@10": 0.29053663233651417,
+          "mrr@10": 0.5,
+          "recall@10": 0.2,
+          "precision@10": 0.2
+        },
+        {
+          "id": "outcome-for-undiscovered-selection",
+          "category": "behavior / outcome",
+          "ndcg@10": 0.563837599974952,
+          "mrr@10": 0.5,
+          "recall@10": 0.42857142857142855,
+          "precision@10": 0.3
+        },
+        {
+          "id": "detected-labels-to-discovery-filters",
+          "category": "data flow / semantic behavior",
+          "ndcg@10": 0.5117452449657012,
+          "mrr@10": 0.5,
+          "recall@10": 0.3333333333333333,
+          "precision@10": 0.3
+        },
+        {
+          "id": "membership-across-self-correction-retries",
+          "category": "multi-hop state / retry flow",
+          "ndcg@10": 0.39994860772462754,
+          "mrr@10": 1.0,
+          "recall@10": 0.375,
+          "precision@10": 0.3
+        },
+        {
+          "id": "validator-identifier-anchor",
+          "category": "exact symbol / identifier anchor",
+          "ndcg@10": 0.9462958943926083,
+          "mrr@10": 1.0,
+          "recall@10": 1.0,
+          "precision@10": 0.8
+        },
+        {
+          "id": "catalog-valid-undiscovered-validator-check",
+          "category": "specific check / semantic paraphrase",
+          "ndcg@10": 0.708547328371166,
+          "mrr@10": 1.0,
+          "recall@10": 0.6666666666666666,
+          "precision@10": 0.4
+        },
+        {
+          "id": "discovery-membership-through-retry",
+          "category": "multi-hop state / retry flow",
+          "ndcg@10": 0.8102539443062526,
+          "mrr@10": 1.0,
+          "recall@10": 0.6153846153846154,
+          "precision@10": 0.8
+        },
+        {
+          "id": "selection-result-discovery-guard",
+          "category": "exact implementation / interactive guard",
+          "ndcg@10": 0.5398020752845778,
+          "mrr@10": 1.0,
+          "recall@10": 0.5,
+          "precision@10": 0.3
+        }
+      ]
+    },
+    {
+      "backend": "sense",
+      "query_count": 11,
+      "overall": {
+        "ndcg@10": 0.328700577303188,
+        "mrr@10": 0.4584415584415584,
+        "recall@10": 0.23256566665657574,
+        "precision@10": 0.18181818181818182
+      },
+      "by_category": {
+        "behavior / outcome": {
+          "ndcg@10": 0.2028406939478906,
+          "mrr@10": 0.16666666666666666,
+          "recall@10": 0.14285714285714285,
+          "precision@10": 0.1
+        },
+        "data flow / semantic behavior": {
+          "ndcg@10": 0.28925102808049746,
+          "mrr@10": 0.3333333333333333,
+          "recall@10": 0.1111111111111111,
+          "precision@10": 0.1
+        },
+        "exact implementation / interactive guard": {
+          "ndcg@10": 0.46342583172161705,
+          "mrr@10": 0.5,
+          "recall@10": 0.5,
+          "precision@10": 0.3
+        },
+        "exact symbol / identifier anchor": {
+          "ndcg@10": 0.5673538212057826,
+          "mrr@10": 1.0,
+          "recall@10": 0.375,
+          "precision@10": 0.3
+        },
+        "implementation / data flow": {
+          "ndcg@10": 0.2843628448838534,
+          "mrr@10": 0.0,
+          "recall@10": 0.0,
+          "precision@10": 0.0
+        },
+        "multi-hop state / retry flow": {
+          "ndcg@10": 0.24030185758090283,
+          "mrr@10": 0.75,
+          "recall@10": 0.2403846153846154,
+          "precision@10": 0.25
+        },
+        "multi-symbol data flow": {
+          "ndcg@10": 0.697599989519409,
+          "mrr@10": 1.0,
+          "recall@10": 0.5,
+          "precision@10": 0.3
+        },
+        "policy constraint / paraphrase": {
+          "ndcg@10": 0.0688114263736055,
+          "mrr@10": 0.14285714285714285,
+          "recall@10": 0.1,
+          "precision@10": 0.1
+        },
+        "policy-check / semantic behavior": {
+          "ndcg@10": 0.2819210614632355,
+          "mrr@10": 0.2,
+          "recall@10": 0.18181818181818182,
+          "precision@10": 0.2
+        },
+        "specific check / semantic paraphrase": {
+          "ndcg@10": 0.27953593797737175,
+          "mrr@10": 0.2,
+          "recall@10": 0.16666666666666666,
+          "precision@10": 0.1
+        }
+      },
+      "per_query": [
+        {
+          "id": "reject-undiscovered-catalog-workflow",
+          "category": "policy-check / semantic behavior",
+          "ndcg@10": 0.2819210614632355,
+          "mrr@10": 0.2,
+          "recall@10": 0.18181818181818182,
+          "precision@10": 0.2
+        },
+        {
+          "id": "discovered-state-flow-to-validation",
+          "category": "multi-symbol data flow",
+          "ndcg@10": 0.697599989519409,
+          "mrr@10": 1.0,
+          "recall@10": 0.5,
+          "precision@10": 0.3
+        },
+        {
+          "id": "record-listed-workflow-ids",
+          "category": "implementation / data flow",
+          "ndcg@10": 0.2843628448838534,
+          "mrr@10": 0.0,
+          "recall@10": 0.0,
+          "precision@10": 0.0
+        },
+        {
+          "id": "restrict-selection-to-discovered-workflows",
+          "category": "policy constraint / paraphrase",
+          "ndcg@10": 0.0688114263736055,
+          "mrr@10": 0.14285714285714285,
+          "recall@10": 0.1,
+          "precision@10": 0.1
+        },
+        {
+          "id": "outcome-for-undiscovered-selection",
+          "category": "behavior / outcome",
+          "ndcg@10": 0.2028406939478906,
+          "mrr@10": 0.16666666666666666,
+          "recall@10": 0.14285714285714285,
+          "precision@10": 0.1
+        },
+        {
+          "id": "detected-labels-to-discovery-filters",
+          "category": "data flow / semantic behavior",
+          "ndcg@10": 0.28925102808049746,
+          "mrr@10": 0.3333333333333333,
+          "recall@10": 0.1111111111111111,
+          "precision@10": 0.1
+        },
+        {
+          "id": "membership-across-self-correction-retries",
+          "category": "multi-hop state / retry flow",
+          "ndcg@10": 0.2068042966373786,
+          "mrr@10": 0.5,
+          "recall@10": 0.25,
+          "precision@10": 0.2
+        },
+        {
+          "id": "validator-identifier-anchor",
+          "category": "exact symbol / identifier anchor",
+          "ndcg@10": 0.5673538212057826,
+          "mrr@10": 1.0,
+          "recall@10": 0.375,
+          "precision@10": 0.3
+        },
+        {
+          "id": "catalog-valid-undiscovered-validator-check",
+          "category": "specific check / semantic paraphrase",
+          "ndcg@10": 0.27953593797737175,
+          "mrr@10": 0.2,
+          "recall@10": 0.16666666666666666,
+          "precision@10": 0.1
+        },
+        {
+          "id": "discovery-membership-through-retry",
+          "category": "multi-hop state / retry flow",
+          "ndcg@10": 0.2737994185244271,
+          "mrr@10": 1.0,
+          "recall@10": 0.23076923076923078,
+          "precision@10": 0.3
+        },
+        {
+          "id": "selection-result-discovery-guard",
+          "category": "exact implementation / interactive guard",
+          "ndcg@10": 0.46342583172161705,
+          "mrr@10": 0.5,
+          "recall@10": 0.5,
+          "precision@10": 0.3
+        }
+      ]
+    }
+  ]
+}

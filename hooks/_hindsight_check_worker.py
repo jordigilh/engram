@@ -66,7 +66,7 @@ def main() -> int:
         sys.path.insert(0, os.path.expanduser("~/.engram"))
         from contradiction_resolution import resolve  # noqa: E402
 
-        res = resolve("cursor-memory", overview, project=project)
+        res = resolve("shared-memory", overview, project=project)
         print(json.dumps({"action": res.action, "confidence": res.confidence, "explanation": res.explanation}))
         return 0
     except Exception as e:  # noqa: BLE001 -- worker must always emit valid JSON

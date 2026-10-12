@@ -587,7 +587,7 @@ def build_call_graph(
     `repo_tag`, if given, is prefixed onto every `display_path` as
     `f"{repo_tag}/{rel_path}"` -- for orgs whose MCP tool searches several
     independent repo checkouts in one call (`praxis.py`'s 7 Rust repos,
-    `dcm.py`'s 8 Go repos), this keeps qualified names disambiguated by repo
+    multi-repo Go deployments), this keeps qualified names disambiguated by repo
     even if two repos happen to share a relative file path. See
     `build_multi_repo_call_graph`, the caller that actually supplies this.
     """
@@ -634,7 +634,7 @@ def build_call_graph(
                 graph.graph["unresolved_calls"] += 1
                 continue
             # Prefer a same-file match (the common "private helper" case,
-            # e.g. dcm.py's main() calling dcm.py's own _run_cli_pattern_query)
+            # e.g. a multi-repo adapter's main() calling its own CLI helper)
             # over fanning out to every same-named function repo-wide.
             # Discovered mid-spike verifying against this repo's own several
             # near-identical *_code_pattern_search modules: without this, a
@@ -728,7 +728,7 @@ def build_multi_repo_call_graph(
 ) -> nx.DiGraph:
     """Same contract as `build_call_graph`, but for orgs whose MCP server
     searches several independently-checked-out repos in one call (`praxis.py`'s
-    7 Rust repos, `dcm.py`'s 8 Go repos) -- `roots` is that org's
+    7 Rust repos, or another multi-repo Go deployment) -- `roots` is that org's
     `_PATTERN_SEARCH_ROOTS` list verbatim: `(repo_tag, root, included,
     excluded)` tuples.
 

@@ -35,12 +35,18 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from engram.project_config import load_project_settings
+
 from .artifact_selection import is_must_gather, select_artifact, select_sibling_artifacts
 from .branch_scope import normalize_branch
 from .normalize import iter_evidence
 from .testlog import classify_failure, deduplicate_failures, extract_expected_actual, extract_test_failures, infer_rr_ids
 
 DOWNSTREAM_JOB_RE = re.compile(r"summary|merge.?gate|report", re.IGNORECASE)
+PROJECT_SETTINGS = load_project_settings("kubernaut")
+DEFAULT_RCA_PROJECT = PROJECT_SETTINGS.text("rca_project", "kubernaut")
+assert DEFAULT_RCA_PROJECT is not None
+DEFAULT_RCA_REPOSITORY = PROJECT_SETTINGS.text("rca_repository")
 
 _TIMEOUT_MARKERS = (
     "exceeded the maximum execution time",
@@ -282,9 +288,9 @@ def generate_rca(
     *,
     run_id: str | int | None = None,
     job_id: str | int | None = None,
-    repository: str = "jordigilh/kubernaut",
+    repository: str | None = None,
     branch: str = "main",
-    project: str = "kubernaut",
+    project: str = DEFAULT_RCA_PROJECT,
     test_log_url: str | None = None,
     must_gather_url: str | None = None,
     artifact_hint: str | None = None,
@@ -305,6 +311,9 @@ def generate_rca(
     from .remote import ingest_urls
     from .service import triage_test_failure
 
+    repository = repository or DEFAULT_RCA_REPOSITORY
+    if not repository:
+        raise ValueError("configure projects.kubernaut.rca_repository or pass repository")
     repository = _validate_repository(repository)
     scope_branch = normalize_branch(branch)
     warnings: list[str] = []

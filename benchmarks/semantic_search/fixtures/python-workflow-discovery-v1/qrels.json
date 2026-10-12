@@ -1,0 +1,1401 @@
+{
+  "schema_version": 1,
+  "suite_id": "synthetic-python-workflow-discovery",
+  "fixture_id": "python-workflow-discovery-v1",
+  "judgment_status": "adjudicated",
+  "candidate_pool_complete": true,
+  "source_truth": true,
+  "source": {
+    "repository": "synthetic/python-workflow-discovery",
+    "revision": "fixture-v1",
+    "root": ".",
+    "include": [
+      "**/*.py"
+    ],
+    "exclude": [
+      "**/test_*.py"
+    ],
+    "snapshot_sha256": "0b77b06131e0a0e8ffbafa258c54e8900b7c32c2ea6f156ea75e8c6a181e076b",
+    "files": 8,
+    "bytes": 6179
+  },
+  "unit_count": 33,
+  "queries": [
+    {
+      "id": "record-discovered-membership",
+      "query": "Where are workflow IDs returned by list_workflows recorded for later validation?",
+      "category": "exact implementation / data flow",
+      "judgments": [
+        {
+          "unit_id": "discovery/state.py::WorkflowState",
+          "grade": 2,
+          "rationale": "Defines the shared state that holds discovered IDs."
+        },
+        {
+          "unit_id": "discovery/state.py::WorkflowState.add",
+          "grade": 3,
+          "rationale": "Stores returned IDs in the state set."
+        },
+        {
+          "unit_id": "discovery/state.py::WorkflowState.contains",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::state_from_context",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::Workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.__init__",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.list_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.list_actions",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.get_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::Signal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::DiscoveryFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::filters_from_signal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::apply_label_filters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::ValidationError",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.__init__",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.set_workflow_state",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.is_allowed",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.validate",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/retry.py::select_with_retry",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/retry.py::self_correct_selection",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::DiscoveryResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::WorkflowResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::list_workflows",
+          "grade": 2,
+          "rationale": "Obtains discovery results and calls the recording path."
+        },
+        {
+          "unit_id": "tools/workflows.py::record_discovered_workflows",
+          "grade": 3,
+          "rationale": "Records each returned workflow ID in shared discovery state."
+        },
+        {
+          "unit_id": "tools/workflows.py::is_workflow_in_discovery_result",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::authorize_selection_driver",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::handle_select_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::apply_selected_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::lookup_discovered_parameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/runner.py::validate_workflow_parameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/validator.py::validate_metric_name",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        }
+      ]
+    },
+    {
+      "id": "reject-undiscovered-workflow",
+      "query": "How is a catalog-valid workflow rejected when it was not returned by workflow discovery?",
+      "category": "policy check / semantic behavior",
+      "judgments": [
+        {
+          "unit_id": "discovery/state.py::WorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::WorkflowState.add",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::WorkflowState.contains",
+          "grade": 2,
+          "rationale": "Implements the discovery-state membership predicate."
+        },
+        {
+          "unit_id": "discovery/state.py::state_from_context",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::Workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.__init__",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.list_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.list_actions",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.get_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::Signal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::DiscoveryFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::filters_from_signal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::apply_label_filters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::ValidationError",
+          "grade": 2,
+          "rationale": "Represents the fail-closed validation error."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.__init__",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.set_workflow_state",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.is_allowed",
+          "grade": 3,
+          "rationale": "Combines catalog allowlist membership with current discovery membership."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.validate",
+          "grade": 3,
+          "rationale": "Turns a failed membership check into a validation error."
+        },
+        {
+          "unit_id": "selection/retry.py::select_with_retry",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/retry.py::self_correct_selection",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::DiscoveryResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::WorkflowResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::list_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::record_discovered_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::is_workflow_in_discovery_result",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::authorize_selection_driver",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::handle_select_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::apply_selected_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::lookup_discovered_parameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/runner.py::validate_workflow_parameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/validator.py::validate_metric_name",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        }
+      ]
+    },
+    {
+      "id": "forward-labels-to-discovery",
+      "query": "How are signal labels converted into filters before workflow discovery lists actions?",
+      "category": "data flow / semantic behavior",
+      "judgments": [
+        {
+          "unit_id": "discovery/state.py::WorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::WorkflowState.add",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::WorkflowState.contains",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::state_from_context",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::Workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.__init__",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.list_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.list_actions",
+          "grade": 3,
+          "rationale": "Applies the filters when listing available actions."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.get_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::Signal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::DiscoveryFilters",
+          "grade": 1,
+          "rationale": "Defines the filter shape but not the conversion path."
+        },
+        {
+          "unit_id": "discovery/filters.py::filters_from_signal",
+          "grade": 3,
+          "rationale": "Converts signal labels into a discovery filter value."
+        },
+        {
+          "unit_id": "discovery/filters.py::apply_label_filters",
+          "grade": 2,
+          "rationale": "Applies label constraints to candidate workflows."
+        },
+        {
+          "unit_id": "selection/validator.py::ValidationError",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.__init__",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.set_workflow_state",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.is_allowed",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.validate",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/retry.py::select_with_retry",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/retry.py::self_correct_selection",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::DiscoveryResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::WorkflowResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::list_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::record_discovered_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::is_workflow_in_discovery_result",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::authorize_selection_driver",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::handle_select_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::apply_selected_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::lookup_discovered_parameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/runner.py::validate_workflow_parameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/validator.py::validate_metric_name",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        }
+      ]
+    },
+    {
+      "id": "preserve-membership-on-retry",
+      "query": "How does discovered workflow membership survive self-correction retries?",
+      "category": "multi-hop state / retry flow",
+      "judgments": [
+        {
+          "unit_id": "discovery/state.py::WorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::WorkflowState.add",
+          "grade": 2,
+          "rationale": "Adds later discovered IDs to the same state set."
+        },
+        {
+          "unit_id": "discovery/state.py::WorkflowState.contains",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::state_from_context",
+          "grade": 2,
+          "rationale": "Recovers the shared state from selection context."
+        },
+        {
+          "unit_id": "discovery/catalog.py::Workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.__init__",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.list_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.list_actions",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.get_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::Signal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::DiscoveryFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::filters_from_signal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::apply_label_filters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::ValidationError",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.__init__",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.set_workflow_state",
+          "grade": 3,
+          "rationale": "Attaches shared discovery state to validation."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.is_allowed",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.validate",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/retry.py::select_with_retry",
+          "grade": 2,
+          "rationale": "Coordinates validation and retry correction."
+        },
+        {
+          "unit_id": "selection/retry.py::self_correct_selection",
+          "grade": 3,
+          "rationale": "Validates a corrected choice using the same validator state."
+        },
+        {
+          "unit_id": "tools/workflows.py::DiscoveryResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::WorkflowResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::list_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::record_discovered_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::is_workflow_in_discovery_result",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::authorize_selection_driver",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::handle_select_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::apply_selected_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::lookup_discovered_parameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/runner.py::validate_workflow_parameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/validator.py::validate_metric_name",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        }
+      ]
+    },
+    {
+      "id": "interactive-selection-guard",
+      "query": "Where does interactive selection reject a workflow absent from the current discovery result?",
+      "category": "exact implementation / interactive guard",
+      "judgments": [
+        {
+          "unit_id": "discovery/state.py::WorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::WorkflowState.add",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::WorkflowState.contains",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::state_from_context",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::Workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.__init__",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.list_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.list_actions",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.get_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::Signal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::DiscoveryFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::filters_from_signal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::apply_label_filters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::ValidationError",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.__init__",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.set_workflow_state",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.is_allowed",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.validate",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/retry.py::select_with_retry",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/retry.py::self_correct_selection",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::DiscoveryResult",
+          "grade": 2,
+          "rationale": "Defines the IDs consumed by the guard."
+        },
+        {
+          "unit_id": "tools/workflows.py::WorkflowResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::list_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::record_discovered_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::is_workflow_in_discovery_result",
+          "grade": 3,
+          "rationale": "Checks the recommended ID and alternatives."
+        },
+        {
+          "unit_id": "tools/workflows.py::authorize_selection_driver",
+          "grade": 3,
+          "rationale": "Rejects IDs absent from the current result before catalog lookup."
+        },
+        {
+          "unit_id": "tools/workflows.py::handle_select_workflow",
+          "grade": 2,
+          "rationale": "Calls the guard before resolving the catalog item."
+        },
+        {
+          "unit_id": "tools/workflows.py::apply_selected_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::lookup_discovered_parameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/runner.py::validate_workflow_parameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/validator.py::validate_metric_name",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        }
+      ]
+    },
+    {
+      "id": "validate-workflow-parameters",
+      "query": "Where are remediation workflow parameters validated before execution?",
+      "category": "exact implementation / validation",
+      "judgments": [
+        {
+          "unit_id": "discovery/state.py::WorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::WorkflowState.add",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::WorkflowState.contains",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::state_from_context",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::Workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.__init__",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.list_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.list_actions",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.get_workflow",
+          "grade": 2,
+          "rationale": "Resolves the workflow whose parameter requirements are used."
+        },
+        {
+          "unit_id": "discovery/filters.py::Signal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::DiscoveryFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::filters_from_signal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::apply_label_filters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::ValidationError",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.__init__",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.set_workflow_state",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.is_allowed",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.validate",
+          "grade": 2,
+          "rationale": "Validates the selected workflow before execution."
+        },
+        {
+          "unit_id": "selection/retry.py::select_with_retry",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/retry.py::self_correct_selection",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::DiscoveryResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::WorkflowResult",
+          "grade": 1,
+          "rationale": "Carries selected values but does not validate them."
+        },
+        {
+          "unit_id": "tools/workflows.py::list_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::record_discovered_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::is_workflow_in_discovery_result",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::authorize_selection_driver",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::handle_select_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::apply_selected_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::lookup_discovered_parameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/runner.py::validate_workflow_parameters",
+          "grade": 3,
+          "rationale": "Rejects missing and unknown execution parameters."
+        },
+        {
+          "unit_id": "metrics/validator.py::validate_metric_name",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        }
+      ]
+    },
+    {
+      "id": "empty-discovery-fails-closed",
+      "query": "What happens when workflow discovery returns no IDs and a selection is attempted?",
+      "category": "behavior / failure mode",
+      "judgments": [
+        {
+          "unit_id": "discovery/state.py::WorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::WorkflowState.add",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::WorkflowState.contains",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::state_from_context",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::Workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.__init__",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.list_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.list_actions",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.get_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::Signal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::DiscoveryFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::filters_from_signal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::apply_label_filters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::ValidationError",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.__init__",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.set_workflow_state",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.is_allowed",
+          "grade": 3,
+          "rationale": "An empty current state makes a catalog ID fail membership validation."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.validate",
+          "grade": 3,
+          "rationale": "Turns the failed check into a rejected selection."
+        },
+        {
+          "unit_id": "selection/retry.py::select_with_retry",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/retry.py::self_correct_selection",
+          "grade": 2,
+          "rationale": "Provides the correction path after rejection."
+        },
+        {
+          "unit_id": "tools/workflows.py::DiscoveryResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::WorkflowResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::list_workflows",
+          "grade": 2,
+          "rationale": "The empty discovery result leaves the state empty."
+        },
+        {
+          "unit_id": "tools/workflows.py::record_discovered_workflows",
+          "grade": 2,
+          "rationale": "Shows the path that records zero IDs for an empty result."
+        },
+        {
+          "unit_id": "tools/workflows.py::is_workflow_in_discovery_result",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::authorize_selection_driver",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::handle_select_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::apply_selected_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::lookup_discovered_parameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/runner.py::validate_workflow_parameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/validator.py::validate_metric_name",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        }
+      ]
+    },
+    {
+      "id": "copy-selected-workflow-details",
+      "query": "How are selected workflow details copied into the final investigation result?",
+      "category": "multi-symbol data flow",
+      "judgments": [
+        {
+          "unit_id": "discovery/state.py::WorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::WorkflowState.add",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::WorkflowState.contains",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/state.py::state_from_context",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::Workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.__init__",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.list_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.list_actions",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/catalog.py::WorkflowCatalog.get_workflow",
+          "grade": 2,
+          "rationale": "Supplies the resolved workflow details."
+        },
+        {
+          "unit_id": "discovery/filters.py::Signal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::DiscoveryFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::filters_from_signal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/filters.py::apply_label_filters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::ValidationError",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.__init__",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.set_workflow_state",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.is_allowed",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/validator.py::Validator.validate",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/retry.py::select_with_retry",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/retry.py::self_correct_selection",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::DiscoveryResult",
+          "grade": 1,
+          "rationale": "Carries discovery data but does not perform result assembly."
+        },
+        {
+          "unit_id": "tools/workflows.py::WorkflowResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::list_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::record_discovered_workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::is_workflow_in_discovery_result",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::authorize_selection_driver",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::handle_select_workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/workflows.py::apply_selected_workflow",
+          "grade": 3,
+          "rationale": "Copies resolved workflow identity and discovered parameters into the result."
+        },
+        {
+          "unit_id": "tools/workflows.py::lookup_discovered_parameters",
+          "grade": 2,
+          "rationale": "Selects the parameters associated with the recommendation or alternative."
+        },
+        {
+          "unit_id": "execution/runner.py::validate_workflow_parameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/validator.py::validate_metric_name",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        }
+      ]
+    }
+  ]
+}

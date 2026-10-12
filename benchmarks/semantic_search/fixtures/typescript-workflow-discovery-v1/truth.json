@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "suite_id": "synthetic-typescript-workflow-discovery",
+  "description": "TypeScript-specific source and relevance judgments for the independent cross-language workflow-discovery lane.",
+  "queries": [
+    {
+      "id":"record-discovered-membership",
+      "query":"Where are workflow IDs returned by list_workflows recorded for later validation?",
+      "category":"exact implementation / data flow",
+      "judgments":[
+        {"unit_id":"tools/workflows.ts::recordDiscoveredWorkflows","grade":3,"rationale":"Records each returned workflow ID in shared discovery state."},
+        {"unit_id":"discovery/state.ts::WorkflowState.add","grade":3,"rationale":"Stores returned IDs in the state set."},
+        {"unit_id":"tools/workflows.ts::listWorkflows","grade":2,"rationale":"Obtains discovery results and calls the recording path."},
+        {"unit_id":"discovery/state.ts::WorkflowState","grade":2,"rationale":"Defines the shared state that holds discovered IDs."}
+      ]
+    },
+    {
+      "id":"reject-undiscovered-workflow",
+      "query":"How is a catalog-valid workflow rejected when it was not returned by workflow discovery?",
+      "category":"policy check / semantic behavior",
+      "judgments":[
+        {"unit_id":"selection/validator.ts::WorkflowValidator.isAllowed","grade":3,"rationale":"Combines catalog allowlist membership with current discovery membership."},
+        {"unit_id":"selection/validator.ts::WorkflowValidator.validate","grade":3,"rationale":"Turns a failed membership check into a validation error."},
+        {"unit_id":"discovery/state.ts::WorkflowState.contains","grade":2,"rationale":"Implements the discovery-state membership predicate."},
+        {"unit_id":"selection/validator.ts::ValidationError","grade":2,"rationale":"Represents the fail-closed validation error."}
+      ]
+    },
+    {
+      "id":"forward-labels-to-discovery",
+      "query":"How are signal labels converted into filters before workflow discovery lists actions?",
+      "category":"data flow / semantic behavior",
+      "judgments":[
+        {"unit_id":"discovery/filters.ts::filtersFromSignal","grade":3,"rationale":"Converts signal labels into a discovery filter value."},
+        {"unit_id":"discovery/catalog.ts::WorkflowCatalog.listActions","grade":3,"rationale":"Applies the filters when listing available actions."},
+        {"unit_id":"discovery/filters.ts::applyLabelFilters","grade":2,"rationale":"Applies label constraints to candidate workflows."},
+        {"unit_id":"discovery/filters.ts::DiscoveryFilters","grade":1,"rationale":"Defines the filter shape but not the conversion path."}
+      ]
+    },
+    {
+      "id":"preserve-membership-on-retry",
+      "query":"How does discovered workflow membership survive self-correction retries?",
+      "category":"multi-hop state / retry flow",
+      "judgments":[
+        {"unit_id":"selection/retry.ts::selfCorrectSelection","grade":3,"rationale":"Validates a corrected choice using the same validator state."},
+        {"unit_id":"selection/validator.ts::WorkflowValidator.setWorkflowState","grade":3,"rationale":"Attaches shared discovery state to validation."},
+        {"unit_id":"discovery/state.ts::stateFromContext","grade":2,"rationale":"Recovers the shared state from selection context."},
+        {"unit_id":"discovery/state.ts::WorkflowState.add","grade":2,"rationale":"Adds later discovered IDs to the same state set."},
+        {"unit_id":"selection/retry.ts::selectWithRetry","grade":2,"rationale":"Coordinates validation and retry correction."}
+      ]
+    },
+    {
+      "id":"interactive-selection-guard",
+      "query":"Where does interactive selection reject a workflow absent from the current discovery result?",
+      "category":"exact implementation / interactive guard",
+      "judgments":[
+        {"unit_id":"tools/workflows.ts::authorizeSelectionDriver","grade":3,"rationale":"Rejects IDs absent from the current result before catalog lookup."},
+        {"unit_id":"tools/workflows.ts::isWorkflowInDiscoveryResult","grade":3,"rationale":"Checks the recommended ID and alternatives."},
+        {"unit_id":"tools/workflows.ts::handleSelectWorkflow","grade":2,"rationale":"Calls the guard before resolving the catalog item."},
+        {"unit_id":"tools/workflows.ts::DiscoveryResult","grade":2,"rationale":"Defines the IDs consumed by the guard."}
+      ]
+    },
+    {
+      "id":"validate-workflow-parameters",
+      "query":"Where are remediation workflow parameters validated before execution?",
+      "category":"exact implementation / validation",
+      "judgments":[
+        {"unit_id":"execution/runner.ts::validateWorkflowParameters","grade":3,"rationale":"Rejects missing and unknown execution parameters."},
+        {"unit_id":"selection/validator.ts::WorkflowValidator.validate","grade":2,"rationale":"Validates the selected workflow before execution."},
+        {"unit_id":"discovery/catalog.ts::WorkflowCatalog.getWorkflow","grade":2,"rationale":"Resolves the workflow whose parameter requirements are used."},
+        {"unit_id":"tools/workflows.ts::WorkflowResult","grade":1,"rationale":"Carries selected values but does not validate them."}
+      ]
+    },
+    {
+      "id":"empty-discovery-fails-closed",
+      "query":"What happens when workflow discovery returns no IDs and a selection is attempted?",
+      "category":"behavior / failure mode",
+      "judgments":[
+        {"unit_id":"selection/validator.ts::WorkflowValidator.isAllowed","grade":3,"rationale":"An empty current state makes a catalog ID fail membership validation."},
+        {"unit_id":"selection/validator.ts::WorkflowValidator.validate","grade":3,"rationale":"Turns the failed check into a rejected selection."},
+        {"unit_id":"tools/workflows.ts::listWorkflows","grade":2,"rationale":"The empty discovery result leaves the state empty."},
+        {"unit_id":"tools/workflows.ts::recordDiscoveredWorkflows","grade":2,"rationale":"Shows the path that records zero IDs for an empty result."},
+        {"unit_id":"selection/retry.ts::selfCorrectSelection","grade":2,"rationale":"Provides the correction path after rejection."}
+      ]
+    },
+    {
+      "id":"copy-selected-workflow-details",
+      "query":"How are selected workflow details copied into the final investigation result?",
+      "category":"multi-symbol data flow",
+      "judgments":[
+        {"unit_id":"tools/workflows.ts::applySelectedWorkflow","grade":3,"rationale":"Copies resolved workflow identity and discovered parameters into the result."},
+        {"unit_id":"tools/workflows.ts::lookupDiscoveredParameters","grade":2,"rationale":"Selects the parameters associated with the recommendation or alternative."},
+        {"unit_id":"discovery/catalog.ts::WorkflowCatalog.getWorkflow","grade":2,"rationale":"Supplies the resolved workflow details."},
+        {"unit_id":"tools/workflows.ts::DiscoveryResult","grade":1,"rationale":"Carries discovery data but does not perform result assembly."}
+      ]
+    }
+  ]
+}

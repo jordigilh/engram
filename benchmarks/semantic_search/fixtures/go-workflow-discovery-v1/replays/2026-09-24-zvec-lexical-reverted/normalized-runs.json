@@ -1,0 +1,1838 @@
+{
+  "schema_version": 1,
+  "suite_id": "synthetic-go-workflow-discovery",
+  "fixture_id": "go-workflow-discovery-v1",
+  "source": {
+    "repository": "synthetic/go-workflow-discovery",
+    "revision": "fixture-v1",
+    "root": ".",
+    "include": [
+      "**/*.go"
+    ],
+    "exclude": [
+      "**/*_test.go"
+    ],
+    "snapshot_sha256": "94183663d9e5f81b753dde7c460428c2414c46867b936b5cc42f9827dab0827f",
+    "files": 10,
+    "bytes": 7872,
+    "fixture": "go-workflow-discovery-v1"
+  },
+  "result_limit": 10,
+  "runs": [
+    {
+      "backend": "cocoindex",
+      "queries": [
+        {
+          "id": "record-discovered-membership",
+          "results": [
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/state.go::NewWorkflowState",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Add",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Contains",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::ListWorkflows",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::RecordDiscovered",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.SetWorkflowState",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.IsAllowed",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.Validate",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/api/types.go::WorkflowSummary",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::Workflow",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListWorkflows",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListActions",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.GetWorkflow",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::HandleSelectWorkflow",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::WorkflowResult",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::lookupDiscoveredParameters",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::DiscoveryResult",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::isWorkflowInDiscoveryResult",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::authorizeSelectionDriver",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/state.go::workflowStateKey",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WithWorkflowState",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowStateFromContext",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError.Error",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/selection/validator.go::NewValidator",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelfCorrectSelection",
+              "backend_rank": 10
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelectWithRetry",
+              "backend_rank": 10
+            },
+            {
+              "unit_id": "internal/selection/retry.go::retrySelection",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "reject-undiscovered-workflow",
+          "results": [
+            {
+              "unit_id": "internal/selection/validator.go::Validator.SetWorkflowState",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.IsAllowed",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.Validate",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError.Error",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/selection/validator.go::NewValidator",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::ListWorkflows",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::RecordDiscovered",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::DiscoveryResult",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::isWorkflowInDiscoveryResult",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::authorizeSelectionDriver",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::HandleSelectWorkflow",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::WorkflowResult",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::lookupDiscoveredParameters",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelfCorrectSelection",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelectWithRetry",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/selection/retry.go::retrySelection",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/state.go::NewWorkflowState",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Add",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Contains",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::Workflow",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListWorkflows",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListActions",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.GetWorkflow",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/state.go::workflowStateKey",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WithWorkflowState",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowStateFromContext",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/execution/runner.go::ValidateWorkflowParameters",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "forward-labels-to-discovery",
+          "results": [
+            {
+              "unit_id": "internal/discovery/catalog.go::Workflow",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListWorkflows",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListActions",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.GetWorkflow",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::Signal",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::DiscoveryFilters",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::FiltersFromSignal",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::ApplyLabelFilters",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::ListWorkflows",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::RecordDiscovered",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/discovery/state.go::NewWorkflowState",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Add",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Contains",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::HandleSelectWorkflow",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::WorkflowResult",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::lookupDiscoveredParameters",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::DiscoveryResult",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::isWorkflowInDiscoveryResult",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::authorizeSelectionDriver",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError.Error",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/selection/validator.go::NewValidator",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.SetWorkflowState",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelfCorrectSelection",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelectWithRetry",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/selection/retry.go::retrySelection",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.IsAllowed",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.Validate",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/api/types.go::WorkflowSummary",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "preserve-membership-on-retry",
+          "results": [
+            {
+              "unit_id": "internal/selection/validator.go::Validator.SetWorkflowState",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.IsAllowed",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.Validate",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/state.go::NewWorkflowState",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Add",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Contains",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::DiscoveryResult",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::isWorkflowInDiscoveryResult",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::authorizeSelectionDriver",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelfCorrectSelection",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelectWithRetry",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/selection/retry.go::retrySelection",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::ListWorkflows",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::RecordDiscovered",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/discovery/state.go::workflowStateKey",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WithWorkflowState",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowStateFromContext",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError.Error",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/selection/validator.go::NewValidator",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::HandleSelectWorkflow",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::WorkflowResult",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::lookupDiscoveredParameters",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::Workflow",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListWorkflows",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListActions",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.GetWorkflow",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/execution/runner.go::ValidateWorkflowParameters",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "interactive-selection-guard",
+          "results": [
+            {
+              "unit_id": "internal/tools/select_workflow.go::DiscoveryResult",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::isWorkflowInDiscoveryResult",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::authorizeSelectionDriver",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::ListWorkflows",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::RecordDiscovered",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelfCorrectSelection",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelectWithRetry",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/selection/retry.go::retrySelection",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.SetWorkflowState",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.IsAllowed",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.Validate",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::HandleSelectWorkflow",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::WorkflowResult",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::lookupDiscoveredParameters",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError.Error",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/selection/validator.go::NewValidator",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/state.go::NewWorkflowState",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Add",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Contains",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::Workflow",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListWorkflows",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListActions",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.GetWorkflow",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/state.go::workflowStateKey",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WithWorkflowState",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowStateFromContext",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::Signal",
+              "backend_rank": 10
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::DiscoveryFilters",
+              "backend_rank": 10
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::FiltersFromSignal",
+              "backend_rank": 10
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::ApplyLabelFilters",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "validate-workflow-parameters",
+          "results": [
+            {
+              "unit_id": "internal/execution/runner.go::ValidateWorkflowParameters",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Contains",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/state.go::workflowStateKey",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WithWorkflowState",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowStateFromContext",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::HandleSelectWorkflow",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::WorkflowResult",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::lookupDiscoveredParameters",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelfCorrectSelection",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelectWithRetry",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/selection/retry.go::retrySelection",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError.Error",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/selection/validator.go::NewValidator",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.SetWorkflowState",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.IsAllowed",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.Validate",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::Workflow",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListWorkflows",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListActions",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.GetWorkflow",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::DiscoveryResult",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::isWorkflowInDiscoveryResult",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::authorizeSelectionDriver",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/discovery/state.go::NewWorkflowState",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Add",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::ListWorkflows",
+              "backend_rank": 10
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::RecordDiscovered",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "empty-discovery-fails-closed",
+          "results": [
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/state.go::NewWorkflowState",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Add",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Contains",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::ListWorkflows",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::RecordDiscovered",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::DiscoveryResult",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::isWorkflowInDiscoveryResult",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::authorizeSelectionDriver",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::HandleSelectWorkflow",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::WorkflowResult",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::lookupDiscoveredParameters",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelfCorrectSelection",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelectWithRetry",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/selection/retry.go::retrySelection",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.SetWorkflowState",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.IsAllowed",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.Validate",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError.Error",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/selection/validator.go::NewValidator",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::Workflow",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListWorkflows",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListActions",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.GetWorkflow",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/state.go::workflowStateKey",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WithWorkflowState",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowStateFromContext",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/api/types.go::WorkflowSummary",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "copy-selected-workflow-details",
+          "results": [
+            {
+              "unit_id": "internal/tools/select_workflow.go::DiscoveryResult",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::isWorkflowInDiscoveryResult",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::authorizeSelectionDriver",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::HandleSelectWorkflow",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::WorkflowResult",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::lookupDiscoveredParameters",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::Workflow",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListWorkflows",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListActions",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.GetWorkflow",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::ListWorkflows",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::RecordDiscovered",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/discovery/state.go::NewWorkflowState",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Add",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Contains",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelfCorrectSelection",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelectWithRetry",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/selection/retry.go::retrySelection",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/discovery/state.go::workflowStateKey",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WithWorkflowState",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowStateFromContext",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError.Error",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/selection/validator.go::NewValidator",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.SetWorkflowState",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.IsAllowed",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.Validate",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/execution/runner.go::ValidateWorkflowParameters",
+              "backend_rank": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "backend": "sense",
+      "queries": [
+        {
+          "id": "record-discovered-membership",
+          "results": [
+            {
+              "unit_id": "internal/tools/list_workflows.go::ListWorkflows",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.GetWorkflow",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListWorkflows",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::WorkflowResult",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Add",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::Workflow",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.IsAllowed",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "reject-undiscovered-workflow",
+          "results": [
+            {
+              "unit_id": "internal/tools/select_workflow.go::isWorkflowInDiscoveryResult",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.IsAllowed",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::Workflow",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.GetWorkflow",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListWorkflows",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListActions",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/metrics/validator.go::ValidateMetricName",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Contains",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "forward-labels-to-discovery",
+          "results": [
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListActions",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::FiltersFromSignal",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::Signal",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListWorkflows",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::ApplyLabelFilters",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::DiscoveryFilters",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::Workflow",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/state.go::workflowStateKey",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "preserve-membership-on-retry",
+          "results": [
+            {
+              "unit_id": "internal/tools/list_workflows.go::RecordDiscovered",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::Workflow",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.GetWorkflow",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Contains",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Add",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WithWorkflowState",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::lookupDiscoveredParameters",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::ListWorkflows",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "interactive-selection-guard",
+          "results": [
+            {
+              "unit_id": "internal/tools/select_workflow.go::authorizeSelectionDriver",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::HandleSelectWorkflow",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowStateFromContext",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::isWorkflowInDiscoveryResult",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WithWorkflowState",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::ListWorkflows",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::Workflow",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::DiscoveryResult",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelfCorrectSelection",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "validate-workflow-parameters",
+          "results": [
+            {
+              "unit_id": "internal/tools/select_workflow.go::lookupDiscoveredParameters",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListActions",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListWorkflows",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.GetWorkflow",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::ApplyLabelFilters",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::ListWorkflows",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::WorkflowResult",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::Workflow",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "empty-discovery-fails-closed",
+          "results": [
+            {
+              "unit_id": "internal/selection/validator.go::Validator.IsAllowed",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.Validate",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowStateFromContext",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelfCorrectSelection",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::ListWorkflows",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::isWorkflowInDiscoveryResult",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Contains",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/selection/retry.go::retrySelection",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::authorizeSelectionDriver",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "copy-selected-workflow-details",
+          "results": [
+            {
+              "unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::lookupDiscoveredParameters",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::WorkflowResult",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::DiscoveryResult",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::isWorkflowInDiscoveryResult",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::HandleSelectWorkflow",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::authorizeSelectionDriver",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListActions",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::Workflow",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListWorkflows",
+              "backend_rank": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "backend": "zvec-git",
+      "queries": [
+        {
+          "id": "record-discovered-membership",
+          "results": [
+            {
+              "unit_id": "internal/tools/list_workflows.go::ListWorkflows",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Add",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::ApplyLabelFilters",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/discovery/state.go::NewWorkflowState",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListWorkflows",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError.Error",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.IsAllowed",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.GetWorkflow",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "reject-undiscovered-workflow",
+          "results": [
+            {
+              "unit_id": "internal/tools/list_workflows.go::ListWorkflows",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::isWorkflowInDiscoveryResult",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Add",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.IsAllowed",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::authorizeSelectionDriver",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::HandleSelectWorkflow",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListActions",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/selection/validator.go::ValidationError.Error",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "forward-labels-to-discovery",
+          "results": [
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListActions",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::FiltersFromSignal",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::ApplyLabelFilters",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::ListWorkflows",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::DiscoveryFilters",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListWorkflows",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::Signal",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::Workflow",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.SetWorkflowState",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "preserve-membership-on-retry",
+          "results": [
+            {
+              "unit_id": "internal/tools/select_workflow.go::authorizeSelectionDriver",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::RecordDiscovered",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::ApplyLabelFilters",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.IsAllowed",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListActions",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelfCorrectSelection",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Add",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/tools/list_workflows.go::ListWorkflows",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::lookupDiscoveredParameters",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "interactive-selection-guard",
+          "results": [
+            {
+              "unit_id": "internal/tools/select_workflow.go::authorizeSelectionDriver",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::HandleSelectWorkflow",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::isWorkflowInDiscoveryResult",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListWorkflows",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.Validate",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/metrics/validator.go::ValidateMetricName",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowStateFromContext",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::DiscoveryResult",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelfCorrectSelection",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "validate-workflow-parameters",
+          "results": [
+            {
+              "unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/execution/runner.go::ValidateWorkflowParameters",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.GetWorkflow",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListWorkflows",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListActions",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::Workflow",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::WorkflowResult",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/filters.go::ApplyLabelFilters",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::lookupDiscoveredParameters",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.Validate",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "empty-discovery-fails-closed",
+          "results": [
+            {
+              "unit_id": "internal/tools/list_workflows.go::ListWorkflows",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState.Add",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::isWorkflowInDiscoveryResult",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/metrics/validator.go::ValidateMetricName",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.IsAllowed",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/selection/retry.go::SelfCorrectSelection",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/discovery/state.go::WorkflowState",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/discovery/state.go::NewWorkflowState",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::authorizeSelectionDriver",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "copy-selected-workflow-details",
+          "results": [
+            {
+              "unit_id": "internal/tools/select_workflow.go::applySelectedWorkflow",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::isWorkflowInDiscoveryResult",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::HandleSelectWorkflow",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::authorizeSelectionDriver",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::WorkflowResult",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::lookupDiscoveredParameters",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "internal/discovery/catalog.go::WorkflowCatalog.ListWorkflows",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "internal/tools/select_workflow.go::DiscoveryResult",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.SetWorkflowState",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "internal/selection/validator.go::Validator.Validate",
+              "backend_rank": 10
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

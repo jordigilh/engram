@@ -71,7 +71,7 @@ class TestApprove:
 
         assert len(invalidate_calls) == 1
         bank, memory_id, reason = invalidate_calls[0]
-        assert (bank, memory_id) == ("cursor-memory", "mem-old-1")
+        assert (bank, memory_id) == ("shared-memory", "mem-old-1")
         assert reason  # non-empty audit reason recorded
         assert len(retain_calls) == 1
         assert retain_calls[0]["document_id"] == "contradiction-resolved-pending-1"
@@ -103,7 +103,7 @@ class TestApprove:
         _feed_inputs(monkeypatch, "a")
         rc.main()
 
-        assert delete_calls == [("cursor-memory", "old-doc-1")]
+        assert delete_calls == [("shared-memory", "old-doc-1")]
         assert len(retain_calls) == 1
 
     def test_approve_without_memory_id_or_document_id_skips_both_but_still_retains(self, rc, monkeypatch):

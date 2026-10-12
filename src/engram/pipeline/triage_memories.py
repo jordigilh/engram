@@ -23,34 +23,38 @@ Usage:
 import argparse
 import json
 import logging
-import os
 import re
 import sys
 import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
-from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
-HINDSIGHT_URL = "http://localhost:8888"
-DEFAULT_BANK = "cursor-memory"
-LOG_DIR = Path.home() / ".engram" / "logs"
+from engram.project_config import DEFAULT_HINDSIGHT_URL, load_default_settings
+
+DEPLOYMENT_SETTINGS = load_default_settings()
+HINDSIGHT_URL = DEPLOYMENT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+assert HINDSIGHT_URL is not None
+DEFAULT_BANK = "shared-memory"
+LOG_DIR = DEPLOYMENT_SETTINGS.path("log_dir", "~/.engram/logs")
+assert LOG_DIR is not None
 REARRANGE_BATCH_SIZE = 5
 
 # Banks whose chunk/document IDs follow the CocoIndex flows convention
 # (document_id set on every chunk, stable `--`/`-` suffixed chunk keys) rather
-# than cursor-memory's `cursor-memory_<uuid>_<n>` chunk_id convention. For
+# than the shared memory bank's `<bank>_<uuid>_<n>` chunk_id convention. For
 # these banks, triage must group by `document_id` directly; the legacy
-# cursor-memory regex below would otherwise match nothing and silently report
+# shared-memory regex below would otherwise match nothing and silently report
 # zero documents.
 PRAXIS_BANKS = {"praxis-docs", "praxis-issues"}
 
 # Provenance for human-directed, LLM-free replacements. Neutral by default so
 # no personal identity is stored; override via ENGRAM_MANUAL_TRIAGE_REVIEWER
 # only with an explicit role label (never a personal name without consent).
-MANUAL_TRIAGE_REVIEWER = os.environ.get("ENGRAM_MANUAL_TRIAGE_REVIEWER", "manual-triage")
+MANUAL_TRIAGE_REVIEWER = DEPLOYMENT_SETTINGS.text("manual_triage_reviewer", "manual-triage")
+assert MANUAL_TRIAGE_REVIEWER is not None
 MANUAL_TRIAGE_TAG = "manual-triage"
 MANUAL_TRIAGE_REPLACEMENT_TAG = "manual-replacement"
 
@@ -198,14 +202,14 @@ def api_patch(path: str, payload: dict) -> bool:
 def document_key(memory: dict, bank_id: str) -> str:
     """Grouping key for triage documents.
 
-    cursor-memory keeps the legacy chunk_id regex. Praxis banks use the stored
-    document_id directly; legacy LLM observations without one become singleton
+    The shared memory bank keeps the legacy chunk_id format. Praxis banks use
+    the stored document_id directly; legacy LLM observations without one become singleton
     orphan groups so they are reviewed individually instead of vanishing from
     the document accounting.
     """
     if bank_id == DEFAULT_BANK:
         chunk_id = memory.get("chunk_id", "")
-        match = re.match(r"cursor-memory_([a-f0-9-]+)_", chunk_id)
+        match = re.match(rf"{re.escape(bank_id)}_([a-f0-9-]+)_", chunk_id)
         if match:
             return match.group(1)
         return ""
@@ -414,7 +418,9 @@ def find_near_duplicates(memories: list[dict]) -> list[tuple[str, str, float]]:
 # Opt-in: set ENGRAM_GCP_PROJECT locally (never commit the real value) to
 # also dedup repeated mentions of your real Vertex AI project ID. Skipped
 # entirely when unset.
-_KNOWN_GCP_PROJECT = os.environ.get("ENGRAM_GCP_PROJECT", "")
+_KNOWN_GCP_PROJECT = DEPLOYMENT_SETTINGS.get("gcp_project", "")
+if not isinstance(_KNOWN_GCP_PROJECT, str):
+    raise ValueError("deployment setting 'gcp_project' must be a string")
 
 
 def find_repeated_facts(memories: list[dict]) -> dict[str, list[str]]:
@@ -570,7 +576,7 @@ def triage(
 ) -> dict:
     """Run triage on a memory bank.
 
-    When apply=True with apply_mode="rearrange" (default, cursor-memory
+    When apply=True with apply_mode="rearrange" (default, shared-memory
     behavior preserved), documents are rearranged: each document containing
     flagged memories is deleted and rebuilt with only the valuable memories.
 
@@ -599,7 +605,7 @@ def triage(
     mem_by_id = {m["id"]: m for m in memories}
 
     # --- Phase 2: Duplicate detection ---
-    # cursor-memory keeps the legacy global near-duplicate scan. Praxis banks
+    # shared-memory keeps the legacy global near-duplicate scan. Praxis banks
     # bound near-duplicate comparisons to one document family (cheap, and the
     # only place positional splits can masquerade as duplicates) and add a
     # bank-wide exact-text pass for genuinely repeated content.
@@ -801,7 +807,7 @@ def main():
     parser.add_argument(
         "--bank",
         default=DEFAULT_BANK,
-        help="Bank ID to triage (default: cursor-memory)",
+        help="Bank ID to triage (default: shared-memory)",
     )
     parser.add_argument(
         "--apply",
@@ -812,7 +818,7 @@ def main():
         "--apply-mode",
         choices=["rearrange", "invalidate"],
         default="rearrange",
-        help="rearrange deletes/rebuilds docs (cursor-memory default); invalidate only replaces orphans and dedupes exact copies without deleting anything.",
+        help="rearrange deletes/rebuilds docs (shared-memory default); invalidate only replaces orphans and dedupes exact copies without deleting anything.",
     )
     parser.add_argument(
         "--reviewer",

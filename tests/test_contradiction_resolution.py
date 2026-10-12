@@ -96,7 +96,7 @@ class TestDeleteDocument:
 
     def test_success_returns_true(self, monkeypatch):
         monkeypatch.setattr(cr, "urlopen", lambda req, timeout=10: None)
-        assert cr.delete_document("cursor-memory", "doc-1") is True
+        assert cr.delete_document("shared-memory", "doc-1") is True
 
     def test_404_returns_false_without_retry(self, monkeypatch):
         calls = {"count": 0}
@@ -106,7 +106,7 @@ class TestDeleteDocument:
             raise HTTPError(req.full_url, 404, "not found", None, None)
 
         monkeypatch.setattr(cr, "urlopen", fake_urlopen)
-        assert cr.delete_document("cursor-memory", "doc-1") is False
+        assert cr.delete_document("shared-memory", "doc-1") is False
         assert calls["count"] == 1
 
     def test_transient_error_retries_then_succeeds(self, monkeypatch):
@@ -120,7 +120,7 @@ class TestDeleteDocument:
 
         monkeypatch.setattr(cr, "urlopen", fake_urlopen)
         monkeypatch.setattr(cr.time, "sleep", lambda *_: None)
-        assert cr.delete_document("cursor-memory", "doc-1", retries=2) is True
+        assert cr.delete_document("shared-memory", "doc-1", retries=2) is True
         assert calls["count"] == 2
 
     def test_exhausts_retries_and_returns_false(self, monkeypatch):
@@ -129,7 +129,7 @@ class TestDeleteDocument:
 
         monkeypatch.setattr(cr, "urlopen", always_fails)
         monkeypatch.setattr(cr.time, "sleep", lambda *_: None)
-        assert cr.delete_document("cursor-memory", "doc-1", retries=2) is False
+        assert cr.delete_document("shared-memory", "doc-1", retries=2) is False
 
     def test_non_404_http_error_retries_then_fails(self, monkeypatch):
         def always_500(req, timeout=10):
@@ -137,7 +137,7 @@ class TestDeleteDocument:
 
         monkeypatch.setattr(cr, "urlopen", always_500)
         monkeypatch.setattr(cr.time, "sleep", lambda *_: None)
-        assert cr.delete_document("cursor-memory", "doc-1", retries=1) is False
+        assert cr.delete_document("shared-memory", "doc-1", retries=1) is False
 
 
 class TestInvalidateMemory:
@@ -156,9 +156,9 @@ class TestInvalidateMemory:
             return None
 
         monkeypatch.setattr(cr, "urlopen", fake_urlopen)
-        assert cr.invalidate_memory("cursor-memory", "mem-1", reason="superseded: new fact") is True
+        assert cr.invalidate_memory("shared-memory", "mem-1", reason="superseded: new fact") is True
         assert captured["method"] == "PATCH"
-        assert captured["url"] == "http://localhost:8888/v1/default/banks/cursor-memory/memories/mem-1"
+        assert captured["url"] == "http://localhost:8888/v1/default/banks/shared-memory/memories/mem-1"
         assert captured["body"] == {"state": "invalidated", "reason": "superseded: new fact"}
 
     def test_404_returns_false_without_retry(self, monkeypatch):
@@ -169,7 +169,7 @@ class TestInvalidateMemory:
             raise HTTPError(req.full_url, 404, "not found", None, None)
 
         monkeypatch.setattr(cr, "urlopen", fake_urlopen)
-        assert cr.invalidate_memory("cursor-memory", "mem-1", reason="x") is False
+        assert cr.invalidate_memory("shared-memory", "mem-1", reason="x") is False
         assert calls["count"] == 1
 
     def test_transient_error_retries_then_succeeds(self, monkeypatch):
@@ -183,7 +183,7 @@ class TestInvalidateMemory:
 
         monkeypatch.setattr(cr, "urlopen", fake_urlopen)
         monkeypatch.setattr(cr.time, "sleep", lambda *_: None)
-        assert cr.invalidate_memory("cursor-memory", "mem-1", reason="x", retries=2) is True
+        assert cr.invalidate_memory("shared-memory", "mem-1", reason="x", retries=2) is True
         assert calls["count"] == 2
 
     def test_exhausts_retries_and_returns_false(self, monkeypatch):
@@ -192,7 +192,7 @@ class TestInvalidateMemory:
 
         monkeypatch.setattr(cr, "urlopen", always_fails)
         monkeypatch.setattr(cr.time, "sleep", lambda *_: None)
-        assert cr.invalidate_memory("cursor-memory", "mem-1", reason="x", retries=2) is False
+        assert cr.invalidate_memory("shared-memory", "mem-1", reason="x", retries=2) is False
 
     def test_non_404_http_error_retries_then_fails(self, monkeypatch):
         def always_500(req, timeout=10):
@@ -200,24 +200,24 @@ class TestInvalidateMemory:
 
         monkeypatch.setattr(cr, "urlopen", always_500)
         monkeypatch.setattr(cr.time, "sleep", lambda *_: None)
-        assert cr.invalidate_memory("cursor-memory", "mem-1", reason="x", retries=1) is False
+        assert cr.invalidate_memory("shared-memory", "mem-1", reason="x", retries=1) is False
 
 
 class TestResolve:
     def test_disabled_returns_retain_without_calling_recall(self, monkeypatch):
         monkeypatch.setenv("ENGRAM_CONTRADICTION_CHECK", "off")
         monkeypatch.setattr(cr, "recall", lambda *a, **k: _raise(AssertionError("recall should not be called")))
-        result = cr.resolve("cursor-memory", "some statement")
+        result = cr.resolve("shared-memory", "some statement")
         assert result.action == "retain"
 
     def test_recall_exception_fails_open_to_retain(self, monkeypatch):
         monkeypatch.setattr(cr, "recall", lambda *a, **k: _raise(RuntimeError("network down")))
-        result = cr.resolve("cursor-memory", "some statement")
+        result = cr.resolve("shared-memory", "some statement")
         assert result.action == "retain"
 
     def test_no_existing_memories_returns_retain(self, monkeypatch):
         monkeypatch.setattr(cr, "recall", lambda *a, **k: [])
-        result = cr.resolve("cursor-memory", "some statement")
+        result = cr.resolve("shared-memory", "some statement")
         assert result.action == "retain"
 
     def test_check_contradiction_error_returns_retain(self, monkeypatch):
@@ -225,13 +225,13 @@ class TestResolve:
         monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(
             contradicts=False, error="timeout",
         ))
-        result = cr.resolve("cursor-memory", "some statement")
+        result = cr.resolve("shared-memory", "some statement")
         assert result.action == "retain"
 
     def test_no_contradiction_returns_retain(self, monkeypatch):
         monkeypatch.setattr(cr, "recall", lambda *a, **k: [("mem-1", "doc-1", "old memory")])
         monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(contradicts=False))
-        result = cr.resolve("cursor-memory", "some statement")
+        result = cr.resolve("shared-memory", "some statement")
         assert result.action == "retain"
 
     def test_contradicts_with_null_index_returns_retain(self, monkeypatch):
@@ -239,7 +239,7 @@ class TestResolve:
         monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(
             contradicts=True, conflicting_memory_index=None, confidence=0.99,
         ))
-        result = cr.resolve("cursor-memory", "some statement")
+        result = cr.resolve("shared-memory", "some statement")
         assert result.action == "retain"
 
     def test_contradicts_with_out_of_range_index_returns_retain(self, monkeypatch):
@@ -247,7 +247,7 @@ class TestResolve:
         monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(
             contradicts=True, conflicting_memory_index=5, confidence=0.99,
         ))
-        result = cr.resolve("cursor-memory", "some statement")
+        result = cr.resolve("shared-memory", "some statement")
         assert result.action == "retain"
 
     def test_high_confidence_auto_resolves_in_shadow_mode_without_invalidating(self, monkeypatch):
@@ -259,7 +259,7 @@ class TestResolve:
         invalidate_calls = []
         monkeypatch.setattr(cr, "invalidate_memory", lambda *a, **k: invalidate_calls.append((a, k)) or True)
 
-        result = cr.resolve("cursor-memory", "new statement")
+        result = cr.resolve("shared-memory", "new statement")
 
         assert result.action == "auto_resolved"
         assert result.superseded_memory_id == "mem-1"
@@ -284,12 +284,12 @@ class TestResolve:
         delete_calls = []
         monkeypatch.setattr(cr, "delete_document", lambda *a, **k: delete_calls.append(a) or True)
 
-        result = cr.resolve("cursor-memory", "new statement")
+        result = cr.resolve("shared-memory", "new statement")
 
         assert result.action == "auto_resolved"
         assert len(invalidate_calls) == 1
         args, kwargs = invalidate_calls[0]
-        assert args == ("cursor-memory", "mem-1")
+        assert args == ("shared-memory", "mem-1")
         assert "new statement" in kwargs["reason"]
         assert delete_calls == [], "live mode must invalidate, not hard-delete, the superseded memory"
 
@@ -305,7 +305,7 @@ class TestResolve:
         ))
         monkeypatch.setattr(cr, "invalidate_memory", lambda *a, **k: False)
 
-        cr.resolve("cursor-memory", "new statement")
+        cr.resolve("shared-memory", "new statement")
 
         logged = [json.loads(line) for line in cr.AUTO_RESOLVED_LOG_PATH.read_text().splitlines()]
         assert logged[0]["invalidated"] is False
@@ -318,7 +318,7 @@ class TestResolve:
         queue_calls = []
         monkeypatch.setattr(cr.pending_queue, "append_pending", lambda **kwargs: queue_calls.append(kwargs))
 
-        result = cr.resolve("cursor-memory", "new statement")
+        result = cr.resolve("shared-memory", "new statement")
 
         assert result.action == "queued"
         assert result.superseded_memory_id == "mem-1"
@@ -337,7 +337,7 @@ class TestResolve:
         monkeypatch.setattr(cr, "check_contradiction", lambda *a, **k: _contradiction_result(
             contradicts=True, conflicting_memory_index=0, confidence=0.9,
         ))
-        result = cr.resolve("cursor-memory", "new statement")
+        result = cr.resolve("shared-memory", "new statement")
         assert result.action == "auto_resolved"
 
 
@@ -354,7 +354,7 @@ class TestProjectTagging:
         queue_calls = []
         monkeypatch.setattr(cr.pending_queue, "append_pending", lambda **kwargs: queue_calls.append(kwargs))
 
-        cr.resolve("cursor-memory", "new statement", project="kubernaut")
+        cr.resolve("shared-memory", "new statement", project="kubernaut")
 
         assert queue_calls[0]["project"] == "kubernaut"
 
@@ -366,7 +366,7 @@ class TestProjectTagging:
         queue_calls = []
         monkeypatch.setattr(cr.pending_queue, "append_pending", lambda **kwargs: queue_calls.append(kwargs))
 
-        cr.resolve("cursor-memory", "new statement")
+        cr.resolve("shared-memory", "new statement")
 
         assert queue_calls[0]["project"] is None
 
@@ -376,7 +376,7 @@ class TestProjectTagging:
             contradicts=True, conflicting_memory_index=0, confidence=0.95, explanation="clear conflict",
         ))
 
-        cr.resolve("cursor-memory", "new statement", project="dcm")
+        cr.resolve("shared-memory", "new statement", project="dcm")
 
         logged = [json.loads(line) for line in cr.AUTO_RESOLVED_LOG_PATH.read_text().splitlines()]
         assert logged[0]["project"] == "dcm"

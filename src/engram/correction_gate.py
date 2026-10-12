@@ -38,8 +38,13 @@ from typing import Pattern
 # `~/.engram/` symlink with no `engram` package context.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from classify import classify_correction  # noqa: E402
+from engram.project_config import load_default_settings  # noqa: E402
 
-CACHE_PATH = Path(os.path.expanduser("~/.engram/logs/correction-cache.json"))
+DEPLOYMENT_SETTINGS = load_default_settings()
+LOG_DIR = DEPLOYMENT_SETTINGS.path("log_dir", "~/.engram/logs")
+assert LOG_DIR is not None
+CACHE_PATH = DEPLOYMENT_SETTINGS.path("correction_cache", str(LOG_DIR / "correction-cache.json"))
+assert CACHE_PATH is not None
 
 # See prefilter-shadow-trial.py's identical filter -- kept in sync with it.
 _BOILERPLATE_PREFIXES = (

@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "run_id": "2026-09-24-zvec-sense-lexical-baseline",
+  "fixture_id": "python-workflow-discovery-v1",
+  "language": "python",
+  "source": {
+    "repository": "synthetic/python-workflow-discovery",
+    "revision": "fixture-v1",
+    "root": ".",
+    "include": [
+      "**/*.py"
+    ],
+    "exclude": [
+      "**/test_*.py"
+    ],
+    "snapshot_sha256": "dcdf9e27742ad0c3a559afb64f8a950c1e2723c7985ef3321c3edf35bf921723",
+    "files": 8,
+    "bytes": 6221
+  },
+  "queries": 8,
+  "units": 33,
+  "qrels_status": "adjudicated",
+  "candidate_pool_complete": true,
+  "implementation": {
+    "backend": "zvec-grep TypeScript",
+    "source_commit": "196a73015bf4ca42b1bb0adae56338d9ab156af7",
+    "working_tree_dirty": true,
+    "working_tree_patch_sha256": "f5d233e328639f5720cd997fd5f181e0a8f928fbcfff0e983e8491669424a869",
+    "binary": "/Users/jgil/go/src/github.com/jordigilh/zvec-grep-fork/dist/cli/index.js",
+    "binary_sha256": "817ff1c4ff0b57b0c27eb9c3d8869f9a4db32d1765267798e77c3be6d1b49f6f"
+  },
+  "index": {
+    "index_version": 2,
+    "embedding_model": "local/potion-code-16m-v2",
+    "device": "cpu",
+    "root": "/private/var/folders/r7/gktmmltd1zq7wqhsjjslwsm80000gn/T/opencode/zvec-sense-baseline-python",
+    "files_indexed": 8,
+    "entities_indexed": 33,
+    "selection": {
+      "repository": "synthetic/python-workflow-discovery",
+      "revision": "fixture-v1",
+      "root": ".",
+      "include": [
+        "**/*.py"
+      ],
+      "exclude": [
+        "**/test_*.py"
+      ]
+    },
+    "model_cache": "/var/folders/r7/gktmmltd1zq7wqhsjjslwsm80000gn/T/opencode/zvec-sense-baseline-model-cache"
+  },
+  "search": {
+    "route": "hybrid",
+    "mode": "direct",
+    "refresh": "off",
+    "limit": 10,
+    "normalized_cutoff": 10,
+    "normalization": "source-unit@10"
+  },
+  "metrics_at_10": {
+    "ndcg@10": 0.5465207178647487,
+    "mrr@10": 0.5479166666666667,
+    "recall@10": 0.6895833333333333,
+    "precision@10": 0.25
+  }
+}

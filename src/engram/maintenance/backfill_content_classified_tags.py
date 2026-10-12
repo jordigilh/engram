@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-off backfill: tag cursor-memory documents that backfill-memory-tags.py's
+"""One-off backfill: tag shared-memory documents that backfill-memory-tags.py's
 transcript-path resolution (plan_retags()) could NOT resolve, using
 content-based LLM classification instead.
 
@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,8 +50,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from engram import classify  # noqa: E402
 from engram.maintenance import backfill_memory_tags as bmt  # noqa: E402
 
-HINDSIGHT_URL = "http://localhost:8888"
-AUDIT_LOG = Path(os.path.expanduser("~/.engram/logs/content-classification-audit.jsonl"))
+HINDSIGHT_URL = bmt.HINDSIGHT_URL
+AUDIT_LOG = bmt.LOG_DIR / "content-classification-audit.jsonl"
 
 
 def plan_content_targets(documents: list[dict], resolvable_ids: set[str]) -> list[dict]:
@@ -85,7 +84,7 @@ def should_apply_tag(result: classify.ProjectClassificationResult, min_confidenc
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--bank", default="cursor-memory")
+    ap.add_argument("--bank", default="shared-memory")
     ap.add_argument("--min-confidence", type=float, default=0.75)
     args = ap.parse_args()
 

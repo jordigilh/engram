@@ -102,7 +102,7 @@ mode to begin coding:
    pollution.
 2. Also fetch kubernaut's 4 tagged mental models (`coding-conventions`,
    `testing-methodology`, `architecture-decisions`, `workflow-preferences`,
-   all tagged `["kubernaut"]` on the shared `cursor-memory` bank) via
+   all tagged `["kubernaut"]` on the `shared-memory` bank) via
    `get_mental_model` and apply them as authoritative context alongside
    step 1's recall.
 3. Apply the recalled methodology to your plan.

@@ -15,6 +15,7 @@ from engram.incident.postgres_retention import promote_incident_pg
 from engram.incident.quality import validate_dossier
 from engram.incident.retention import promote_incident
 from engram.incident.service import triage_test_failure
+from engram.project_config import load_project_settings
 from engram.incident.testlog import (
     classify_failure,
     deduplicate_failures,
@@ -22,6 +23,11 @@ from engram.incident.testlog import (
     extract_test_failures,
     infer_rr_ids,
 )
+
+
+PROJECT_SETTINGS = load_project_settings("kubernaut")
+DEFAULT_RCA_PROJECT = PROJECT_SETTINGS.text("rca_project", "kubernaut")
+assert DEFAULT_RCA_PROJECT is not None
 
 
 def _select_artifact(run: dict[str, Any], job: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -38,6 +44,7 @@ def backfill(
     db_path: Path | None = None,
     pg_url: str | None = None,
     promote: bool = True,
+    project: str | None = None,
 ) -> dict[str, Any]:
     output.mkdir(parents=True, exist_ok=True)
     runs = inventory.get("runs", [])[:limit] if limit else inventory.get("runs", [])
@@ -157,7 +164,7 @@ def backfill(
                             failure_text=failure["failure_text"],
                             rr_id=failure["rr_id"],
                             branch=run.get("target_branch", "main"),
-                            project="kubernaut",
+                            project=project or DEFAULT_RCA_PROJECT,
                         )
                         destination_path = run_output / f"{failure['rr_id']}.json"
                         destination_path.parent.mkdir(parents=True, exist_ok=True)
@@ -242,6 +249,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--db", type=Path, default=None)
     parser.add_argument("--pg-url", default=None)
+    parser.add_argument("--project", default=DEFAULT_RCA_PROJECT)
     parser.add_argument(
         "--dossiers-only",
         action="store_true",
@@ -255,6 +263,7 @@ def main() -> None:
         args.db,
         args.pg_url,
         promote=not args.dossiers_only,
+        project=args.project,
     )
     print(json.dumps(result["metrics"]))
 

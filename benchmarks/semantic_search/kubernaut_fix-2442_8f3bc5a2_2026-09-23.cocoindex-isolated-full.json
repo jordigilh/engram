@@ -1,0 +1,1086 @@
+{
+  "backend": "cocoindex",
+  "run_status": "exploratory; no adjudicated relevance labels",
+  "source": {
+    "repository": "jordigilh/kubernaut",
+    "branch": "fix/2442-workflow-discovery-membership",
+    "head": "8f3bc5a2d7da5262553a0919f9faecb83d61a09a",
+    "root": "/private/var/folders/r7/gktmmltd1zq7wqhsjjslwsm80000gn/T/opencode/kubernaut-fix-2442-cocoindex-source",
+    "selected_go_snapshot_sha256": "1eb2a57192e0af48c80741d7d732a13028f93c2614d194e3ce278234cc859dd8",
+    "selected_go_snapshot_digest_verified": true,
+    "files": 1072,
+    "bytes": 13611586
+  },
+  "index": {
+    "table": "cocoindex.code_embeddings_shadow_kubernaut_fix_2442_8f3bc5a2_20260923",
+    "state_db": "/var/folders/r7/gktmmltd1zq7wqhsjjslwsm80000gn/T/opencode/cocoindex-kubernaut-fix-2442-8f3bc5a2-20260923.db",
+    "isolated": true,
+    "rows": 19371,
+    "distinct_files": 1072,
+    "chunk_size": 1000,
+    "chunk_overlap": 300,
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "result_mode": "hybrid",
+    "result_limit": 10,
+    "branch_argument": "main",
+    "repo_filter": "kubernaut"
+  },
+  "queries": [
+    {
+      "id": "reject-undiscovered-catalog-workflow",
+      "query": "How does workflow selection reject a catalog-valid workflow that was never discovered by list_workflows?",
+      "results": [
+        {
+          "id": "kubernaut/internal/kubernautagent/parser/validator.go:11",
+          "filepath": "kubernaut/internal/kubernautagent/parser/validator.go",
+          "chunk_index": 11,
+          "code": "func (v *Validator) GetWorkflowMeta(workflowID string) (WorkflowMeta, bool) {\n\tm, ok := v.catalogMeta[workflowID]\n\treturn m, ok\n}\n\n// IsAllowed reports whether workflowID is present in the catalog allowlist and,\n// when discovery state is attached, was returned by list_workflows in the\n// current selection context. This\n// is the same membership test Validate applies to workflow_id, exposed here\n// so callers outside Validate (e.g. enrichFromCatalog's Issue #1711 guard)\n// can distinguish \"unresolvable ID\" from \"resolvable ID with no registered\n// WorkflowMeta\" -- the latter occurs only in test fixtures that populate the\n// allowlist without a matching SetWorkflowMeta call; production always sets\n// both from the same catalog-fetch loop (see dsCatalogFetcher.FetchValidator).\nfunc (v *Validator) IsAllowed(workflowID string) bool {\n\tif _, ok := v.allowedWorkflows[workflowID]; !ok {\n\t\treturn false\n\t}\n\treturn v.discoveredWorkflows == nil || v.discoveredWorkflows.Contains(workflowID)\n}",
+          "dense_score": 0.6397,
+          "rrf_score": 0.016393,
+          "score": 0.016393
+        },
+        {
+          "id": "kubernaut/cmd/kubernautagent/bootstrap.go:9",
+          "filepath": "kubernaut/cmd/kubernautagent/bootstrap.go",
+          "chunk_index": 9,
+          "code": "\t// silently allowing an unvalidated LLM-selected workflow through (the\n\t// former \"CatalogFetcher == nil -> skip validation entirely\" bypass this\n\t// replaces; see investigator_workflow_selection.go).\n\tcatalogFetcher := newWorkflowCatalogFetcher(wfCatalog, logger)\n\n\teffectiveLLM, effectiveReg, alignEvaluator, alignCfg := buildAlignmentStack(cfg, llmRuntime, instrumentedLLM, reg, auditStore, logger)\n\n\treturn &coreServices{\n\t\tauditStore: auditStore, auditCleanup: auditCleanup, infra: infra,\n\t\tinteractiveReadiness: interactiveReadiness, eventEmitter: eventEmitter,\n\t\tds: ds, reg: reg, fleetClient: fleetClient, fleetGate: fleetGate, dsGate: dsGate, fleetOverlayResolver: fleetOverlayResolver, enricher: enricher,\n\t\tsanitizer: sanitizer, anomalyDetector: anomalyDetector, summarizer: sum,\n\t\tcatalogFetcher: catalogFetcher, effectiveLLM: effectiveLLM, effectiveReg: effectiveReg,\n\t\talignEvaluator: alignEvaluator, alignCfg: alignCfg,\n\t\twfCatalog: wfCatalog,\n\t}\n}",
+          "dense_score": 0.5814,
+          "rrf_score": 0.016129,
+          "score": 0.016129
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/workflowcatalog/discovery.go:5",
+          "filepath": "kubernaut/internal/kubernautagent/workflowcatalog/discovery.go",
+          "chunk_index": 5,
+          "code": "// Returns ErrNotFound if the workflow doesn't exist OR exists but doesn't match\n// the context (security gate) \u2014 DD-WORKFLOW-016: the two cases are\n// deliberately not distinguished to prevent information leakage.\n// This is Step 3 of the discovery protocol.\nfunc (c *Catalog) GetWorkflowWithContextFilters(ctx context.Context, workflowID string, filters *models.WorkflowDiscoveryFilters) (*models.RemediationWorkflow, error) {\n\t// If no context filters, fall back to simple GetByID\n\tif filters == nil || !filters.HasContextFilters() {\n\t\treturn c.GetByID(ctx, workflowID)\n\t}\n\n\treturn c.getWorkflowWithContextFiltersFromCache(ctx, workflowID, filters)\n}",
+          "dense_score": 0.571,
+          "rrf_score": 0.015873,
+          "score": 0.015873
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/tools/custom/tools.go:17",
+          "filepath": "kubernaut/internal/kubernautagent/tools/custom/tools.go",
+          "chunk_index": 17,
+          "code": "// are misleading for per-incident workflow selection. Ported verbatim from\n// pkg/datastorage/server/workflow_discovery_handlers.go (Issue #1677 Phase 2d).\nfunc convertWorkflowsToDiscoveryEntries(workflows []models.RemediationWorkflow) []models.WorkflowDiscoveryEntry {\n\tdiscoveryEntries := make([]models.WorkflowDiscoveryEntry, 0, len(workflows))\n\tfor _, wf := range workflows {\n\t\tentry := models.WorkflowDiscoveryEntry{\n\t\t\tWorkflowID:      wf.WorkflowID,\n\t\t\tWorkflowName:    wf.WorkflowName,\n\t\t\tName:            wf.Name,\n\t\t\tDescription:     wf.Description,\n\t\t\tVersion:         wf.Version,\n\t\t\tExecutionEngine: string(wf.ExecutionEngine),\n\t\t}\n\t\tif wf.SchemaImage != nil {\n\t\t\tentry.SchemaImage = *wf.SchemaImage\n\t\t}\n\t\tif wf.ExecutionBundle != nil {\n\t\t\tentry.ExecutionBundle = *wf.ExecutionBundle\n\t\t}\n\t\tif wf.ServiceAccountName != nil {\n\t\t\tentry.ServiceAccountName = *wf.ServiceAccountName\n\t\t}\n\t\tdiscoveryEntries = append(discoveryEntries, entry)\n\t}\n\treturn discoveryEntries\n}\n\n// --- get_workflow ---",
+          "dense_score": 0.5433,
+          "rrf_score": 0.015625,
+          "score": 0.015625
+        },
+        {
+          "id": "kubernaut/pkg/kubernautagent/types/types.go:6",
+          "filepath": "kubernaut/pkg/kubernautagent/types/types.go",
+          "chunk_index": 6,
+          "code": "\t// #1661 Change 12) resolved from the DS catalog at selection time and\n\t// copied by enrichFromCatalog, never LLM-suppliable. ActionType is the\n\t// DD-WORKFLOW-016 taxonomy action type; WorkflowName is always equal to\n\t// RemediationWorkflow.metadata.name. Both flow to\n\t// AIAnalysis.Status.SelectedWorkflow (via sharedtypes.WorkflowSnapshot)\n\t// and ultimately WorkflowExecution.Spec.WorkflowRef.\n\tActionType   string `json:\"action_type,omitempty\"`\n\tWorkflowName string `json:\"workflow_name,omitempty\"`\n\n\t// ExecutionClusterID is the workflow-declared fleet cluster this\n\t// workflow's execution resource runs on, decoupled from the signal's\n\t// origin cluster (DD-FLEET-008, BR-FLEET-004, Issue #2326).\n\t// Catalog-authoritative like ActionType/WorkflowName above: copied by\n\t// enrichFromCatalog, never LLM-suppliable. Empty means unset (execution\n\t// runs on the signal's cluster, unchanged default behavior). Flows to\n\t// AIAnalysis.Status.SelectedWorkflow (via sharedtypes.WorkflowSnapshot)",
+          "dense_score": 0.5399,
+          "rrf_score": 0.015385,
+          "score": 0.015385
+        },
+        {
+          "id": "kubernaut/pkg/shared/types/workflow_snapshot.go:7",
+          "filepath": "kubernaut/pkg/shared/types/workflow_snapshot.go",
+          "chunk_index": 7,
+          "code": "\t// resolved from the DS workflow catalog at selection time. Deliberately\n\t// NOT Required: unlike WorkflowID/WorkflowName/ActionType/Version/\n\t// ExecutionBundle (whose upstream sources guarantee non-empty values),\n\t// AIAnalysis legitimately persists a SelectedWorkflow with this field\n\t// empty on its partial/degenerate paths (e.g. workflow-resolution\n\t// failure, low-confidence preservation -- see\n\t// preservePartialSelectedWorkflow/preserveLowConfidenceWorkflow in\n\t// pkg/aianalysis/handlers/response_processor.go) before\n\t// RemediationOrchestrator's validateSelectedWorkflow ever runs its own\n\t// Go-level fail-closed check. Tightening this to Required+no-omitempty\n\t// broke exactly that: an empty string is present-but-invalid against the\n\t// Enum, not merely \"missing\" (#1661 Change 12 CI regression, confirmed\n\t// against IT-AA-344-001 and three sibling suites -- 100go.co \"validate\n\t// at the right layer\": RO's runtime check, not CRD admission, is the\n\t// correct gate here).",
+          "dense_score": 0.5399,
+          "rrf_score": 0.015152,
+          "score": 0.015152
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/investigator/investigator_gates.go:44",
+          "filepath": "kubernaut/internal/kubernautagent/investigator/investigator_gates.go",
+          "chunk_index": 44,
+          "code": "func enrichFromCatalog(result *katypes.InvestigationResult, v *parser.Validator) {\n\tif result == nil || v == nil || result.WorkflowID == \"\" {\n\t\treturn\n\t}\n\tif !v.IsAllowed(result.WorkflowID) {\n\t\t// DD-KA-001 Step 1 (Workflow Existence) is unconditional: a\n\t\t// workflow_id that does not resolve against the DS catalog allowlist\n\t\t// must never survive as structured data, even when HumanReviewNeeded\n\t\t// was already set to true by an earlier signal (e.g.\n\t\t// investigation_outcome=inconclusive), which caused\n\t\t// Validator.Validate() to short-circuit its own allowlist check\n\t\t// before ever reaching this function. Clearing WorkflowID here is\n\t\t// sufficient: mapInvestigationResultToResponse only emits\n\t\t// selected_workflow at all when WorkflowID != \"\" (Issue #1711).\n\t\tresult.WorkflowID = \"\"\n\t\treturn\n\t}\n\n\t// meta may be legitimately absent even for an allowed ID: this happens\n\t// only in test fixtures that populate the allowlist without a matching",
+          "dense_score": 0.5361,
+          "rrf_score": 0.014925,
+          "score": 0.014925
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/tools/custom/tools.go:3",
+          "filepath": "kubernaut/internal/kubernautagent/tools/custom/tools.go",
+          "chunk_index": 3,
+          "code": "// WorkflowCatalog is the subset of workflowcatalog.Catalog's three-step\n// discovery protocol used by the custom MCP tools below. Satisfied by\n// *workflowcatalog.Catalog in production; defined here (rather than\n// importing the workflowcatalog package) so unit tests can substitute a\n// lightweight fake without standing up an informer cache/envtest.\n//\n// Issue #1677 Phase 2d (DD-WORKFLOW-019): replaces the former\n// WorkflowDiscoveryClient/*ogenclient.Client indirection through\n// DataStorage -- KA now queries its own cache-backed Catalog directly.",
+          "dense_score": 0.5334,
+          "rrf_score": 0.014706,
+          "score": 0.014706
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/parser/validator.go:8",
+          "filepath": "kubernaut/internal/kubernautagent/parser/validator.go",
+          "chunk_index": 8,
+          "code": "func NewValidator(allowedWorkflows []string) *Validator {\n\tallowed := make(map[string]struct{}, len(allowedWorkflows))\n\tfor _, w := range allowedWorkflows {\n\t\tallowed[w] = struct{}{}\n\t}\n\treturn &Validator{\n\t\tallowedWorkflows: allowed,\n\t\tcatalogMeta:      make(map[string]WorkflowMeta),\n\t}\n}\n\n// SetWorkflowMeta stores catalog metadata for a workflow ID (UUID).\n// Pre-compiles regex patterns from parameter schema to avoid per-call compilation.\nfunc (v *Validator) SetWorkflowMeta(workflowID string, meta WorkflowMeta) {\n\tif len(meta.Parameters) > 0 && meta.CompiledPatterns == nil {\n\t\tmeta.CompiledPatterns = compileParameterPatterns(meta.Parameters)\n\t}\n\tv.catalogMeta[workflowID] = meta\n}\n\n// SetDiscoveredWorkflowState attaches the live workflow-discovery membership\n// for the current selection context. The pointer is intentional: a\n// self-correction retry may call list_workflows and expand membership after",
+          "dense_score": 0.5225,
+          "rrf_score": 0.014493,
+          "score": 0.014493
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/mcp/tools/list_workflows.go:3",
+          "filepath": "kubernaut/internal/kubernautagent/mcp/tools/list_workflows.go",
+          "chunk_index": 3,
+          "code": "type ListWorkflowsOutput struct {\n\tWorkflows []CatalogWorkflowSummary `json:\"workflows\"`\n\tCount     int                      `json:\"count\"`\n}\n\n// WorkflowLister abstracts workflowcatalog.Catalog.List for testability,\n// avoiding an import-cycle-prone direct dependency on the concrete type.\ntype WorkflowLister interface {\n\tList(ctx context.Context, filters *models.WorkflowSearchFilters, limit, offset int) ([]models.RemediationWorkflow, int, error)\n}\n\n// ListWorkflowsTool handles the kubernaut_list_workflows MCP tool: a\n// stateless, unfiltered-by-default catalog browse distinct from the\n// action-type-scoped 3-step discovery protocol (list_available_actions ->\n// list_workflows -> get_workflow in internal/kubernautagent/tools/custom).\n// #1677 Phase 2f (DD-WORKFLOW-019): backed by workflowcatalog.Catalog.List,\n// replacing DS's GET /api/v1/workflows as AF's kubernaut_list_workflows\n// backend.",
+          "dense_score": 0.5175,
+          "rrf_score": 0.014286,
+          "score": 0.014286
+        }
+      ]
+    },
+    {
+      "id": "discovered-state-flow-to-validation",
+      "query": "Where is discovered workflow state created, attached to context, and passed to result validation?",
+      "results": [
+        {
+          "id": "kubernaut/pkg/kubernautagent/types/context.go:3",
+          "filepath": "kubernaut/pkg/kubernautagent/types/context.go",
+          "chunk_index": 3,
+          "code": "func (s *DiscoveredWorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.workflowIDs[workflowID]\n\treturn ok\n}\n\n// WithDiscoveredWorkflowState returns a context carrying workflow-discovery state.\nfunc WithDiscoveredWorkflowState(ctx context.Context, state *DiscoveredWorkflowState) context.Context {\n\treturn context.WithValue(ctx, discoveredWorkflowStateKey{}, state)\n}\n\n// DiscoveredWorkflowStateFromContext extracts workflow-discovery state.\nfunc DiscoveredWorkflowStateFromContext(ctx context.Context) (*DiscoveredWorkflowState, bool) {\n\tstate, ok := ctx.Value(discoveredWorkflowStateKey{}).(*DiscoveredWorkflowState)\n\treturn state, ok && state != nil\n}",
+          "dense_score": 0.6141,
+          "rrf_score": 0.016393,
+          "score": 0.016393
+        },
+        {
+          "id": "kubernaut/pkg/kubernautagent/types/context.go:1",
+          "filepath": "kubernaut/pkg/kubernautagent/types/context.go",
+          "chunk_index": 1,
+          "code": "func WithSignalContext(ctx context.Context, signal SignalContext) context.Context {\n\treturn context.WithValue(ctx, signalContextKey{}, signal)\n}\n\n// SignalContextFromContext extracts the SignalContext from the context.\n// Returns the signal and true if found, zero value and false otherwise.\nfunc SignalContextFromContext(ctx context.Context) (SignalContext, bool) {\n\tsignal, ok := ctx.Value(signalContextKey{}).(SignalContext)\n\treturn signal, ok\n}\n\n// DiscoveredWorkflowState tracks workflow IDs returned by list_workflows for\n// one workflow-selection context. The state is shared by concurrent tool calls\n// and by self-correction retries that may rediscover additional pages.\ntype DiscoveredWorkflowState struct {\n\tmu          sync.RWMutex\n\tworkflowIDs map[string]struct{}\n}\n\n// NewDiscoveredWorkflowState creates empty workflow-discovery state.\nfunc NewDiscoveredWorkflowState() *DiscoveredWorkflowState {\n\treturn &DiscoveredWorkflowState{workflowIDs: make(map[string]struct{})}\n}",
+          "dense_score": 0.575,
+          "rrf_score": 0.016129,
+          "score": 0.016129
+        },
+        {
+          "id": "kubernaut/pkg/datastorage/models/workflow_schema.go:9",
+          "filepath": "kubernaut/pkg/datastorage/models/workflow_schema.go",
+          "chunk_index": 9,
+          "code": "// WorkflowDescription is an alias for the shared StructuredDescription type.\n// DD-WORKFLOW-016: Same format shared between RemediationWorkflow and ActionType.\ntype WorkflowDescription = sharedtypes.StructuredDescription\n\n// WorkflowMaintainer contains maintainer contact information\ntype WorkflowMaintainer struct {\n\t// Name is the maintainer's name\n\tName string `yaml:\"name\" json:\"name\" validate:\"required\"`\n\n\t// Email is the maintainer's email address\n\tEmail string `yaml:\"email\" json:\"email\" validate:\"required,email\"`\n}\n\n// WorkflowSchemaLabels contains mandatory matching/filtering criteria for discovery.\n// These fields are used by the three-step discovery protocol (DD-KA-017) to filter\n// workflows for a given incident context. Stored in the labels JSONB column.\n//\n// BR-WORKFLOW-004: severity, environment, component, priority are required.\n// Issue #274: signalName removed \u2014 LLM selects by actionType + structured descriptions.",
+          "dense_score": 0.5574,
+          "rrf_score": 0.015873,
+          "score": 0.015873
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/workflowcatalog/discovery.go:5",
+          "filepath": "kubernaut/internal/kubernautagent/workflowcatalog/discovery.go",
+          "chunk_index": 5,
+          "code": "// Returns ErrNotFound if the workflow doesn't exist OR exists but doesn't match\n// the context (security gate) \u2014 DD-WORKFLOW-016: the two cases are\n// deliberately not distinguished to prevent information leakage.\n// This is Step 3 of the discovery protocol.\nfunc (c *Catalog) GetWorkflowWithContextFilters(ctx context.Context, workflowID string, filters *models.WorkflowDiscoveryFilters) (*models.RemediationWorkflow, error) {\n\t// If no context filters, fall back to simple GetByID\n\tif filters == nil || !filters.HasContextFilters() {\n\t\treturn c.GetByID(ctx, workflowID)\n\t}\n\n\treturn c.getWorkflowWithContextFiltersFromCache(ctx, workflowID, filters)\n}",
+          "dense_score": 0.5333,
+          "rrf_score": 0.015625,
+          "score": 0.015625
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/parser/validator.go:11",
+          "filepath": "kubernaut/internal/kubernautagent/parser/validator.go",
+          "chunk_index": 11,
+          "code": "func (v *Validator) GetWorkflowMeta(workflowID string) (WorkflowMeta, bool) {\n\tm, ok := v.catalogMeta[workflowID]\n\treturn m, ok\n}\n\n// IsAllowed reports whether workflowID is present in the catalog allowlist and,\n// when discovery state is attached, was returned by list_workflows in the\n// current selection context. This\n// is the same membership test Validate applies to workflow_id, exposed here\n// so callers outside Validate (e.g. enrichFromCatalog's Issue #1711 guard)\n// can distinguish \"unresolvable ID\" from \"resolvable ID with no registered\n// WorkflowMeta\" -- the latter occurs only in test fixtures that populate the\n// allowlist without a matching SetWorkflowMeta call; production always sets\n// both from the same catalog-fetch loop (see dsCatalogFetcher.FetchValidator).\nfunc (v *Validator) IsAllowed(workflowID string) bool {\n\tif _, ok := v.allowedWorkflows[workflowID]; !ok {\n\t\treturn false\n\t}\n\treturn v.discoveredWorkflows == nil || v.discoveredWorkflows.Contains(workflowID)\n}",
+          "dense_score": 0.5219,
+          "rrf_score": 0.015385,
+          "score": 0.015385
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/investigator/investigator_workflow_selection.go:1",
+          "filepath": "kubernaut/internal/kubernautagent/investigator/investigator_workflow_selection.go",
+          "chunk_index": 1,
+          "code": "func (inv *Investigator) runWorkflowSelection(ctx context.Context, signal katypes.SignalContext, rcaSummary string, enrichData *prompt.EnrichmentData, p1Ctx *prompt.Phase1Data, llmCtx LLMInvocationContext) (result *katypes.InvestigationResult, retErr error) {\n\tcorrelationID := llmCtx.CorrelationID\n\t// Apply signal label overrides (target_resource_kind / target_resource_name)\n\t// before attaching to context. This ensures workflow discovery tools\n\t// (list_available_actions, list_workflows) filter by the correct component.\n\t// Defense-in-depth for #1064/#1065: even if enrichment resolved a container\n\t// kind (e.g. Namespace), the label override corrects it for tool context.",
+          "dense_score": 0.5137,
+          "rrf_score": 0.015152,
+          "score": 0.015152
+        },
+        {
+          "id": "kubernaut/api/remediation/v1alpha1/remediationrequest_types.go:67",
+          "filepath": "kubernaut/api/remediation/v1alpha1/remediationrequest_types.go",
+          "chunk_index": 67,
+          "code": "// WorkflowReference captures workflow catalog information for audit trail.\n// Used in RemediationRequestStatus.SelectedWorkflowRef (Gap #5).\ntype WorkflowReference struct {\n\t// WorkflowID is the catalog lookup key\n\tWorkflowID string `json:\"workflowId\"`\n\n\t// Version of the workflow\n\tVersion string `json:\"version\"`\n\n\t// ExecutionBundle resolved from workflow catalog\n\t// OCI bundle reference for Tekton PipelineRun\n\tExecutionBundle string `json:\"executionBundle\"`\n\n\t// ExecutionBundleDigest for audit trail and reproducibility\n\t// +optional\n\tExecutionBundleDigest string `json:\"executionBundleDigest,omitempty\"`\n}\n\n// ========================================\n// GATEWAY-OWNED STATUS TYPES (DD-GATEWAY-011)\n// These types track Gateway-specific state\n// ========================================\n\n// DeduplicationStatus tracks signal occurrence for deduplication.\n// OWNER: Gateway Service (exclusive write access)\n// Reference: DD-GATEWAY-011, BR-GATEWAY-181",
+          "dense_score": 0.5092,
+          "rrf_score": 0.014925,
+          "score": 0.014925
+        },
+        {
+          "id": "kubernaut/pkg/datastorage/ogen-client/oas_schemas_gen.go:1251",
+          "filepath": "kubernaut/pkg/datastorage/ogen-client/oas_schemas_gen.go",
+          "chunk_index": 1251,
+          "code": "// Selected workflow with workflowId, actionType, executionBundle, confidence, parameters (optional).\ntype IncidentResponseDataSelectedWorkflow struct {\n\tWorkflowId OptString `json:\"workflowId\"`\n\t// Action type from DD-WORKFLOW-016 taxonomy (e.g., ScaleReplicas, RestartPod).\n\t// Propagated from KA's three-step discovery protocol.\n\tActionType      OptString                                         `json:\"actionType\"`\n\tExecutionBundle OptString                                         `json:\"executionBundle\"`\n\tConfidence      OptFloat32                                        `json:\"confidence\"`\n\tParameters      OptIncidentResponseDataSelectedWorkflowParameters `json:\"parameters\"`\n}\n\n// GetWorkflowId returns the value of WorkflowId.\nfunc (s *IncidentResponseDataSelectedWorkflow) GetWorkflowId() OptString {\n\treturn s.WorkflowId\n}\n\n// GetActionType returns the value of ActionType.",
+          "dense_score": 0.5063,
+          "rrf_score": 0.014706,
+          "score": 0.014706
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/parser/validator.go:2",
+          "filepath": "kubernaut/internal/kubernautagent/parser/validator.go",
+          "chunk_index": 2,
+          "code": "\t// ActionType/WorkflowName are catalog-authoritative identifiers (Issue\n\t// #1661 Change 12, DD-WORKFLOW-018) copied verbatim from the DS\n\t// catalog response (both are required, non-optional fields there).\n\t// enrichFromCatalog copies these onto InvestigationResult so KA's wire\n\t// response carries them through to AIAnalysis.Status.SelectedWorkflow.\n\tActionType   string\n\tWorkflowName string\n\n\t// ClusterID is the workflow-declared execution cluster (DD-FLEET-008,\n\t// BR-FLEET-004, Issue #2326), sourced from RemediationWorkflow's\n\t// spec.execution.clusterId via models.RemediationWorkflow.ExecutionClusterID.\n\t// Empty means unset (hub/signal-cluster default, unchanged behavior).\n\t// Catalog-authoritative like ActionType/WorkflowName above: never\n\t// LLM-suppliable, always copied verbatim.",
+          "dense_score": 0.5061,
+          "rrf_score": 0.014493,
+          "score": 0.014493
+        },
+        {
+          "id": "kubernaut/pkg/workflowexecution/client/schema_metadata.go:2",
+          "filepath": "kubernaut/pkg/workflowexecution/client/schema_metadata.go",
+          "chunk_index": 2,
+          "code": "{\n\t// Engine is the execution engine from the DS catalog entry (e.g. \"tekton\", \"job\", \"ansible\").\n\t// Issue #518: resolved at runtime, not from the WFE spec.\n\tEngine string\n\t// WorkflowName is the human-readable workflow name from the DS catalog entry.\n\tWorkflowName string\n\t// EngineConfig is the raw JSON engine-specific configuration extracted from\n\t// the schema's execution.engineConfig section. nil when absent.\n\t// DD-WORKFLOW-017: execution details come from the workflow catalog entry.\n\tEngineConfig json.RawMessage\n\t// Dependencies are the infrastructure resources (Secrets, ConfigMaps) declared",
+          "dense_score": 0.5046,
+          "rrf_score": 0.014286,
+          "score": 0.014286
+        }
+      ]
+    },
+    {
+      "id": "record-listed-workflow-ids",
+      "query": "How does list_workflows record workflow IDs for later selection validation?",
+      "results": [
+        {
+          "id": "kubernaut/internal/kubernautagent/parser/validator.go:11",
+          "filepath": "kubernaut/internal/kubernautagent/parser/validator.go",
+          "chunk_index": 11,
+          "code": "func (v *Validator) GetWorkflowMeta(workflowID string) (WorkflowMeta, bool) {\n\tm, ok := v.catalogMeta[workflowID]\n\treturn m, ok\n}\n\n// IsAllowed reports whether workflowID is present in the catalog allowlist and,\n// when discovery state is attached, was returned by list_workflows in the\n// current selection context. This\n// is the same membership test Validate applies to workflow_id, exposed here\n// so callers outside Validate (e.g. enrichFromCatalog's Issue #1711 guard)\n// can distinguish \"unresolvable ID\" from \"resolvable ID with no registered\n// WorkflowMeta\" -- the latter occurs only in test fixtures that populate the\n// allowlist without a matching SetWorkflowMeta call; production always sets\n// both from the same catalog-fetch loop (see dsCatalogFetcher.FetchValidator).\nfunc (v *Validator) IsAllowed(workflowID string) bool {\n\tif _, ok := v.allowedWorkflows[workflowID]; !ok {\n\t\treturn false\n\t}\n\treturn v.discoveredWorkflows == nil || v.discoveredWorkflows.Contains(workflowID)\n}",
+          "dense_score": 0.5274,
+          "rrf_score": 0.016393,
+          "score": 0.016393
+        },
+        {
+          "id": "kubernaut/pkg/workflowexecution/audit/manager.go:21",
+          "filepath": "kubernaut/pkg/workflowexecution/audit/manager.go",
+          "chunk_index": 21,
+          "code": "// WorkflowID remains the functional/join key for SOC2 CC8.1 reconstruction\n// regardless (IT-AW-1111-001).\nfunc setWorkflowIdentifiers(payload *api.WorkflowExecutionAuditPayload, wfe *workflowexecutionv1alpha1.WorkflowExecution) {\n\t// Issue #1661 Change 12: WorkflowName now lives on the CRD-embedded\n\t// execution snapshot (Spec.WorkflowRef.WorkflowName), same as its\n\t// sibling ActionType below -- Status.WorkflowName was never actually\n\t// set by production code (a dead field superseded by this Spec value;\n\t// see WorkflowExecutionStatus.WorkflowName's doc comment).\n\tif wfe.Spec.WorkflowRef.WorkflowName != \"\" {\n\t\tpayload.WorkflowName.SetTo(wfe.Spec.WorkflowRef.WorkflowName)\n\t}\n\tif wfe.Spec.WorkflowRef.ActionType != \"\" {\n\t\tpayload.ActionType.SetTo(wfe.Spec.WorkflowRef.ActionType)\n\t}\n}\n\n// buildExecutionStartedPayload builds the WorkflowExecutionAuditPayload for\n// an execution.workflow.started event (Gap #6), defaulting Phase to",
+          "dense_score": 0.4736,
+          "rrf_score": 0.016129,
+          "score": 0.016129
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/workflowcatalog/cache.go:4",
+          "filepath": "kubernaut/internal/kubernautagent/workflowcatalog/cache.go",
+          "chunk_index": 4,
+          "code": "// namespace -- workflow names are globally unique across the catalog\n// (the same invariant the retired Postgres workflow_name column enforced).\nconst workflowNameFieldIndex = \"metadata.name\"\n\n// workflowIDFieldIndex indexes RemediationWorkflow CRDs by status.workflowId\n// (the deterministic content-hash UUID AuthWebhook computes and stamps),\n// enabling GetWorkflowByID to do an indexed lookup instead of a full scan.\n// Step 3 of the discovery protocol (GetWorkflowByID/GetWorkflowWithContext\n// Filters): unlike metadata.name, workflow_id is a content identity, not a\n// naming identity (DD-WORKFLOW-018), which is exactly why callers look\n// workflows up by it instead of by name.\nconst workflowIDFieldIndex = \"status.workflowId\"\n\n// syncTimeout bounds how long NewInformerCache waits for the initial\n// informer List+Watch sync before failing fast. Mirrors Gateway's\n// buildGatewayCache (pkg/gateway/server_constructors.go), the established",
+          "dense_score": 0.4731,
+          "rrf_score": 0.015873,
+          "score": 0.015873
+        },
+        {
+          "id": "kubernaut/pkg/kubernautagent/types/context.go:2",
+          "filepath": "kubernaut/pkg/kubernautagent/types/context.go",
+          "chunk_index": 2,
+          "code": "// NewDiscoveredWorkflowState creates empty workflow-discovery state.\nfunc NewDiscoveredWorkflowState() *DiscoveredWorkflowState {\n\treturn &DiscoveredWorkflowState{workflowIDs: make(map[string]struct{})}\n}\n\n// Add records workflow IDs returned by list_workflows. Empty IDs are ignored.\nfunc (s *DiscoveredWorkflowState) Add(workflowIDs ...string) {\n\tif s == nil {\n\t\treturn\n\t}\n\ts.mu.Lock()\n\tdefer s.mu.Unlock()\n\tif s.workflowIDs == nil {\n\t\ts.workflowIDs = make(map[string]struct{})\n\t}\n\tfor _, workflowID := range workflowIDs {\n\t\tif workflowID != \"\" {\n\t\t\ts.workflowIDs[workflowID] = struct{}{}\n\t\t}\n\t}\n}\n\n// Contains reports whether workflowID was returned by list_workflows.\nfunc (s *DiscoveredWorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.workflowIDs[workflowID]\n\treturn ok\n}",
+          "dense_score": 0.4719,
+          "rrf_score": 0.015625,
+          "score": 0.015625
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/workflowcatalog/catalog.go:3",
+          "filepath": "kubernaut/internal/kubernautagent/workflowcatalog/catalog.go",
+          "chunk_index": 3,
+          "code": "// a cache that has completed its initial sync (NewInformerCache blocks until\n// then).\nfunc NewCatalog(cache *Cache, logger logr.Logger) *Catalog {\n\treturn &Catalog{cache: cache, logger: logger}\n}\n\n// GetByID retrieves a workflow by UUID (primary key) from the Cache.\n// DD-WORKFLOW-002 v3.0: workflow_id is the sole UUID primary key. Returns\n// ErrNotFound (wrapped with the queried ID) if no workflow exists.\nfunc (c *Catalog) GetByID(ctx context.Context, workflowID string) (*models.RemediationWorkflow, error) {\n\treturn c.getByIDFromCache(ctx, workflowID)\n}\n\n// List retrieves workflows with optional filtering and pagination from the\n// Cache. BR-STORAGE-012: Workflow catalog listing.\nfunc (c *Catalog) List(ctx context.Context, filters *models.WorkflowSearchFilters, limit, offset int) ([]models.RemediationWorkflow, int, error) {\n\treturn c.listFromCache(ctx, filters, limit, offset)\n}",
+          "dense_score": 0.4623,
+          "rrf_score": 0.015385,
+          "score": 0.015385
+        },
+        {
+          "id": "kubernaut/pkg/notification/enrichment/enricher.go:4",
+          "filepath": "kubernaut/pkg/notification/enrichment/enricher.go",
+          "chunk_index": 4,
+          "code": "// extractWorkflowID reads the workflow UUID from the typed notification context.\n// Checks WorkflowID (completion) first, then SelectedWorkflow (approval).\nfunc extractWorkflowID(ctx *notificationv1alpha1.NotificationContext) string {\n\tif ctx == nil || ctx.Workflow == nil {\n\t\treturn \"\"\n\t}\n\tif ctx.Workflow.WorkflowID != \"\" {\n\t\treturn ctx.Workflow.WorkflowID\n\t}\n\tif ctx.Workflow.SelectedWorkflow != \"\" {\n\t\treturn ctx.Workflow.SelectedWorkflow\n\t}\n\treturn \"\"\n}\n\n// extractWorkflowName reads the catalog-authoritative WorkflowName from the\n// typed notification context, when already populated by the caller (Issue\n// #1677 Phase 1). Returns \"\" if absent, signaling the live-resolver fallback.\nfunc extractWorkflowName(ctx *notificationv1alpha1.NotificationContext) string {\n\tif ctx == nil || ctx.Workflow == nil {\n\t\treturn \"\"\n\t}\n\treturn ctx.Workflow.WorkflowName\n}",
+          "dense_score": 0.4556,
+          "rrf_score": 0.015152,
+          "score": 0.015152
+        },
+        {
+          "id": "kubernaut/api/aianalysis/v1alpha1/aianalysis_types.go:33",
+          "filepath": "kubernaut/api/aianalysis/v1alpha1/aianalysis_types.go",
+          "chunk_index": 33,
+          "code": "\tSelectedWorkflow *SelectedWorkflow `json:\"selectedWorkflow,omitempty\"`\n\n\t// ========================================\n\t// ALTERNATIVE WORKFLOWS (Dec 2025)\n\t// ========================================\n\t// Alternative workflows considered but not selected.\n\t// INFORMATIONAL ONLY - NOT for automatic execution.\n\t// Helps operators make informed approval decisions and provides audit trail.\n\t// Per KA team: Alternatives are for CONTEXT, not EXECUTION.\n\t// +optional\n\tAlternativeWorkflows []AlternativeWorkflow `json:\"alternativeWorkflows,omitempty\"`\n\n\t// #388: LLM's assessment of whether the alert warrants action.\n\t// Empty when not yet assessed (pre-investigation or error paths).\n\t// \"Actionable\" when the LLM determines the alert warrants action (default for all processed alerts).\n\t// \"NotActionable\" when the LLM determines the alert is benign (e.g., orphaned PVCs).\n\t// +kubebuilder:validation:Enum=Actionable;NotActionable\n\t// +optional\n\tActionability string `json:\"actionability,omitempty\"`\n}",
+          "dense_score": 0.452,
+          "rrf_score": 0.014925,
+          "score": 0.014925
+        },
+        {
+          "id": "kubernaut/pkg/remediationorchestrator/creator/workflowexecution.go:3",
+          "filepath": "kubernaut/pkg/remediationorchestrator/creator/workflowexecution.go",
+          "chunk_index": 3,
+          "code": "// full set of Required (no-omitempty) fields on sharedtypes.WorkflowSnapshot --\n// WorkflowID/WorkflowName/ActionType/Version/ExecutionBundle, plus ExecutionEngine (Required\n// at this layer only, see its own +optional CRD-level rationale in workflow_snapshot.go). CRD\n// admission's \"Required\" only guarantees the JSON key is present, not that a string value is\n// non-empty, so an incompletely-enriched snapshot (e.g. a workflow_id that never resolved\n// against the DS catalog) would otherwise pass admission and silently create a\n// WorkflowExecution with missing identifying/audit fields. Whenever a workflowId is present,\n// every other Required field it implies must be present too -- WorkflowExecution.Spec.WorkflowRef\n// is the immutable execution snapshot every downstream consumer (Job/Tekton/Ansible executor,\n// audit trail, SOC2 CC8.1 reconstruction) trusts without re-validation.",
+          "dense_score": 0.4468,
+          "rrf_score": 0.014706,
+          "score": 0.014706
+        },
+        {
+          "id": "kubernaut/pkg/datastorage/ogen-client/oas_schemas_gen.go:1828",
+          "filepath": "kubernaut/pkg/datastorage/ogen-client/oas_schemas_gen.go",
+          "chunk_index": 1828,
+          "code": "func (s *WorkflowCatalogUpdatedPayload) GetWorkflowID() uuid.UUID {\n\treturn s.WorkflowID\n}\n\n// GetUpdatedFields returns the value of UpdatedFields.\nfunc (s *WorkflowCatalogUpdatedPayload) GetUpdatedFields() WorkflowCatalogUpdatedFields {\n\treturn s.UpdatedFields\n}\n\n// SetWorkflowID sets the value of WorkflowID.\nfunc (s *WorkflowCatalogUpdatedPayload) SetWorkflowID(val uuid.UUID) {\n\ts.WorkflowID = val\n}\n\n// SetUpdatedFields sets the value of UpdatedFields.\nfunc (s *WorkflowCatalogUpdatedPayload) SetUpdatedFields(val WorkflowCatalogUpdatedFields) {\n\ts.UpdatedFields = val\n}\n\n// Safe, structured provenance for the detected-label context used during\n// workflow discovery. This deliberately records presence and structured\n// labels instead of persisting the complete prompt or arbitrary resource\n// labels (BR-AUDIT-005, BR-AI-2459).\n// Ref: #/components/schemas/WorkflowDiscoveryAuditContext",
+          "dense_score": 0.444,
+          "rrf_score": 0.014493,
+          "score": 0.014493
+        },
+        {
+          "id": "kubernaut/internal/controller/workflowexecution/workflowexecution_catalog.go:5",
+          "filepath": "kubernaut/internal/controller/workflowexecution/workflowexecution_catalog.go",
+          "chunk_index": 5,
+          "code": "//\n// WorkflowName remains permanently unset: WorkflowRef carries no such field\n// (KA's autonomous selection path never emits a display name distinct from\n// WorkflowID either), so there is no source to read regardless of which\n// struct holds it. WorkflowID remains the functional/join key for SOC2\n// CC8.1 reconstruction either way (IT-AW-1111-001).\n\n// validateExecutionEngineResolved checks that the WFE's CRD-embedded\n// WorkflowRef snapshot declares an execution engine. Name retained from the\n// pre-Change-11f Status-mirroring design (git history/callers reference it\n// as \"resolved\") even though there is no runtime resolution step left: RO's\n// validateSelectedWorkflow (pkg/remediationorchestrator/creator/\n// workflowexecution.go) already enforces this before the WFE is ever\n// created, so this is a defensive fail-closed guard against corrupted or\n// manually-constructed WorkflowExecution objects (e.g. test fixtures), not\n// a real per-reconcile resolution step.",
+          "dense_score": 0.4384,
+          "rrf_score": 0.014286,
+          "score": 0.014286
+        }
+      ]
+    },
+    {
+      "id": "restrict-selection-to-discovered-workflows",
+      "query": "Only allow the model to select remediation workflows discovered in this investigation context",
+      "results": [
+        {
+          "id": "kubernaut/internal/kubernautagent/tools/custom/tools.go:17",
+          "filepath": "kubernaut/internal/kubernautagent/tools/custom/tools.go",
+          "chunk_index": 17,
+          "code": "// are misleading for per-incident workflow selection. Ported verbatim from\n// pkg/datastorage/server/workflow_discovery_handlers.go (Issue #1677 Phase 2d).\nfunc convertWorkflowsToDiscoveryEntries(workflows []models.RemediationWorkflow) []models.WorkflowDiscoveryEntry {\n\tdiscoveryEntries := make([]models.WorkflowDiscoveryEntry, 0, len(workflows))\n\tfor _, wf := range workflows {\n\t\tentry := models.WorkflowDiscoveryEntry{\n\t\t\tWorkflowID:      wf.WorkflowID,\n\t\t\tWorkflowName:    wf.WorkflowName,\n\t\t\tName:            wf.Name,\n\t\t\tDescription:     wf.Description,\n\t\t\tVersion:         wf.Version,\n\t\t\tExecutionEngine: string(wf.ExecutionEngine),\n\t\t}\n\t\tif wf.SchemaImage != nil {\n\t\t\tentry.SchemaImage = *wf.SchemaImage\n\t\t}\n\t\tif wf.ExecutionBundle != nil {\n\t\t\tentry.ExecutionBundle = *wf.ExecutionBundle\n\t\t}\n\t\tif wf.ServiceAccountName != nil {\n\t\t\tentry.ServiceAccountName = *wf.ServiceAccountName\n\t\t}\n\t\tdiscoveryEntries = append(discoveryEntries, entry)\n\t}\n\treturn discoveryEntries\n}\n\n// --- get_workflow ---",
+          "dense_score": 0.6517,
+          "rrf_score": 0.016393,
+          "score": 0.016393
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/investigator/investigator_phases.go:10",
+          "filepath": "kubernaut/internal/kubernautagent/investigator/investigator_phases.go",
+          "chunk_index": 10,
+          "code": "// FinalizeWorkflowResult applies post-Phase 3 processing to the workflow\n// discovery result, mirroring the autonomous path in Investigate() L558-569.\n// This ensures interactive discover_workflows results have the same\n// completeness as autonomous results: severity backfill, detected labels,\n// authoritative remediation target, and TARGET_RESOURCE_* parameters.\n//\n// enrichData may be nil when the interactive path lacks full enrichment (F5).\n// All callees handle nil gracefully.\nfunc FinalizeWorkflowResult(result *katypes.InvestigationResult, signal katypes.SignalContext, rcaResult *katypes.InvestigationResult, enrichData *enrichment.EnrichmentResult)",
+          "dense_score": 0.5904,
+          "rrf_score": 0.016129,
+          "score": 0.016129
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/parser/validator.go:2",
+          "filepath": "kubernaut/internal/kubernautagent/parser/validator.go",
+          "chunk_index": 2,
+          "code": "\t// ActionType/WorkflowName are catalog-authoritative identifiers (Issue\n\t// #1661 Change 12, DD-WORKFLOW-018) copied verbatim from the DS\n\t// catalog response (both are required, non-optional fields there).\n\t// enrichFromCatalog copies these onto InvestigationResult so KA's wire\n\t// response carries them through to AIAnalysis.Status.SelectedWorkflow.\n\tActionType   string\n\tWorkflowName string\n\n\t// ClusterID is the workflow-declared execution cluster (DD-FLEET-008,\n\t// BR-FLEET-004, Issue #2326), sourced from RemediationWorkflow's\n\t// spec.execution.clusterId via models.RemediationWorkflow.ExecutionClusterID.\n\t// Empty means unset (hub/signal-cluster default, unchanged behavior).\n\t// Catalog-authoritative like ActionType/WorkflowName above: never\n\t// LLM-suppliable, always copied verbatim.",
+          "dense_score": 0.5872,
+          "rrf_score": 0.015873,
+          "score": 0.015873
+        },
+        {
+          "id": "kubernaut/pkg/shared/types/workflow_snapshot.go:7",
+          "filepath": "kubernaut/pkg/shared/types/workflow_snapshot.go",
+          "chunk_index": 7,
+          "code": "\t// resolved from the DS workflow catalog at selection time. Deliberately\n\t// NOT Required: unlike WorkflowID/WorkflowName/ActionType/Version/\n\t// ExecutionBundle (whose upstream sources guarantee non-empty values),\n\t// AIAnalysis legitimately persists a SelectedWorkflow with this field\n\t// empty on its partial/degenerate paths (e.g. workflow-resolution\n\t// failure, low-confidence preservation -- see\n\t// preservePartialSelectedWorkflow/preserveLowConfidenceWorkflow in\n\t// pkg/aianalysis/handlers/response_processor.go) before\n\t// RemediationOrchestrator's validateSelectedWorkflow ever runs its own\n\t// Go-level fail-closed check. Tightening this to Required+no-omitempty\n\t// broke exactly that: an empty string is present-but-invalid against the\n\t// Enum, not merely \"missing\" (#1661 Change 12 CI regression, confirmed\n\t// against IT-AA-344-001 and three sibling suites -- 100go.co \"validate\n\t// at the right layer\": RO's runtime check, not CRD admission, is the\n\t// correct gate here).",
+          "dense_score": 0.5862,
+          "rrf_score": 0.015625,
+          "score": 0.015625
+        },
+        {
+          "id": "kubernaut/cmd/kubernautagent/bootstrap.go:9",
+          "filepath": "kubernaut/cmd/kubernautagent/bootstrap.go",
+          "chunk_index": 9,
+          "code": "\t// silently allowing an unvalidated LLM-selected workflow through (the\n\t// former \"CatalogFetcher == nil -> skip validation entirely\" bypass this\n\t// replaces; see investigator_workflow_selection.go).\n\tcatalogFetcher := newWorkflowCatalogFetcher(wfCatalog, logger)\n\n\teffectiveLLM, effectiveReg, alignEvaluator, alignCfg := buildAlignmentStack(cfg, llmRuntime, instrumentedLLM, reg, auditStore, logger)\n\n\treturn &coreServices{\n\t\tauditStore: auditStore, auditCleanup: auditCleanup, infra: infra,\n\t\tinteractiveReadiness: interactiveReadiness, eventEmitter: eventEmitter,\n\t\tds: ds, reg: reg, fleetClient: fleetClient, fleetGate: fleetGate, dsGate: dsGate, fleetOverlayResolver: fleetOverlayResolver, enricher: enricher,\n\t\tsanitizer: sanitizer, anomalyDetector: anomalyDetector, summarizer: sum,\n\t\tcatalogFetcher: catalogFetcher, effectiveLLM: effectiveLLM, effectiveReg: effectiveReg,\n\t\talignEvaluator: alignEvaluator, alignCfg: alignCfg,\n\t\twfCatalog: wfCatalog,\n\t}\n}",
+          "dense_score": 0.5731,
+          "rrf_score": 0.015385,
+          "score": 0.015385
+        },
+        {
+          "id": "kubernaut/cmd/kubernautagent/routes.go:58",
+          "filepath": "kubernaut/cmd/kubernautagent/routes.go",
+          "chunk_index": 58,
+          "code": "\tinvestigateTool := mcptools.NewInvestigateTool(d.leaseMgr, d.investigatorRunner, d.recon, d.autoMgr, investigateOpts...)\n\n\t// Build SelectWorkflowTool (reuses the same catalogAdapter).\n\t// #1012: enrichment is now internalized into select_workflow via WithEnrichmentRunner.\n\tswOpts := []mcptools.SelectWorkflowOption{\n\t\tmcptools.WithLogger(d.logger.WithName(\"select-workflow\")),\n\t\tmcptools.WithHTTPSessionCompleter(d.autoMgr),\n\t\tmcptools.WithMutexProvider(investigateTool),\n\t\tmcptools.WithSelectWorkflowTimeoutTracker(d.timeoutMgr),\n\t\tmcptools.WithSelectWorkflowAuditStore(d.auditStore),\n\t\tmcptools.WithSelectWorkflowSignalContextResolver(d.signalResolver),\n\t\tmcptools.WithSelectWorkflowFleetOverlayResolver(d.fleetOverlayResolver),\n\t}\n\tif d.enricher != nil {\n\t\tswOpts = append(swOpts, mcptools.WithEnrichmentRunner(d.enricher))\n\t}\n\tselectWfTool := mcptools.NewSelectWorkflowTool(d.catalogAdapter, d.leaseMgr, swOpts...)\n\n\t// Build the CompleteNoActionTool.",
+          "dense_score": 0.5614,
+          "rrf_score": 0.015152,
+          "score": 0.015152
+        },
+        {
+          "id": "kubernaut/pkg/datastorage/ogen-client/oas_schemas_gen.go:1217",
+          "filepath": "kubernaut/pkg/datastorage/ogen-client/oas_schemas_gen.go",
+          "chunk_index": 1217,
+          "code": "\t// Selected workflow with workflowId, actionType, executionBundle, confidence, parameters (optional).\n\tSelectedWorkflow OptIncidentResponseDataSelectedWorkflow `json:\"selectedWorkflow\"`\n\t// Overall confidence in analysis.\n\tConfidence float32 `json:\"confidence\"`\n\t// ISO timestamp of analysis completion.\n\tTimestamp time.Time `json:\"timestamp\"`\n\t// Whether the investigation determined the incident is actionable\n\t// (Issue #1923). Tri-state: true/false when KA reached an explicit\n\t// determination, unset/null when the investigation never reached\n\t// the decisive step (e.g. blocked before tool-availability gating\n\t// resolved it). Propagated unmodified from KA's investigation\n\t// result; does not reflect any DataStorage-side re-evaluation.\n\tIsActionable OptNilBool `json:\"isActionable\"`",
+          "dense_score": 0.56,
+          "rrf_score": 0.014925,
+          "score": 0.014925
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/investigator/investigator_discovery.go:1",
+          "filepath": "kubernaut/internal/kubernautagent/investigator/investigator_discovery.go",
+          "chunk_index": 1,
+          "code": "// RunWorkflowDiscoveryFromRCA executes Phase 3 (workflow selection) using a\n// structured RCA result. This reuses the exact autonomous Phase 3 pipeline\n// (BuildPhase1Context + runWorkflowSelection) so that interactive and\n// autonomous workflow discovery produce consistent results.\n//\n// F5/F6 (#1374): When the investigator has an enricher wired, this function\n// resolves enrichment internally (pre-RCA + post-RCA re-enrichment), mirroring\n// the autonomous Investigate() pipeline. The caller-provided enrichData is used\n// as fallback only when the enricher is nil.",
+          "dense_score": 0.5591,
+          "rrf_score": 0.014706,
+          "score": 0.014706
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/workflowcatalog/cache.go:18",
+          "filepath": "kubernaut/internal/kubernautagent/workflowcatalog/cache.go",
+          "chunk_index": 18,
+          "code": "// ListWorkflows returns every RemediationWorkflow CRD across all namespaces,\n// unfiltered -- the cache-backed source for the full-catalog listing\n// (Phase 2b's list_workflows MCP tool).\nfunc (c *Cache) ListWorkflows(ctx context.Context) ([]rwv1alpha1.RemediationWorkflow, error) {\n\tvar list rwv1alpha1.RemediationWorkflowList\n\tif err := c.reader.List(ctx, &list); err != nil {\n\t\treturn nil, fmt.Errorf(\"failed to list RemediationWorkflows: %w\", err)\n\t}\n\treturn list.Items, nil\n}\n\n// GetActionType returns the ActionType CRD whose spec.name equals name, or\n// (nil, nil) if none exists. Lookup is keyed by the business identifier\n// (spec.name), not metadata.name -- mirrors AuthWebhook's existing\n// findActionTypeKey convention (pkg/authwebhook/rw_reconciler.go).",
+          "dense_score": 0.5542,
+          "rrf_score": 0.014493,
+          "score": 0.014493
+        },
+        {
+          "id": "kubernaut/pkg/workflowschema/converter.go:8",
+          "filepath": "kubernaut/pkg/workflowschema/converter.go",
+          "chunk_index": 8,
+          "code": "func applyDependenciesToSpec(schema *models.WorkflowSchema, spec *rwv1alpha1.RemediationWorkflowSpec) {\n\tif schema.Dependencies == nil {\n\t\treturn\n\t}\n\tdeps := &rwv1alpha1.RemediationWorkflowDependencies{}\n\tfor _, s := range schema.Dependencies.Secrets {\n\t\tdeps.Secrets = append(deps.Secrets, rwv1alpha1.RemediationWorkflowResourceDependency{Name: s.Name})\n\t}\n\tfor _, cm := range schema.Dependencies.ConfigMaps {\n\t\tdeps.ConfigMaps = append(deps.ConfigMaps, rwv1alpha1.RemediationWorkflowResourceDependency{Name: cm.Name})\n\t}\n\tspec.Dependencies = deps\n}",
+          "dense_score": 0.5507,
+          "rrf_score": 0.014286,
+          "score": 0.014286
+        }
+      ]
+    },
+    {
+      "id": "outcome-for-undiscovered-selection",
+      "query": "What happens when the model selects a workflow that exists in the catalog but was not returned by workflow discovery?",
+      "results": [
+        {
+          "id": "kubernaut/internal/kubernautagent/tools/custom/tools.go:17",
+          "filepath": "kubernaut/internal/kubernautagent/tools/custom/tools.go",
+          "chunk_index": 17,
+          "code": "// are misleading for per-incident workflow selection. Ported verbatim from\n// pkg/datastorage/server/workflow_discovery_handlers.go (Issue #1677 Phase 2d).\nfunc convertWorkflowsToDiscoveryEntries(workflows []models.RemediationWorkflow) []models.WorkflowDiscoveryEntry {\n\tdiscoveryEntries := make([]models.WorkflowDiscoveryEntry, 0, len(workflows))\n\tfor _, wf := range workflows {\n\t\tentry := models.WorkflowDiscoveryEntry{\n\t\t\tWorkflowID:      wf.WorkflowID,\n\t\t\tWorkflowName:    wf.WorkflowName,\n\t\t\tName:            wf.Name,\n\t\t\tDescription:     wf.Description,\n\t\t\tVersion:         wf.Version,\n\t\t\tExecutionEngine: string(wf.ExecutionEngine),\n\t\t}\n\t\tif wf.SchemaImage != nil {\n\t\t\tentry.SchemaImage = *wf.SchemaImage\n\t\t}\n\t\tif wf.ExecutionBundle != nil {\n\t\t\tentry.ExecutionBundle = *wf.ExecutionBundle\n\t\t}\n\t\tif wf.ServiceAccountName != nil {\n\t\t\tentry.ServiceAccountName = *wf.ServiceAccountName\n\t\t}\n\t\tdiscoveryEntries = append(discoveryEntries, entry)\n\t}\n\treturn discoveryEntries\n}\n\n// --- get_workflow ---",
+          "dense_score": 0.6365,
+          "rrf_score": 0.016393,
+          "score": 0.016393
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/mcp/tools/select_workflow.go:30",
+          "filepath": "kubernaut/internal/kubernautagent/mcp/tools/select_workflow.go",
+          "chunk_index": 30,
+          "code": "// isWorkflowInDiscoveryResult checks if the given workflow_id is in the\n// discovery result (recommended or alternatives).\nfunc isWorkflowInDiscoveryResult(workflowID string, dr *mcpinternal.WorkflowDiscoveryResult) bool {\n\tif dr.Recommended != nil && dr.Recommended.WorkflowID == workflowID {\n\t\treturn true\n\t}\n\tfor _, alt := range dr.Alternatives {\n\t\tif alt.WorkflowID == workflowID {\n\t\t\treturn true\n\t\t}\n\t}\n\treturn false\n}\n\n// buildFinalResult constructs the final InvestigationResult by merging the RCA\n// with the selected workflow details from the catalog and per-workflow parameters\n// from the discovery result (#1169).\nfunc buildFinalResult(rca *katypes.InvestigationResult, workflow *CatalogWorkflow, discovery *mcpinternal.WorkflowDiscoveryResult) *katypes.InvestigationResult {\n\tresult := *rca\n\n\tapplyDiscoveryFullResult(&result, discovery)\n\n\t// KA-HIGH-1: Use Phase 3 confidence when a discovery recommendation exists,\n\t// since Phase 3 has additional workflow-specific scoring context.",
+          "dense_score": 0.6175,
+          "rrf_score": 0.016129,
+          "score": 0.016129
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/workflowcatalog/discovery.go:5",
+          "filepath": "kubernaut/internal/kubernautagent/workflowcatalog/discovery.go",
+          "chunk_index": 5,
+          "code": "// Returns ErrNotFound if the workflow doesn't exist OR exists but doesn't match\n// the context (security gate) \u2014 DD-WORKFLOW-016: the two cases are\n// deliberately not distinguished to prevent information leakage.\n// This is Step 3 of the discovery protocol.\nfunc (c *Catalog) GetWorkflowWithContextFilters(ctx context.Context, workflowID string, filters *models.WorkflowDiscoveryFilters) (*models.RemediationWorkflow, error) {\n\t// If no context filters, fall back to simple GetByID\n\tif filters == nil || !filters.HasContextFilters() {\n\t\treturn c.GetByID(ctx, workflowID)\n\t}\n\n\treturn c.getWorkflowWithContextFiltersFromCache(ctx, workflowID, filters)\n}",
+          "dense_score": 0.6105,
+          "rrf_score": 0.015873,
+          "score": 0.015873
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/parser/validator.go:11",
+          "filepath": "kubernaut/internal/kubernautagent/parser/validator.go",
+          "chunk_index": 11,
+          "code": "func (v *Validator) GetWorkflowMeta(workflowID string) (WorkflowMeta, bool) {\n\tm, ok := v.catalogMeta[workflowID]\n\treturn m, ok\n}\n\n// IsAllowed reports whether workflowID is present in the catalog allowlist and,\n// when discovery state is attached, was returned by list_workflows in the\n// current selection context. This\n// is the same membership test Validate applies to workflow_id, exposed here\n// so callers outside Validate (e.g. enrichFromCatalog's Issue #1711 guard)\n// can distinguish \"unresolvable ID\" from \"resolvable ID with no registered\n// WorkflowMeta\" -- the latter occurs only in test fixtures that populate the\n// allowlist without a matching SetWorkflowMeta call; production always sets\n// both from the same catalog-fetch loop (see dsCatalogFetcher.FetchValidator).\nfunc (v *Validator) IsAllowed(workflowID string) bool {\n\tif _, ok := v.allowedWorkflows[workflowID]; !ok {\n\t\treturn false\n\t}\n\treturn v.discoveredWorkflows == nil || v.discoveredWorkflows.Contains(workflowID)\n}",
+          "dense_score": 0.5907,
+          "rrf_score": 0.015625,
+          "score": 0.015625
+        },
+        {
+          "id": "kubernaut/pkg/kubernautagent/types/context.go:3",
+          "filepath": "kubernaut/pkg/kubernautagent/types/context.go",
+          "chunk_index": 3,
+          "code": "func (s *DiscoveredWorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.workflowIDs[workflowID]\n\treturn ok\n}\n\n// WithDiscoveredWorkflowState returns a context carrying workflow-discovery state.\nfunc WithDiscoveredWorkflowState(ctx context.Context, state *DiscoveredWorkflowState) context.Context {\n\treturn context.WithValue(ctx, discoveredWorkflowStateKey{}, state)\n}\n\n// DiscoveredWorkflowStateFromContext extracts workflow-discovery state.\nfunc DiscoveredWorkflowStateFromContext(ctx context.Context) (*DiscoveredWorkflowState, bool) {\n\tstate, ok := ctx.Value(discoveredWorkflowStateKey{}).(*DiscoveredWorkflowState)\n\treturn state, ok && state != nil\n}",
+          "dense_score": 0.5828,
+          "rrf_score": 0.015385,
+          "score": 0.015385
+        },
+        {
+          "id": "kubernaut/pkg/kubernautagent/types/context.go:2",
+          "filepath": "kubernaut/pkg/kubernautagent/types/context.go",
+          "chunk_index": 2,
+          "code": "// NewDiscoveredWorkflowState creates empty workflow-discovery state.\nfunc NewDiscoveredWorkflowState() *DiscoveredWorkflowState {\n\treturn &DiscoveredWorkflowState{workflowIDs: make(map[string]struct{})}\n}\n\n// Add records workflow IDs returned by list_workflows. Empty IDs are ignored.\nfunc (s *DiscoveredWorkflowState) Add(workflowIDs ...string) {\n\tif s == nil {\n\t\treturn\n\t}\n\ts.mu.Lock()\n\tdefer s.mu.Unlock()\n\tif s.workflowIDs == nil {\n\t\ts.workflowIDs = make(map[string]struct{})\n\t}\n\tfor _, workflowID := range workflowIDs {\n\t\tif workflowID != \"\" {\n\t\t\ts.workflowIDs[workflowID] = struct{}{}\n\t\t}\n\t}\n}\n\n// Contains reports whether workflowID was returned by list_workflows.\nfunc (s *DiscoveredWorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.workflowIDs[workflowID]\n\treturn ok\n}",
+          "dense_score": 0.5743,
+          "rrf_score": 0.015152,
+          "score": 0.015152
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/mcp/tools/select_workflow.go:36",
+          "filepath": "kubernaut/internal/kubernautagent/mcp/tools/select_workflow.go",
+          "chunk_index": 36,
+          "code": "// discoveryAlternativeWorkflows converts the discovery result's alternative\n// workflows into the katypes wire format, returning nil when there are none\n// (preserving the original nil-vs-empty-slice semantics for callers that\n// serialize this field).\nfunc discoveryAlternativeWorkflows(discovery *mcpinternal.WorkflowDiscoveryResult) []katypes.AlternativeWorkflow {\n\tif discovery == nil || len(discovery.Alternatives) == 0 {\n\t\treturn nil\n\t}\n\talts := make([]katypes.AlternativeWorkflow, 0, len(discovery.Alternatives))\n\tfor _, alt := range discovery.Alternatives {\n\t\talts = append(alts, katypes.AlternativeWorkflow{\n\t\t\tWorkflowID:      alt.WorkflowID,\n\t\t\tExecutionBundle: alt.ExecutionBundle,\n\t\t\tConfidence:      alt.Confidence,\n\t\t\tRationale:       alt.Rationale,\n\t\t\tParameters:      cloneParameterMap(alt.Parameters),\n\t\t})\n\t}\n\treturn alts\n}\n\n// lookupDiscoveredParameters finds the parameter map for a given workflow_id\n// in the discovery result (recommended or alternatives).",
+          "dense_score": 0.5703,
+          "rrf_score": 0.014925,
+          "score": 0.014925
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/investigator/investigator_discovery.go:1",
+          "filepath": "kubernaut/internal/kubernautagent/investigator/investigator_discovery.go",
+          "chunk_index": 1,
+          "code": "// RunWorkflowDiscoveryFromRCA executes Phase 3 (workflow selection) using a\n// structured RCA result. This reuses the exact autonomous Phase 3 pipeline\n// (BuildPhase1Context + runWorkflowSelection) so that interactive and\n// autonomous workflow discovery produce consistent results.\n//\n// F5/F6 (#1374): When the investigator has an enricher wired, this function\n// resolves enrichment internally (pre-RCA + post-RCA re-enrichment), mirroring\n// the autonomous Investigate() pipeline. The caller-provided enrichData is used\n// as fallback only when the enricher is nil.",
+          "dense_score": 0.5665,
+          "rrf_score": 0.014706,
+          "score": 0.014706
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/tools/custom/tools.go:16",
+          "filepath": "kubernaut/internal/kubernautagent/tools/custom/tools.go",
+          "chunk_index": 16,
+          "code": "\tdata, err := json.Marshal(resp)\n\tif err != nil {\n\t\treturn \"\", fmt.Errorf(\"marshaling workflows response: %w\", err)\n\t}\n\treturn string(transformPagination(data)), nil\n}\n\n// convertWorkflowsToDiscoveryEntries converts catalog workflow records into\n// the LLM-facing discovery entry shape. DD-KA-017 v1.1: ActualSuccessRate\n// and TotalExecutions are intentionally excluded -- global aggregate metrics\n// are misleading for per-incident workflow selection. Ported verbatim from\n// pkg/datastorage/server/workflow_discovery_handlers.go (Issue #1677 Phase 2d).",
+          "dense_score": 0.5646,
+          "rrf_score": 0.014493,
+          "score": 0.014493
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/investigator/investigator_phases.go:10",
+          "filepath": "kubernaut/internal/kubernautagent/investigator/investigator_phases.go",
+          "chunk_index": 10,
+          "code": "// FinalizeWorkflowResult applies post-Phase 3 processing to the workflow\n// discovery result, mirroring the autonomous path in Investigate() L558-569.\n// This ensures interactive discover_workflows results have the same\n// completeness as autonomous results: severity backfill, detected labels,\n// authoritative remediation target, and TARGET_RESOURCE_* parameters.\n//\n// enrichData may be nil when the interactive path lacks full enrichment (F5).\n// All callees handle nil gracefully.\nfunc FinalizeWorkflowResult(result *katypes.InvestigationResult, signal katypes.SignalContext, rcaResult *katypes.InvestigationResult, enrichData *enrichment.EnrichmentResult)",
+          "dense_score": 0.5589,
+          "rrf_score": 0.014286,
+          "score": 0.014286
+        }
+      ]
+    },
+    {
+      "id": "detected-labels-to-discovery-filters",
+      "query": "How are detected signal labels applied before workflow discovery filters available actions?",
+      "results": [
+        {
+          "id": "kubernaut/pkg/datastorage/ogen-client/oas_schemas_gen.go:1829",
+          "filepath": "kubernaut/pkg/datastorage/ogen-client/oas_schemas_gen.go",
+          "chunk_index": 1829,
+          "code": "// workflow discovery. This deliberately records presence and structured\n// labels instead of persisting the complete prompt or arbitrary resource\n// labels (BR-AUDIT-005, BR-AI-2459).\n// Ref: #/components/schemas/WorkflowDiscoveryAuditContext\ntype WorkflowDiscoveryAuditContext struct {\n\t// Whether enrichment produced detected labels for this workflow-discovery turn.\n\tEnrichmentLabelsPresent bool `json:\"enrichment_labels_present\"`\n\t// Whether detected labels were attached to the signal context used by catalog tools.\n\tSignalLabelsPresent bool `json:\"signal_labels_present\"`\n\t// Whether the rendered workflow-selection prompt contains the detected-label context.\n\tPromptLabelsPresent bool              `json:\"prompt_labels_present\"`\n\tDetectedLabels      OptDetectedLabels `json:\"detected_labels\"`\n}\n\n// GetEnrichmentLabelsPresent returns the value of EnrichmentLabelsPresent.\nfunc (s *WorkflowDiscoveryAuditContext) GetEnrichmentLabelsPresent() bool {\n\treturn s.EnrichmentLabelsPresent\n}",
+          "dense_score": 0.6894,
+          "rrf_score": 0.016393,
+          "score": 0.016393
+        },
+        {
+          "id": "kubernaut/pkg/datastorage/ogen-client/oas_schemas_gen.go:1831",
+          "filepath": "kubernaut/pkg/datastorage/ogen-client/oas_schemas_gen.go",
+          "chunk_index": 1831,
+          "code": "func (s *WorkflowDiscoveryAuditContext) SetEnrichmentLabelsPresent(val bool) {\n\ts.EnrichmentLabelsPresent = val\n}\n\n// SetSignalLabelsPresent sets the value of SignalLabelsPresent.\nfunc (s *WorkflowDiscoveryAuditContext) SetSignalLabelsPresent(val bool) {\n\ts.SignalLabelsPresent = val\n}\n\n// SetPromptLabelsPresent sets the value of PromptLabelsPresent.\nfunc (s *WorkflowDiscoveryAuditContext) SetPromptLabelsPresent(val bool) {\n\ts.PromptLabelsPresent = val\n}\n\n// SetDetectedLabels sets the value of DetectedLabels.\nfunc (s *WorkflowDiscoveryAuditContext) SetDetectedLabels(val OptDetectedLabels) {\n\ts.DetectedLabels = val\n}\n\n// Audit event payload for three-step workflow discovery operations.\n// Authority: DD-KA-017 (Three-Step Workflow Discovery Integration, formerly DD-HAPI-017)\n// Authority: DD-WORKFLOW-014 v3.0 (Workflow Selection Audit Trail)\n// Replaces WorkflowSearchAuditPayload (search endpoint removed).\n// Ref: #/components/schemas/WorkflowDiscoveryAuditPayload",
+          "dense_score": 0.6368,
+          "rrf_score": 0.016129,
+          "score": 0.016129
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/audit/ds_workflow_catalog_payloads.go:7",
+          "filepath": "kubernaut/internal/kubernautagent/audit/ds_workflow_catalog_payloads.go",
+          "chunk_index": 7,
+          "code": "func detectedLabelsFromJSON(data map[string]interface{}) (ogenclient.DetectedLabels, bool) {\n\traw := dataString(data, \"detected_labels_json\")\n\tif raw == \"\" {\n\t\treturn ogenclient.DetectedLabels{}, false\n\t}\n\treturn detectedLabelsFromJSONText(raw)\n}\n\n// hasDiscoveryFilters reports whether any signal-context filter dimension\n// was recorded on the event, matching the `if filters != nil` gate DS's\n// buildDiscoveryPayload used against its typed *models.WorkflowDiscoveryFilters.\nfunc hasDiscoveryFilters(data map[string]interface{}) bool {\n\treturn dataString(data, \"severity\") != \"\" ||\n\t\tdataString(data, \"component\") != \"\" ||\n\t\tdataString(data, \"environment\") != \"\" ||\n\t\tdataString(data, \"priority\") != \"\" ||\n\t\tdataBool(data, \"detected_labels_present\")\n}",
+          "dense_score": 0.6206,
+          "rrf_score": 0.015873,
+          "score": 0.015873
+        },
+        {
+          "id": "kubernaut/pkg/datastorage/models/workflow_schema.go:7",
+          "filepath": "kubernaut/pkg/datastorage/models/workflow_schema.go",
+          "chunk_index": 7,
+          "code": "\t// DetectedLabels contains author-declared infrastructure requirements (OPTIONAL)\n\t// ADR-043 v1.3: Matched against incident DetectedLabels from KA LabelDetector\n\t// DD-WORKFLOW-001 v2.0: Boolean fields accept only \"true\"; string fields accept\n\t// specific values or \"*\" wildcard.\n\t// nil = section absent from YAML; non-nil empty = explicit empty section\n\tDetectedLabels *DetectedLabelsSchema `yaml:\"detectedLabels,omitempty\" json:\"detectedLabels,omitempty\"`\n\n\t// Execution contains execution engine configuration (optional)\n\tExecution *WorkflowExecution `yaml:\"execution,omitempty\" json:\"execution,omitempty\"`\n\n\t// Dependencies declares infrastructure resources (Secrets, ConfigMaps) required\n\t// by the workflow, provisioned by operators in the execution namespace.\n\t// DD-WE-006: Validated at registration (DS) and execution (WFE) time.\n\tDependencies *WorkflowDependencies `yaml:\"dependencies,omitempty\" json:\"dependencies,omitempty\"`",
+          "dense_score": 0.5639,
+          "rrf_score": 0.015625,
+          "score": 0.015625
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/investigator/investigator_discovery.go:17",
+          "filepath": "kubernaut/internal/kubernautagent/investigator/investigator_discovery.go",
+          "chunk_index": 17,
+          "code": "// attachRCADetectedLabelsJSON marshals rawEnrichData's DetectedLabels onto\n// signal.DetectedLabelsJSON so workflow discovery tools forward labels to DS\n// catalog queries, activating GitOps-aware scoring (parity with the\n// autonomous Investigate path). No-op when rawEnrichData or its labels are\n// unset (which is always the case when the enricher is not wired).\nfunc (inv *Investigator) attachRCADetectedLabelsJSON(signal *katypes.SignalContext, rawEnrichData *enrichment.EnrichmentResult, correlationID string)",
+          "dense_score": 0.5429,
+          "rrf_score": 0.015385,
+          "score": 0.015385
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/investigator/investigator_workflow_selection.go:9",
+          "filepath": "kubernaut/internal/kubernautagent/investigator/investigator_workflow_selection.go",
+          "chunk_index": 9,
+          "code": "func newWorkflowDiscoveryAuditContext(enrichData *prompt.EnrichmentData, signal katypes.SignalContext, renderedPrompt string) *workflowDiscoveryAuditContext {\n\ttrace := &workflowDiscoveryAuditContext{\n\t\tSignalLabelsPresent: signal.DetectedLabelsJSON != \"\",\n\t}\n\tif enrichData == nil || len(enrichData.DetectedLabels) == 0 {\n\t\treturn trace\n\t}\n\ttrace.EnrichmentLabelsPresent = true\n\ttrace.DetectedLabels = make(map[string]string, len(enrichData.DetectedLabels))\n\tfor key, value := range enrichData.DetectedLabels {\n\t\ttrace.DetectedLabels[key] = value\n\t}\n\ttrace.PromptLabelsPresent = promptContainsDetectedLabels(renderedPrompt, trace.DetectedLabels)\n\treturn trace\n}\n\nfunc promptContainsDetectedLabels(renderedPrompt string, labels map[string]string) bool {\n\tif len(labels) == 0 {\n\t\treturn false\n\t}\n\tfor key, value := range labels {\n\t\tif !strings.Contains(renderedPrompt, key+\"=\"+value) {\n\t\t\treturn false\n\t\t}\n\t}\n\treturn true\n}\n\n// handleWorkflowSelectionLoopResult classifies the runLLMLoop outcome for",
+          "dense_score": 0.538,
+          "rrf_score": 0.015152,
+          "score": 0.015152
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/audit/ds_payloads.go:6",
+          "filepath": "kubernaut/internal/kubernautagent/audit/ds_payloads.go",
+          "chunk_index": 6,
+          "code": "\tif phase := dataString(event.Data, \"phase\"); phase != \"\" {\n\t\tpayload.Phase.SetTo(phase)\n\t}\n\tif _, present := event.Data[\"workflow_discovery_enrichment_labels_present\"]; present {\n\t\tworkflowContext := ogenclient.WorkflowDiscoveryAuditContext{\n\t\t\tEnrichmentLabelsPresent: dataBool(event.Data, \"workflow_discovery_enrichment_labels_present\"),\n\t\t\tSignalLabelsPresent:     dataBool(event.Data, \"workflow_discovery_signal_labels_present\"),\n\t\t\tPromptLabelsPresent:     dataBool(event.Data, \"workflow_discovery_prompt_labels_present\"),\n\t\t}\n\t\tif labels := dataStringMap(event.Data, \"workflow_discovery_detected_labels\"); len(labels) > 0 {\n\t\t\tworkflowContext.DetectedLabels.SetTo(detectedLabelsFromStringMap(labels))\n\t\t}\n\t\tpayload.WorkflowDiscoveryContext.SetTo(workflowContext)\n\t}\n\tif tools := dataStringSlice(event.Data, \"toolsets_enabled\"); len(tools) > 0 {\n\t\tpayload.ToolsetsEnabled = tools\n\t}\n\t// #2141 (BR-AI-2120/BR-AI-1044, FedRAMP AU-3): only present on",
+          "dense_score": 0.5265,
+          "rrf_score": 0.014925,
+          "score": 0.014925
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/workflowcatalog/discovery_cache.go:10",
+          "filepath": "kubernaut/internal/kubernautagent/workflowcatalog/discovery_cache.go",
+          "chunk_index": 10,
+          "code": "\tfor i := range workflows {\n\t\trw := &workflows[i]\n\t\tif !matchesMandatoryLabels(crdLabelsToMandatoryLabels(rw.Spec.Labels), filters) {\n\t\t\tcontinue\n\t\t}\n\n\t\tdetectedLabels, err := crdDetectedLabelsToModel(rw.Spec.DetectedLabels)\n\t\tif err != nil {\n\t\t\treturn nil, fmt.Errorf(\"workflow %s: %w\", rw.Name, err)\n\t\t}\n\t\tif !matchesDetectedLabelsFilter(detectedLabels, dl) {\n\t\t\tcontinue\n\t\t}\n\n\t\twf, err := crdWorkflowToModel(rw)\n\t\tif err != nil {\n\t\t\treturn nil, err\n\t\t}\n\n\t\tboost := detectedLabelsBoost(detectedLabels, dl)\n\t\tcustom := customLabelsBoost(crdCustomLabelsToModel(rw.Spec.CustomLabels), customLabels)\n\t\tpenalty := detectedLabelsPenalty(detectedLabels, dl)\n\t\tscored = append(scored, scoredWorkflow{workflow: wf, score: finalScore(boost, custom, penalty)})\n\t}\n\n\tsort.SliceStable(scored, func(i, j int) bool {\n\t\tif scored[i].score != scored[j].score {\n\t\t\treturn scored[i].score > scored[j].score\n\t\t}\n\t\treturn scored[i].workflow.WorkflowID < scored[j].workflow.WorkflowID\n\t})",
+          "dense_score": 0.5258,
+          "rrf_score": 0.014706,
+          "score": 0.014706
+        },
+        {
+          "id": "kubernaut/pkg/datastorage/models/workflow_schema.go:24",
+          "filepath": "kubernaut/pkg/datastorage/models/workflow_schema.go",
+          "chunk_index": 24,
+          "code": "// ========================================\n// DETECTED LABELS SCHEMA (ADR-043 v1.3)\n// ========================================\n// Authority: ADR-043 v1.3 (detectedLabels schema field)\n// Authority: DD-WORKFLOW-001 v2.0 (DetectedLabels architecture)\n// Authority: BR-WORKFLOW-004 (Workflow Schema Format Specification)\n//\n// Raw YAML representation of the detectedLabels section. All fields are\n// strings matching the YAML values. Converted to models.DetectedLabels\n// (bool/string) via Parser.ExtractDetectedLabels().\n//\n// PopulatedFields tracks which fields the author explicitly declared,\n// mirroring the Signal Processing pattern for distinguishing \"empty\"\n// from \"not defined\" at the field level.",
+          "dense_score": 0.5142,
+          "rrf_score": 0.014493,
+          "score": 0.014493
+        },
+        {
+          "id": "kubernaut/pkg/shared/types/enrichment.go:7",
+          "filepath": "kubernaut/pkg/shared/types/enrichment.go",
+          "chunk_index": 7,
+          "code": "// ========================================\n// DETECTED LABELS (DD-WORKFLOW-001 v2.2)\n// ========================================\n\n// DetectedLabels contains auto-detected cluster characteristics.\n// SignalProcessing populates these automatically from K8s resources.\n// Used by KA for:\n//   - Workflow filtering (deterministic SQL WHERE)\n//   - LLM context (natural language in prompt)\n//\n// DETECTION FAILURE HANDLING (DD-WORKFLOW-001 v2.2):\n// All fields are plain `bool` (NOT `*bool`). Uses `FailedDetections` array to track\n// which fields had query failures (RBAC denied, timeout, network error).\n//\n// IMPORTANT DISTINCTION:\n//   - Resource doesn't exist (no PDB) \u2192 false value, NOT in FailedDetections\n//   - Query failed (RBAC denied) \u2192 false value, field name IN FailedDetections\n//\n// Consumers should check FailedDetections before trusting a false value.",
+          "dense_score": 0.5128,
+          "rrf_score": 0.014286,
+          "score": 0.014286
+        }
+      ]
+    },
+    {
+      "id": "membership-across-self-correction-retries",
+      "query": "How does workflow discovery membership persist across self-correction and retry attempts?",
+      "results": [
+        {
+          "id": "kubernaut/test/shared/scenarios/crashloop_config_fix.go:5",
+          "filepath": "kubernaut/test/shared/scenarios/crashloop_config_fix.go",
+          "chunk_index": 5,
+          "code": "\t// RemediationRequestName identifies the RR created by the caller's\n\t// trigger step (real K8s event for FP, synthetic alert POST for Fleet).\n\tRemediationRequestName string\n\n\t// ExpectClusterID, when non-empty, asserts RR.Spec.ClusterID equals this\n\t// value (fleet lane cross-cluster proof).\n\tExpectClusterID string\n\n\t// ExpectedWorkflowID, when non-empty, asserts AA selected exactly this\n\t// workflow (the real DataStorage-assigned UUID for crashloop-config-fix-v1,\n\t// resolved by the caller from the suite-level workflowUUIDs map).\n\tExpectedWorkflowID string\n\n\tTimeout  time.Duration\n\tInterval time.Duration\n}",
+          "dense_score": 0.5357,
+          "rrf_score": 0.016393,
+          "score": 0.016393
+        },
+        {
+          "id": "kubernaut/pkg/authwebhook/startup_reconciler.go:4",
+          "filepath": "kubernaut/pkg/authwebhook/startup_reconciler.go",
+          "chunk_index": 4,
+          "code": "// REST endpoints were deleted (DD-WORKFLOW-018) -- syncActionTypeCRD has\n// computed/patched everything locally with zero DS round-trips since Change\n// 8d; WorkflowDSClient/DSWorkflow remain pending the equivalent RW-side\n// handler removal (Phase B).\n//\n// Issue #548: Ensures PVC-wipe resilience by re-registering CRDs on startup.\n// Issue #1246: Graceful degradation \u2014 individual RW failures don't crash the pod.\ntype StartupReconciler struct {\n\tK8sClient      client.Client\n\tDSWorkflow     WorkflowDSClient\n\tLogger         logr.Logger\n\tTimeout        time.Duration\n\tInitialBackoff time.Duration\n\tEventRecorder  record.EventRecorder\n\tAuditStore     audit.AuditStore\n}\n\n// NeedLeaderElection returns false so the reconciler runs on every replica,\n// ensuring every authwebhook instance has a consistent view.\nfunc (r *StartupReconciler) NeedLeaderElection() bool {\n\treturn false\n}\n\n// Start performs the full startup reconciliation: list CRDs, sync with DS,",
+          "dense_score": 0.5193,
+          "rrf_score": 0.016129,
+          "score": 0.016129
+        },
+        {
+          "id": "kubernaut/pkg/authwebhook/startup_reconciler.go:3",
+          "filepath": "kubernaut/pkg/authwebhook/startup_reconciler.go",
+          "chunk_index": 3,
+          "code": "// startup and stamps both from a pure local computation with zero DS\n// involvement (#1661 Change 8c for RemediationWorkflow, Change 8d for\n// ActionType). It implements manager.Runnable so that the controller\n// manager blocks readiness until the reconciliation completes.\n//\n// #1661 Phase 55c: ActionTypeDSClient (the vestigial marker interface that\n// used to back a DSActionType field here) was removed once DS's ActionType\n// REST endpoints were deleted (DD-WORKFLOW-018) -- syncActionTypeCRD has\n// computed/patched everything locally with zero DS round-trips since Change\n// 8d; WorkflowDSClient/DSWorkflow remain pending the equivalent RW-side\n// handler removal (Phase B).",
+          "dense_score": 0.5151,
+          "rrf_score": 0.015873,
+          "score": 0.015873
+        },
+        {
+          "id": "kubernaut/pkg/authwebhook/remediationworkflow_handler.go:4",
+          "filepath": "kubernaut/pkg/authwebhook/remediationworkflow_handler.go",
+          "chunk_index": 4,
+          "code": "// zero DS round-trips. The atCounter field/WithActionTypeWorkflowCounter option are\n// kept (rather than removed outright) to avoid an unrelated, high-blast-radius\n// signature change across every test call site in this GREEN pass; full removal is\n// deferred to Phase 27 REFACTOR.\ntype ActionTypeWorkflowCounter interface{}\n\n// RemediationWorkflowHandler handles admission requests for RemediationWorkflow CRD\n// CREATE, UPDATE, and DELETE operations. #1661 Change 8c: CRD lifecycle is no\n// longer bridged to a DS workflow catalog -- workflow_id/content_hash/\n// catalogStatus are computed locally and patched onto .status directly\n// (DD-WORKFLOW-018).",
+          "dense_score": 0.5136,
+          "rrf_score": 0.015625,
+          "score": 0.015625
+        },
+        {
+          "id": "kubernaut/pkg/authwebhook/startup_reconciler.go:2",
+          "filepath": "kubernaut/pkg/authwebhook/startup_reconciler.go",
+          "chunk_index": 2,
+          "code": "const startupRegisteredBy = \"system:authwebhook-startup\"\n\n// WorkflowDSClient is now an empty marker interface. #1661 Change 8c removed\n// its only method (CreateWorkflowInline) -- syncWorkflowCRD computes/patches\n// everything locally with zero DS round-trips. The DSWorkflow field is kept\n// (rather than removed outright) to avoid an unrelated, high-blast-radius\n// signature change across every test call site and cmd/authwebhook/main.go\n// in this REFACTOR pass; full removal is deferred to Phase 55.\ntype WorkflowDSClient interface{}\n\n// StartupReconciler lists all ActionType and RemediationWorkflow CRDs at\n// startup and stamps both from a pure local computation with zero DS\n// involvement (#1661 Change 8c for RemediationWorkflow, Change 8d for\n// ActionType). It implements manager.Runnable so that the controller\n// manager blocks readiness until the reconciliation completes.",
+          "dense_score": 0.5134,
+          "rrf_score": 0.015385,
+          "score": 0.015385
+        },
+        {
+          "id": "kubernaut/pkg/authwebhook/rw_reconciler.go:5",
+          "filepath": "kubernaut/pkg/authwebhook/rw_reconciler.go",
+          "chunk_index": 5,
+          "code": "// refreshActionTypeWorkflowCount counts live RemediationWorkflow CRDs\n// referencing actionType and patches the matching ActionType CRD's status.\n// Uses RetryOnConflict to handle races with the webhook's concurrent\n// status update goroutine (fixes E2E-AT-300-003 flake).\n// Best-effort: errors are logged but do not block finalizer removal.\n//\n// #1661 Change 8d: the count is now a direct K8s-native list against the\n// cache-backed client -- DS's Postgres catalog stopped learning about\n// RemediationWorkflow CRDs the moment Change 8c removed AW's\n// CreateWorkflowInline call, making a DS-backed count permanently stale\n// (DD-WORKFLOW-018). excludeRWName excludes the RW currently being deleted\n// (still present in etcd at this point -- finalizers block physical removal\n// until this reconcile completes) so the count reflects what remains\n// afterward, not what remains including it (see listDependentWorkflowNames).",
+          "dense_score": 0.5096,
+          "rrf_score": 0.015152,
+          "score": 0.015152
+        },
+        {
+          "id": "kubernaut/pkg/authwebhook/workflow_dependents.go:3",
+          "filepath": "kubernaut/pkg/authwebhook/workflow_dependents.go",
+          "chunk_index": 3,
+          "code": "// is gated on. Without excluding it, the count would be permanently\n// off-by-one-high after every deletion, with no later trigger to correct it.\n// Callers with no such self-reference (e.g. the ActionType DELETE dependents\n// gate) pass \"\".\n//\n// #1661 Change 8d: this is now the SOLE dependents check for ActionType\n// deletion and the sole source for status.activeWorkflowCount. DS's Postgres\n// catalog stopped learning about RemediationWorkflow CRDs the moment Change\n// 8c removed AW's CreateWorkflowInline call, so any DS-backed dependents\n// check is permanently blind to workflows created after that point -- the\n// safety gap this change closes (IT-AW-1111-009). The live etcd list (via\n// the cache-backed k8sClient) reflects every write once the informer's watch\n// catches up, so there is no \"orphan recovery\" reconciliation to perform:",
+          "dense_score": 0.5019,
+          "rrf_score": 0.014925,
+          "score": 0.014925
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/session/manager_query.go:14",
+          "filepath": "kubernaut/internal/kubernautagent/session/manager_query.go",
+          "chunk_index": 14,
+          "code": "// PersistPendingDecisionResult exposes Store.SetPendingDecisionResult so\n// discover_workflows (mcp/tools) can preserve a discovered-but-unconfirmed\n// workflow recommendation ahead of a possible inactivity timeout\n// (#2019/#2020). See Store.SetPendingDecisionResult for the full rationale.\nfunc (m *Manager) PersistPendingDecisionResult(id string, result *katypes.InvestigationResult) {\n\tm.store.SetPendingDecisionResult(id, result)\n}\n\n// CompleteUserDriving transitions a user-driven session to completed with the\n// given result. This bridges the MCP tool completion path to the HTTP session\n// store so AA's poll mechanism picks up the result.",
+          "dense_score": 0.4968,
+          "rrf_score": 0.014706,
+          "score": 0.014706
+        },
+        {
+          "id": "kubernaut/pkg/authwebhook/remediationworkflow_handler.go:5",
+          "filepath": "kubernaut/pkg/authwebhook/remediationworkflow_handler.go",
+          "chunk_index": 5,
+          "code": "// CREATE, UPDATE, and DELETE operations. #1661 Change 8c: CRD lifecycle is no\n// longer bridged to a DS workflow catalog -- workflow_id/content_hash/\n// catalogStatus are computed locally and patched onto .status directly\n// (DD-WORKFLOW-018).\n//\n// CREATE/UPDATE: unmarshal \u2192 local content-hash/workflow-ID computation \u2192\n// authenticate \u2192 validate \u2192 patch CRD .status asynchronously.\n// DELETE: audit who deleted it; no DS notification (etcd removal is terminal).\ntype RemediationWorkflowHandler struct {\n\tdsClient      WorkflowCatalogClient // vestigial; see WorkflowCatalogClient doc\n\tauditStore    audit.AuditStore\n\tk8sClient     client.Client\n\tauthenticator *Authenticator\n\tatCounter     ActionTypeWorkflowCounter // nullable; nil skips cross-update\n}\n\n// RWHandlerOption configures optional dependencies on RemediationWorkflowHandler.\ntype RWHandlerOption func(*RemediationWorkflowHandler)",
+          "dense_score": 0.4912,
+          "rrf_score": 0.014493,
+          "score": 0.014493
+        },
+        {
+          "id": "kubernaut/internal/controller/effectivenessmonitor/target_resources.go:11",
+          "filepath": "kubernaut/internal/controller/effectivenessmonitor/target_resources.go",
+          "chunk_index": 11,
+          "code": "// from the RO's remediation.workflow_created audit event.\n// Returns empty string if DS is unavailable or no pre-hash exists (graceful degradation).\nfunc (r *Reconciler) queryPreRemediationHash(ctx context.Context, correlationID string) string {\n\tif r.DSQuerier == nil {\n\t\tlog.FromContext(ctx).V(1).Info(\"DSQuerier not configured, skipping pre-remediation hash lookup\")\n\t\treturn \"\"\n\t}\n\n\tpreHash, err := r.DSQuerier.QueryPreRemediationHash(ctx, correlationID)\n\tif err != nil {\n\t\tlog.FromContext(ctx).Error(err, \"Failed to query pre-remediation hash from DataStorage\",\n\t\t\t\"correlationID\", correlationID)\n\t\tr.Metrics.RecordExternalCallError(\"datastorage\", \"query_pre_hash\", \"query_error\")\n\t\treturn \"\"\n\t}\n\n\tif preHash != \"\" {\n\t\tlog.FromContext(ctx).V(1).Info(\"Pre-remediation hash retrieved from DataStorage\",\n\t\t\t\"correlationID\", correlationID,\n\t\t\t\"preHash\", preHash[:min(23, len(preHash))]+\"...\")\n\t}\n\treturn preHash\n}\n\n// resolveConfigMapHashes extracts ConfigMap references from the resource spec,",
+          "dense_score": 0.4863,
+          "rrf_score": 0.014286,
+          "score": 0.014286
+        }
+      ]
+    },
+    {
+      "id": "validator-identifier-anchor",
+      "query": "Validator.IsAllowed discoveredWorkflows list_workflows catalog allowlist",
+      "results": [
+        {
+          "id": "kubernaut/internal/kubernautagent/parser/validator.go:11",
+          "filepath": "kubernaut/internal/kubernautagent/parser/validator.go",
+          "chunk_index": 11,
+          "code": "func (v *Validator) GetWorkflowMeta(workflowID string) (WorkflowMeta, bool) {\n\tm, ok := v.catalogMeta[workflowID]\n\treturn m, ok\n}\n\n// IsAllowed reports whether workflowID is present in the catalog allowlist and,\n// when discovery state is attached, was returned by list_workflows in the\n// current selection context. This\n// is the same membership test Validate applies to workflow_id, exposed here\n// so callers outside Validate (e.g. enrichFromCatalog's Issue #1711 guard)\n// can distinguish \"unresolvable ID\" from \"resolvable ID with no registered\n// WorkflowMeta\" -- the latter occurs only in test fixtures that populate the\n// allowlist without a matching SetWorkflowMeta call; production always sets\n// both from the same catalog-fetch loop (see dsCatalogFetcher.FetchValidator).\nfunc (v *Validator) IsAllowed(workflowID string) bool {\n\tif _, ok := v.allowedWorkflows[workflowID]; !ok {\n\t\treturn false\n\t}\n\treturn v.discoveredWorkflows == nil || v.discoveredWorkflows.Contains(workflowID)\n}",
+          "dense_score": 0.6463,
+          "rrf_score": 0.016393,
+          "score": 0.016393
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/investigator/investigator_gates.go:44",
+          "filepath": "kubernaut/internal/kubernautagent/investigator/investigator_gates.go",
+          "chunk_index": 44,
+          "code": "func enrichFromCatalog(result *katypes.InvestigationResult, v *parser.Validator) {\n\tif result == nil || v == nil || result.WorkflowID == \"\" {\n\t\treturn\n\t}\n\tif !v.IsAllowed(result.WorkflowID) {\n\t\t// DD-KA-001 Step 1 (Workflow Existence) is unconditional: a\n\t\t// workflow_id that does not resolve against the DS catalog allowlist\n\t\t// must never survive as structured data, even when HumanReviewNeeded\n\t\t// was already set to true by an earlier signal (e.g.\n\t\t// investigation_outcome=inconclusive), which caused\n\t\t// Validator.Validate() to short-circuit its own allowlist check\n\t\t// before ever reaching this function. Clearing WorkflowID here is\n\t\t// sufficient: mapInvestigationResultToResponse only emits\n\t\t// selected_workflow at all when WorkflowID != \"\" (Issue #1711).\n\t\tresult.WorkflowID = \"\"\n\t\treturn\n\t}\n\n\t// meta may be legitimately absent even for an allowed ID: this happens\n\t// only in test fixtures that populate the allowlist without a matching",
+          "dense_score": 0.6432,
+          "rrf_score": 0.016129,
+          "score": 0.016129
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/parser/validator.go:8",
+          "filepath": "kubernaut/internal/kubernautagent/parser/validator.go",
+          "chunk_index": 8,
+          "code": "func NewValidator(allowedWorkflows []string) *Validator {\n\tallowed := make(map[string]struct{}, len(allowedWorkflows))\n\tfor _, w := range allowedWorkflows {\n\t\tallowed[w] = struct{}{}\n\t}\n\treturn &Validator{\n\t\tallowedWorkflows: allowed,\n\t\tcatalogMeta:      make(map[string]WorkflowMeta),\n\t}\n}\n\n// SetWorkflowMeta stores catalog metadata for a workflow ID (UUID).\n// Pre-compiles regex patterns from parameter schema to avoid per-call compilation.\nfunc (v *Validator) SetWorkflowMeta(workflowID string, meta WorkflowMeta) {\n\tif len(meta.Parameters) > 0 && meta.CompiledPatterns == nil {\n\t\tmeta.CompiledPatterns = compileParameterPatterns(meta.Parameters)\n\t}\n\tv.catalogMeta[workflowID] = meta\n}\n\n// SetDiscoveredWorkflowState attaches the live workflow-discovery membership\n// for the current selection context. The pointer is intentional: a\n// self-correction retry may call list_workflows and expand membership after",
+          "dense_score": 0.6189,
+          "rrf_score": 0.015873,
+          "score": 0.015873
+        },
+        {
+          "id": "kubernaut/cmd/kubernautagent/bootstrap.go:9",
+          "filepath": "kubernaut/cmd/kubernautagent/bootstrap.go",
+          "chunk_index": 9,
+          "code": "\t// silently allowing an unvalidated LLM-selected workflow through (the\n\t// former \"CatalogFetcher == nil -> skip validation entirely\" bypass this\n\t// replaces; see investigator_workflow_selection.go).\n\tcatalogFetcher := newWorkflowCatalogFetcher(wfCatalog, logger)\n\n\teffectiveLLM, effectiveReg, alignEvaluator, alignCfg := buildAlignmentStack(cfg, llmRuntime, instrumentedLLM, reg, auditStore, logger)\n\n\treturn &coreServices{\n\t\tauditStore: auditStore, auditCleanup: auditCleanup, infra: infra,\n\t\tinteractiveReadiness: interactiveReadiness, eventEmitter: eventEmitter,\n\t\tds: ds, reg: reg, fleetClient: fleetClient, fleetGate: fleetGate, dsGate: dsGate, fleetOverlayResolver: fleetOverlayResolver, enricher: enricher,\n\t\tsanitizer: sanitizer, anomalyDetector: anomalyDetector, summarizer: sum,\n\t\tcatalogFetcher: catalogFetcher, effectiveLLM: effectiveLLM, effectiveReg: effectiveReg,\n\t\talignEvaluator: alignEvaluator, alignCfg: alignCfg,\n\t\twfCatalog: wfCatalog,\n\t}\n}",
+          "dense_score": 0.5756,
+          "rrf_score": 0.015625,
+          "score": 0.015625
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/investigator/investigator_gates.go:45",
+          "filepath": "kubernaut/internal/kubernautagent/investigator/investigator_gates.go",
+          "chunk_index": 45,
+          "code": "\t// meta may be legitimately absent even for an allowed ID: this happens\n\t// only in test fixtures that populate the allowlist without a matching\n\t// SetWorkflowMeta call. Production always sets both from the same\n\t// catalog-fetch loop (dsCatalogFetcher.FetchValidator), so an allowed ID\n\t// there always has metadata. Treat this as best-effort enrichment rather\n\t// than a second existence check (Issue #1711 cascade fix-forward).\n\tmeta, ok := v.GetWorkflowMeta(result.WorkflowID)\n\tif !ok {\n\t\treturn\n\t}\n\tif result.ExecutionEngine == \"\" {\n\t\tresult.ExecutionEngine = meta.ExecutionEngine\n\t}\n\tif result.ExecutionBundle == \"\" {\n\t\tresult.ExecutionBundle = meta.ExecutionBundle\n\t}\n\tif result.ExecutionBundleDigest == \"\" {\n\t\tresult.ExecutionBundleDigest = meta.ExecutionBundleDigest\n\t}\n\tif result.ServiceAccountName == \"\" {\n\t\tresult.ServiceAccountName = meta.ServiceAccountName\n\t}\n\tresult.WorkflowVersion = meta.Version\n\n\t// Issue #1661 Change 11a (DD-WORKFLOW-018): catalog-authoritative, not",
+          "dense_score": 0.5688,
+          "rrf_score": 0.015385,
+          "score": 0.015385
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/workflowcatalog/metadata.go:1",
+          "filepath": "kubernaut/internal/kubernautagent/workflowcatalog/metadata.go",
+          "chunk_index": 1,
+          "code": "// BuildWorkflowMeta converts catalog metadata into the single KA validation\n// snapshot used by autonomous and interactive workflow selection.\n//\n// Schema parsing is fail-closed: a malformed schema leaves schema-derived\n// fields empty so unvalidated LLM parameters cannot reach execution. The\n// catalog-authoritative execution fields are copied independently.\nfunc BuildWorkflowMeta(w *models.RemediationWorkflow, logger logr.Logger) parser.WorkflowMeta {\n\tmeta := parser.WorkflowMeta{}\n\tif w == nil {\n\t\treturn meta\n\t}\n\n\tmeta.ExecutionEngine = string(w.ExecutionEngine)\n\tmeta.Version = w.Version\n\tmeta.Component = append([]string(nil), w.Labels.Component...)\n\tmeta.ActionType = w.ActionType\n\tmeta.WorkflowName = w.WorkflowName\n\tif w.ExecutionBundle != nil {\n\t\tmeta.ExecutionBundle = *w.ExecutionBundle\n\t}\n\tif w.ExecutionBundleDigest != nil {\n\t\tmeta.ExecutionBundleDigest = *w.ExecutionBundleDigest\n\t}",
+          "dense_score": 0.5582,
+          "rrf_score": 0.015152,
+          "score": 0.015152
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/mcp/tools/list_workflows.go:3",
+          "filepath": "kubernaut/internal/kubernautagent/mcp/tools/list_workflows.go",
+          "chunk_index": 3,
+          "code": "type ListWorkflowsOutput struct {\n\tWorkflows []CatalogWorkflowSummary `json:\"workflows\"`\n\tCount     int                      `json:\"count\"`\n}\n\n// WorkflowLister abstracts workflowcatalog.Catalog.List for testability,\n// avoiding an import-cycle-prone direct dependency on the concrete type.\ntype WorkflowLister interface {\n\tList(ctx context.Context, filters *models.WorkflowSearchFilters, limit, offset int) ([]models.RemediationWorkflow, int, error)\n}\n\n// ListWorkflowsTool handles the kubernaut_list_workflows MCP tool: a\n// stateless, unfiltered-by-default catalog browse distinct from the\n// action-type-scoped 3-step discovery protocol (list_available_actions ->\n// list_workflows -> get_workflow in internal/kubernautagent/tools/custom).\n// #1677 Phase 2f (DD-WORKFLOW-019): backed by workflowcatalog.Catalog.List,\n// replacing DS's GET /api/v1/workflows as AF's kubernaut_list_workflows\n// backend.",
+          "dense_score": 0.5533,
+          "rrf_score": 0.014925,
+          "score": 0.014925
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/mcp/adapters/adapters.go:11",
+          "filepath": "kubernaut/internal/kubernautagent/mcp/adapters/adapters.go",
+          "chunk_index": 11,
+          "code": "func (a *WorkflowCatalogAdapter) GetWorkflowByID(ctx context.Context, workflowID string) (*tools.CatalogWorkflow, error) {\n\twf, err := a.catalog.GetByID(ctx, workflowID)\n\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"workflow catalog lookup: %w\", err)\n\t}\n\n\tcatalogWorkflow := &tools.CatalogWorkflow{\n\t\tWorkflowID: wf.WorkflowID,\n\t\t// WorkflowName was already wired here; ActionType (Issue #1661\n\t\t// Change 12) closes the sibling gap -- both catalog-authoritative,\n\t\t// mirroring the autonomous path's enrichFromCatalog.\n\t\tWorkflowName:    wf.WorkflowName,\n\t\tActionType:      wf.ActionType,\n\t\tVersion:         wf.Version,\n\t\tExecutionEngine: string(wf.ExecutionEngine),\n\t}\n\tmeta := workflowcatalog.BuildWorkflowMeta(wf, logr.FromContextOrDiscard(ctx))\n\tcatalogWorkflow.ExecutionEngine = meta.ExecutionEngine\n\tcatalogWorkflow.Version = meta.Version\n\tcatalogWorkflow.ExecutionClusterID = meta.ClusterID\n\tcatalogWorkflow.EngineConfig = meta.EngineConfig\n\tcatalogWorkflow.Dependencies = meta.Dependencies",
+          "dense_score": 0.5426,
+          "rrf_score": 0.014706,
+          "score": 0.014706
+        },
+        {
+          "id": "kubernaut/pkg/datastorage/schema/parser.go:6",
+          "filepath": "kubernaut/pkg/datastorage/schema/parser.go",
+          "chunk_index": 6,
+          "code": "// Validate validates a WorkflowSchema spec against BR-WORKFLOW-004 requirements.\n// CRD envelope validation (apiVersion, kind) is handled by Parse/validateCRDEnvelope.\n// SchemaVersion is derived from apiVersion and already populated by Parse.\nfunc (p *Parser) Validate(schema *models.WorkflowSchema) error {\n\tif err := validateWorkflowIdentification(schema); err != nil {\n\t\treturn err\n\t}\n\tif err := validateWorkflowParameters(schema); err != nil {\n\t\treturn err\n\t}\n\n\t// Validate dependencies (DD-WE-006)\n\tif schema.Dependencies != nil {\n\t\tif err := schema.Dependencies.ValidateDependencies(); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n\n\t// Validate detectedLabels (ADR-043 v1.3)\n\tif schema.DetectedLabels != nil {\n\t\tif err := schema.DetectedLabels.ValidateDetectedLabels(); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n\n\treturn validateWorkflowExecution(schema)\n}\n\n// validateWorkflowIdentification validates the required identification\n// fields: name, version, structured description, actionType, and mandatory",
+          "dense_score": 0.5373,
+          "rrf_score": 0.014493,
+          "score": 0.014493
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/mcp/adapters/adapters.go:12",
+          "filepath": "kubernaut/internal/kubernautagent/mcp/adapters/adapters.go",
+          "chunk_index": 12,
+          "code": "\tcatalogWorkflow.ExecutionEngine = meta.ExecutionEngine\n\tcatalogWorkflow.Version = meta.Version\n\tcatalogWorkflow.ExecutionClusterID = meta.ClusterID\n\tcatalogWorkflow.EngineConfig = meta.EngineConfig\n\tcatalogWorkflow.Dependencies = meta.Dependencies\n\tcatalogWorkflow.Resources = meta.Resources\n\tcatalogWorkflow.DeclaredParameterNames = meta.DeclaredParameterNames\n\tif wf.ExecutionBundle != nil {\n\t\tcatalogWorkflow.ExecutionBundle = *wf.ExecutionBundle\n\t}\n\tif wf.ExecutionBundleDigest != nil {\n\t\tcatalogWorkflow.ExecutionBundleDigest = *wf.ExecutionBundleDigest\n\t}\n\tif wf.ServiceAccountName != nil {\n\t\tcatalogWorkflow.ServiceAccountName = *wf.ServiceAccountName\n\t}\n\treturn catalogWorkflow, nil\n}\n\n// Compile-time interface compliance check.\nvar _ tools.WorkflowCatalog = (*WorkflowCatalogAdapter)(nil)",
+          "dense_score": 0.5315,
+          "rrf_score": 0.014286,
+          "score": 0.014286
+        }
+      ]
+    },
+    {
+      "id": "catalog-valid-undiscovered-validator-check",
+      "query": "Which check prevents selecting a workflow present in the catalog but absent from workflows returned by list_workflows?",
+      "results": [
+        {
+          "id": "kubernaut/internal/kubernautagent/parser/validator.go:11",
+          "filepath": "kubernaut/internal/kubernautagent/parser/validator.go",
+          "chunk_index": 11,
+          "code": "func (v *Validator) GetWorkflowMeta(workflowID string) (WorkflowMeta, bool) {\n\tm, ok := v.catalogMeta[workflowID]\n\treturn m, ok\n}\n\n// IsAllowed reports whether workflowID is present in the catalog allowlist and,\n// when discovery state is attached, was returned by list_workflows in the\n// current selection context. This\n// is the same membership test Validate applies to workflow_id, exposed here\n// so callers outside Validate (e.g. enrichFromCatalog's Issue #1711 guard)\n// can distinguish \"unresolvable ID\" from \"resolvable ID with no registered\n// WorkflowMeta\" -- the latter occurs only in test fixtures that populate the\n// allowlist without a matching SetWorkflowMeta call; production always sets\n// both from the same catalog-fetch loop (see dsCatalogFetcher.FetchValidator).\nfunc (v *Validator) IsAllowed(workflowID string) bool {\n\tif _, ok := v.allowedWorkflows[workflowID]; !ok {\n\t\treturn false\n\t}\n\treturn v.discoveredWorkflows == nil || v.discoveredWorkflows.Contains(workflowID)\n}",
+          "dense_score": 0.6349,
+          "rrf_score": 0.016393,
+          "score": 0.016393
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/workflowcatalog/discovery.go:5",
+          "filepath": "kubernaut/internal/kubernautagent/workflowcatalog/discovery.go",
+          "chunk_index": 5,
+          "code": "// Returns ErrNotFound if the workflow doesn't exist OR exists but doesn't match\n// the context (security gate) \u2014 DD-WORKFLOW-016: the two cases are\n// deliberately not distinguished to prevent information leakage.\n// This is Step 3 of the discovery protocol.\nfunc (c *Catalog) GetWorkflowWithContextFilters(ctx context.Context, workflowID string, filters *models.WorkflowDiscoveryFilters) (*models.RemediationWorkflow, error) {\n\t// If no context filters, fall back to simple GetByID\n\tif filters == nil || !filters.HasContextFilters() {\n\t\treturn c.GetByID(ctx, workflowID)\n\t}\n\n\treturn c.getWorkflowWithContextFiltersFromCache(ctx, workflowID, filters)\n}",
+          "dense_score": 0.5666,
+          "rrf_score": 0.016129,
+          "score": 0.016129
+        },
+        {
+          "id": "kubernaut/cmd/kubernautagent/bootstrap.go:9",
+          "filepath": "kubernaut/cmd/kubernautagent/bootstrap.go",
+          "chunk_index": 9,
+          "code": "\t// silently allowing an unvalidated LLM-selected workflow through (the\n\t// former \"CatalogFetcher == nil -> skip validation entirely\" bypass this\n\t// replaces; see investigator_workflow_selection.go).\n\tcatalogFetcher := newWorkflowCatalogFetcher(wfCatalog, logger)\n\n\teffectiveLLM, effectiveReg, alignEvaluator, alignCfg := buildAlignmentStack(cfg, llmRuntime, instrumentedLLM, reg, auditStore, logger)\n\n\treturn &coreServices{\n\t\tauditStore: auditStore, auditCleanup: auditCleanup, infra: infra,\n\t\tinteractiveReadiness: interactiveReadiness, eventEmitter: eventEmitter,\n\t\tds: ds, reg: reg, fleetClient: fleetClient, fleetGate: fleetGate, dsGate: dsGate, fleetOverlayResolver: fleetOverlayResolver, enricher: enricher,\n\t\tsanitizer: sanitizer, anomalyDetector: anomalyDetector, summarizer: sum,\n\t\tcatalogFetcher: catalogFetcher, effectiveLLM: effectiveLLM, effectiveReg: effectiveReg,\n\t\talignEvaluator: alignEvaluator, alignCfg: alignCfg,\n\t\twfCatalog: wfCatalog,\n\t}\n}",
+          "dense_score": 0.5601,
+          "rrf_score": 0.015873,
+          "score": 0.015873
+        },
+        {
+          "id": "kubernaut/pkg/kubernautagent/types/context.go:2",
+          "filepath": "kubernaut/pkg/kubernautagent/types/context.go",
+          "chunk_index": 2,
+          "code": "// NewDiscoveredWorkflowState creates empty workflow-discovery state.\nfunc NewDiscoveredWorkflowState() *DiscoveredWorkflowState {\n\treturn &DiscoveredWorkflowState{workflowIDs: make(map[string]struct{})}\n}\n\n// Add records workflow IDs returned by list_workflows. Empty IDs are ignored.\nfunc (s *DiscoveredWorkflowState) Add(workflowIDs ...string) {\n\tif s == nil {\n\t\treturn\n\t}\n\ts.mu.Lock()\n\tdefer s.mu.Unlock()\n\tif s.workflowIDs == nil {\n\t\ts.workflowIDs = make(map[string]struct{})\n\t}\n\tfor _, workflowID := range workflowIDs {\n\t\tif workflowID != \"\" {\n\t\t\ts.workflowIDs[workflowID] = struct{}{}\n\t\t}\n\t}\n}\n\n// Contains reports whether workflowID was returned by list_workflows.\nfunc (s *DiscoveredWorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.workflowIDs[workflowID]\n\treturn ok\n}",
+          "dense_score": 0.5574,
+          "rrf_score": 0.015625,
+          "score": 0.015625
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/tools/custom/tools.go:17",
+          "filepath": "kubernaut/internal/kubernautagent/tools/custom/tools.go",
+          "chunk_index": 17,
+          "code": "// are misleading for per-incident workflow selection. Ported verbatim from\n// pkg/datastorage/server/workflow_discovery_handlers.go (Issue #1677 Phase 2d).\nfunc convertWorkflowsToDiscoveryEntries(workflows []models.RemediationWorkflow) []models.WorkflowDiscoveryEntry {\n\tdiscoveryEntries := make([]models.WorkflowDiscoveryEntry, 0, len(workflows))\n\tfor _, wf := range workflows {\n\t\tentry := models.WorkflowDiscoveryEntry{\n\t\t\tWorkflowID:      wf.WorkflowID,\n\t\t\tWorkflowName:    wf.WorkflowName,\n\t\t\tName:            wf.Name,\n\t\t\tDescription:     wf.Description,\n\t\t\tVersion:         wf.Version,\n\t\t\tExecutionEngine: string(wf.ExecutionEngine),\n\t\t}\n\t\tif wf.SchemaImage != nil {\n\t\t\tentry.SchemaImage = *wf.SchemaImage\n\t\t}\n\t\tif wf.ExecutionBundle != nil {\n\t\t\tentry.ExecutionBundle = *wf.ExecutionBundle\n\t\t}\n\t\tif wf.ServiceAccountName != nil {\n\t\t\tentry.ServiceAccountName = *wf.ServiceAccountName\n\t\t}\n\t\tdiscoveryEntries = append(discoveryEntries, entry)\n\t}\n\treturn discoveryEntries\n}\n\n// --- get_workflow ---",
+          "dense_score": 0.5512,
+          "rrf_score": 0.015385,
+          "score": 0.015385
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/workflowcatalog/cache.go:18",
+          "filepath": "kubernaut/internal/kubernautagent/workflowcatalog/cache.go",
+          "chunk_index": 18,
+          "code": "// ListWorkflows returns every RemediationWorkflow CRD across all namespaces,\n// unfiltered -- the cache-backed source for the full-catalog listing\n// (Phase 2b's list_workflows MCP tool).\nfunc (c *Cache) ListWorkflows(ctx context.Context) ([]rwv1alpha1.RemediationWorkflow, error) {\n\tvar list rwv1alpha1.RemediationWorkflowList\n\tif err := c.reader.List(ctx, &list); err != nil {\n\t\treturn nil, fmt.Errorf(\"failed to list RemediationWorkflows: %w\", err)\n\t}\n\treturn list.Items, nil\n}\n\n// GetActionType returns the ActionType CRD whose spec.name equals name, or\n// (nil, nil) if none exists. Lookup is keyed by the business identifier\n// (spec.name), not metadata.name -- mirrors AuthWebhook's existing\n// findActionTypeKey convention (pkg/authwebhook/rw_reconciler.go).",
+          "dense_score": 0.5485,
+          "rrf_score": 0.015152,
+          "score": 0.015152
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/workflowcatalog/lazy_catalog.go:13",
+          "filepath": "kubernaut/internal/kubernautagent/workflowcatalog/lazy_catalog.go",
+          "chunk_index": 13,
+          "code": "// ListWorkflowsByActionType delegates to the underlying Catalog once Ready,\n// or returns ErrCatalogNotReady beforehand.\nfunc (l *LazyCatalog) ListWorkflowsByActionType(ctx context.Context, actionType string, filters *models.WorkflowDiscoveryFilters, offset, limit int) ([]models.RemediationWorkflow, int, error) {\n\tc, err := l.get()\n\tif err != nil {\n\t\treturn nil, 0, err\n\t}\n\treturn c.ListWorkflowsByActionType(ctx, actionType, filters, offset, limit)\n}\n\n// GetWorkflowWithContextFilters delegates to the underlying Catalog once\n// Ready, or returns ErrCatalogNotReady beforehand.\nfunc (l *LazyCatalog) GetWorkflowWithContextFilters(ctx context.Context, workflowID string, filters *models.WorkflowDiscoveryFilters) (*models.RemediationWorkflow, error) {\n\tc, err := l.get()\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn c.GetWorkflowWithContextFilters(ctx, workflowID, filters)\n}",
+          "dense_score": 0.5442,
+          "rrf_score": 0.014925,
+          "score": 0.014925
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/workflowcatalog/cache.go:15",
+          "filepath": "kubernaut/internal/kubernautagent/workflowcatalog/cache.go",
+          "chunk_index": 15,
+          "code": "// GetWorkflow returns the RemediationWorkflow CRD named name, or (nil, nil)\n// if it does not exist -- matching the retired Postgres repository's\n// not-found convention. Lookup is cluster-wide by metadata.name: workflow\n// names are globally unique across the catalog.\nfunc (c *Cache) GetWorkflow(ctx context.Context, name string) (*rwv1alpha1.RemediationWorkflow, error) {\n\tvar list rwv1alpha1.RemediationWorkflowList\n\tif err := c.reader.List(ctx, &list, client.MatchingFields{workflowNameFieldIndex: name}); err != nil {\n\t\treturn nil, fmt.Errorf(\"failed to get RemediationWorkflow %s: %w\", name, err)\n\t}\n\tif len(list.Items) == 0 {\n\t\treturn nil, nil //nolint:nilnil // intentional \"not found, no error\" cache-layer contract, see doc comment above\n\t}\n\treturn &list.Items[0], nil\n}\n\n// GetWorkflowByID returns the RemediationWorkflow CRD whose status.workflowId\n// matches workflowID, or (nil, nil) if none exists -- matching the retired",
+          "dense_score": 0.5422,
+          "rrf_score": 0.014706,
+          "score": 0.014706
+        },
+        {
+          "id": "kubernaut/pkg/shared/types/workflow_snapshot.go:7",
+          "filepath": "kubernaut/pkg/shared/types/workflow_snapshot.go",
+          "chunk_index": 7,
+          "code": "\t// resolved from the DS workflow catalog at selection time. Deliberately\n\t// NOT Required: unlike WorkflowID/WorkflowName/ActionType/Version/\n\t// ExecutionBundle (whose upstream sources guarantee non-empty values),\n\t// AIAnalysis legitimately persists a SelectedWorkflow with this field\n\t// empty on its partial/degenerate paths (e.g. workflow-resolution\n\t// failure, low-confidence preservation -- see\n\t// preservePartialSelectedWorkflow/preserveLowConfidenceWorkflow in\n\t// pkg/aianalysis/handlers/response_processor.go) before\n\t// RemediationOrchestrator's validateSelectedWorkflow ever runs its own\n\t// Go-level fail-closed check. Tightening this to Required+no-omitempty\n\t// broke exactly that: an empty string is present-but-invalid against the\n\t// Enum, not merely \"missing\" (#1661 Change 12 CI regression, confirmed\n\t// against IT-AA-344-001 and three sibling suites -- 100go.co \"validate\n\t// at the right layer\": RO's runtime check, not CRD admission, is the\n\t// correct gate here).",
+          "dense_score": 0.54,
+          "rrf_score": 0.014493,
+          "score": 0.014493
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/mcp/tools/list_workflows.go:3",
+          "filepath": "kubernaut/internal/kubernautagent/mcp/tools/list_workflows.go",
+          "chunk_index": 3,
+          "code": "type ListWorkflowsOutput struct {\n\tWorkflows []CatalogWorkflowSummary `json:\"workflows\"`\n\tCount     int                      `json:\"count\"`\n}\n\n// WorkflowLister abstracts workflowcatalog.Catalog.List for testability,\n// avoiding an import-cycle-prone direct dependency on the concrete type.\ntype WorkflowLister interface {\n\tList(ctx context.Context, filters *models.WorkflowSearchFilters, limit, offset int) ([]models.RemediationWorkflow, int, error)\n}\n\n// ListWorkflowsTool handles the kubernaut_list_workflows MCP tool: a\n// stateless, unfiltered-by-default catalog browse distinct from the\n// action-type-scoped 3-step discovery protocol (list_available_actions ->\n// list_workflows -> get_workflow in internal/kubernautagent/tools/custom).\n// #1677 Phase 2f (DD-WORKFLOW-019): backed by workflowcatalog.Catalog.List,\n// replacing DS's GET /api/v1/workflows as AF's kubernaut_list_workflows\n// backend.",
+          "dense_score": 0.5326,
+          "rrf_score": 0.014286,
+          "score": 0.014286
+        }
+      ]
+    },
+    {
+      "id": "discovery-membership-through-retry",
+      "query": "How is workflow discovery membership carried into Validator during self-correction retries, and what happens if another list_workflows call adds workflows?",
+      "results": [
+        {
+          "id": "kubernaut/internal/kubernautagent/parser/validator.go:11",
+          "filepath": "kubernaut/internal/kubernautagent/parser/validator.go",
+          "chunk_index": 11,
+          "code": "func (v *Validator) GetWorkflowMeta(workflowID string) (WorkflowMeta, bool) {\n\tm, ok := v.catalogMeta[workflowID]\n\treturn m, ok\n}\n\n// IsAllowed reports whether workflowID is present in the catalog allowlist and,\n// when discovery state is attached, was returned by list_workflows in the\n// current selection context. This\n// is the same membership test Validate applies to workflow_id, exposed here\n// so callers outside Validate (e.g. enrichFromCatalog's Issue #1711 guard)\n// can distinguish \"unresolvable ID\" from \"resolvable ID with no registered\n// WorkflowMeta\" -- the latter occurs only in test fixtures that populate the\n// allowlist without a matching SetWorkflowMeta call; production always sets\n// both from the same catalog-fetch loop (see dsCatalogFetcher.FetchValidator).\nfunc (v *Validator) IsAllowed(workflowID string) bool {\n\tif _, ok := v.allowedWorkflows[workflowID]; !ok {\n\t\treturn false\n\t}\n\treturn v.discoveredWorkflows == nil || v.discoveredWorkflows.Contains(workflowID)\n}",
+          "dense_score": 0.5461,
+          "rrf_score": 0.016393,
+          "score": 0.016393
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/parser/validator.go:9",
+          "filepath": "kubernaut/internal/kubernautagent/parser/validator.go",
+          "chunk_index": 9,
+          "code": "// SetDiscoveredWorkflowState attaches the live workflow-discovery membership\n// for the current selection context. The pointer is intentional: a\n// self-correction retry may call list_workflows and expand membership after\n// validation has started.\nfunc (v *Validator) SetDiscoveredWorkflowState(state *katypes.DiscoveredWorkflowState) {\n\tv.discoveredWorkflows = state\n}\n\n// maxPatternLength caps regex pattern length to prevent ReDoS from excessively\n// long patterns in workflow schemas. Patterns exceeding this are treated as\n// invalid and skipped (warning emitted at validation time).\nconst maxPatternLength = 1024\n\n// compileParameterPatterns pre-compiles regex patterns from workflow parameter\n// definitions. Invalid or oversized patterns are silently skipped \u2014 they'll\n// produce a warning at validation time via the fallback path.",
+          "dense_score": 0.5446,
+          "rrf_score": 0.016129,
+          "score": 0.016129
+        },
+        {
+          "id": "kubernaut/pkg/shared/types/workflow_snapshot.go:7",
+          "filepath": "kubernaut/pkg/shared/types/workflow_snapshot.go",
+          "chunk_index": 7,
+          "code": "\t// resolved from the DS workflow catalog at selection time. Deliberately\n\t// NOT Required: unlike WorkflowID/WorkflowName/ActionType/Version/\n\t// ExecutionBundle (whose upstream sources guarantee non-empty values),\n\t// AIAnalysis legitimately persists a SelectedWorkflow with this field\n\t// empty on its partial/degenerate paths (e.g. workflow-resolution\n\t// failure, low-confidence preservation -- see\n\t// preservePartialSelectedWorkflow/preserveLowConfidenceWorkflow in\n\t// pkg/aianalysis/handlers/response_processor.go) before\n\t// RemediationOrchestrator's validateSelectedWorkflow ever runs its own\n\t// Go-level fail-closed check. Tightening this to Required+no-omitempty\n\t// broke exactly that: an empty string is present-but-invalid against the\n\t// Enum, not merely \"missing\" (#1661 Change 12 CI regression, confirmed\n\t// against IT-AA-344-001 and three sibling suites -- 100go.co \"validate\n\t// at the right layer\": RO's runtime check, not CRD admission, is the\n\t// correct gate here).",
+          "dense_score": 0.5108,
+          "rrf_score": 0.015873,
+          "score": 0.015873
+        },
+        {
+          "id": "kubernaut/api/remediationworkflow/v1alpha1/remediationworkflow_types.go:14",
+          "filepath": "kubernaut/api/remediationworkflow/v1alpha1/remediationworkflow_types.go",
+          "chunk_index": 14,
+          "code": "type RemediationWorkflowStatus struct {\n\t// WorkflowID is the deterministic UUID derived from the workflow's content\n\t// hash (DeterministicUUID(ComputeContentHash(spec))). Computed locally by\n\t// AuthWebhook (#1661 Change 8a/8c) rather than assigned by Data Storage --\n\t// stable across the etcd-single-source-of-truth migration (DD-WORKFLOW-018).\n\t// +optional\n\tWorkflowID string `json:\"workflowId,omitempty\"`\n\n\t// ContentHash is the sha256 hex digest of the workflow's clean CRD content\n\t// (apiVersion/kind/metadata.name/spec), computed locally by AuthWebhook\n\t// (#1661 Change 8c). Lets DELETE/UPDATE flows and downstream consumers\n\t// verify content identity without any Data Storage round-trip.\n\t// +optional\n\tContentHash string `json:\"contentHash,omitempty\"`\n\n\t// CatalogStatus reflects the workflow's lifecycle state. Always \"Active\"\n\t// once admitted -- there is no external catalog decision to defer to\n\t// (#1661 Change 8c, DD-WORKFLOW-018).",
+          "dense_score": 0.4908,
+          "rrf_score": 0.015625,
+          "score": 0.015625
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/workflowcatalog/cache.go:16",
+          "filepath": "kubernaut/internal/kubernautagent/workflowcatalog/cache.go",
+          "chunk_index": 16,
+          "code": "// matches workflowID, or (nil, nil) if none exists -- matching the retired\n// Postgres repository's not-found convention. Lookup is cluster-wide by the\n// content-hash identity (DD-WORKFLOW-018), not by name: this is Step 3 of\n// the discovery protocol.\nfunc (c *Cache) GetWorkflowByID(ctx context.Context, workflowID string) (*rwv1alpha1.RemediationWorkflow, error) {\n\tvar list rwv1alpha1.RemediationWorkflowList\n\tif err := c.reader.List(ctx, &list, client.MatchingFields{workflowIDFieldIndex: workflowID}); err != nil {\n\t\treturn nil, fmt.Errorf(\"failed to get RemediationWorkflow by workflow_id %s: %w\", workflowID, err)\n\t}\n\tif len(list.Items) == 0 {\n\t\treturn nil, nil //nolint:nilnil // intentional \"not found, no error\" cache-layer contract, see doc comment above\n\t}\n\treturn &list.Items[0], nil\n}\n\n// ListWorkflowsByActionType returns every RemediationWorkflow CRD whose\n// spec.actionType matches actionType, using the indexed field lookup instead\n// of a full scan.",
+          "dense_score": 0.4862,
+          "rrf_score": 0.015385,
+          "score": 0.015385
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/investigator/investigator_workflow_selection.go:18",
+          "filepath": "kubernaut/internal/kubernautagent/investigator/investigator_workflow_selection.go",
+          "chunk_index": 18,
+          "code": "// selfCorrectWorkflowSelection runs the catalog-validated self-correction\n// loop (up to maxSelfCorrectionAttempts) for the parsed workflow-selection\n// result, then applies catalog enrichment and target-alignment checks to the\n// final accepted (or exhausted) result.\nfunc (inv *Investigator) selfCorrectWorkflowSelection(ctx context.Context, result *katypes.InvestigationResult, content string, messages []llm.Message, rcaSummary, correlationID string, llmCtx LLMInvocationContext) (*katypes.InvestigationResult, error) {\n\tvalidator, fetchErr := inv.pipeline.CatalogFetcher.FetchValidator(ctx)\n\tif fetchErr != nil {\n\t\tinv.logger.Error(fetchErr, \"workflow catalog unavailable, requiring human review\")\n\t\tresult.HumanReviewNeeded = true\n\t\tresult.HumanReviewReason = \"catalog_unavailable\"\n\t\tresult.Reason = fmt.Sprintf(\"workflow catalog unavailable: %s\", fetchErr)\n\t\treturn result, nil\n\t}",
+          "dense_score": 0.4816,
+          "rrf_score": 0.015152,
+          "score": 0.015152
+        },
+        {
+          "id": "kubernaut/pkg/kubernautagent/types/context.go:1",
+          "filepath": "kubernaut/pkg/kubernautagent/types/context.go",
+          "chunk_index": 1,
+          "code": "func WithSignalContext(ctx context.Context, signal SignalContext) context.Context {\n\treturn context.WithValue(ctx, signalContextKey{}, signal)\n}\n\n// SignalContextFromContext extracts the SignalContext from the context.\n// Returns the signal and true if found, zero value and false otherwise.\nfunc SignalContextFromContext(ctx context.Context) (SignalContext, bool) {\n\tsignal, ok := ctx.Value(signalContextKey{}).(SignalContext)\n\treturn signal, ok\n}\n\n// DiscoveredWorkflowState tracks workflow IDs returned by list_workflows for\n// one workflow-selection context. The state is shared by concurrent tool calls\n// and by self-correction retries that may rediscover additional pages.\ntype DiscoveredWorkflowState struct {\n\tmu          sync.RWMutex\n\tworkflowIDs map[string]struct{}\n}\n\n// NewDiscoveredWorkflowState creates empty workflow-discovery state.\nfunc NewDiscoveredWorkflowState() *DiscoveredWorkflowState {\n\treturn &DiscoveredWorkflowState{workflowIDs: make(map[string]struct{})}\n}",
+          "dense_score": 0.4786,
+          "rrf_score": 0.014925,
+          "score": 0.014925
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/workflowcatalog/discovery.go:5",
+          "filepath": "kubernaut/internal/kubernautagent/workflowcatalog/discovery.go",
+          "chunk_index": 5,
+          "code": "// Returns ErrNotFound if the workflow doesn't exist OR exists but doesn't match\n// the context (security gate) \u2014 DD-WORKFLOW-016: the two cases are\n// deliberately not distinguished to prevent information leakage.\n// This is Step 3 of the discovery protocol.\nfunc (c *Catalog) GetWorkflowWithContextFilters(ctx context.Context, workflowID string, filters *models.WorkflowDiscoveryFilters) (*models.RemediationWorkflow, error) {\n\t// If no context filters, fall back to simple GetByID\n\tif filters == nil || !filters.HasContextFilters() {\n\t\treturn c.GetByID(ctx, workflowID)\n\t}\n\n\treturn c.getWorkflowWithContextFiltersFromCache(ctx, workflowID, filters)\n}",
+          "dense_score": 0.4703,
+          "rrf_score": 0.014706,
+          "score": 0.014706
+        },
+        {
+          "id": "kubernaut/pkg/shared/types/workflow_snapshot.go:10",
+          "filepath": "kubernaut/pkg/shared/types/workflow_snapshot.go",
+          "chunk_index": 10,
+          "code": "\t// behavior. When set, RemediationOrchestrator's WorkflowExecutionCreator\n\t// uses this value in preference to RemediationRequest.Spec.ClusterID for\n\t// WorkflowExecution.Spec.ClusterID -- e.g. a GitOps-hub cluster, or an\n\t// aggregator cluster reaching a resource-constrained edge device.\n\t// +optional\n\tExecutionClusterID string `json:\"executionClusterId,omitempty\"`\n\n\t// Dependencies declares the Secrets/ConfigMaps the workflow's schema\n\t// requires in the execution namespace (DD-WE-006).\n\t// +optional\n\tDependencies *WorkflowDependencies `json:\"dependencies,omitempty\"`\n\n\t// Resources declares the per-workflow Job container CPU/memory\n\t// requests/limits (BR-WE-019 / DD-WE-008). Nil preserves BestEffort QoS.",
+          "dense_score": 0.4702,
+          "rrf_score": 0.014493,
+          "score": 0.014493
+        },
+        {
+          "id": "kubernaut/test/services/mock-llm/conversation/discovery.go:4",
+          "filepath": "kubernaut/test/services/mock-llm/conversation/discovery.go",
+          "chunk_index": 4,
+          "code": "// PlanDiscovery advances DD-KA-017 from the complete request transcript.\n// Membership is derived only from list_workflows results. The get_workflow result\n// is intentionally read-only and cannot expand the membership set.\nfunc PlanDiscovery(input DiscoveryPlannerInput) DiscoveryPlan {\n\tif !advertisedTool(input.Transcript, \"list_available_actions\") {\n\t\treturn unresolvedDiscovery(\"list_available_actions is not advertised\")\n\t}\n\tif hasToolResult(input.Transcript, \"get_workflow\") &&\n\t\t!workflowWasListed(input.Transcript, input.ExpectedWorkflowID) {\n\t\treturn unresolvedDiscovery(\"get_workflow cannot establish discovery membership\")\n\t}",
+          "dense_score": 0.4699,
+          "rrf_score": 0.014286,
+          "score": 0.014286
+        }
+      ]
+    },
+    {
+      "id": "selection-result-discovery-guard",
+      "query": "Where does select_workflow validate the chosen workflow against the current discovery result before returning the final result?",
+      "results": [
+        {
+          "id": "kubernaut/internal/kubernautagent/mcp/tools/select_workflow.go:30",
+          "filepath": "kubernaut/internal/kubernautagent/mcp/tools/select_workflow.go",
+          "chunk_index": 30,
+          "code": "// isWorkflowInDiscoveryResult checks if the given workflow_id is in the\n// discovery result (recommended or alternatives).\nfunc isWorkflowInDiscoveryResult(workflowID string, dr *mcpinternal.WorkflowDiscoveryResult) bool {\n\tif dr.Recommended != nil && dr.Recommended.WorkflowID == workflowID {\n\t\treturn true\n\t}\n\tfor _, alt := range dr.Alternatives {\n\t\tif alt.WorkflowID == workflowID {\n\t\t\treturn true\n\t\t}\n\t}\n\treturn false\n}\n\n// buildFinalResult constructs the final InvestigationResult by merging the RCA\n// with the selected workflow details from the catalog and per-workflow parameters\n// from the discovery result (#1169).\nfunc buildFinalResult(rca *katypes.InvestigationResult, workflow *CatalogWorkflow, discovery *mcpinternal.WorkflowDiscoveryResult) *katypes.InvestigationResult {\n\tresult := *rca\n\n\tapplyDiscoveryFullResult(&result, discovery)\n\n\t// KA-HIGH-1: Use Phase 3 confidence when a discovery recommendation exists,\n\t// since Phase 3 has additional workflow-specific scoring context.",
+          "dense_score": 0.6201,
+          "rrf_score": 0.016393,
+          "score": 0.016393
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/parser/validator.go:11",
+          "filepath": "kubernaut/internal/kubernautagent/parser/validator.go",
+          "chunk_index": 11,
+          "code": "func (v *Validator) GetWorkflowMeta(workflowID string) (WorkflowMeta, bool) {\n\tm, ok := v.catalogMeta[workflowID]\n\treturn m, ok\n}\n\n// IsAllowed reports whether workflowID is present in the catalog allowlist and,\n// when discovery state is attached, was returned by list_workflows in the\n// current selection context. This\n// is the same membership test Validate applies to workflow_id, exposed here\n// so callers outside Validate (e.g. enrichFromCatalog's Issue #1711 guard)\n// can distinguish \"unresolvable ID\" from \"resolvable ID with no registered\n// WorkflowMeta\" -- the latter occurs only in test fixtures that populate the\n// allowlist without a matching SetWorkflowMeta call; production always sets\n// both from the same catalog-fetch loop (see dsCatalogFetcher.FetchValidator).\nfunc (v *Validator) IsAllowed(workflowID string) bool {\n\tif _, ok := v.allowedWorkflows[workflowID]; !ok {\n\t\treturn false\n\t}\n\treturn v.discoveredWorkflows == nil || v.discoveredWorkflows.Contains(workflowID)\n}",
+          "dense_score": 0.5851,
+          "rrf_score": 0.016129,
+          "score": 0.016129
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/mcp/tools/select_workflow.go:36",
+          "filepath": "kubernaut/internal/kubernautagent/mcp/tools/select_workflow.go",
+          "chunk_index": 36,
+          "code": "// discoveryAlternativeWorkflows converts the discovery result's alternative\n// workflows into the katypes wire format, returning nil when there are none\n// (preserving the original nil-vs-empty-slice semantics for callers that\n// serialize this field).\nfunc discoveryAlternativeWorkflows(discovery *mcpinternal.WorkflowDiscoveryResult) []katypes.AlternativeWorkflow {\n\tif discovery == nil || len(discovery.Alternatives) == 0 {\n\t\treturn nil\n\t}\n\talts := make([]katypes.AlternativeWorkflow, 0, len(discovery.Alternatives))\n\tfor _, alt := range discovery.Alternatives {\n\t\talts = append(alts, katypes.AlternativeWorkflow{\n\t\t\tWorkflowID:      alt.WorkflowID,\n\t\t\tExecutionBundle: alt.ExecutionBundle,\n\t\t\tConfidence:      alt.Confidence,\n\t\t\tRationale:       alt.Rationale,\n\t\t\tParameters:      cloneParameterMap(alt.Parameters),\n\t\t})\n\t}\n\treturn alts\n}\n\n// lookupDiscoveredParameters finds the parameter map for a given workflow_id\n// in the discovery result (recommended or alternatives).",
+          "dense_score": 0.5668,
+          "rrf_score": 0.015873,
+          "score": 0.015873
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/tools/custom/tools.go:17",
+          "filepath": "kubernaut/internal/kubernautagent/tools/custom/tools.go",
+          "chunk_index": 17,
+          "code": "// are misleading for per-incident workflow selection. Ported verbatim from\n// pkg/datastorage/server/workflow_discovery_handlers.go (Issue #1677 Phase 2d).\nfunc convertWorkflowsToDiscoveryEntries(workflows []models.RemediationWorkflow) []models.WorkflowDiscoveryEntry {\n\tdiscoveryEntries := make([]models.WorkflowDiscoveryEntry, 0, len(workflows))\n\tfor _, wf := range workflows {\n\t\tentry := models.WorkflowDiscoveryEntry{\n\t\t\tWorkflowID:      wf.WorkflowID,\n\t\t\tWorkflowName:    wf.WorkflowName,\n\t\t\tName:            wf.Name,\n\t\t\tDescription:     wf.Description,\n\t\t\tVersion:         wf.Version,\n\t\t\tExecutionEngine: string(wf.ExecutionEngine),\n\t\t}\n\t\tif wf.SchemaImage != nil {\n\t\t\tentry.SchemaImage = *wf.SchemaImage\n\t\t}\n\t\tif wf.ExecutionBundle != nil {\n\t\t\tentry.ExecutionBundle = *wf.ExecutionBundle\n\t\t}\n\t\tif wf.ServiceAccountName != nil {\n\t\t\tentry.ServiceAccountName = *wf.ServiceAccountName\n\t\t}\n\t\tdiscoveryEntries = append(discoveryEntries, entry)\n\t}\n\treturn discoveryEntries\n}\n\n// --- get_workflow ---",
+          "dense_score": 0.5657,
+          "rrf_score": 0.015625,
+          "score": 0.015625
+        },
+        {
+          "id": "kubernaut/pkg/kubernautagent/types/context.go:2",
+          "filepath": "kubernaut/pkg/kubernautagent/types/context.go",
+          "chunk_index": 2,
+          "code": "// NewDiscoveredWorkflowState creates empty workflow-discovery state.\nfunc NewDiscoveredWorkflowState() *DiscoveredWorkflowState {\n\treturn &DiscoveredWorkflowState{workflowIDs: make(map[string]struct{})}\n}\n\n// Add records workflow IDs returned by list_workflows. Empty IDs are ignored.\nfunc (s *DiscoveredWorkflowState) Add(workflowIDs ...string) {\n\tif s == nil {\n\t\treturn\n\t}\n\ts.mu.Lock()\n\tdefer s.mu.Unlock()\n\tif s.workflowIDs == nil {\n\t\ts.workflowIDs = make(map[string]struct{})\n\t}\n\tfor _, workflowID := range workflowIDs {\n\t\tif workflowID != \"\" {\n\t\t\ts.workflowIDs[workflowID] = struct{}{}\n\t\t}\n\t}\n}\n\n// Contains reports whether workflowID was returned by list_workflows.\nfunc (s *DiscoveredWorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.workflowIDs[workflowID]\n\treturn ok\n}",
+          "dense_score": 0.5495,
+          "rrf_score": 0.015385,
+          "score": 0.015385
+        },
+        {
+          "id": "kubernaut/pkg/kubernautagent/types/context.go:3",
+          "filepath": "kubernaut/pkg/kubernautagent/types/context.go",
+          "chunk_index": 3,
+          "code": "func (s *DiscoveredWorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.workflowIDs[workflowID]\n\treturn ok\n}\n\n// WithDiscoveredWorkflowState returns a context carrying workflow-discovery state.\nfunc WithDiscoveredWorkflowState(ctx context.Context, state *DiscoveredWorkflowState) context.Context {\n\treturn context.WithValue(ctx, discoveredWorkflowStateKey{}, state)\n}\n\n// DiscoveredWorkflowStateFromContext extracts workflow-discovery state.\nfunc DiscoveredWorkflowStateFromContext(ctx context.Context) (*DiscoveredWorkflowState, bool) {\n\tstate, ok := ctx.Value(discoveredWorkflowStateKey{}).(*DiscoveredWorkflowState)\n\treturn state, ok && state != nil\n}",
+          "dense_score": 0.5469,
+          "rrf_score": 0.015152,
+          "score": 0.015152
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/investigator/investigator_phases.go:10",
+          "filepath": "kubernaut/internal/kubernautagent/investigator/investigator_phases.go",
+          "chunk_index": 10,
+          "code": "// FinalizeWorkflowResult applies post-Phase 3 processing to the workflow\n// discovery result, mirroring the autonomous path in Investigate() L558-569.\n// This ensures interactive discover_workflows results have the same\n// completeness as autonomous results: severity backfill, detected labels,\n// authoritative remediation target, and TARGET_RESOURCE_* parameters.\n//\n// enrichData may be nil when the interactive path lacks full enrichment (F5).\n// All callees handle nil gracefully.\nfunc FinalizeWorkflowResult(result *katypes.InvestigationResult, signal katypes.SignalContext, rcaResult *katypes.InvestigationResult, enrichData *enrichment.EnrichmentResult)",
+          "dense_score": 0.5462,
+          "rrf_score": 0.014925,
+          "score": 0.014925
+        },
+        {
+          "id": "kubernaut/internal/kubernautagent/workflowcatalog/discovery.go:5",
+          "filepath": "kubernaut/internal/kubernautagent/workflowcatalog/discovery.go",
+          "chunk_index": 5,
+          "code": "// Returns ErrNotFound if the workflow doesn't exist OR exists but doesn't match\n// the context (security gate) \u2014 DD-WORKFLOW-016: the two cases are\n// deliberately not distinguished to prevent information leakage.\n// This is Step 3 of the discovery protocol.\nfunc (c *Catalog) GetWorkflowWithContextFilters(ctx context.Context, workflowID string, filters *models.WorkflowDiscoveryFilters) (*models.RemediationWorkflow, error) {\n\t// If no context filters, fall back to simple GetByID\n\tif filters == nil || !filters.HasContextFilters() {\n\t\treturn c.GetByID(ctx, workflowID)\n\t}\n\n\treturn c.getWorkflowWithContextFiltersFromCache(ctx, workflowID, filters)\n}",
+          "dense_score": 0.5368,
+          "rrf_score": 0.014706,
+          "score": 0.014706
+        },
+        {
+          "id": "kubernaut/pkg/notification/enrichment/enricher.go:4",
+          "filepath": "kubernaut/pkg/notification/enrichment/enricher.go",
+          "chunk_index": 4,
+          "code": "// extractWorkflowID reads the workflow UUID from the typed notification context.\n// Checks WorkflowID (completion) first, then SelectedWorkflow (approval).\nfunc extractWorkflowID(ctx *notificationv1alpha1.NotificationContext) string {\n\tif ctx == nil || ctx.Workflow == nil {\n\t\treturn \"\"\n\t}\n\tif ctx.Workflow.WorkflowID != \"\" {\n\t\treturn ctx.Workflow.WorkflowID\n\t}\n\tif ctx.Workflow.SelectedWorkflow != \"\" {\n\t\treturn ctx.Workflow.SelectedWorkflow\n\t}\n\treturn \"\"\n}\n\n// extractWorkflowName reads the catalog-authoritative WorkflowName from the\n// typed notification context, when already populated by the caller (Issue\n// #1677 Phase 1). Returns \"\" if absent, signaling the live-resolver fallback.\nfunc extractWorkflowName(ctx *notificationv1alpha1.NotificationContext) string {\n\tif ctx == nil || ctx.Workflow == nil {\n\t\treturn \"\"\n\t}\n\treturn ctx.Workflow.WorkflowName\n}",
+          "dense_score": 0.5172,
+          "rrf_score": 0.014493,
+          "score": 0.014493
+        },
+        {
+          "id": "kubernaut/test/services/mock-llm/conversation/discovery.go:4",
+          "filepath": "kubernaut/test/services/mock-llm/conversation/discovery.go",
+          "chunk_index": 4,
+          "code": "// PlanDiscovery advances DD-KA-017 from the complete request transcript.\n// Membership is derived only from list_workflows results. The get_workflow result\n// is intentionally read-only and cannot expand the membership set.\nfunc PlanDiscovery(input DiscoveryPlannerInput) DiscoveryPlan {\n\tif !advertisedTool(input.Transcript, \"list_available_actions\") {\n\t\treturn unresolvedDiscovery(\"list_available_actions is not advertised\")\n\t}\n\tif hasToolResult(input.Transcript, \"get_workflow\") &&\n\t\t!workflowWasListed(input.Transcript, input.ExpectedWorkflowID) {\n\t\treturn unresolvedDiscovery(\"get_workflow cannot establish discovery membership\")\n\t}",
+          "dense_score": 0.5137,
+          "rrf_score": 0.014286,
+          "score": 0.014286
+        }
+      ]
+    }
+  ]
+}

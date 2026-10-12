@@ -1,5 +1,5 @@
 """Tests for chunking.py -- the shared, content-stable chunking helpers used
-by all four *-cocoindex-flows.py scripts (cocoindex, engram, koku, dcm).
+by the configuration-driven ingestion flow.
 
 Primary regression target: the 2026-08-03 chunk-ID-cascade bug (see
 docs/FINDINGS.md) where fixed-character-offset chunking + positional

@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "run_id": "2026-09-24-zvec-sense-lexical-baseline",
+  "fixture_id": "typescript-workflow-discovery-v1",
+  "language": "typescript",
+  "source": {
+    "repository": "synthetic/typescript-workflow-discovery",
+    "revision": "fixture-v1",
+    "root": ".",
+    "include": [
+      "**/*.ts"
+    ],
+    "exclude": [
+      "**/*.test.ts"
+    ],
+    "snapshot_sha256": "152a5562e1fbc0a44f8e7143fa29b9559c6a1ad4a5b85c309a092bb9814b1057",
+    "files": 8,
+    "bytes": 5670
+  },
+  "queries": 8,
+  "units": 33,
+  "qrels_status": "adjudicated",
+  "candidate_pool_complete": true,
+  "implementation": {
+    "backend": "zvec-grep TypeScript",
+    "source_commit": "196a73015bf4ca42b1bb0adae56338d9ab156af7",
+    "working_tree_dirty": true,
+    "working_tree_patch_sha256": "f5d233e328639f5720cd997fd5f181e0a8f928fbcfff0e983e8491669424a869",
+    "binary": "/Users/jgil/go/src/github.com/jordigilh/zvec-grep-fork/dist/cli/index.js",
+    "binary_sha256": "817ff1c4ff0b57b0c27eb9c3d8869f9a4db32d1765267798e77c3be6d1b49f6f"
+  },
+  "index": {
+    "index_version": 2,
+    "embedding_model": "local/potion-code-16m-v2",
+    "device": "cpu",
+    "root": "/private/var/folders/r7/gktmmltd1zq7wqhsjjslwsm80000gn/T/opencode/zvec-sense-baseline-typescript",
+    "files_indexed": 8,
+    "entities_indexed": 33,
+    "selection": {
+      "repository": "synthetic/typescript-workflow-discovery",
+      "revision": "fixture-v1",
+      "root": ".",
+      "include": [
+        "**/*.ts"
+      ],
+      "exclude": [
+        "**/*.test.ts"
+      ]
+    },
+    "model_cache": "/var/folders/r7/gktmmltd1zq7wqhsjjslwsm80000gn/T/opencode/zvec-sense-baseline-model-cache"
+  },
+  "search": {
+    "route": "hybrid",
+    "mode": "direct",
+    "refresh": "off",
+    "limit": 10,
+    "normalized_cutoff": 10,
+    "normalization": "source-unit@10"
+  },
+  "metrics_at_10": {
+    "ndcg@10": 0.42679147362817854,
+    "mrr@10": 0.5916666666666667,
+    "recall@10": 0.55,
+    "precision@10": 0.2
+  }
+}

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""One-off, re-runnable audit/cleanup tool: finds and deletes cursor-memory
+"""One-off, re-runnable audit/cleanup tool: finds and deletes shared-memory
 documents that trace back to a transcript from a Cursor workspace NOT in
 project_scope.ALLOWED_WORKSPACE_PREFIXES.
 
 Written 2026-07-13 after discovering nightly-learn.py/cocoindex-flows.py had
 no project filter on the retain path -- see docs/FINDINGS.md. Confirmed 139
-of 444 transcript-attributable cursor-memory documents (31%) came from
+of 444 transcript-attributable shared-memory documents (31%) came from
 out-of-scope workspaces (insights-onprem/koku, redhat-developer-rhdh-plugins,
 blank "no folder open" sessions, etc.) before this was fixed.
 
@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from collections import Counter
 from datetime import datetime, timezone
@@ -38,11 +37,16 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from engram import project_scope  # noqa: E402
 from engram.contradiction_resolution import delete_document  # noqa: E402
+from engram.project_config import DEFAULT_HINDSIGHT_URL, load_default_settings  # noqa: E402
 
-HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
-BANK_ID = "cursor-memory"
-PROJECTS_ROOT = Path(os.path.expanduser("~/.cursor/projects"))
-LOG_DIR = Path.home() / ".engram" / "logs"
+DEPLOYMENT_SETTINGS = load_default_settings()
+HINDSIGHT_URL = DEPLOYMENT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+assert HINDSIGHT_URL is not None
+BANK_ID = "shared-memory"
+PROJECTS_ROOT = DEPLOYMENT_SETTINGS.path("transcripts_dir", "~/.cursor/projects")
+assert PROJECTS_ROOT is not None
+LOG_DIR = DEPLOYMENT_SETTINGS.path("log_dir", "~/.engram/logs")
+assert LOG_DIR is not None
 
 
 def build_transcript_project_map() -> dict[str, str]:

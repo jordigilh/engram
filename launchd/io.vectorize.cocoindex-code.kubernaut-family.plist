@@ -8,12 +8,16 @@
          (kubernaut, kubernaut-operator, kubernaut-console, kubernaut-demo-scenarios,
          kubernaut-v1.5, kubernaut-v1.6). Each repo's OpenCode project route points
          its "cocoindex-code" backend at this daemon's fixed HTTP URL instead of spawning
-         its own stdio subprocess -- see docs/findings/2026-08.md, 2026-08-13
-         (same day, seventh follow-up). Already multi-repo-aware via --repo/--branch
+         its own stdio subprocess - see docs/findings/2026-08.md, 2026-08-13
+         (same day, seventh follow-up). Already multi-repo-aware via repo/branch
          query params; no per-repo instance needed. -->
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.engram/venv/bin/engram-search-kubernaut</string>
+        <string>__HOME__/.engram/venv/bin/engram-search-configured</string>
+        <string>--project</string>
+        <string>kubernaut</string>
+        <string>--config</string>
+        <string>__HOME__/.engram/projects.toml</string>
         <string>--transport</string>
         <string>streamable-http</string>
         <string>--host</string>
@@ -22,23 +26,13 @@
         <string>8891</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>__HOME__/go/src/github.com/jordigilh/kubernaut</string>
+    <string>__HOME__/.engram</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
         <string>__HOME__/.engram/venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-        <key>COCOINDEX_PG_URL</key>
-        <string>postgresql://hindsight:hindsight@localhost:5432/hindsight</string>
-        <key>ENGRAM_CODE_DIR</key>
-        <string>__HOME__/go/src/github.com/jordigilh/kubernaut</string>
-        <key>ENGRAM_OPERATOR_DIR</key>
-        <string>__HOME__/go/src/github.com/jordigilh/kubernaut-operator</string>
-        <key>ENGRAM_CONSOLE_DIR</key>
-        <string>__HOME__/go/src/github.com/jordigilh/kubernaut-console</string>
-        <key>ENGRAM_SCENARIOS_DIR</key>
-        <string>__HOME__/go/src/github.com/jordigilh/kubernaut-demo-scenarios</string>
-        <key>KUBERNAUT_LIVE_CLONE_DIR</key>
-        <string>__HOME__/go/src/github.com/jordigilh/kubernaut</string>
+        <!-- Project paths, repository mappings, and database settings are
+             loaded from __HOME__/.engram/projects.toml. -->
         <key>HF_HUB_OFFLINE</key>
         <string>1</string>
         <key>HOME</key>

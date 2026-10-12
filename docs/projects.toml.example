@@ -1,0 +1,62 @@
+# Deployment-local Engram project configuration.
+# Copy to ~/.engram/projects.toml and keep the populated file out of Git.
+# Relative paths are resolved relative to this file; ~ and environment
+# variables are expanded.
+
+[defaults]
+hindsight_url = "http://localhost:8888"
+pg_dsn = "postgresql://hindsight:hindsight@localhost:5432/hindsight"
+embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
+pg_pool_min_size = 2
+pg_pool_max_size = 5
+
+[projects.example]
+docs_bank = "example-docs"
+issues_bank = "example-issues" # omit when issue ingestion is out of scope
+code_table = "example_code_embeddings"
+issues_repos = ["example/example"]
+issue_provider = "github" # or "jira"
+
+[[projects.example.models]]
+bank = "example-docs"
+id = "example-architecture"
+name = "Example Architecture"
+source_query = "How are the example project's components, data flow, and interfaces structured?"
+max_tokens = 4096
+trigger = { mode = "full", refresh_after_consolidation = false }
+
+# For a Jira-backed project, omit issues_repos, set issue_provider = "jira",
+# and configure a narrow JQL scope. The generic adapter reads the token from
+# JIRA_API_TOKEN or the macOS Keychain; no token is stored in this file.
+# [projects.jira-example]
+# issues_bank = "jira-example-issues"
+# issue_provider = "jira"
+# [projects.jira-example.jira]
+# server = "https://example.atlassian.net"
+# email = "operator@example.com"
+# jql = "parent = EX-123 OR key = EX-123 order by created asc"
+# keychain_account = "jira-cli"
+# keychain_service = "jira-cloud-api-token"
+
+[projects.example.paths]
+cocoindex_db = "~/.engram/example-cocoindex.db"
+
+# Add one source for each repository or workspace.  A source may provide docs,
+# code, or both.  The generic flow and search server use these patterns exactly
+# as written; no Python module or pyproject entry is added for this project.
+[[projects.example.sources]]
+tag = "example"
+root = "~/src/example"
+language = "go"
+docs_include = ["**/*.md"]
+docs_exclude = ["**/node_modules/**", "**/vendor/**"]
+code_include = ["**/*.go", "**/*.py"]
+code_exclude = ["**/.git/**", "**/vendor/**", "**/node_modules/**"]
+
+# A second repository can share the same project banks/table and stay
+# distinguishable in filepath and Hindsight metadata.
+# [[projects.example.sources]]
+# tag = "example-operator"
+# root = "~/src/example-operator"
+# docs_include = ["**/*.md"]
+# code_include = ["**/*.go"]

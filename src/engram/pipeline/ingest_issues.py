@@ -20,22 +20,28 @@ Usage:
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from datetime import datetime, timedelta
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-BANK_ID = "kubernaut-issues"
-DEFAULT_REPO = "jordigilh/kubernaut"
-TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"}
+from engram.project_config import DEFAULT_HINDSIGHT_URL, load_project_settings
 
-_config = {"hindsight_url": os.environ.get("HINDSIGHT_URL", "http://localhost:8888")}
+PROJECT_SETTINGS = load_project_settings("kubernaut")
+HINDSIGHT_URL = PROJECT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+assert HINDSIGHT_URL is not None
+_ISSUES_REPOS = PROJECT_SETTINGS.strings("issues_repos")
+BANK_ID = PROJECT_SETTINGS.text("issues_bank", "kubernaut-issues")
+assert BANK_ID is not None
+DEFAULT_REPO = PROJECT_SETTINGS.text("default_issue_repo")
+if DEFAULT_REPO is None and _ISSUES_REPOS:
+    DEFAULT_REPO = _ISSUES_REPOS[0]
+TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"}
 
 
 def api_request(method, path, payload=None):
-    url = f"{_config['hindsight_url']}{path}"
+    url = f"{HINDSIGHT_URL}{path}"
     data = json.dumps(payload).encode() if payload else None
     req = Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
     try:
@@ -171,16 +177,20 @@ def ingest_issues(issues: list[dict]) -> tuple[int, int]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Ingest GitHub issues into Hindsight")
-    parser.add_argument("--repo", default=DEFAULT_REPO, help="GitHub repo (default: jordigilh/kubernaut)")
+    global HINDSIGHT_URL
+    parser = argparse.ArgumentParser(description="Ingest configured GitHub issues into Hindsight")
+    parser.add_argument("--repo", default=DEFAULT_REPO, help="GitHub repo (defaults to projects.toml)")
     parser.add_argument("--days", type=int, default=90, help="Include closed issues from last N days (default: 90)")
     parser.add_argument("--open-only", action="store_true", help="Only ingest open issues")
     parser.add_argument("--limit", type=int, default=500, help="Max issues per state to fetch")
     parser.add_argument("--refresh", action="store_true", help="Re-ingest (overwrites existing documents)")
-    parser.add_argument("--hindsight-url", default=_config["hindsight_url"], help="Hindsight API URL")
+    parser.add_argument("--hindsight-url", default=HINDSIGHT_URL, help="Hindsight API URL")
     args = parser.parse_args()
 
-    _config["hindsight_url"] = args.hindsight_url
+    if not args.repo:
+        parser.error("configure projects.kubernaut.issues_repos or pass --repo")
+
+    HINDSIGHT_URL = args.hindsight_url
 
     create_bank()
 

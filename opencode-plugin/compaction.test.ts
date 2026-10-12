@@ -14,9 +14,9 @@ describe("buildCompactionContext", () => {
   })
 
   test("carries project identity so the summary stays routed", () => {
-    const ctx = buildCompactionContext({ project: "kubernaut-v1.5", family: "kubernaut", branchSuffix: "v1.5" })
-    expect(ctx).toContain("kubernaut-v1.5")
-    expect(ctx).toContain("kubernaut")
+    const ctx = buildCompactionContext({ project: "service-api-v1.5", family: "platform", branchSuffix: "v1.5" })
+    expect(ctx).toContain("service-api-v1.5")
+    expect(ctx).toContain("platform")
     expect(ctx).toContain("v1.5")
   })
 })

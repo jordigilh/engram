@@ -1,0 +1,38 @@
+# Native host gateway registry.
+# Copy to ~/.engram/runtime/native-instances.toml and replace every endpoint,
+# command, and workspace path with values for this deployment. The populated
+# file is intentionally not tracked by Engram.
+
+[instances."my-project".backends.docs]
+kind = "http"
+url = "http://127.0.0.1:8888/mcp/my-project-docs/"
+
+[instances."my-project".backends.issues]
+kind = "http"
+url = "http://127.0.0.1:8888/mcp/my-project-issues/"
+
+[instances."my-project".backends.code]
+kind = "stdio"
+command = "/path/to/engram-search-my-project"
+args = []
+env = { COCOINDEX_PG_URL = "postgresql://user:password@127.0.0.1:5432/database" }
+shared_key = "my-project-code"
+
+[instances."my-project".backends.serena]
+kind = "stdio"
+command = "/path/to/serena"
+args = ["start-mcp-server", "--project", "/path/to/my-project"]
+
+# A shadow backend is optional. Its source_roots and callgraph_repos are
+# deployment-local because they authorize which local workspaces may be used
+# for comparisons.
+#
+# [instances."my-project".backends.code_shadow]
+# kind = "shadow_http"
+# url = "http://127.0.0.1:7999/mcp"
+# shadow_url = "http://127.0.0.1:8891/mcp"
+# timeout_seconds = 300
+# shadow_timeout_seconds = 180
+# shadow_log = "~/.engram/logs/code-shadow.jsonl"
+# source_roots = { my-project = "/path/to/my-project" }
+# callgraph_repos = ["my-project"]

@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "thresholds": {
+    "near_tie_max_score_gap_ratio": 0.05,
+    "maximum_adjustment_ratio": 0.02
+  },
+  "trace_replay_matches_matrix_candidate_order_for_all_queries": true,
+  "counts_are_unique_relationship_pairs_among_candidate_top_10": true,
+  "languages": {
+    "go": {
+      "totals": {
+        "verified_query_aligned_pairs": 9,
+        "near_tie_pairs": 4,
+        "applied_swaps": 1
+      },
+      "queries": [
+        {"query_id": "record-discovered-membership", "verified_pairs": 1, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "reject-undiscovered-workflow", "verified_pairs": 1, "near_tie_pairs": 1, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "forward-labels-to-discovery", "verified_pairs": 0, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "preserve-membership-on-retry", "verified_pairs": 1, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "interactive-selection-guard", "verified_pairs": 1, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "validate-workflow-parameters", "verified_pairs": 1, "near_tie_pairs": 1, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "empty-discovery-fails-closed", "verified_pairs": 1, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {
+          "query_id": "copy-selected-workflow-details",
+          "verified_pairs": 3,
+          "near_tie_pairs": 2,
+          "applied_swaps": 1,
+          "rank_changes": [
+            {"symbol": "function HandleSelectWorkflow", "baseline_rank": 3, "candidate_rank": 2},
+            {"symbol": "function authorizeSelectionDriver", "baseline_rank": 2, "candidate_rank": 3}
+          ],
+          "normalized_unit_order_changed": true
+        }
+      ]
+    },
+    "python": {
+      "totals": {
+        "verified_query_aligned_pairs": 13,
+        "near_tie_pairs": 5,
+        "applied_swaps": 1
+      },
+      "queries": [
+        {"query_id": "record-discovered-membership", "verified_pairs": 0, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "reject-undiscovered-workflow", "verified_pairs": 3, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "forward-labels-to-discovery", "verified_pairs": 1, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "preserve-membership-on-retry", "verified_pairs": 2, "near_tie_pairs": 1, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "interactive-selection-guard", "verified_pairs": 2, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "validate-workflow-parameters", "verified_pairs": 0, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {
+          "query_id": "empty-discovery-fails-closed",
+          "verified_pairs": 2,
+          "near_tie_pairs": 2,
+          "applied_swaps": 1,
+          "rank_changes": [
+            {"symbol": "function self_correct_selection", "baseline_rank": 9, "candidate_rank": 8},
+            {"symbol": "function validate scope: Validator", "baseline_rank": 8, "candidate_rank": 9}
+          ],
+          "normalized_unit_order_changed": false
+        },
+        {"query_id": "copy-selected-workflow-details", "verified_pairs": 3, "near_tie_pairs": 2, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false}
+      ]
+    },
+    "rust": {
+      "totals": {
+        "verified_query_aligned_pairs": 13,
+        "near_tie_pairs": 4,
+        "applied_swaps": 2
+      },
+      "queries": [
+        {"query_id": "record-discovered-membership", "verified_pairs": 1, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {
+          "query_id": "reject-undiscovered-workflow",
+          "verified_pairs": 2,
+          "near_tie_pairs": 2,
+          "applied_swaps": 2,
+          "rank_changes": [
+            {"symbol": "function is_workflow_in_discovery_result", "baseline_rank": 3, "candidate_rank": 2},
+            {"symbol": "function handle_select_workflow", "baseline_rank": 4, "candidate_rank": 3},
+            {"symbol": "function authorize_selection_driver", "baseline_rank": 2, "candidate_rank": 4}
+          ],
+          "normalized_unit_order_changed": true
+        },
+        {"query_id": "forward-labels-to-discovery", "verified_pairs": 1, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "preserve-membership-on-retry", "verified_pairs": 1, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "interactive-selection-guard", "verified_pairs": 2, "near_tie_pairs": 1, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "validate-workflow-parameters", "verified_pairs": 1, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "empty-discovery-fails-closed", "verified_pairs": 1, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "copy-selected-workflow-details", "verified_pairs": 4, "near_tie_pairs": 1, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false}
+      ]
+    },
+    "typescript": {
+      "totals": {
+        "verified_query_aligned_pairs": 5,
+        "near_tie_pairs": 4,
+        "applied_swaps": 0
+      },
+      "queries": [
+        {"query_id": "record-discovered-membership", "verified_pairs": 0, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "reject-undiscovered-workflow", "verified_pairs": 1, "near_tie_pairs": 1, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "forward-labels-to-discovery", "verified_pairs": 0, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "preserve-membership-on-retry", "verified_pairs": 0, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "interactive-selection-guard", "verified_pairs": 1, "near_tie_pairs": 1, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "validate-workflow-parameters", "verified_pairs": 0, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "empty-discovery-fails-closed", "verified_pairs": 0, "near_tie_pairs": 0, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false},
+        {"query_id": "copy-selected-workflow-details", "verified_pairs": 3, "near_tie_pairs": 2, "applied_swaps": 0, "rank_changes": [], "normalized_unit_order_changed": false}
+      ]
+    }
+  }
+}

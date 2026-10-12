@@ -21,6 +21,8 @@
          path. -->
     <key>ProgramArguments</key>
     <array>
+        <string>__HOME__/.engram/venv/bin/python3</string>
+        <string>__HOME__/.engram/scripts/serena-launchd-supervisor.py</string>
         <string>__HOME__/.engram/venv/bin/engram-serena-multiplex</string>
         <string>--host</string>
         <string>127.0.0.1</string>
@@ -61,5 +63,21 @@
     </dict>
     <key>RunAtLoad</key>
     <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>ExitTimeOut</key>
+    <integer>10</integer>
+    <key>AbandonProcessGroup</key>
+    <false/>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>ResidentSetSize</key>
+        <integer>1073741824</integer>
+    </dict>
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>ResidentSetSize</key>
+        <integer>1073741824</integer>
+    </dict>
 </dict>
 </plist>

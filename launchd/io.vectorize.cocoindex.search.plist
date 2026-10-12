@@ -6,14 +6,20 @@
     <string>io.vectorize.cocoindex.search</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__HOME__/.engram/venv/bin/engram-search-kubernaut</string>
+        <string>__HOME__/.engram/venv/bin/engram-search-configured</string>
+        <string>--project</string>
+        <string>kubernaut</string>
+        <string>--config</string>
+        <string>__HOME__/.engram/projects.toml</string>
+        <string>--transport</string>
+        <string>streamable-http</string>
         <string>--port</string>
-        <string>8889</string>
+        <string>8890</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>COCOINDEX_PG_URL</key>
-        <string>postgresql://hindsight:hindsight@localhost:5432/hindsight</string>
+        <!-- Project paths and database settings are loaded from
+             __HOME__/.engram/projects.toml. -->
         <key>PATH</key>
         <string>__HOME__/.engram/venv/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
         <key>HOME</key>

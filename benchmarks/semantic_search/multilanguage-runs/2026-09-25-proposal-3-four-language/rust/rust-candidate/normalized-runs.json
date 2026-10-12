@@ -1,0 +1,447 @@
+{
+  "schema_version": 1,
+  "suite_id": "synthetic-rust-workflow-discovery",
+  "fixture_id": "rust-workflow-discovery-v1",
+  "source": {
+    "repository": "synthetic/rust-workflow-discovery",
+    "revision": "fixture-v1",
+    "root": ".",
+    "include": [
+      "**/*.rs"
+    ],
+    "exclude": [
+      "**/*_test.rs"
+    ],
+    "snapshot_sha256": "eb8b41c271aa13160a1ba7ce63af7c8ea35461f3f1bfa8248a3845d19d44c98a",
+    "files": 14,
+    "bytes": 8073
+  },
+  "result_limit": 10,
+  "runs": [
+    {
+      "backend": "rust-candidate",
+      "queries": [
+        {
+          "id": "record-discovered-membership",
+          "results": [
+            {
+              "unit_id": "src/tools/workflows.rs::list_workflows",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::record_discovered_workflows",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "src/discovery/catalog.rs::WorkflowCatalog",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "src/discovery/catalog.rs::WorkflowCatalog.list_workflows",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "src/discovery/catalog.rs::WorkflowCatalog.new",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "src/discovery/catalog.rs::WorkflowCatalog.list_actions",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "src/discovery/catalog.rs::WorkflowCatalog.get_workflow",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::handle_select_workflow",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "src/discovery/state.rs::WorkflowState",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "src/discovery/state.rs::WorkflowState.add",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "src/discovery/state.rs::WorkflowState.contains",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::authorize_selection_driver",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "src/selection/retry.rs::self_correct_selection",
+              "backend_rank": 9
+            }
+          ]
+        },
+        {
+          "id": "reject-undiscovered-workflow",
+          "results": [
+            {
+              "unit_id": "src/tools/workflows.rs::list_workflows",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::is_workflow_in_discovery_result",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::handle_select_workflow",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::authorize_selection_driver",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "src/discovery/filters.rs::apply_label_filters",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "src/execution/runner.rs::validate_workflow_parameters",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "src/selection/retry.rs::self_correct_selection",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::apply_selected_workflow",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "src/lib.rs::module-declarations",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "src/selection/validator.rs::WorkflowValidator",
+              "backend_rank": 10
+            },
+            {
+              "unit_id": "src/selection/validator.rs::WorkflowValidator.is_allowed",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "forward-labels-to-discovery",
+          "results": [
+            {
+              "unit_id": "src/discovery/catalog.rs::WorkflowCatalog",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "src/discovery/catalog.rs::WorkflowCatalog.list_actions",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "src/discovery/filters.rs::apply_label_filters",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "src/discovery/catalog.rs::WorkflowCatalog.new",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "src/discovery/catalog.rs::WorkflowCatalog.list_workflows",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "src/discovery/catalog.rs::WorkflowCatalog.get_workflow",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::is_workflow_in_discovery_result",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "src/discovery/filters.rs::filters_from_signal",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "src/discovery/filters.rs::Signal",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "src/lib.rs::module-declarations",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::authorize_selection_driver",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "src/selection/validator.rs::WorkflowValidator",
+              "backend_rank": 10
+            },
+            {
+              "unit_id": "src/selection/validator.rs::WorkflowValidator.is_allowed",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "preserve-membership-on-retry",
+          "results": [
+            {
+              "unit_id": "src/tools/workflows.rs::record_discovered_workflows",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::handle_select_workflow",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::apply_selected_workflow",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "src/discovery/state.rs::WorkflowState",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "src/discovery/state.rs::WorkflowState.contains",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::list_workflows",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "src/selection/retry.rs::self_correct_selection",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::lookup_discovered_parameters",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "src/discovery/catalog.rs::WorkflowCatalog",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "src/discovery/catalog.rs::WorkflowCatalog.get_workflow",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::is_workflow_in_discovery_result",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "src/discovery/catalog.rs::WorkflowCatalog.list_actions",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "interactive-selection-guard",
+          "results": [
+            {
+              "unit_id": "src/tools/workflows.rs::authorize_selection_driver",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::is_workflow_in_discovery_result",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "src/selection/retry.rs::self_correct_selection",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::handle_select_workflow",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "src/lib.rs::module-declarations",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "src/discovery/state.rs::state_from_context",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::lookup_discovered_parameters",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::apply_selected_workflow",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "src/selection/retry.rs::select_with_retry",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "validate-workflow-parameters",
+          "results": [
+            {
+              "unit_id": "src/tools/workflows.rs::handle_select_workflow",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "src/selection/retry.rs::self_correct_selection",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "src/lib.rs::module-declarations",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::apply_selected_workflow",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "src/execution/runner.rs::validate_workflow_parameters",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::lookup_discovered_parameters",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "src/discovery/catalog.rs::Workflow",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "src/discovery/catalog.rs::WorkflowCatalog",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "src/discovery/catalog.rs::WorkflowCatalog.get_workflow",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::WorkflowResult",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "src/selection/validator.rs::WorkflowValidator",
+              "backend_rank": 10
+            },
+            {
+              "unit_id": "src/selection/validator.rs::WorkflowValidator.validate",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "empty-discovery-fails-closed",
+          "results": [
+            {
+              "unit_id": "src/tools/workflows.rs::authorize_selection_driver",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::is_workflow_in_discovery_result",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::handle_select_workflow",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "src/discovery/state.rs::WorkflowState",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "src/discovery/state.rs::WorkflowState.add",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "src/discovery/state.rs::WorkflowState.contains",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "src/selection/retry.rs::self_correct_selection",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "src/lib.rs::module-declarations",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "src/selection/validator.rs::WorkflowValidator",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "src/selection/validator.rs::WorkflowValidator.is_allowed",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "src/selection/validator.rs::WorkflowValidator.validate",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::record_discovered_workflows",
+              "backend_rank": 10
+            }
+          ]
+        },
+        {
+          "id": "copy-selected-workflow-details",
+          "results": [
+            {
+              "unit_id": "src/tools/workflows.rs::handle_select_workflow",
+              "backend_rank": 1
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::apply_selected_workflow",
+              "backend_rank": 2
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::is_workflow_in_discovery_result",
+              "backend_rank": 3
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::authorize_selection_driver",
+              "backend_rank": 4
+            },
+            {
+              "unit_id": "src/discovery/catalog.rs::WorkflowCatalog",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "src/discovery/catalog.rs::WorkflowCatalog.new",
+              "backend_rank": 5
+            },
+            {
+              "unit_id": "src/tools/workflows.rs::lookup_discovered_parameters",
+              "backend_rank": 6
+            },
+            {
+              "unit_id": "src/selection/retry.rs::self_correct_selection",
+              "backend_rank": 7
+            },
+            {
+              "unit_id": "src/execution/runner.rs::validate_workflow_parameters",
+              "backend_rank": 8
+            },
+            {
+              "unit_id": "src/selection/validator.rs::WorkflowValidator",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "src/selection/validator.rs::WorkflowValidator.validate",
+              "backend_rank": 9
+            },
+            {
+              "unit_id": "src/discovery/state.rs::WorkflowState",
+              "backend_rank": 10
+            },
+            {
+              "unit_id": "src/discovery/state.rs::WorkflowState.add",
+              "backend_rank": 10
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -27,6 +27,10 @@ Load the plugin globally from `opencode.jsonc` or configure it per repository.
 The global configuration is preferred when OpenCode and OpenChamber share one
 host. Native V2 form:
 
+Keep the deployment-specific gateway, repository, branch, and worktree policy
+in `~/.engram/opencode.json`; the inline `options` object below is useful for a
+temporary override or an isolated test.
+
 ```json
 {
   "plugins": [
@@ -65,8 +69,10 @@ host. Native V2 form:
 
 `oauth: false` is required: V2 attempts OAuth discovery on remote servers by
 default, and the gateway is a plain-LAN endpoint with no OAuth issuer. The
-plugin's generated fallback entry sets this automatically, but an explicit
-config entry must include it.
+plugin's generated fallback entry sets this automatically when
+`~/.engram/opencode.json` provides `gatewayUrl`; without that deployment value,
+the plugin keeps its behavioral hooks but does not invent an MCP endpoint. An
+explicit config entry must include `oauth: false`.
 
 For a standalone repository whose directory name matches a registered gateway
 route, the plugin can be used with zero repository mappings. Keep the explicit
@@ -88,6 +94,11 @@ directory, or the route differs from the directory name:
   }
 }
 ```
+
+The global plugin does not generate an MCP route for an unconfigured non-Git
+root such as a home or chat directory. Add a `repositories.directories` mapping
+when a non-Git workspace is intentionally an Engram project; this prevents
+ordinary OpenChamber storage roots from becoming guaranteed gateway 404s.
 
 The direct `mcp.servers.engram` entry is the route authority. The plugin's
 generated entry is only a fallback:
@@ -111,11 +122,101 @@ Users do not register Hindsight, CocoIndex, or Serena separately. Do not add a
 second gateway entry through OpenChamber's Settings -> MCP; OpenChamber should
 use the OpenCode server's resolved configuration.
 
-Managed zvec-grep searches use `autoUpdate: true` with
-`freshness: "wait_for_fresh"`. Each query refreshes only its requested
-workspace and waits for indexing to finish before returning results; Engram
-does not continuously refresh unused repositories. Direct zvec-grep clients
-that bypass the gateway retain zvec-grep's eventual freshness behavior.
+### Configured worktree indexes
+
+The plugin reads deployment-local policy from `~/.engram/opencode.json`. No
+project receives automatic indexing implicitly; list each route explicitly:
+
+```json
+{
+  "worktreeIndex": {
+    "projects": ["<project-route>"],
+    "binary": "~/bin/zg",
+    "embedding": "local/potion-code-16m-v2",
+    "jiebaDictionary": "/path/to/zvec-grep/node_modules/@zvec/bindings-darwin-arm64/jieba_dict",
+    "gateSessions": true
+  }
+}
+```
+
+For every configured route, the plugin watches OpenCode's
+`worktree.updated` events and runs `zg --index` for each sibling worktree that
+does not have a usable local index. It also reconciles the worktree inventory
+when the plugin starts, so a worktree created while the event stream was
+disconnected is not missed. The canonical checkout is left unchanged. Each
+sibling worktree gets its own `.zvec-grep` index; the local embedding setting
+keeps source code on the host.
+
+For configured routes, every zvec workspace-read tool also performs a
+synchronous readiness check for its requested absolute `root` immediately
+before the MCP call. This closes the startup race for a newly-created
+worktree and covers OpenChamber aggregate worktree directories that are not
+present in the project inventory. The explicit index tool is not intercepted;
+routes without `worktreeIndex` configuration remain unchanged.
+
+The managed zvec search route also requests `freshness: "wait_for_fresh"` with
+`autoUpdate: true`. A search therefore refreshes only its requested workspace
+and waits for the pending index work to finish before returning results; Engram
+does not keep every managed repository continuously fresh. Direct zvec-grep
+clients that bypass the Engram gateway retain zvec-grep's normal eventual
+freshness default.
+
+The background inventory pass leaves the canonical checkout unchanged; a
+gated session may initialize or refresh its current root synchronously when
+that root is the canonical checkout.
+
+When `gateSessions` is explicitly true, the plugin also installs a V2
+prompt-admission gate. The first prompt for each session waits for the `engram`
+MCP server to report `connected`, then waits for `zg --index` and its
+provenance sidecar to finish for the current checkout. A failed MCP connection
+or index operation rejects prompt admission with an actionable error instead
+of allowing the agent to work against an unindexed tree. Concurrent prompts
+share the same readiness operation. This is intentionally a prompt hook rather
+than a model-context hook: the prompt is not admitted until the prerequisite
+is complete.
+
+Session gating is opt-in. Listing a route in `projects` continues to enable
+background worktree indexing, but does not make an optional Engram or zvec-grep
+failure block model requests.
+
+ZG's manifest does not record Git branch or commit provenance. After a
+successful setup, the plugin therefore writes an Engram-owned
+`.zvec-grep/engram-git-provenance.json` sidecar. A missing sidecar, a changed
+branch/commit, or a provenance record for another root invokes
+`zg --index <worktree> --rebuild` before the worktree is considered ready.
+Index operations are serialized and a checkout that changes during a rebuild
+gets a follow-up rebuild rather than being marked fresh with the old revision.
+
+The default executable is `~/bin/zg` when present, otherwise `zg` from `PATH`.
+Set `binary` or `embedding` in the deployment-local policy when needed. An
+explicit OpenCode plugin option can temporarily override the file for testing,
+but persistent identity and indexing configuration belongs under `~/.engram/`:
+
+Some host builds of `zg` also require the Jieba dictionary directory for their
+FTS tokenizer. Set `jiebaDictionary` to the installed `jieba_dict` directory
+when `zg --index` reports `JiebaTokenizer: jieba_dict_dir not configured`; the
+plugin passes it only to the indexing child as `ZVEC_JIEBA_DICT_DIR`.
+
+```jsonc
+{
+  "plugins": [{
+    "package": "/path/to/engram/opencode-plugin",
+    "options": {
+      "worktreeIndex": {
+        "projects": ["<project-route>"],
+        "binary": "/path/to/zg",
+        "embedding": "local/potion-code-16m-v2"
+      }
+    }
+  }]
+}
+```
+
+OpenChamber-created worktrees are covered when OpenChamber delegates worktree
+operations to the OpenCode server. A client that creates Git worktrees outside
+OpenCode's worktree API does not emit this event; the next session prompt still
+performs the synchronous current-root readiness check, but an external
+Git-level hook is needed if indexing must begin before a session exists.
 
 ## Project Identity
 

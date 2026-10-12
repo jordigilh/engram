@@ -67,9 +67,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from classify import check_contradiction  # noqa: E402
 from hindsight_client import recall  # noqa: E402
 import pending_queue  # noqa: E402
+from project_config import DEFAULT_HINDSIGHT_URL, load_default_settings  # noqa: E402
 
-HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8888")
-LOG_DIR = Path.home() / ".engram" / "logs"
+DEPLOYMENT_SETTINGS = load_default_settings()
+HINDSIGHT_URL = DEPLOYMENT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+assert HINDSIGHT_URL is not None
+LOG_DIR = DEPLOYMENT_SETTINGS.path("log_dir", "~/.engram/logs")
+assert LOG_DIR is not None
 AUTO_RESOLVED_LOG_PATH = LOG_DIR / "contradictions-auto-resolved.jsonl"
 
 DEFAULT_AUTO_THRESHOLD = 0.9

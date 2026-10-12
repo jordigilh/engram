@@ -10,8 +10,9 @@ session:
    `reset`/`rebase` that rewrites files on disk without restarting these
    processes leaves them serving stale symbol/reference data.
 
-See `docs/NEW_PROJECT_SETUP.md` step 14 for the full installation walk-through
-and step 8a for the shared-daemon "family" concept these hooks assume.
+See [`docs/NEW_PROJECT_SETUP.md`](../docs/NEW_PROJECT_SETUP.md#optional-integrations)
+for the onboarding summary and the shared-daemon "family" concept these hooks
+assume.
 
 ## Which variant do I need?
 
@@ -91,5 +92,5 @@ daemon silently serving stale data) — see `docs/findings/2026-08.md`'s
 - The family variant's single-shared-daemon model has an accepted
   known limitation if two agents on two different family repos both need
   "active project" state concurrently — see the family template header and
-  `docs/NEW_PROJECT_SETUP.md` step 8a for the multiplex-daemon workaround
+  `docs/NEW_PROJECT_SETUP.md#optional-integrations` for the multiplex-daemon workaround
   (`engram-serena-multiplex`) if you need real per-repo isolation instead.

@@ -1,0 +1,1760 @@
+{
+  "schema_version": 1,
+  "suite_id": "synthetic-go-workflow-discovery",
+  "fixture_id": "go-workflow-discovery-v1",
+  "source": {
+    "repository": "synthetic/go-workflow-discovery",
+    "revision": "fixture-v1",
+    "root": ".",
+    "include": [
+      "**/*.go"
+    ],
+    "exclude": [
+      "**/*_test.go"
+    ],
+    "snapshot_sha256": "94183663d9e5f81b753dde7c460428c2414c46867b936b5cc42f9827dab0827f",
+    "files": 10,
+    "bytes": 7872,
+    "fixture": "go-workflow-discovery-v1"
+  },
+  "result_limit": 10,
+  "backends": {
+    "cocoindex": {
+      "table": "synthetic_go_workflow_discovery_v1",
+      "repo_tag": "synthetic-go-workflow-discovery-v1",
+      "queries": [
+        {
+          "id": "record-discovered-membership",
+          "query": "Where are workflow IDs returned by list_workflows recorded for later validation?",
+          "results": [
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go",
+              "chunk_index": 0,
+              "code": "package discovery\n\nimport (\n\t\"context\"\n\t\"sync\"\n)\n\n// WorkflowState records workflow IDs returned by list_workflows for one\n// selection context. Retries and later discovery calls share this object.\ntype WorkflowState struct {\n\tmu  sync.RWMutex\n\tids map[string]struct{}\n}\n\nfunc NewWorkflowState() *WorkflowState {\n\treturn &WorkflowState{ids: make(map[string]struct{})}\n}\n\n// Add records every non-empty workflow ID returned by discovery.\nfunc (s *WorkflowState) Add(workflowIDs ...string) {\n\tif s == nil {\n\t\treturn\n\t}\n\ts.mu.Lock()\n\tdefer s.mu.Unlock()\n\tif s.ids == nil {\n\t\ts.ids = make(map[string]struct{})\n\t}\n\tfor _, id := range workflowIDs {\n\t\tif id != \"\" {\n\t\t\ts.ids[id] = struct{}{}\n\t\t}\n\t}\n}\n\nfunc (s *WorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.ids[workflowID]\n\treturn ok\n}",
+              "dense_score": 0.5121,
+              "rrf_score": 0.016393,
+              "score": 0.016393
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/list_workflows.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/list_workflows.go",
+              "chunk_index": 0,
+              "code": "package tools\n\nimport (\n\t\"context\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\nfunc ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {\n\tworkflows := catalog.ListWorkflows(ctx, filters)\n\tids := make([]string, 0, len(workflows))\n\tfor _, workflow := range workflows {\n\t\tids = append(ids, workflow.ID)\n\t}\n\tRecordDiscovered(state, ids)\n\treturn workflows\n}\n\nfunc RecordDiscovered(state *discovery.WorkflowState, workflowIDs []string) {\n\tif state != nil {\n\t\tstate.Add(workflowIDs...)\n\t}\n}",
+              "dense_score": 0.4822,
+              "rrf_score": 0.016129,
+              "score": 0.016129
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go",
+              "chunk_index": 1,
+              "code": "func (v *Validator) SetWorkflowState(state *discovery.WorkflowState) {\n\tv.state = state\n}\n\n// IsAllowed requires catalog membership and, when state is attached, current\n// list_workflows membership.\nfunc (v *Validator) IsAllowed(workflowID string) bool {\n\tif _, ok := v.allowed[workflowID]; !ok {\n\t\treturn false\n\t}\n\treturn v.state == nil || v.state.Contains(workflowID)\n}\n\nfunc (v *Validator) Validate(workflowID string) error {\n\tif v.IsAllowed(workflowID) {\n\t\treturn nil\n\t}\n\treturn &ValidationError{WorkflowID: workflowID, Reason: \"not in current discovery result\"}\n}",
+              "dense_score": 0.4223,
+              "rrf_score": 0.015873,
+              "score": 0.015873
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/api/types.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/api/types.go",
+              "chunk_index": 0,
+              "code": "package api\n\ntype WorkflowSummary struct {\n\tID          string\n\tDisplayName string\n}",
+              "dense_score": 0.4155,
+              "rrf_score": 0.015625,
+              "score": 0.015625
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/catalog.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/catalog.go",
+              "chunk_index": 0,
+              "code": "package discovery\n\nimport \"context\"\n\ntype Workflow struct {\n\tID         string\n\tParameters map[string]string\n\tLabels     map[string]string\n}\n\ntype WorkflowCatalog struct {\n\tworkflows map[string]Workflow\n}\n\nfunc (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {\n\t_ = ctx\n\t_ = filters\n\tresult := make([]Workflow, 0, len(c.workflows))\n\tfor _, workflow := range c.workflows {\n\t\tresult = append(result, workflow)\n\t}\n\treturn result\n}\n\n// ListActions applies signal-derived filters before exposing available actions.\nfunc (c *WorkflowCatalog) ListActions(ctx context.Context, filters DiscoveryFilters) []Workflow {\n\treturn ApplyLabelFilters(ctx, c.ListWorkflows(ctx, filters), filters)\n}\n\nfunc (c *WorkflowCatalog) GetWorkflow(ctx context.Context, workflowID string) (Workflow, bool) {\n\t_ = ctx\n\tworkflow, ok := c.workflows[workflowID]\n\treturn workflow, ok\n}",
+              "dense_score": 0.3982,
+              "rrf_score": 0.015385,
+              "score": 0.015385
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go",
+              "chunk_index": 1,
+              "code": "func HandleSelectWorkflow(ctx context.Context, workflowID string, result DiscoveryResult, catalog *discovery.WorkflowCatalog) (WorkflowResult, error) {\n\tif err := authorizeSelectionDriver(workflowID, result); err != nil {\n\t\treturn WorkflowResult{}, err\n\t}\n\tworkflow, ok := catalog.GetWorkflow(ctx, workflowID)\n\tif !ok {\n\t\treturn WorkflowResult{}, fmt.Errorf(\"workflow %q not found\", workflowID)\n\t}\n\treturn applySelectedWorkflow(workflow, result), nil\n}\n\ntype WorkflowResult struct {\n\tID         string\n\tParameters map[string]string\n}\n\nfunc applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {\n\treturn WorkflowResult{ID: workflow.ID, Parameters: lookupDiscoveredParameters(workflow.ID, result)}\n}\n\nfunc lookupDiscoveredParameters(workflowID string, result DiscoveryResult) map[string]string {\n\tif workflowID == result.Recommended {\n\t\treturn map[string]string{\"source\": \"recommended\"}\n\t}\n\treturn map[string]string{\"source\": \"alternative\"}\n}",
+              "dense_score": 0.3976,
+              "rrf_score": 0.015152,
+              "score": 0.015152
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go",
+              "chunk_index": 0,
+              "code": "package tools\n\nimport (\n\t\"context\"\n\t\"fmt\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\ntype DiscoveryResult struct {\n\tRecommended string\n\tAlternatives []string\n}\n\nfunc isWorkflowInDiscoveryResult(workflowID string, result DiscoveryResult) bool {\n\tif result.Recommended == workflowID {\n\t\treturn true\n\t}\n\tfor _, alternative := range result.Alternatives {\n\t\tif alternative == workflowID {\n\t\t\treturn true\n\t\t}\n\t}\n\treturn false\n}\n\nfunc authorizeSelectionDriver(workflowID string, result DiscoveryResult) error {\n\tif !isWorkflowInDiscoveryResult(workflowID, result) {\n\t\treturn fmt.Errorf(\"workflow %q was not discovered\", workflowID)\n\t}\n\treturn nil\n}",
+              "dense_score": 0.3906,
+              "rrf_score": 0.014925,
+              "score": 0.014925
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go",
+              "chunk_index": 1,
+              "code": "func (s *WorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.ids[workflowID]\n\treturn ok\n}\n\ntype workflowStateKey struct{}\n\nfunc WithWorkflowState(ctx context.Context, state *WorkflowState) context.Context {\n\treturn context.WithValue(ctx, workflowStateKey{}, state)\n}\n\nfunc WorkflowStateFromContext(ctx context.Context) (*WorkflowState, bool) {\n\tstate, ok := ctx.Value(workflowStateKey{}).(*WorkflowState)\n\treturn state, ok && state != nil\n}",
+              "dense_score": 0.3875,
+              "rrf_score": 0.014706,
+              "score": 0.014706
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go",
+              "chunk_index": 0,
+              "code": "package selection\n\nimport (\n\t\"fmt\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\ntype ValidationError struct {\n\tWorkflowID string\n\tReason     string\n}\n\nfunc (e *ValidationError) Error() string {\n\treturn fmt.Sprintf(\"workflow %q rejected: %s\", e.WorkflowID, e.Reason)\n}\n\ntype Validator struct {\n\tallowed map[string]struct{}\n\tstate   *discovery.WorkflowState\n}\n\nfunc NewValidator(allowedWorkflowIDs []string) *Validator {\n\tallowed := make(map[string]struct{}, len(allowedWorkflowIDs))\n\tfor _, id := range allowedWorkflowIDs {\n\t\tallowed[id] = struct{}{}\n\t}\n\treturn &Validator{allowed: allowed}\n}\n\nfunc (v *Validator) SetWorkflowState(state *discovery.WorkflowState) {\n\tv.state = state\n}\n\n// IsAllowed requires catalog membership and, when state is attached, current",
+              "dense_score": 0.3733,
+              "rrf_score": 0.014493,
+              "score": 0.014493
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/retry.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/retry.go",
+              "chunk_index": 0,
+              "code": "package selection\n\nimport (\n\t\"context\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\nfunc SelfCorrectSelection(ctx context.Context, validator *Validator, candidate string) error {\n\tstate, ok := discovery.WorkflowStateFromContext(ctx)\n\tif ok {\n\t\tvalidator.SetWorkflowState(state)\n\t}\n\treturn validator.Validate(candidate)\n}\n\nfunc SelectWithRetry(ctx context.Context, validator *Validator, candidate string) error {\n\tif err := SelfCorrectSelection(ctx, validator, candidate); err != nil {\n\t\treturn retrySelection(ctx, validator, candidate)\n\t}\n\treturn nil\n}\n\nfunc retrySelection(ctx context.Context, validator *Validator, candidate string) error {\n\treturn SelfCorrectSelection(ctx, validator, candidate)\n}",
+              "dense_score": 0.3651,
+              "rrf_score": 0.014286,
+              "score": 0.014286
+            }
+          ]
+        },
+        {
+          "id": "reject-undiscovered-workflow",
+          "query": "How is a catalog-valid workflow rejected when it was not returned by workflow discovery?",
+          "results": [
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go",
+              "chunk_index": 1,
+              "code": "func (v *Validator) SetWorkflowState(state *discovery.WorkflowState) {\n\tv.state = state\n}\n\n// IsAllowed requires catalog membership and, when state is attached, current\n// list_workflows membership.\nfunc (v *Validator) IsAllowed(workflowID string) bool {\n\tif _, ok := v.allowed[workflowID]; !ok {\n\t\treturn false\n\t}\n\treturn v.state == nil || v.state.Contains(workflowID)\n}\n\nfunc (v *Validator) Validate(workflowID string) error {\n\tif v.IsAllowed(workflowID) {\n\t\treturn nil\n\t}\n\treturn &ValidationError{WorkflowID: workflowID, Reason: \"not in current discovery result\"}\n}",
+              "dense_score": 0.5933,
+              "rrf_score": 0.016393,
+              "score": 0.016393
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go",
+              "chunk_index": 0,
+              "code": "package selection\n\nimport (\n\t\"fmt\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\ntype ValidationError struct {\n\tWorkflowID string\n\tReason     string\n}\n\nfunc (e *ValidationError) Error() string {\n\treturn fmt.Sprintf(\"workflow %q rejected: %s\", e.WorkflowID, e.Reason)\n}\n\ntype Validator struct {\n\tallowed map[string]struct{}\n\tstate   *discovery.WorkflowState\n}\n\nfunc NewValidator(allowedWorkflowIDs []string) *Validator {\n\tallowed := make(map[string]struct{}, len(allowedWorkflowIDs))\n\tfor _, id := range allowedWorkflowIDs {\n\t\tallowed[id] = struct{}{}\n\t}\n\treturn &Validator{allowed: allowed}\n}\n\nfunc (v *Validator) SetWorkflowState(state *discovery.WorkflowState) {\n\tv.state = state\n}\n\n// IsAllowed requires catalog membership and, when state is attached, current",
+              "dense_score": 0.5563,
+              "rrf_score": 0.016129,
+              "score": 0.016129
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/list_workflows.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/list_workflows.go",
+              "chunk_index": 0,
+              "code": "package tools\n\nimport (\n\t\"context\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\nfunc ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {\n\tworkflows := catalog.ListWorkflows(ctx, filters)\n\tids := make([]string, 0, len(workflows))\n\tfor _, workflow := range workflows {\n\t\tids = append(ids, workflow.ID)\n\t}\n\tRecordDiscovered(state, ids)\n\treturn workflows\n}\n\nfunc RecordDiscovered(state *discovery.WorkflowState, workflowIDs []string) {\n\tif state != nil {\n\t\tstate.Add(workflowIDs...)\n\t}\n}",
+              "dense_score": 0.5345,
+              "rrf_score": 0.015873,
+              "score": 0.015873
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go",
+              "chunk_index": 0,
+              "code": "package tools\n\nimport (\n\t\"context\"\n\t\"fmt\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\ntype DiscoveryResult struct {\n\tRecommended string\n\tAlternatives []string\n}\n\nfunc isWorkflowInDiscoveryResult(workflowID string, result DiscoveryResult) bool {\n\tif result.Recommended == workflowID {\n\t\treturn true\n\t}\n\tfor _, alternative := range result.Alternatives {\n\t\tif alternative == workflowID {\n\t\t\treturn true\n\t\t}\n\t}\n\treturn false\n}\n\nfunc authorizeSelectionDriver(workflowID string, result DiscoveryResult) error {\n\tif !isWorkflowInDiscoveryResult(workflowID, result) {\n\t\treturn fmt.Errorf(\"workflow %q was not discovered\", workflowID)\n\t}\n\treturn nil\n}",
+              "dense_score": 0.5225,
+              "rrf_score": 0.015625,
+              "score": 0.015625
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go",
+              "chunk_index": 1,
+              "code": "func HandleSelectWorkflow(ctx context.Context, workflowID string, result DiscoveryResult, catalog *discovery.WorkflowCatalog) (WorkflowResult, error) {\n\tif err := authorizeSelectionDriver(workflowID, result); err != nil {\n\t\treturn WorkflowResult{}, err\n\t}\n\tworkflow, ok := catalog.GetWorkflow(ctx, workflowID)\n\tif !ok {\n\t\treturn WorkflowResult{}, fmt.Errorf(\"workflow %q not found\", workflowID)\n\t}\n\treturn applySelectedWorkflow(workflow, result), nil\n}\n\ntype WorkflowResult struct {\n\tID         string\n\tParameters map[string]string\n}\n\nfunc applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {\n\treturn WorkflowResult{ID: workflow.ID, Parameters: lookupDiscoveredParameters(workflow.ID, result)}\n}\n\nfunc lookupDiscoveredParameters(workflowID string, result DiscoveryResult) map[string]string {\n\tif workflowID == result.Recommended {\n\t\treturn map[string]string{\"source\": \"recommended\"}\n\t}\n\treturn map[string]string{\"source\": \"alternative\"}\n}",
+              "dense_score": 0.4971,
+              "rrf_score": 0.015385,
+              "score": 0.015385
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/retry.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/retry.go",
+              "chunk_index": 0,
+              "code": "package selection\n\nimport (\n\t\"context\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\nfunc SelfCorrectSelection(ctx context.Context, validator *Validator, candidate string) error {\n\tstate, ok := discovery.WorkflowStateFromContext(ctx)\n\tif ok {\n\t\tvalidator.SetWorkflowState(state)\n\t}\n\treturn validator.Validate(candidate)\n}\n\nfunc SelectWithRetry(ctx context.Context, validator *Validator, candidate string) error {\n\tif err := SelfCorrectSelection(ctx, validator, candidate); err != nil {\n\t\treturn retrySelection(ctx, validator, candidate)\n\t}\n\treturn nil\n}\n\nfunc retrySelection(ctx context.Context, validator *Validator, candidate string) error {\n\treturn SelfCorrectSelection(ctx, validator, candidate)\n}",
+              "dense_score": 0.4716,
+              "rrf_score": 0.015152,
+              "score": 0.015152
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go",
+              "chunk_index": 0,
+              "code": "package discovery\n\nimport (\n\t\"context\"\n\t\"sync\"\n)\n\n// WorkflowState records workflow IDs returned by list_workflows for one\n// selection context. Retries and later discovery calls share this object.\ntype WorkflowState struct {\n\tmu  sync.RWMutex\n\tids map[string]struct{}\n}\n\nfunc NewWorkflowState() *WorkflowState {\n\treturn &WorkflowState{ids: make(map[string]struct{})}\n}\n\n// Add records every non-empty workflow ID returned by discovery.\nfunc (s *WorkflowState) Add(workflowIDs ...string) {\n\tif s == nil {\n\t\treturn\n\t}\n\ts.mu.Lock()\n\tdefer s.mu.Unlock()\n\tif s.ids == nil {\n\t\ts.ids = make(map[string]struct{})\n\t}\n\tfor _, id := range workflowIDs {\n\t\tif id != \"\" {\n\t\t\ts.ids[id] = struct{}{}\n\t\t}\n\t}\n}\n\nfunc (s *WorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.ids[workflowID]\n\treturn ok\n}",
+              "dense_score": 0.462,
+              "rrf_score": 0.014925,
+              "score": 0.014925
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/catalog.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/catalog.go",
+              "chunk_index": 0,
+              "code": "package discovery\n\nimport \"context\"\n\ntype Workflow struct {\n\tID         string\n\tParameters map[string]string\n\tLabels     map[string]string\n}\n\ntype WorkflowCatalog struct {\n\tworkflows map[string]Workflow\n}\n\nfunc (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {\n\t_ = ctx\n\t_ = filters\n\tresult := make([]Workflow, 0, len(c.workflows))\n\tfor _, workflow := range c.workflows {\n\t\tresult = append(result, workflow)\n\t}\n\treturn result\n}\n\n// ListActions applies signal-derived filters before exposing available actions.\nfunc (c *WorkflowCatalog) ListActions(ctx context.Context, filters DiscoveryFilters) []Workflow {\n\treturn ApplyLabelFilters(ctx, c.ListWorkflows(ctx, filters), filters)\n}\n\nfunc (c *WorkflowCatalog) GetWorkflow(ctx context.Context, workflowID string) (Workflow, bool) {\n\t_ = ctx\n\tworkflow, ok := c.workflows[workflowID]\n\treturn workflow, ok\n}",
+              "dense_score": 0.4292,
+              "rrf_score": 0.014706,
+              "score": 0.014706
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go",
+              "chunk_index": 1,
+              "code": "func (s *WorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.ids[workflowID]\n\treturn ok\n}\n\ntype workflowStateKey struct{}\n\nfunc WithWorkflowState(ctx context.Context, state *WorkflowState) context.Context {\n\treturn context.WithValue(ctx, workflowStateKey{}, state)\n}\n\nfunc WorkflowStateFromContext(ctx context.Context) (*WorkflowState, bool) {\n\tstate, ok := ctx.Value(workflowStateKey{}).(*WorkflowState)\n\treturn state, ok && state != nil\n}",
+              "dense_score": 0.3764,
+              "rrf_score": 0.014493,
+              "score": 0.014493
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/execution/runner.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/execution/runner.go",
+              "chunk_index": 0,
+              "code": "package execution\n\nimport \"fmt\"\n\nfunc ValidateWorkflowParameters(required []string, provided map[string]string) error {\n\tfor _, name := range required {\n\t\tif provided[name] == \"\" {\n\t\t\treturn fmt.Errorf(\"missing workflow parameter %q\", name)\n\t\t}\n\t}\n\treturn nil\n}",
+              "dense_score": 0.3752,
+              "rrf_score": 0.014286,
+              "score": 0.014286
+            }
+          ]
+        },
+        {
+          "id": "forward-labels-to-discovery",
+          "query": "How are signal labels converted into filters before workflow discovery lists actions?",
+          "results": [
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/catalog.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/catalog.go",
+              "chunk_index": 0,
+              "code": "package discovery\n\nimport \"context\"\n\ntype Workflow struct {\n\tID         string\n\tParameters map[string]string\n\tLabels     map[string]string\n}\n\ntype WorkflowCatalog struct {\n\tworkflows map[string]Workflow\n}\n\nfunc (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {\n\t_ = ctx\n\t_ = filters\n\tresult := make([]Workflow, 0, len(c.workflows))\n\tfor _, workflow := range c.workflows {\n\t\tresult = append(result, workflow)\n\t}\n\treturn result\n}\n\n// ListActions applies signal-derived filters before exposing available actions.\nfunc (c *WorkflowCatalog) ListActions(ctx context.Context, filters DiscoveryFilters) []Workflow {\n\treturn ApplyLabelFilters(ctx, c.ListWorkflows(ctx, filters), filters)\n}\n\nfunc (c *WorkflowCatalog) GetWorkflow(ctx context.Context, workflowID string) (Workflow, bool) {\n\t_ = ctx\n\tworkflow, ok := c.workflows[workflowID]\n\treturn workflow, ok\n}",
+              "dense_score": 0.7383,
+              "rrf_score": 0.016393,
+              "score": 0.016393
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/filters.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/filters.go",
+              "chunk_index": 0,
+              "code": "package discovery\n\nimport \"context\"\n\ntype Signal struct {\n\tLabels map[string]string\n}\n\ntype DiscoveryFilters struct {\n\tComponent  string\n\tEnvironment string\n\tSeverity   string\n}\n\nfunc FiltersFromSignal(signal Signal) DiscoveryFilters {\n\treturn DiscoveryFilters{\n\t\tComponent:   signal.Labels[\"component\"],\n\t\tEnvironment: signal.Labels[\"environment\"],\n\t\tSeverity:    signal.Labels[\"severity\"],\n\t}\n}\n\nfunc ApplyLabelFilters(ctx context.Context, workflows []Workflow, filters DiscoveryFilters) []Workflow {\n\t_ = ctx\n\tfiltered := make([]Workflow, 0, len(workflows))\n\tfor _, workflow := range workflows {\n\t\tif filters.Component != \"\" && workflow.Labels[\"component\"] != filters.Component {\n\t\t\tcontinue\n\t\t}\n\t\tif filters.Environment != \"\" && workflow.Labels[\"environment\"] != filters.Environment {\n\t\t\tcontinue\n\t\t}\n\t\tif filters.Severity != \"\" && workflow.Labels[\"severity\"] != filters.Severity {\n\t\t\tcontinue\n\t\t}\n\t\tfiltered = append(filtered, workflow)\n\t}\n\treturn filtered\n}",
+              "dense_score": 0.6671,
+              "rrf_score": 0.016129,
+              "score": 0.016129
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/list_workflows.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/list_workflows.go",
+              "chunk_index": 0,
+              "code": "package tools\n\nimport (\n\t\"context\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\nfunc ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {\n\tworkflows := catalog.ListWorkflows(ctx, filters)\n\tids := make([]string, 0, len(workflows))\n\tfor _, workflow := range workflows {\n\t\tids = append(ids, workflow.ID)\n\t}\n\tRecordDiscovered(state, ids)\n\treturn workflows\n}\n\nfunc RecordDiscovered(state *discovery.WorkflowState, workflowIDs []string) {\n\tif state != nil {\n\t\tstate.Add(workflowIDs...)\n\t}\n}",
+              "dense_score": 0.5312,
+              "rrf_score": 0.015873,
+              "score": 0.015873
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go",
+              "chunk_index": 0,
+              "code": "package discovery\n\nimport (\n\t\"context\"\n\t\"sync\"\n)\n\n// WorkflowState records workflow IDs returned by list_workflows for one\n// selection context. Retries and later discovery calls share this object.\ntype WorkflowState struct {\n\tmu  sync.RWMutex\n\tids map[string]struct{}\n}\n\nfunc NewWorkflowState() *WorkflowState {\n\treturn &WorkflowState{ids: make(map[string]struct{})}\n}\n\n// Add records every non-empty workflow ID returned by discovery.\nfunc (s *WorkflowState) Add(workflowIDs ...string) {\n\tif s == nil {\n\t\treturn\n\t}\n\ts.mu.Lock()\n\tdefer s.mu.Unlock()\n\tif s.ids == nil {\n\t\ts.ids = make(map[string]struct{})\n\t}\n\tfor _, id := range workflowIDs {\n\t\tif id != \"\" {\n\t\t\ts.ids[id] = struct{}{}\n\t\t}\n\t}\n}\n\nfunc (s *WorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.ids[workflowID]\n\treturn ok\n}",
+              "dense_score": 0.441,
+              "rrf_score": 0.015625,
+              "score": 0.015625
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go",
+              "chunk_index": 1,
+              "code": "func HandleSelectWorkflow(ctx context.Context, workflowID string, result DiscoveryResult, catalog *discovery.WorkflowCatalog) (WorkflowResult, error) {\n\tif err := authorizeSelectionDriver(workflowID, result); err != nil {\n\t\treturn WorkflowResult{}, err\n\t}\n\tworkflow, ok := catalog.GetWorkflow(ctx, workflowID)\n\tif !ok {\n\t\treturn WorkflowResult{}, fmt.Errorf(\"workflow %q not found\", workflowID)\n\t}\n\treturn applySelectedWorkflow(workflow, result), nil\n}\n\ntype WorkflowResult struct {\n\tID         string\n\tParameters map[string]string\n}\n\nfunc applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {\n\treturn WorkflowResult{ID: workflow.ID, Parameters: lookupDiscoveredParameters(workflow.ID, result)}\n}\n\nfunc lookupDiscoveredParameters(workflowID string, result DiscoveryResult) map[string]string {\n\tif workflowID == result.Recommended {\n\t\treturn map[string]string{\"source\": \"recommended\"}\n\t}\n\treturn map[string]string{\"source\": \"alternative\"}\n}",
+              "dense_score": 0.3947,
+              "rrf_score": 0.015385,
+              "score": 0.015385
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go",
+              "chunk_index": 0,
+              "code": "package tools\n\nimport (\n\t\"context\"\n\t\"fmt\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\ntype DiscoveryResult struct {\n\tRecommended string\n\tAlternatives []string\n}\n\nfunc isWorkflowInDiscoveryResult(workflowID string, result DiscoveryResult) bool {\n\tif result.Recommended == workflowID {\n\t\treturn true\n\t}\n\tfor _, alternative := range result.Alternatives {\n\t\tif alternative == workflowID {\n\t\t\treturn true\n\t\t}\n\t}\n\treturn false\n}\n\nfunc authorizeSelectionDriver(workflowID string, result DiscoveryResult) error {\n\tif !isWorkflowInDiscoveryResult(workflowID, result) {\n\t\treturn fmt.Errorf(\"workflow %q was not discovered\", workflowID)\n\t}\n\treturn nil\n}",
+              "dense_score": 0.3944,
+              "rrf_score": 0.015152,
+              "score": 0.015152
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go",
+              "chunk_index": 0,
+              "code": "package selection\n\nimport (\n\t\"fmt\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\ntype ValidationError struct {\n\tWorkflowID string\n\tReason     string\n}\n\nfunc (e *ValidationError) Error() string {\n\treturn fmt.Sprintf(\"workflow %q rejected: %s\", e.WorkflowID, e.Reason)\n}\n\ntype Validator struct {\n\tallowed map[string]struct{}\n\tstate   *discovery.WorkflowState\n}\n\nfunc NewValidator(allowedWorkflowIDs []string) *Validator {\n\tallowed := make(map[string]struct{}, len(allowedWorkflowIDs))\n\tfor _, id := range allowedWorkflowIDs {\n\t\tallowed[id] = struct{}{}\n\t}\n\treturn &Validator{allowed: allowed}\n}\n\nfunc (v *Validator) SetWorkflowState(state *discovery.WorkflowState) {\n\tv.state = state\n}\n\n// IsAllowed requires catalog membership and, when state is attached, current",
+              "dense_score": 0.3781,
+              "rrf_score": 0.014925,
+              "score": 0.014925
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/retry.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/retry.go",
+              "chunk_index": 0,
+              "code": "package selection\n\nimport (\n\t\"context\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\nfunc SelfCorrectSelection(ctx context.Context, validator *Validator, candidate string) error {\n\tstate, ok := discovery.WorkflowStateFromContext(ctx)\n\tif ok {\n\t\tvalidator.SetWorkflowState(state)\n\t}\n\treturn validator.Validate(candidate)\n}\n\nfunc SelectWithRetry(ctx context.Context, validator *Validator, candidate string) error {\n\tif err := SelfCorrectSelection(ctx, validator, candidate); err != nil {\n\t\treturn retrySelection(ctx, validator, candidate)\n\t}\n\treturn nil\n}\n\nfunc retrySelection(ctx context.Context, validator *Validator, candidate string) error {\n\treturn SelfCorrectSelection(ctx, validator, candidate)\n}",
+              "dense_score": 0.3671,
+              "rrf_score": 0.014706,
+              "score": 0.014706
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go",
+              "chunk_index": 1,
+              "code": "func (v *Validator) SetWorkflowState(state *discovery.WorkflowState) {\n\tv.state = state\n}\n\n// IsAllowed requires catalog membership and, when state is attached, current\n// list_workflows membership.\nfunc (v *Validator) IsAllowed(workflowID string) bool {\n\tif _, ok := v.allowed[workflowID]; !ok {\n\t\treturn false\n\t}\n\treturn v.state == nil || v.state.Contains(workflowID)\n}\n\nfunc (v *Validator) Validate(workflowID string) error {\n\tif v.IsAllowed(workflowID) {\n\t\treturn nil\n\t}\n\treturn &ValidationError{WorkflowID: workflowID, Reason: \"not in current discovery result\"}\n}",
+              "dense_score": 0.3562,
+              "rrf_score": 0.014493,
+              "score": 0.014493
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/api/types.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/api/types.go",
+              "chunk_index": 0,
+              "code": "package api\n\ntype WorkflowSummary struct {\n\tID          string\n\tDisplayName string\n}",
+              "dense_score": 0.3218,
+              "rrf_score": 0.014286,
+              "score": 0.014286
+            }
+          ]
+        },
+        {
+          "id": "preserve-membership-on-retry",
+          "query": "How does discovered workflow membership survive self-correction retries?",
+          "results": [
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go",
+              "chunk_index": 1,
+              "code": "func (v *Validator) SetWorkflowState(state *discovery.WorkflowState) {\n\tv.state = state\n}\n\n// IsAllowed requires catalog membership and, when state is attached, current\n// list_workflows membership.\nfunc (v *Validator) IsAllowed(workflowID string) bool {\n\tif _, ok := v.allowed[workflowID]; !ok {\n\t\treturn false\n\t}\n\treturn v.state == nil || v.state.Contains(workflowID)\n}\n\nfunc (v *Validator) Validate(workflowID string) error {\n\tif v.IsAllowed(workflowID) {\n\t\treturn nil\n\t}\n\treturn &ValidationError{WorkflowID: workflowID, Reason: \"not in current discovery result\"}\n}",
+              "dense_score": 0.4488,
+              "rrf_score": 0.016393,
+              "score": 0.016393
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go",
+              "chunk_index": 0,
+              "code": "package discovery\n\nimport (\n\t\"context\"\n\t\"sync\"\n)\n\n// WorkflowState records workflow IDs returned by list_workflows for one\n// selection context. Retries and later discovery calls share this object.\ntype WorkflowState struct {\n\tmu  sync.RWMutex\n\tids map[string]struct{}\n}\n\nfunc NewWorkflowState() *WorkflowState {\n\treturn &WorkflowState{ids: make(map[string]struct{})}\n}\n\n// Add records every non-empty workflow ID returned by discovery.\nfunc (s *WorkflowState) Add(workflowIDs ...string) {\n\tif s == nil {\n\t\treturn\n\t}\n\ts.mu.Lock()\n\tdefer s.mu.Unlock()\n\tif s.ids == nil {\n\t\ts.ids = make(map[string]struct{})\n\t}\n\tfor _, id := range workflowIDs {\n\t\tif id != \"\" {\n\t\t\ts.ids[id] = struct{}{}\n\t\t}\n\t}\n}\n\nfunc (s *WorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.ids[workflowID]\n\treturn ok\n}",
+              "dense_score": 0.3857,
+              "rrf_score": 0.016129,
+              "score": 0.016129
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go",
+              "chunk_index": 0,
+              "code": "package tools\n\nimport (\n\t\"context\"\n\t\"fmt\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\ntype DiscoveryResult struct {\n\tRecommended string\n\tAlternatives []string\n}\n\nfunc isWorkflowInDiscoveryResult(workflowID string, result DiscoveryResult) bool {\n\tif result.Recommended == workflowID {\n\t\treturn true\n\t}\n\tfor _, alternative := range result.Alternatives {\n\t\tif alternative == workflowID {\n\t\t\treturn true\n\t\t}\n\t}\n\treturn false\n}\n\nfunc authorizeSelectionDriver(workflowID string, result DiscoveryResult) error {\n\tif !isWorkflowInDiscoveryResult(workflowID, result) {\n\t\treturn fmt.Errorf(\"workflow %q was not discovered\", workflowID)\n\t}\n\treturn nil\n}",
+              "dense_score": 0.3777,
+              "rrf_score": 0.015873,
+              "score": 0.015873
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/retry.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/retry.go",
+              "chunk_index": 0,
+              "code": "package selection\n\nimport (\n\t\"context\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\nfunc SelfCorrectSelection(ctx context.Context, validator *Validator, candidate string) error {\n\tstate, ok := discovery.WorkflowStateFromContext(ctx)\n\tif ok {\n\t\tvalidator.SetWorkflowState(state)\n\t}\n\treturn validator.Validate(candidate)\n}\n\nfunc SelectWithRetry(ctx context.Context, validator *Validator, candidate string) error {\n\tif err := SelfCorrectSelection(ctx, validator, candidate); err != nil {\n\t\treturn retrySelection(ctx, validator, candidate)\n\t}\n\treturn nil\n}\n\nfunc retrySelection(ctx context.Context, validator *Validator, candidate string) error {\n\treturn SelfCorrectSelection(ctx, validator, candidate)\n}",
+              "dense_score": 0.3742,
+              "rrf_score": 0.015625,
+              "score": 0.015625
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/list_workflows.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/list_workflows.go",
+              "chunk_index": 0,
+              "code": "package tools\n\nimport (\n\t\"context\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\nfunc ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {\n\tworkflows := catalog.ListWorkflows(ctx, filters)\n\tids := make([]string, 0, len(workflows))\n\tfor _, workflow := range workflows {\n\t\tids = append(ids, workflow.ID)\n\t}\n\tRecordDiscovered(state, ids)\n\treturn workflows\n}\n\nfunc RecordDiscovered(state *discovery.WorkflowState, workflowIDs []string) {\n\tif state != nil {\n\t\tstate.Add(workflowIDs...)\n\t}\n}",
+              "dense_score": 0.3722,
+              "rrf_score": 0.015385,
+              "score": 0.015385
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go",
+              "chunk_index": 1,
+              "code": "func (s *WorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.ids[workflowID]\n\treturn ok\n}\n\ntype workflowStateKey struct{}\n\nfunc WithWorkflowState(ctx context.Context, state *WorkflowState) context.Context {\n\treturn context.WithValue(ctx, workflowStateKey{}, state)\n}\n\nfunc WorkflowStateFromContext(ctx context.Context) (*WorkflowState, bool) {\n\tstate, ok := ctx.Value(workflowStateKey{}).(*WorkflowState)\n\treturn state, ok && state != nil\n}",
+              "dense_score": 0.3662,
+              "rrf_score": 0.015152,
+              "score": 0.015152
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go",
+              "chunk_index": 0,
+              "code": "package selection\n\nimport (\n\t\"fmt\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\ntype ValidationError struct {\n\tWorkflowID string\n\tReason     string\n}\n\nfunc (e *ValidationError) Error() string {\n\treturn fmt.Sprintf(\"workflow %q rejected: %s\", e.WorkflowID, e.Reason)\n}\n\ntype Validator struct {\n\tallowed map[string]struct{}\n\tstate   *discovery.WorkflowState\n}\n\nfunc NewValidator(allowedWorkflowIDs []string) *Validator {\n\tallowed := make(map[string]struct{}, len(allowedWorkflowIDs))\n\tfor _, id := range allowedWorkflowIDs {\n\t\tallowed[id] = struct{}{}\n\t}\n\treturn &Validator{allowed: allowed}\n}\n\nfunc (v *Validator) SetWorkflowState(state *discovery.WorkflowState) {\n\tv.state = state\n}\n\n// IsAllowed requires catalog membership and, when state is attached, current",
+              "dense_score": 0.3396,
+              "rrf_score": 0.014925,
+              "score": 0.014925
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go",
+              "chunk_index": 1,
+              "code": "func HandleSelectWorkflow(ctx context.Context, workflowID string, result DiscoveryResult, catalog *discovery.WorkflowCatalog) (WorkflowResult, error) {\n\tif err := authorizeSelectionDriver(workflowID, result); err != nil {\n\t\treturn WorkflowResult{}, err\n\t}\n\tworkflow, ok := catalog.GetWorkflow(ctx, workflowID)\n\tif !ok {\n\t\treturn WorkflowResult{}, fmt.Errorf(\"workflow %q not found\", workflowID)\n\t}\n\treturn applySelectedWorkflow(workflow, result), nil\n}\n\ntype WorkflowResult struct {\n\tID         string\n\tParameters map[string]string\n}\n\nfunc applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {\n\treturn WorkflowResult{ID: workflow.ID, Parameters: lookupDiscoveredParameters(workflow.ID, result)}\n}\n\nfunc lookupDiscoveredParameters(workflowID string, result DiscoveryResult) map[string]string {\n\tif workflowID == result.Recommended {\n\t\treturn map[string]string{\"source\": \"recommended\"}\n\t}\n\treturn map[string]string{\"source\": \"alternative\"}\n}",
+              "dense_score": 0.3226,
+              "rrf_score": 0.014706,
+              "score": 0.014706
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/catalog.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/catalog.go",
+              "chunk_index": 0,
+              "code": "package discovery\n\nimport \"context\"\n\ntype Workflow struct {\n\tID         string\n\tParameters map[string]string\n\tLabels     map[string]string\n}\n\ntype WorkflowCatalog struct {\n\tworkflows map[string]Workflow\n}\n\nfunc (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {\n\t_ = ctx\n\t_ = filters\n\tresult := make([]Workflow, 0, len(c.workflows))\n\tfor _, workflow := range c.workflows {\n\t\tresult = append(result, workflow)\n\t}\n\treturn result\n}\n\n// ListActions applies signal-derived filters before exposing available actions.\nfunc (c *WorkflowCatalog) ListActions(ctx context.Context, filters DiscoveryFilters) []Workflow {\n\treturn ApplyLabelFilters(ctx, c.ListWorkflows(ctx, filters), filters)\n}\n\nfunc (c *WorkflowCatalog) GetWorkflow(ctx context.Context, workflowID string) (Workflow, bool) {\n\t_ = ctx\n\tworkflow, ok := c.workflows[workflowID]\n\treturn workflow, ok\n}",
+              "dense_score": 0.2801,
+              "rrf_score": 0.014493,
+              "score": 0.014493
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/execution/runner.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/execution/runner.go",
+              "chunk_index": 0,
+              "code": "package execution\n\nimport \"fmt\"\n\nfunc ValidateWorkflowParameters(required []string, provided map[string]string) error {\n\tfor _, name := range required {\n\t\tif provided[name] == \"\" {\n\t\t\treturn fmt.Errorf(\"missing workflow parameter %q\", name)\n\t\t}\n\t}\n\treturn nil\n}",
+              "dense_score": 0.2369,
+              "rrf_score": 0.014286,
+              "score": 0.014286
+            }
+          ]
+        },
+        {
+          "id": "interactive-selection-guard",
+          "query": "Where does interactive selection reject a workflow absent from the current discovery result?",
+          "results": [
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go",
+              "chunk_index": 0,
+              "code": "package tools\n\nimport (\n\t\"context\"\n\t\"fmt\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\ntype DiscoveryResult struct {\n\tRecommended string\n\tAlternatives []string\n}\n\nfunc isWorkflowInDiscoveryResult(workflowID string, result DiscoveryResult) bool {\n\tif result.Recommended == workflowID {\n\t\treturn true\n\t}\n\tfor _, alternative := range result.Alternatives {\n\t\tif alternative == workflowID {\n\t\t\treturn true\n\t\t}\n\t}\n\treturn false\n}\n\nfunc authorizeSelectionDriver(workflowID string, result DiscoveryResult) error {\n\tif !isWorkflowInDiscoveryResult(workflowID, result) {\n\t\treturn fmt.Errorf(\"workflow %q was not discovered\", workflowID)\n\t}\n\treturn nil\n}",
+              "dense_score": 0.5358,
+              "rrf_score": 0.016393,
+              "score": 0.016393
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/list_workflows.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/list_workflows.go",
+              "chunk_index": 0,
+              "code": "package tools\n\nimport (\n\t\"context\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\nfunc ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {\n\tworkflows := catalog.ListWorkflows(ctx, filters)\n\tids := make([]string, 0, len(workflows))\n\tfor _, workflow := range workflows {\n\t\tids = append(ids, workflow.ID)\n\t}\n\tRecordDiscovered(state, ids)\n\treturn workflows\n}\n\nfunc RecordDiscovered(state *discovery.WorkflowState, workflowIDs []string) {\n\tif state != nil {\n\t\tstate.Add(workflowIDs...)\n\t}\n}",
+              "dense_score": 0.5251,
+              "rrf_score": 0.016129,
+              "score": 0.016129
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/retry.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/retry.go",
+              "chunk_index": 0,
+              "code": "package selection\n\nimport (\n\t\"context\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\nfunc SelfCorrectSelection(ctx context.Context, validator *Validator, candidate string) error {\n\tstate, ok := discovery.WorkflowStateFromContext(ctx)\n\tif ok {\n\t\tvalidator.SetWorkflowState(state)\n\t}\n\treturn validator.Validate(candidate)\n}\n\nfunc SelectWithRetry(ctx context.Context, validator *Validator, candidate string) error {\n\tif err := SelfCorrectSelection(ctx, validator, candidate); err != nil {\n\t\treturn retrySelection(ctx, validator, candidate)\n\t}\n\treturn nil\n}\n\nfunc retrySelection(ctx context.Context, validator *Validator, candidate string) error {\n\treturn SelfCorrectSelection(ctx, validator, candidate)\n}",
+              "dense_score": 0.5184,
+              "rrf_score": 0.015873,
+              "score": 0.015873
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go",
+              "chunk_index": 1,
+              "code": "func (v *Validator) SetWorkflowState(state *discovery.WorkflowState) {\n\tv.state = state\n}\n\n// IsAllowed requires catalog membership and, when state is attached, current\n// list_workflows membership.\nfunc (v *Validator) IsAllowed(workflowID string) bool {\n\tif _, ok := v.allowed[workflowID]; !ok {\n\t\treturn false\n\t}\n\treturn v.state == nil || v.state.Contains(workflowID)\n}\n\nfunc (v *Validator) Validate(workflowID string) error {\n\tif v.IsAllowed(workflowID) {\n\t\treturn nil\n\t}\n\treturn &ValidationError{WorkflowID: workflowID, Reason: \"not in current discovery result\"}\n}",
+              "dense_score": 0.4987,
+              "rrf_score": 0.015625,
+              "score": 0.015625
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go",
+              "chunk_index": 1,
+              "code": "func HandleSelectWorkflow(ctx context.Context, workflowID string, result DiscoveryResult, catalog *discovery.WorkflowCatalog) (WorkflowResult, error) {\n\tif err := authorizeSelectionDriver(workflowID, result); err != nil {\n\t\treturn WorkflowResult{}, err\n\t}\n\tworkflow, ok := catalog.GetWorkflow(ctx, workflowID)\n\tif !ok {\n\t\treturn WorkflowResult{}, fmt.Errorf(\"workflow %q not found\", workflowID)\n\t}\n\treturn applySelectedWorkflow(workflow, result), nil\n}\n\ntype WorkflowResult struct {\n\tID         string\n\tParameters map[string]string\n}\n\nfunc applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {\n\treturn WorkflowResult{ID: workflow.ID, Parameters: lookupDiscoveredParameters(workflow.ID, result)}\n}\n\nfunc lookupDiscoveredParameters(workflowID string, result DiscoveryResult) map[string]string {\n\tif workflowID == result.Recommended {\n\t\treturn map[string]string{\"source\": \"recommended\"}\n\t}\n\treturn map[string]string{\"source\": \"alternative\"}\n}",
+              "dense_score": 0.4917,
+              "rrf_score": 0.015385,
+              "score": 0.015385
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go",
+              "chunk_index": 0,
+              "code": "package selection\n\nimport (\n\t\"fmt\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\ntype ValidationError struct {\n\tWorkflowID string\n\tReason     string\n}\n\nfunc (e *ValidationError) Error() string {\n\treturn fmt.Sprintf(\"workflow %q rejected: %s\", e.WorkflowID, e.Reason)\n}\n\ntype Validator struct {\n\tallowed map[string]struct{}\n\tstate   *discovery.WorkflowState\n}\n\nfunc NewValidator(allowedWorkflowIDs []string) *Validator {\n\tallowed := make(map[string]struct{}, len(allowedWorkflowIDs))\n\tfor _, id := range allowedWorkflowIDs {\n\t\tallowed[id] = struct{}{}\n\t}\n\treturn &Validator{allowed: allowed}\n}\n\nfunc (v *Validator) SetWorkflowState(state *discovery.WorkflowState) {\n\tv.state = state\n}\n\n// IsAllowed requires catalog membership and, when state is attached, current",
+              "dense_score": 0.4575,
+              "rrf_score": 0.015152,
+              "score": 0.015152
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go",
+              "chunk_index": 0,
+              "code": "package discovery\n\nimport (\n\t\"context\"\n\t\"sync\"\n)\n\n// WorkflowState records workflow IDs returned by list_workflows for one\n// selection context. Retries and later discovery calls share this object.\ntype WorkflowState struct {\n\tmu  sync.RWMutex\n\tids map[string]struct{}\n}\n\nfunc NewWorkflowState() *WorkflowState {\n\treturn &WorkflowState{ids: make(map[string]struct{})}\n}\n\n// Add records every non-empty workflow ID returned by discovery.\nfunc (s *WorkflowState) Add(workflowIDs ...string) {\n\tif s == nil {\n\t\treturn\n\t}\n\ts.mu.Lock()\n\tdefer s.mu.Unlock()\n\tif s.ids == nil {\n\t\ts.ids = make(map[string]struct{})\n\t}\n\tfor _, id := range workflowIDs {\n\t\tif id != \"\" {\n\t\t\ts.ids[id] = struct{}{}\n\t\t}\n\t}\n}\n\nfunc (s *WorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.ids[workflowID]\n\treturn ok\n}",
+              "dense_score": 0.4566,
+              "rrf_score": 0.014925,
+              "score": 0.014925
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/catalog.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/catalog.go",
+              "chunk_index": 0,
+              "code": "package discovery\n\nimport \"context\"\n\ntype Workflow struct {\n\tID         string\n\tParameters map[string]string\n\tLabels     map[string]string\n}\n\ntype WorkflowCatalog struct {\n\tworkflows map[string]Workflow\n}\n\nfunc (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {\n\t_ = ctx\n\t_ = filters\n\tresult := make([]Workflow, 0, len(c.workflows))\n\tfor _, workflow := range c.workflows {\n\t\tresult = append(result, workflow)\n\t}\n\treturn result\n}\n\n// ListActions applies signal-derived filters before exposing available actions.\nfunc (c *WorkflowCatalog) ListActions(ctx context.Context, filters DiscoveryFilters) []Workflow {\n\treturn ApplyLabelFilters(ctx, c.ListWorkflows(ctx, filters), filters)\n}\n\nfunc (c *WorkflowCatalog) GetWorkflow(ctx context.Context, workflowID string) (Workflow, bool) {\n\t_ = ctx\n\tworkflow, ok := c.workflows[workflowID]\n\treturn workflow, ok\n}",
+              "dense_score": 0.446,
+              "rrf_score": 0.014706,
+              "score": 0.014706
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go",
+              "chunk_index": 1,
+              "code": "func (s *WorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.ids[workflowID]\n\treturn ok\n}\n\ntype workflowStateKey struct{}\n\nfunc WithWorkflowState(ctx context.Context, state *WorkflowState) context.Context {\n\treturn context.WithValue(ctx, workflowStateKey{}, state)\n}\n\nfunc WorkflowStateFromContext(ctx context.Context) (*WorkflowState, bool) {\n\tstate, ok := ctx.Value(workflowStateKey{}).(*WorkflowState)\n\treturn state, ok && state != nil\n}",
+              "dense_score": 0.3441,
+              "rrf_score": 0.014493,
+              "score": 0.014493
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/filters.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/filters.go",
+              "chunk_index": 0,
+              "code": "package discovery\n\nimport \"context\"\n\ntype Signal struct {\n\tLabels map[string]string\n}\n\ntype DiscoveryFilters struct {\n\tComponent  string\n\tEnvironment string\n\tSeverity   string\n}\n\nfunc FiltersFromSignal(signal Signal) DiscoveryFilters {\n\treturn DiscoveryFilters{\n\t\tComponent:   signal.Labels[\"component\"],\n\t\tEnvironment: signal.Labels[\"environment\"],\n\t\tSeverity:    signal.Labels[\"severity\"],\n\t}\n}\n\nfunc ApplyLabelFilters(ctx context.Context, workflows []Workflow, filters DiscoveryFilters) []Workflow {\n\t_ = ctx\n\tfiltered := make([]Workflow, 0, len(workflows))\n\tfor _, workflow := range workflows {\n\t\tif filters.Component != \"\" && workflow.Labels[\"component\"] != filters.Component {\n\t\t\tcontinue\n\t\t}\n\t\tif filters.Environment != \"\" && workflow.Labels[\"environment\"] != filters.Environment {\n\t\t\tcontinue\n\t\t}\n\t\tif filters.Severity != \"\" && workflow.Labels[\"severity\"] != filters.Severity {\n\t\t\tcontinue\n\t\t}\n\t\tfiltered = append(filtered, workflow)\n\t}\n\treturn filtered\n}",
+              "dense_score": 0.3135,
+              "rrf_score": 0.014286,
+              "score": 0.014286
+            }
+          ]
+        },
+        {
+          "id": "validate-workflow-parameters",
+          "query": "Where are remediation workflow parameters validated before execution?",
+          "results": [
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/execution/runner.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/execution/runner.go",
+              "chunk_index": 0,
+              "code": "package execution\n\nimport \"fmt\"\n\nfunc ValidateWorkflowParameters(required []string, provided map[string]string) error {\n\tfor _, name := range required {\n\t\tif provided[name] == \"\" {\n\t\t\treturn fmt.Errorf(\"missing workflow parameter %q\", name)\n\t\t}\n\t}\n\treturn nil\n}",
+              "dense_score": 0.512,
+              "rrf_score": 0.016393,
+              "score": 0.016393
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go",
+              "chunk_index": 1,
+              "code": "func (s *WorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.ids[workflowID]\n\treturn ok\n}\n\ntype workflowStateKey struct{}\n\nfunc WithWorkflowState(ctx context.Context, state *WorkflowState) context.Context {\n\treturn context.WithValue(ctx, workflowStateKey{}, state)\n}\n\nfunc WorkflowStateFromContext(ctx context.Context) (*WorkflowState, bool) {\n\tstate, ok := ctx.Value(workflowStateKey{}).(*WorkflowState)\n\treturn state, ok && state != nil\n}",
+              "dense_score": 0.4333,
+              "rrf_score": 0.016129,
+              "score": 0.016129
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go",
+              "chunk_index": 1,
+              "code": "func HandleSelectWorkflow(ctx context.Context, workflowID string, result DiscoveryResult, catalog *discovery.WorkflowCatalog) (WorkflowResult, error) {\n\tif err := authorizeSelectionDriver(workflowID, result); err != nil {\n\t\treturn WorkflowResult{}, err\n\t}\n\tworkflow, ok := catalog.GetWorkflow(ctx, workflowID)\n\tif !ok {\n\t\treturn WorkflowResult{}, fmt.Errorf(\"workflow %q not found\", workflowID)\n\t}\n\treturn applySelectedWorkflow(workflow, result), nil\n}\n\ntype WorkflowResult struct {\n\tID         string\n\tParameters map[string]string\n}\n\nfunc applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {\n\treturn WorkflowResult{ID: workflow.ID, Parameters: lookupDiscoveredParameters(workflow.ID, result)}\n}\n\nfunc lookupDiscoveredParameters(workflowID string, result DiscoveryResult) map[string]string {\n\tif workflowID == result.Recommended {\n\t\treturn map[string]string{\"source\": \"recommended\"}\n\t}\n\treturn map[string]string{\"source\": \"alternative\"}\n}",
+              "dense_score": 0.4215,
+              "rrf_score": 0.015873,
+              "score": 0.015873
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/retry.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/retry.go",
+              "chunk_index": 0,
+              "code": "package selection\n\nimport (\n\t\"context\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\nfunc SelfCorrectSelection(ctx context.Context, validator *Validator, candidate string) error {\n\tstate, ok := discovery.WorkflowStateFromContext(ctx)\n\tif ok {\n\t\tvalidator.SetWorkflowState(state)\n\t}\n\treturn validator.Validate(candidate)\n}\n\nfunc SelectWithRetry(ctx context.Context, validator *Validator, candidate string) error {\n\tif err := SelfCorrectSelection(ctx, validator, candidate); err != nil {\n\t\treturn retrySelection(ctx, validator, candidate)\n\t}\n\treturn nil\n}\n\nfunc retrySelection(ctx context.Context, validator *Validator, candidate string) error {\n\treturn SelfCorrectSelection(ctx, validator, candidate)\n}",
+              "dense_score": 0.4151,
+              "rrf_score": 0.015625,
+              "score": 0.015625
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go",
+              "chunk_index": 0,
+              "code": "package selection\n\nimport (\n\t\"fmt\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\ntype ValidationError struct {\n\tWorkflowID string\n\tReason     string\n}\n\nfunc (e *ValidationError) Error() string {\n\treturn fmt.Sprintf(\"workflow %q rejected: %s\", e.WorkflowID, e.Reason)\n}\n\ntype Validator struct {\n\tallowed map[string]struct{}\n\tstate   *discovery.WorkflowState\n}\n\nfunc NewValidator(allowedWorkflowIDs []string) *Validator {\n\tallowed := make(map[string]struct{}, len(allowedWorkflowIDs))\n\tfor _, id := range allowedWorkflowIDs {\n\t\tallowed[id] = struct{}{}\n\t}\n\treturn &Validator{allowed: allowed}\n}\n\nfunc (v *Validator) SetWorkflowState(state *discovery.WorkflowState) {\n\tv.state = state\n}\n\n// IsAllowed requires catalog membership and, when state is attached, current",
+              "dense_score": 0.4049,
+              "rrf_score": 0.015385,
+              "score": 0.015385
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go",
+              "chunk_index": 1,
+              "code": "func (v *Validator) SetWorkflowState(state *discovery.WorkflowState) {\n\tv.state = state\n}\n\n// IsAllowed requires catalog membership and, when state is attached, current\n// list_workflows membership.\nfunc (v *Validator) IsAllowed(workflowID string) bool {\n\tif _, ok := v.allowed[workflowID]; !ok {\n\t\treturn false\n\t}\n\treturn v.state == nil || v.state.Contains(workflowID)\n}\n\nfunc (v *Validator) Validate(workflowID string) error {\n\tif v.IsAllowed(workflowID) {\n\t\treturn nil\n\t}\n\treturn &ValidationError{WorkflowID: workflowID, Reason: \"not in current discovery result\"}\n}",
+              "dense_score": 0.3966,
+              "rrf_score": 0.015152,
+              "score": 0.015152
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/catalog.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/catalog.go",
+              "chunk_index": 0,
+              "code": "package discovery\n\nimport \"context\"\n\ntype Workflow struct {\n\tID         string\n\tParameters map[string]string\n\tLabels     map[string]string\n}\n\ntype WorkflowCatalog struct {\n\tworkflows map[string]Workflow\n}\n\nfunc (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {\n\t_ = ctx\n\t_ = filters\n\tresult := make([]Workflow, 0, len(c.workflows))\n\tfor _, workflow := range c.workflows {\n\t\tresult = append(result, workflow)\n\t}\n\treturn result\n}\n\n// ListActions applies signal-derived filters before exposing available actions.\nfunc (c *WorkflowCatalog) ListActions(ctx context.Context, filters DiscoveryFilters) []Workflow {\n\treturn ApplyLabelFilters(ctx, c.ListWorkflows(ctx, filters), filters)\n}\n\nfunc (c *WorkflowCatalog) GetWorkflow(ctx context.Context, workflowID string) (Workflow, bool) {\n\t_ = ctx\n\tworkflow, ok := c.workflows[workflowID]\n\treturn workflow, ok\n}",
+              "dense_score": 0.3753,
+              "rrf_score": 0.014925,
+              "score": 0.014925
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go",
+              "chunk_index": 0,
+              "code": "package tools\n\nimport (\n\t\"context\"\n\t\"fmt\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\ntype DiscoveryResult struct {\n\tRecommended string\n\tAlternatives []string\n}\n\nfunc isWorkflowInDiscoveryResult(workflowID string, result DiscoveryResult) bool {\n\tif result.Recommended == workflowID {\n\t\treturn true\n\t}\n\tfor _, alternative := range result.Alternatives {\n\t\tif alternative == workflowID {\n\t\t\treturn true\n\t\t}\n\t}\n\treturn false\n}\n\nfunc authorizeSelectionDriver(workflowID string, result DiscoveryResult) error {\n\tif !isWorkflowInDiscoveryResult(workflowID, result) {\n\t\treturn fmt.Errorf(\"workflow %q was not discovered\", workflowID)\n\t}\n\treturn nil\n}",
+              "dense_score": 0.3477,
+              "rrf_score": 0.014706,
+              "score": 0.014706
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go",
+              "chunk_index": 0,
+              "code": "package discovery\n\nimport (\n\t\"context\"\n\t\"sync\"\n)\n\n// WorkflowState records workflow IDs returned by list_workflows for one\n// selection context. Retries and later discovery calls share this object.\ntype WorkflowState struct {\n\tmu  sync.RWMutex\n\tids map[string]struct{}\n}\n\nfunc NewWorkflowState() *WorkflowState {\n\treturn &WorkflowState{ids: make(map[string]struct{})}\n}\n\n// Add records every non-empty workflow ID returned by discovery.\nfunc (s *WorkflowState) Add(workflowIDs ...string) {\n\tif s == nil {\n\t\treturn\n\t}\n\ts.mu.Lock()\n\tdefer s.mu.Unlock()\n\tif s.ids == nil {\n\t\ts.ids = make(map[string]struct{})\n\t}\n\tfor _, id := range workflowIDs {\n\t\tif id != \"\" {\n\t\t\ts.ids[id] = struct{}{}\n\t\t}\n\t}\n}\n\nfunc (s *WorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.ids[workflowID]\n\treturn ok\n}",
+              "dense_score": 0.3149,
+              "rrf_score": 0.014493,
+              "score": 0.014493
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/list_workflows.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/list_workflows.go",
+              "chunk_index": 0,
+              "code": "package tools\n\nimport (\n\t\"context\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\nfunc ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {\n\tworkflows := catalog.ListWorkflows(ctx, filters)\n\tids := make([]string, 0, len(workflows))\n\tfor _, workflow := range workflows {\n\t\tids = append(ids, workflow.ID)\n\t}\n\tRecordDiscovered(state, ids)\n\treturn workflows\n}\n\nfunc RecordDiscovered(state *discovery.WorkflowState, workflowIDs []string) {\n\tif state != nil {\n\t\tstate.Add(workflowIDs...)\n\t}\n}",
+              "dense_score": 0.3075,
+              "rrf_score": 0.014286,
+              "score": 0.014286
+            }
+          ]
+        },
+        {
+          "id": "empty-discovery-fails-closed",
+          "query": "What happens when workflow discovery returns no IDs and a selection is attempted?",
+          "results": [
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go",
+              "chunk_index": 0,
+              "code": "package discovery\n\nimport (\n\t\"context\"\n\t\"sync\"\n)\n\n// WorkflowState records workflow IDs returned by list_workflows for one\n// selection context. Retries and later discovery calls share this object.\ntype WorkflowState struct {\n\tmu  sync.RWMutex\n\tids map[string]struct{}\n}\n\nfunc NewWorkflowState() *WorkflowState {\n\treturn &WorkflowState{ids: make(map[string]struct{})}\n}\n\n// Add records every non-empty workflow ID returned by discovery.\nfunc (s *WorkflowState) Add(workflowIDs ...string) {\n\tif s == nil {\n\t\treturn\n\t}\n\ts.mu.Lock()\n\tdefer s.mu.Unlock()\n\tif s.ids == nil {\n\t\ts.ids = make(map[string]struct{})\n\t}\n\tfor _, id := range workflowIDs {\n\t\tif id != \"\" {\n\t\t\ts.ids[id] = struct{}{}\n\t\t}\n\t}\n}\n\nfunc (s *WorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.ids[workflowID]\n\treturn ok\n}",
+              "dense_score": 0.6278,
+              "rrf_score": 0.016393,
+              "score": 0.016393
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/list_workflows.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/list_workflows.go",
+              "chunk_index": 0,
+              "code": "package tools\n\nimport (\n\t\"context\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\nfunc ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {\n\tworkflows := catalog.ListWorkflows(ctx, filters)\n\tids := make([]string, 0, len(workflows))\n\tfor _, workflow := range workflows {\n\t\tids = append(ids, workflow.ID)\n\t}\n\tRecordDiscovered(state, ids)\n\treturn workflows\n}\n\nfunc RecordDiscovered(state *discovery.WorkflowState, workflowIDs []string) {\n\tif state != nil {\n\t\tstate.Add(workflowIDs...)\n\t}\n}",
+              "dense_score": 0.559,
+              "rrf_score": 0.016129,
+              "score": 0.016129
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go",
+              "chunk_index": 0,
+              "code": "package tools\n\nimport (\n\t\"context\"\n\t\"fmt\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\ntype DiscoveryResult struct {\n\tRecommended string\n\tAlternatives []string\n}\n\nfunc isWorkflowInDiscoveryResult(workflowID string, result DiscoveryResult) bool {\n\tif result.Recommended == workflowID {\n\t\treturn true\n\t}\n\tfor _, alternative := range result.Alternatives {\n\t\tif alternative == workflowID {\n\t\t\treturn true\n\t\t}\n\t}\n\treturn false\n}\n\nfunc authorizeSelectionDriver(workflowID string, result DiscoveryResult) error {\n\tif !isWorkflowInDiscoveryResult(workflowID, result) {\n\t\treturn fmt.Errorf(\"workflow %q was not discovered\", workflowID)\n\t}\n\treturn nil\n}",
+              "dense_score": 0.5516,
+              "rrf_score": 0.015873,
+              "score": 0.015873
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go",
+              "chunk_index": 1,
+              "code": "func HandleSelectWorkflow(ctx context.Context, workflowID string, result DiscoveryResult, catalog *discovery.WorkflowCatalog) (WorkflowResult, error) {\n\tif err := authorizeSelectionDriver(workflowID, result); err != nil {\n\t\treturn WorkflowResult{}, err\n\t}\n\tworkflow, ok := catalog.GetWorkflow(ctx, workflowID)\n\tif !ok {\n\t\treturn WorkflowResult{}, fmt.Errorf(\"workflow %q not found\", workflowID)\n\t}\n\treturn applySelectedWorkflow(workflow, result), nil\n}\n\ntype WorkflowResult struct {\n\tID         string\n\tParameters map[string]string\n}\n\nfunc applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {\n\treturn WorkflowResult{ID: workflow.ID, Parameters: lookupDiscoveredParameters(workflow.ID, result)}\n}\n\nfunc lookupDiscoveredParameters(workflowID string, result DiscoveryResult) map[string]string {\n\tif workflowID == result.Recommended {\n\t\treturn map[string]string{\"source\": \"recommended\"}\n\t}\n\treturn map[string]string{\"source\": \"alternative\"}\n}",
+              "dense_score": 0.512,
+              "rrf_score": 0.015625,
+              "score": 0.015625
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/retry.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/retry.go",
+              "chunk_index": 0,
+              "code": "package selection\n\nimport (\n\t\"context\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\nfunc SelfCorrectSelection(ctx context.Context, validator *Validator, candidate string) error {\n\tstate, ok := discovery.WorkflowStateFromContext(ctx)\n\tif ok {\n\t\tvalidator.SetWorkflowState(state)\n\t}\n\treturn validator.Validate(candidate)\n}\n\nfunc SelectWithRetry(ctx context.Context, validator *Validator, candidate string) error {\n\tif err := SelfCorrectSelection(ctx, validator, candidate); err != nil {\n\t\treturn retrySelection(ctx, validator, candidate)\n\t}\n\treturn nil\n}\n\nfunc retrySelection(ctx context.Context, validator *Validator, candidate string) error {\n\treturn SelfCorrectSelection(ctx, validator, candidate)\n}",
+              "dense_score": 0.4972,
+              "rrf_score": 0.015385,
+              "score": 0.015385
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go",
+              "chunk_index": 1,
+              "code": "func (v *Validator) SetWorkflowState(state *discovery.WorkflowState) {\n\tv.state = state\n}\n\n// IsAllowed requires catalog membership and, when state is attached, current\n// list_workflows membership.\nfunc (v *Validator) IsAllowed(workflowID string) bool {\n\tif _, ok := v.allowed[workflowID]; !ok {\n\t\treturn false\n\t}\n\treturn v.state == nil || v.state.Contains(workflowID)\n}\n\nfunc (v *Validator) Validate(workflowID string) error {\n\tif v.IsAllowed(workflowID) {\n\t\treturn nil\n\t}\n\treturn &ValidationError{WorkflowID: workflowID, Reason: \"not in current discovery result\"}\n}",
+              "dense_score": 0.4763,
+              "rrf_score": 0.015152,
+              "score": 0.015152
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go",
+              "chunk_index": 0,
+              "code": "package selection\n\nimport (\n\t\"fmt\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\ntype ValidationError struct {\n\tWorkflowID string\n\tReason     string\n}\n\nfunc (e *ValidationError) Error() string {\n\treturn fmt.Sprintf(\"workflow %q rejected: %s\", e.WorkflowID, e.Reason)\n}\n\ntype Validator struct {\n\tallowed map[string]struct{}\n\tstate   *discovery.WorkflowState\n}\n\nfunc NewValidator(allowedWorkflowIDs []string) *Validator {\n\tallowed := make(map[string]struct{}, len(allowedWorkflowIDs))\n\tfor _, id := range allowedWorkflowIDs {\n\t\tallowed[id] = struct{}{}\n\t}\n\treturn &Validator{allowed: allowed}\n}\n\nfunc (v *Validator) SetWorkflowState(state *discovery.WorkflowState) {\n\tv.state = state\n}\n\n// IsAllowed requires catalog membership and, when state is attached, current",
+              "dense_score": 0.4277,
+              "rrf_score": 0.014925,
+              "score": 0.014925
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/catalog.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/catalog.go",
+              "chunk_index": 0,
+              "code": "package discovery\n\nimport \"context\"\n\ntype Workflow struct {\n\tID         string\n\tParameters map[string]string\n\tLabels     map[string]string\n}\n\ntype WorkflowCatalog struct {\n\tworkflows map[string]Workflow\n}\n\nfunc (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {\n\t_ = ctx\n\t_ = filters\n\tresult := make([]Workflow, 0, len(c.workflows))\n\tfor _, workflow := range c.workflows {\n\t\tresult = append(result, workflow)\n\t}\n\treturn result\n}\n\n// ListActions applies signal-derived filters before exposing available actions.\nfunc (c *WorkflowCatalog) ListActions(ctx context.Context, filters DiscoveryFilters) []Workflow {\n\treturn ApplyLabelFilters(ctx, c.ListWorkflows(ctx, filters), filters)\n}\n\nfunc (c *WorkflowCatalog) GetWorkflow(ctx context.Context, workflowID string) (Workflow, bool) {\n\t_ = ctx\n\tworkflow, ok := c.workflows[workflowID]\n\treturn workflow, ok\n}",
+              "dense_score": 0.4223,
+              "rrf_score": 0.014706,
+              "score": 0.014706
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go",
+              "chunk_index": 1,
+              "code": "func (s *WorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.ids[workflowID]\n\treturn ok\n}\n\ntype workflowStateKey struct{}\n\nfunc WithWorkflowState(ctx context.Context, state *WorkflowState) context.Context {\n\treturn context.WithValue(ctx, workflowStateKey{}, state)\n}\n\nfunc WorkflowStateFromContext(ctx context.Context) (*WorkflowState, bool) {\n\tstate, ok := ctx.Value(workflowStateKey{}).(*WorkflowState)\n\treturn state, ok && state != nil\n}",
+              "dense_score": 0.4033,
+              "rrf_score": 0.014493,
+              "score": 0.014493
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/api/types.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/api/types.go",
+              "chunk_index": 0,
+              "code": "package api\n\ntype WorkflowSummary struct {\n\tID          string\n\tDisplayName string\n}",
+              "dense_score": 0.3813,
+              "rrf_score": 0.014286,
+              "score": 0.014286
+            }
+          ]
+        },
+        {
+          "id": "copy-selected-workflow-details",
+          "query": "How are selected workflow details copied into the final investigation result?",
+          "results": [
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go",
+              "chunk_index": 0,
+              "code": "package tools\n\nimport (\n\t\"context\"\n\t\"fmt\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\ntype DiscoveryResult struct {\n\tRecommended string\n\tAlternatives []string\n}\n\nfunc isWorkflowInDiscoveryResult(workflowID string, result DiscoveryResult) bool {\n\tif result.Recommended == workflowID {\n\t\treturn true\n\t}\n\tfor _, alternative := range result.Alternatives {\n\t\tif alternative == workflowID {\n\t\t\treturn true\n\t\t}\n\t}\n\treturn false\n}\n\nfunc authorizeSelectionDriver(workflowID string, result DiscoveryResult) error {\n\tif !isWorkflowInDiscoveryResult(workflowID, result) {\n\t\treturn fmt.Errorf(\"workflow %q was not discovered\", workflowID)\n\t}\n\treturn nil\n}",
+              "dense_score": 0.4595,
+              "rrf_score": 0.016393,
+              "score": 0.016393
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/select_workflow.go",
+              "chunk_index": 1,
+              "code": "func HandleSelectWorkflow(ctx context.Context, workflowID string, result DiscoveryResult, catalog *discovery.WorkflowCatalog) (WorkflowResult, error) {\n\tif err := authorizeSelectionDriver(workflowID, result); err != nil {\n\t\treturn WorkflowResult{}, err\n\t}\n\tworkflow, ok := catalog.GetWorkflow(ctx, workflowID)\n\tif !ok {\n\t\treturn WorkflowResult{}, fmt.Errorf(\"workflow %q not found\", workflowID)\n\t}\n\treturn applySelectedWorkflow(workflow, result), nil\n}\n\ntype WorkflowResult struct {\n\tID         string\n\tParameters map[string]string\n}\n\nfunc applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {\n\treturn WorkflowResult{ID: workflow.ID, Parameters: lookupDiscoveredParameters(workflow.ID, result)}\n}\n\nfunc lookupDiscoveredParameters(workflowID string, result DiscoveryResult) map[string]string {\n\tif workflowID == result.Recommended {\n\t\treturn map[string]string{\"source\": \"recommended\"}\n\t}\n\treturn map[string]string{\"source\": \"alternative\"}\n}",
+              "dense_score": 0.4225,
+              "rrf_score": 0.016129,
+              "score": 0.016129
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/catalog.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/catalog.go",
+              "chunk_index": 0,
+              "code": "package discovery\n\nimport \"context\"\n\ntype Workflow struct {\n\tID         string\n\tParameters map[string]string\n\tLabels     map[string]string\n}\n\ntype WorkflowCatalog struct {\n\tworkflows map[string]Workflow\n}\n\nfunc (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {\n\t_ = ctx\n\t_ = filters\n\tresult := make([]Workflow, 0, len(c.workflows))\n\tfor _, workflow := range c.workflows {\n\t\tresult = append(result, workflow)\n\t}\n\treturn result\n}\n\n// ListActions applies signal-derived filters before exposing available actions.\nfunc (c *WorkflowCatalog) ListActions(ctx context.Context, filters DiscoveryFilters) []Workflow {\n\treturn ApplyLabelFilters(ctx, c.ListWorkflows(ctx, filters), filters)\n}\n\nfunc (c *WorkflowCatalog) GetWorkflow(ctx context.Context, workflowID string) (Workflow, bool) {\n\t_ = ctx\n\tworkflow, ok := c.workflows[workflowID]\n\treturn workflow, ok\n}",
+              "dense_score": 0.4221,
+              "rrf_score": 0.015873,
+              "score": 0.015873
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/tools/list_workflows.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/tools/list_workflows.go",
+              "chunk_index": 0,
+              "code": "package tools\n\nimport (\n\t\"context\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\nfunc ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {\n\tworkflows := catalog.ListWorkflows(ctx, filters)\n\tids := make([]string, 0, len(workflows))\n\tfor _, workflow := range workflows {\n\t\tids = append(ids, workflow.ID)\n\t}\n\tRecordDiscovered(state, ids)\n\treturn workflows\n}\n\nfunc RecordDiscovered(state *discovery.WorkflowState, workflowIDs []string) {\n\tif state != nil {\n\t\tstate.Add(workflowIDs...)\n\t}\n}",
+              "dense_score": 0.4152,
+              "rrf_score": 0.015625,
+              "score": 0.015625
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go",
+              "chunk_index": 0,
+              "code": "package discovery\n\nimport (\n\t\"context\"\n\t\"sync\"\n)\n\n// WorkflowState records workflow IDs returned by list_workflows for one\n// selection context. Retries and later discovery calls share this object.\ntype WorkflowState struct {\n\tmu  sync.RWMutex\n\tids map[string]struct{}\n}\n\nfunc NewWorkflowState() *WorkflowState {\n\treturn &WorkflowState{ids: make(map[string]struct{})}\n}\n\n// Add records every non-empty workflow ID returned by discovery.\nfunc (s *WorkflowState) Add(workflowIDs ...string) {\n\tif s == nil {\n\t\treturn\n\t}\n\ts.mu.Lock()\n\tdefer s.mu.Unlock()\n\tif s.ids == nil {\n\t\ts.ids = make(map[string]struct{})\n\t}\n\tfor _, id := range workflowIDs {\n\t\tif id != \"\" {\n\t\t\ts.ids[id] = struct{}{}\n\t\t}\n\t}\n}\n\nfunc (s *WorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.ids[workflowID]\n\treturn ok\n}",
+              "dense_score": 0.4131,
+              "rrf_score": 0.015385,
+              "score": 0.015385
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/retry.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/retry.go",
+              "chunk_index": 0,
+              "code": "package selection\n\nimport (\n\t\"context\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\nfunc SelfCorrectSelection(ctx context.Context, validator *Validator, candidate string) error {\n\tstate, ok := discovery.WorkflowStateFromContext(ctx)\n\tif ok {\n\t\tvalidator.SetWorkflowState(state)\n\t}\n\treturn validator.Validate(candidate)\n}\n\nfunc SelectWithRetry(ctx context.Context, validator *Validator, candidate string) error {\n\tif err := SelfCorrectSelection(ctx, validator, candidate); err != nil {\n\t\treturn retrySelection(ctx, validator, candidate)\n\t}\n\treturn nil\n}\n\nfunc retrySelection(ctx context.Context, validator *Validator, candidate string) error {\n\treturn SelfCorrectSelection(ctx, validator, candidate)\n}",
+              "dense_score": 0.391,
+              "rrf_score": 0.015152,
+              "score": 0.015152
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/discovery/state.go",
+              "chunk_index": 1,
+              "code": "func (s *WorkflowState) Contains(workflowID string) bool {\n\tif s == nil {\n\t\treturn false\n\t}\n\ts.mu.RLock()\n\tdefer s.mu.RUnlock()\n\t_, ok := s.ids[workflowID]\n\treturn ok\n}\n\ntype workflowStateKey struct{}\n\nfunc WithWorkflowState(ctx context.Context, state *WorkflowState) context.Context {\n\treturn context.WithValue(ctx, workflowStateKey{}, state)\n}\n\nfunc WorkflowStateFromContext(ctx context.Context) (*WorkflowState, bool) {\n\tstate, ok := ctx.Value(workflowStateKey{}).(*WorkflowState)\n\treturn state, ok && state != nil\n}",
+              "dense_score": 0.3414,
+              "rrf_score": 0.014925,
+              "score": 0.014925
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go",
+              "chunk_index": 0,
+              "code": "package selection\n\nimport (\n\t\"fmt\"\n\n\t\"example.com/synthetic-workflow-discovery/internal/discovery\"\n)\n\ntype ValidationError struct {\n\tWorkflowID string\n\tReason     string\n}\n\nfunc (e *ValidationError) Error() string {\n\treturn fmt.Sprintf(\"workflow %q rejected: %s\", e.WorkflowID, e.Reason)\n}\n\ntype Validator struct {\n\tallowed map[string]struct{}\n\tstate   *discovery.WorkflowState\n}\n\nfunc NewValidator(allowedWorkflowIDs []string) *Validator {\n\tallowed := make(map[string]struct{}, len(allowedWorkflowIDs))\n\tfor _, id := range allowedWorkflowIDs {\n\t\tallowed[id] = struct{}{}\n\t}\n\treturn &Validator{allowed: allowed}\n}\n\nfunc (v *Validator) SetWorkflowState(state *discovery.WorkflowState) {\n\tv.state = state\n}\n\n// IsAllowed requires catalog membership and, when state is attached, current",
+              "dense_score": 0.3312,
+              "rrf_score": 0.014706,
+              "score": 0.014706
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go:1",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/selection/validator.go",
+              "chunk_index": 1,
+              "code": "func (v *Validator) SetWorkflowState(state *discovery.WorkflowState) {\n\tv.state = state\n}\n\n// IsAllowed requires catalog membership and, when state is attached, current\n// list_workflows membership.\nfunc (v *Validator) IsAllowed(workflowID string) bool {\n\tif _, ok := v.allowed[workflowID]; !ok {\n\t\treturn false\n\t}\n\treturn v.state == nil || v.state.Contains(workflowID)\n}\n\nfunc (v *Validator) Validate(workflowID string) error {\n\tif v.IsAllowed(workflowID) {\n\t\treturn nil\n\t}\n\treturn &ValidationError{WorkflowID: workflowID, Reason: \"not in current discovery result\"}\n}",
+              "dense_score": 0.3246,
+              "rrf_score": 0.014493,
+              "score": 0.014493
+            },
+            {
+              "id": "synthetic-go-workflow-discovery-v1/internal/execution/runner.go:0",
+              "filepath": "synthetic-go-workflow-discovery-v1/internal/execution/runner.go",
+              "chunk_index": 0,
+              "code": "package execution\n\nimport \"fmt\"\n\nfunc ValidateWorkflowParameters(required []string, provided map[string]string) error {\n\tfor _, name := range required {\n\t\tif provided[name] == \"\" {\n\t\t\treturn fmt.Errorf(\"missing workflow parameter %q\", name)\n\t\t}\n\t}\n\treturn nil\n}",
+              "dense_score": 0.3094,
+              "rrf_score": 0.014286,
+              "score": 0.014286
+            }
+          ]
+        }
+      ]
+    },
+    "zvec-git": {
+      "root": "/private/var/folders/r7/gktmmltd1zq7wqhsjjslwsm80000gn/T/opencode/synthetic-go-workflow-discovery-zvec",
+      "queries": [
+        {
+          "id": "record-discovered-membership",
+          "query": "Where are workflow IDs returned by list_workflows recorded for later validation?",
+          "response": {
+            "stdout": "query groups (1):\nQ1 [primary]: Where are workflow IDs returned by list_workflows recorded for later validation?\nhits: 10\n\n#1 matchedBy=fts+vector internal/tools/list_workflows.go:9-17\nsource:\n9\tfunc ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {\n10\t\tworkflows := catalog.ListWorkflows(ctx, filters)\n11\t\tids := make([]string, 0, len(workflows))\n12\t\tfor _, workflow := range workflows {\n13\t\t\tids = append(ids, workflow.ID)\n14\t\t}\n15\t\tRecordDiscovered(state, ids)\n16\t\treturn workflows\n17\t}\n\n#2 matchedBy=fts+vector internal/discovery/catalog.go:15-23\nsource:\n15\tfunc (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {\n16\t\t_ = ctx\n17\t\t_ = filters\n18\t\tresult := make([]Workflow, 0, len(c.workflows))\n19\t\tfor _, workflow := range c.workflows {\n20\t\t\tresult = append(result, workflow)\n21\t\t}\n22\t\treturn result\n23\t}\n\n#3 matchedBy=fts+vector internal/discovery/catalog.go:30-34\nsource:\n30\tfunc (c *WorkflowCatalog) GetWorkflow(ctx context.Context, workflowID string) (Workflow, bool) {\n31\t\t_ = ctx\n32\t\tworkflow, ok := c.workflows[workflowID]\n33\t\treturn workflow, ok\n34\t}\n\n#4 matchedBy=fts+vector internal/discovery/state.go:20-34\ndocumentation:\n  Add records every non-empty workflow ID returned by discovery.\nsource:\n20\tfunc (s *WorkflowState) Add(workflowIDs ...string) {\n21\t\tif s == nil {\n22\t\t\treturn\n23\t\t}\n24\t\ts.mu.Lock()\n25\t\tdefer s.mu.Unlock()\n26\t\tif s.ids == nil {\n27\t\t\ts.ids = make(map[string]struct{})\n28\t\t}\n29\t\tfor _, id := range workflowIDs {\n30\t\t\tif id != \"\" {\n31\t\t\t\ts.ids[id] = struct{}{}\n32\t\t\t}\n33\t\t}\n34\t}\n\n#5 matchedBy=fts+vector internal/discovery/state.go:36-44\nsource:\n36\tfunc (s *WorkflowState) Contains(workflowID string) bool {\n37\t\tif s == nil {\n38\t\t\treturn false\n39\t\t}\n40\t\ts.mu.RLock()\n41\t\tdefer s.mu.RUnlock()\n42\t\t_, ok := s.ids[workflowID]\n43\t\treturn ok\n44\t}\n\n#6 matchedBy=fts+vector internal/discovery/filters.go:23-39\nsource:\n23\tfunc ApplyLabelFilters(ctx context.Context, workflows []Workflow, filters DiscoveryFilters) []Workflow {\n24\t\t_ = ctx\n25\t\tfiltered := make([]Workflow, 0, len(workflows))\n26\t\tfor _, workflow := range workflows {\n27\t\t\tif filters.Component != \"\" && workflow.Labels[\"component\"] != filters.Component {\n28\t\t\t\tcontinue\n29\t\t\t}\n30\t\t\tif filters.Environment != \"\" && workflow.Labels[\"environment\"] != filters.Environment {\n31\t\t\t\tcontinue\n32\t\t\t}\n33\t\t\tif filters.Severity != \"\" && workflow.Labels[\"severity\"] != filters.Severity {\n34\t\t\t\tcontinue\n35\t\t\t}\n36\t\t\tfiltered = append(filtered, workflow)\n37\t\t}\n38\t\treturn filtered\n39\t}\n\n#7 matchedBy=fts+vector internal/discovery/catalog.go:11-13\nsource:\n11\tWorkflowCatalog struct {\n12\t\tworkflows map[string]Workflow\n13\t}\n\n#8 matchedBy=fts+vector internal/execution/runner.go:5-12\nsource:\n5\tfunc ValidateWorkflowParameters(required []string, provided map[string]string) error {\n6\t\tfor _, name := range required {\n7\t\t\tif provided[name] == \"\" {\n8\t\t\t\treturn fmt.Errorf(\"missing workflow parameter %q\", name)\n9\t\t\t}\n10\t\t}\n11\t\treturn nil\n12\t}\n\n#9 matchedBy=fts+vector internal/tools/select_workflow.go:45-48\nsource:\n45\tWorkflowResult struct {\n46\t\tID         string\n47\t\tParameters map[string]string\n48\t}\n\n#10 matchedBy=fts+vector internal/selection/validator.go:23-29\nsource:\n23\tfunc NewValidator(allowedWorkflowIDs []string) *Validator {\n24\t\tallowed := make(map[string]struct{}, len(allowedWorkflowIDs))\n25\t\tfor _, id := range allowedWorkflowIDs {\n26\t\t\tallowed[id] = struct{}{}\n27\t\t}\n28\t\treturn &Validator{allowed: allowed}\n29\t}\n",
+            "stderr": ""
+          }
+        },
+        {
+          "id": "reject-undiscovered-workflow",
+          "query": "How is a catalog-valid workflow rejected when it was not returned by workflow discovery?",
+          "response": {
+            "stdout": "query groups (1):\nQ1 [primary]: How is a catalog-valid workflow rejected when it was not returned by workflow discovery?\nhits: 10\n\n#1 matchedBy=fts+vector internal/tools/select_workflow.go:34-43\nsource:\n34\tfunc HandleSelectWorkflow(ctx context.Context, workflowID string, result DiscoveryResult, catalog *discovery.WorkflowCatalog) (WorkflowResult, error) {\n35\t\tif err := authorizeSelectionDriver(workflowID, result); err != nil {\n36\t\t\treturn WorkflowResult{}, err\n37\t\t}\n38\t\tworkflow, ok := catalog.GetWorkflow(ctx, workflowID)\n39\t\tif !ok {\n40\t\t\treturn WorkflowResult{}, fmt.Errorf(\"workflow %q not found\", workflowID)\n41\t\t}\n42\t\treturn applySelectedWorkflow(workflow, result), nil\n43\t}\n\n#2 matchedBy=fts+vector internal/tools/list_workflows.go:9-17\nsource:\n9\tfunc ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {\n10\t\tworkflows := catalog.ListWorkflows(ctx, filters)\n11\t\tids := make([]string, 0, len(workflows))\n12\t\tfor _, workflow := range workflows {\n13\t\t\tids = append(ids, workflow.ID)\n14\t\t}\n15\t\tRecordDiscovered(state, ids)\n16\t\treturn workflows\n17\t}\n\n#3 matchedBy=fts+vector internal/tools/select_workflow.go:50-52\nsource:\n50\tfunc applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {\n51\t\treturn WorkflowResult{ID: workflow.ID, Parameters: lookupDiscoveredParameters(workflow.ID, result)}\n52\t}\n\n#4 matchedBy=fts+vector internal/discovery/catalog.go:30-34\nsource:\n30\tfunc (c *WorkflowCatalog) GetWorkflow(ctx context.Context, workflowID string) (Workflow, bool) {\n31\t\t_ = ctx\n32\t\tworkflow, ok := c.workflows[workflowID]\n33\t\treturn workflow, ok\n34\t}\n\n#5 matchedBy=fts+vector internal/discovery/filters.go:23-39\nsource:\n23\tfunc ApplyLabelFilters(ctx context.Context, workflows []Workflow, filters DiscoveryFilters) []Workflow {\n24\t\t_ = ctx\n25\t\tfiltered := make([]Workflow, 0, len(workflows))\n26\t\tfor _, workflow := range workflows {\n27\t\t\tif filters.Component != \"\" && workflow.Labels[\"component\"] != filters.Component {\n28\t\t\t\tcontinue\n29\t\t\t}\n30\t\t\tif filters.Environment != \"\" && workflow.Labels[\"environment\"] != filters.Environment {\n31\t\t\t\tcontinue\n32\t\t\t}\n33\t\t\tif filters.Severity != \"\" && workflow.Labels[\"severity\"] != filters.Severity {\n34\t\t\t\tcontinue\n35\t\t\t}\n36\t\t\tfiltered = append(filtered, workflow)\n37\t\t}\n38\t\treturn filtered\n39\t}\n\n#6 matchedBy=fts+vector internal/discovery/catalog.go:15-23\nsource:\n15\tfunc (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {\n16\t\t_ = ctx\n17\t\t_ = filters\n18\t\tresult := make([]Workflow, 0, len(c.workflows))\n19\t\tfor _, workflow := range c.workflows {\n20\t\t\tresult = append(result, workflow)\n21\t\t}\n22\t\treturn result\n23\t}\n\n#7 matchedBy=fts+vector internal/discovery/catalog.go:11-13\nsource:\n11\tWorkflowCatalog struct {\n12\t\tworkflows map[string]Workflow\n13\t}\n\n#8 matchedBy=fts+vector internal/tools/select_workflow.go:27-32\nsource:\n27\tfunc authorizeSelectionDriver(workflowID string, result DiscoveryResult) error {\n28\t\tif !isWorkflowInDiscoveryResult(workflowID, result) {\n29\t\t\treturn fmt.Errorf(\"workflow %q was not discovered\", workflowID)\n30\t\t}\n31\t\treturn nil\n32\t}\n\n#9 matchedBy=fts+vector internal/selection/validator.go:14-16\nsource:\n14\tfunc (e *ValidationError) Error() string {\n15\t\treturn fmt.Sprintf(\"workflow %q rejected: %s\", e.WorkflowID, e.Reason)\n16\t}\n\n#10 matchedBy=fts+vector internal/selection/validator.go:44-49\nsource:\n44\tfunc (v *Validator) Validate(workflowID string) error {\n45\t\tif v.IsAllowed(workflowID) {\n46\t\t\treturn nil\n47\t\t}\n48\t\treturn &ValidationError{WorkflowID: workflowID, Reason: \"not in current discovery result\"}\n49\t}\n",
+            "stderr": ""
+          }
+        },
+        {
+          "id": "forward-labels-to-discovery",
+          "query": "How are signal labels converted into filters before workflow discovery lists actions?",
+          "response": {
+            "stdout": "query groups (1):\nQ1 [primary]: How are signal labels converted into filters before workflow discovery lists actions?\nhits: 10\n\n#1 matchedBy=fts+vector internal/discovery/filters.go:23-39\nsource:\n23\tfunc ApplyLabelFilters(ctx context.Context, workflows []Workflow, filters DiscoveryFilters) []Workflow {\n24\t\t_ = ctx\n25\t\tfiltered := make([]Workflow, 0, len(workflows))\n26\t\tfor _, workflow := range workflows {\n27\t\t\tif filters.Component != \"\" && workflow.Labels[\"component\"] != filters.Component {\n28\t\t\t\tcontinue\n29\t\t\t}\n30\t\t\tif filters.Environment != \"\" && workflow.Labels[\"environment\"] != filters.Environment {\n31\t\t\t\tcontinue\n32\t\t\t}\n33\t\t\tif filters.Severity != \"\" && workflow.Labels[\"severity\"] != filters.Severity {\n34\t\t\t\tcontinue\n35\t\t\t}\n36\t\t\tfiltered = append(filtered, workflow)\n37\t\t}\n38\t\treturn filtered\n39\t}\n\n#2 matchedBy=fts+vector internal/tools/list_workflows.go:9-17\nsource:\n9\tfunc ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {\n10\t\tworkflows := catalog.ListWorkflows(ctx, filters)\n11\t\tids := make([]string, 0, len(workflows))\n12\t\tfor _, workflow := range workflows {\n13\t\t\tids = append(ids, workflow.ID)\n14\t\t}\n15\t\tRecordDiscovered(state, ids)\n16\t\treturn workflows\n17\t}\n\n#3 matchedBy=fts+vector internal/discovery/catalog.go:15-23\nsource:\n15\tfunc (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {\n16\t\t_ = ctx\n17\t\t_ = filters\n18\t\tresult := make([]Workflow, 0, len(c.workflows))\n19\t\tfor _, workflow := range c.workflows {\n20\t\t\tresult = append(result, workflow)\n21\t\t}\n22\t\treturn result\n23\t}\n\n#4 matchedBy=fts+vector internal/tools/select_workflow.go:50-52\nsource:\n50\tfunc applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {\n51\t\treturn WorkflowResult{ID: workflow.ID, Parameters: lookupDiscoveredParameters(workflow.ID, result)}\n52\t}\n\n#5 matchedBy=fts+vector internal/tools/select_workflow.go:34-43\nsource:\n34\tfunc HandleSelectWorkflow(ctx context.Context, workflowID string, result DiscoveryResult, catalog *discovery.WorkflowCatalog) (WorkflowResult, error) {\n35\t\tif err := authorizeSelectionDriver(workflowID, result); err != nil {\n36\t\t\treturn WorkflowResult{}, err\n37\t\t}\n38\t\tworkflow, ok := catalog.GetWorkflow(ctx, workflowID)\n39\t\tif !ok {\n40\t\t\treturn WorkflowResult{}, fmt.Errorf(\"workflow %q not found\", workflowID)\n41\t\t}\n42\t\treturn applySelectedWorkflow(workflow, result), nil\n43\t}\n\n#6 matchedBy=fts+vector internal/discovery/filters.go:15-21\nsource:\n15\tfunc FiltersFromSignal(signal Signal) DiscoveryFilters {\n16\t\treturn DiscoveryFilters{\n17\t\t\tComponent:   signal.Labels[\"component\"],\n18\t\t\tEnvironment: signal.Labels[\"environment\"],\n19\t\t\tSeverity:    signal.Labels[\"severity\"],\n20\t\t}\n21\t}\n\n#7 matchedBy=fts+vector internal/discovery/filters.go:5-7\nsource:\n5\tSignal struct {\n6\t\tLabels map[string]string\n7\t}\n\n#8 matchedBy=fts+vector internal/discovery/catalog.go:26-28\ndocumentation:\n  ListActions applies signal-derived filters before exposing available actions.\nsource:\n26\tfunc (c *WorkflowCatalog) ListActions(ctx context.Context, filters DiscoveryFilters) []Workflow {\n27\t\treturn ApplyLabelFilters(ctx, c.ListWorkflows(ctx, filters), filters)\n28\t}\n\n#9 matchedBy=fts+vector internal/discovery/catalog.go:5-9\nsource:\n5\tWorkflow struct {\n6\t\tID         string\n7\t\tParameters map[string]string\n8\t\tLabels     map[string]string\n9\t}\n\n#10 matchedBy=fts+vector internal/tools/select_workflow.go:45-48\nsource:\n45\tWorkflowResult struct {\n46\t\tID         string\n47\t\tParameters map[string]string\n48\t}\n",
+            "stderr": ""
+          }
+        },
+        {
+          "id": "preserve-membership-on-retry",
+          "query": "How does discovered workflow membership survive self-correction retries?",
+          "response": {
+            "stdout": "query groups (1):\nQ1 [primary]: How does discovered workflow membership survive self-correction retries?\nhits: 10\n\n#1 matchedBy=fts+vector internal/tools/select_workflow.go:50-52\nsource:\n50\tfunc applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {\n51\t\treturn WorkflowResult{ID: workflow.ID, Parameters: lookupDiscoveredParameters(workflow.ID, result)}\n52\t}\n\n#2 matchedBy=fts+vector internal/discovery/filters.go:23-39\nsource:\n23\tfunc ApplyLabelFilters(ctx context.Context, workflows []Workflow, filters DiscoveryFilters) []Workflow {\n24\t\t_ = ctx\n25\t\tfiltered := make([]Workflow, 0, len(workflows))\n26\t\tfor _, workflow := range workflows {\n27\t\t\tif filters.Component != \"\" && workflow.Labels[\"component\"] != filters.Component {\n28\t\t\t\tcontinue\n29\t\t\t}\n30\t\t\tif filters.Environment != \"\" && workflow.Labels[\"environment\"] != filters.Environment {\n31\t\t\t\tcontinue\n32\t\t\t}\n33\t\t\tif filters.Severity != \"\" && workflow.Labels[\"severity\"] != filters.Severity {\n34\t\t\t\tcontinue\n35\t\t\t}\n36\t\t\tfiltered = append(filtered, workflow)\n37\t\t}\n38\t\treturn filtered\n39\t}\n\n#3 matchedBy=fts+vector internal/discovery/catalog.go:15-23\nsource:\n15\tfunc (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {\n16\t\t_ = ctx\n17\t\t_ = filters\n18\t\tresult := make([]Workflow, 0, len(c.workflows))\n19\t\tfor _, workflow := range c.workflows {\n20\t\t\tresult = append(result, workflow)\n21\t\t}\n22\t\treturn result\n23\t}\n\n#4 matchedBy=fts+vector internal/tools/select_workflow.go:34-43\nsource:\n34\tfunc HandleSelectWorkflow(ctx context.Context, workflowID string, result DiscoveryResult, catalog *discovery.WorkflowCatalog) (WorkflowResult, error) {\n35\t\tif err := authorizeSelectionDriver(workflowID, result); err != nil {\n36\t\t\treturn WorkflowResult{}, err\n37\t\t}\n38\t\tworkflow, ok := catalog.GetWorkflow(ctx, workflowID)\n39\t\tif !ok {\n40\t\t\treturn WorkflowResult{}, fmt.Errorf(\"workflow %q not found\", workflowID)\n41\t\t}\n42\t\treturn applySelectedWorkflow(workflow, result), nil\n43\t}\n\n#5 matchedBy=fts+vector internal/tools/select_workflow.go:27-32\nsource:\n27\tfunc authorizeSelectionDriver(workflowID string, result DiscoveryResult) error {\n28\t\tif !isWorkflowInDiscoveryResult(workflowID, result) {\n29\t\t\treturn fmt.Errorf(\"workflow %q was not discovered\", workflowID)\n30\t\t}\n31\t\treturn nil\n32\t}\n\n#6 matchedBy=fts+vector internal/discovery/catalog.go:30-34\nsource:\n30\tfunc (c *WorkflowCatalog) GetWorkflow(ctx context.Context, workflowID string) (Workflow, bool) {\n31\t\t_ = ctx\n32\t\tworkflow, ok := c.workflows[workflowID]\n33\t\treturn workflow, ok\n34\t}\n\n#7 matchedBy=fts+vector internal/discovery/catalog.go:11-13\nsource:\n11\tWorkflowCatalog struct {\n12\t\tworkflows map[string]Workflow\n13\t}\n\n#8 matchedBy=fts+vector internal/tools/list_workflows.go:9-17\nsource:\n9\tfunc ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {\n10\t\tworkflows := catalog.ListWorkflows(ctx, filters)\n11\t\tids := make([]string, 0, len(workflows))\n12\t\tfor _, workflow := range workflows {\n13\t\t\tids = append(ids, workflow.ID)\n14\t\t}\n15\t\tRecordDiscovered(state, ids)\n16\t\treturn workflows\n17\t}\n\n#9 matchedBy=fts+vector internal/tools/select_workflow.go:15-25\nsource:\n15\tfunc isWorkflowInDiscoveryResult(workflowID string, result DiscoveryResult) bool {\n16\t\tif result.Recommended == workflowID {\n17\t\t\treturn true\n18\t\t}\n19\t\tfor _, alternative := range result.Alternatives {\n20\t\t\tif alternative == workflowID {\n21\t\t\t\treturn true\n22\t\t\t}\n23\t\t}\n24\t\treturn false\n25\t}\n\n#10 matchedBy=fts+vector internal/discovery/state.go:52-55\nsource:\n52\tfunc WorkflowStateFromContext(ctx context.Context) (*WorkflowState, bool) {\n53\t\tstate, ok := ctx.Value(workflowStateKey{}).(*WorkflowState)\n54\t\treturn state, ok && state != nil\n55\t}\n",
+            "stderr": ""
+          }
+        },
+        {
+          "id": "interactive-selection-guard",
+          "query": "Where does interactive selection reject a workflow absent from the current discovery result?",
+          "response": {
+            "stdout": "query groups (1):\nQ1 [primary]: Where does interactive selection reject a workflow absent from the current discovery result?\nhits: 10\n\n#1 matchedBy=fts+vector internal/tools/select_workflow.go:50-52\nsource:\n50\tfunc applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {\n51\t\treturn WorkflowResult{ID: workflow.ID, Parameters: lookupDiscoveredParameters(workflow.ID, result)}\n52\t}\n\n#2 matchedBy=fts+vector internal/tools/select_workflow.go:34-43\nsource:\n34\tfunc HandleSelectWorkflow(ctx context.Context, workflowID string, result DiscoveryResult, catalog *discovery.WorkflowCatalog) (WorkflowResult, error) {\n35\t\tif err := authorizeSelectionDriver(workflowID, result); err != nil {\n36\t\t\treturn WorkflowResult{}, err\n37\t\t}\n38\t\tworkflow, ok := catalog.GetWorkflow(ctx, workflowID)\n39\t\tif !ok {\n40\t\t\treturn WorkflowResult{}, fmt.Errorf(\"workflow %q not found\", workflowID)\n41\t\t}\n42\t\treturn applySelectedWorkflow(workflow, result), nil\n43\t}\n\n#3 matchedBy=fts+vector internal/discovery/catalog.go:15-23\nsource:\n15\tfunc (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {\n16\t\t_ = ctx\n17\t\t_ = filters\n18\t\tresult := make([]Workflow, 0, len(c.workflows))\n19\t\tfor _, workflow := range c.workflows {\n20\t\t\tresult = append(result, workflow)\n21\t\t}\n22\t\treturn result\n23\t}\n\n#4 matchedBy=fts+vector internal/tools/list_workflows.go:9-17\nsource:\n9\tfunc ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {\n10\t\tworkflows := catalog.ListWorkflows(ctx, filters)\n11\t\tids := make([]string, 0, len(workflows))\n12\t\tfor _, workflow := range workflows {\n13\t\t\tids = append(ids, workflow.ID)\n14\t\t}\n15\t\tRecordDiscovered(state, ids)\n16\t\treturn workflows\n17\t}\n\n#5 matchedBy=fts+vector internal/tools/select_workflow.go:27-32\nsource:\n27\tfunc authorizeSelectionDriver(workflowID string, result DiscoveryResult) error {\n28\t\tif !isWorkflowInDiscoveryResult(workflowID, result) {\n29\t\t\treturn fmt.Errorf(\"workflow %q was not discovered\", workflowID)\n30\t\t}\n31\t\treturn nil\n32\t}\n\n#6 matchedBy=fts+vector internal/tools/select_workflow.go:15-25\nsource:\n15\tfunc isWorkflowInDiscoveryResult(workflowID string, result DiscoveryResult) bool {\n16\t\tif result.Recommended == workflowID {\n17\t\t\treturn true\n18\t\t}\n19\t\tfor _, alternative := range result.Alternatives {\n20\t\t\tif alternative == workflowID {\n21\t\t\t\treturn true\n22\t\t\t}\n23\t\t}\n24\t\treturn false\n25\t}\n\n#7 matchedBy=fts+vector internal/selection/validator.go:44-49\nsource:\n44\tfunc (v *Validator) Validate(workflowID string) error {\n45\t\tif v.IsAllowed(workflowID) {\n46\t\t\treturn nil\n47\t\t}\n48\t\treturn &ValidationError{WorkflowID: workflowID, Reason: \"not in current discovery result\"}\n49\t}\n\n#8 matchedBy=fts+vector internal/tools/select_workflow.go:54-59\nsource:\n54\tfunc lookupDiscoveredParameters(workflowID string, result DiscoveryResult) map[string]string {\n55\t\tif workflowID == result.Recommended {\n56\t\t\treturn map[string]string{\"source\": \"recommended\"}\n57\t\t}\n58\t\treturn map[string]string{\"source\": \"alternative\"}\n59\t}\n\n#9 matchedBy=fts+vector internal/tools/select_workflow.go:45-48\nsource:\n45\tWorkflowResult struct {\n46\t\tID         string\n47\t\tParameters map[string]string\n48\t}\n\n#10 matchedBy=fts+vector internal/selection/validator.go:18-21\nsource:\n18\tValidator struct {\n19\t\tallowed map[string]struct{}\n20\t\tstate   *discovery.WorkflowState\n21\t}\n",
+            "stderr": ""
+          }
+        },
+        {
+          "id": "validate-workflow-parameters",
+          "query": "Where are remediation workflow parameters validated before execution?",
+          "response": {
+            "stdout": "query groups (1):\nQ1 [primary]: Where are remediation workflow parameters validated before execution?\nhits: 10\n\n#1 matchedBy=fts+vector internal/discovery/catalog.go:30-34\nsource:\n30\tfunc (c *WorkflowCatalog) GetWorkflow(ctx context.Context, workflowID string) (Workflow, bool) {\n31\t\t_ = ctx\n32\t\tworkflow, ok := c.workflows[workflowID]\n33\t\treturn workflow, ok\n34\t}\n\n#2 matchedBy=fts+vector internal/discovery/catalog.go:15-23\nsource:\n15\tfunc (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {\n16\t\t_ = ctx\n17\t\t_ = filters\n18\t\tresult := make([]Workflow, 0, len(c.workflows))\n19\t\tfor _, workflow := range c.workflows {\n20\t\t\tresult = append(result, workflow)\n21\t\t}\n22\t\treturn result\n23\t}\n\n#3 matchedBy=fts+vector internal/tools/select_workflow.go:34-43\nsource:\n34\tfunc HandleSelectWorkflow(ctx context.Context, workflowID string, result DiscoveryResult, catalog *discovery.WorkflowCatalog) (WorkflowResult, error) {\n35\t\tif err := authorizeSelectionDriver(workflowID, result); err != nil {\n36\t\t\treturn WorkflowResult{}, err\n37\t\t}\n38\t\tworkflow, ok := catalog.GetWorkflow(ctx, workflowID)\n39\t\tif !ok {\n40\t\t\treturn WorkflowResult{}, fmt.Errorf(\"workflow %q not found\", workflowID)\n41\t\t}\n42\t\treturn applySelectedWorkflow(workflow, result), nil\n43\t}\n\n#4 matchedBy=fts+vector internal/tools/select_workflow.go:50-52\nsource:\n50\tfunc applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {\n51\t\treturn WorkflowResult{ID: workflow.ID, Parameters: lookupDiscoveredParameters(workflow.ID, result)}\n52\t}\n\n#5 matchedBy=fts+vector internal/discovery/catalog.go:5-9\nsource:\n5\tWorkflow struct {\n6\t\tID         string\n7\t\tParameters map[string]string\n8\t\tLabels     map[string]string\n9\t}\n\n#6 matchedBy=fts+vector internal/tools/select_workflow.go:45-48\nsource:\n45\tWorkflowResult struct {\n46\t\tID         string\n47\t\tParameters map[string]string\n48\t}\n\n#7 matchedBy=fts+vector internal/discovery/filters.go:23-39\nsource:\n23\tfunc ApplyLabelFilters(ctx context.Context, workflows []Workflow, filters DiscoveryFilters) []Workflow {\n24\t\t_ = ctx\n25\t\tfiltered := make([]Workflow, 0, len(workflows))\n26\t\tfor _, workflow := range workflows {\n27\t\t\tif filters.Component != \"\" && workflow.Labels[\"component\"] != filters.Component {\n28\t\t\t\tcontinue\n29\t\t\t}\n30\t\t\tif filters.Environment != \"\" && workflow.Labels[\"environment\"] != filters.Environment {\n31\t\t\t\tcontinue\n32\t\t\t}\n33\t\t\tif filters.Severity != \"\" && workflow.Labels[\"severity\"] != filters.Severity {\n34\t\t\t\tcontinue\n35\t\t\t}\n36\t\t\tfiltered = append(filtered, workflow)\n37\t\t}\n38\t\treturn filtered\n39\t}\n\n#8 matchedBy=fts+vector internal/discovery/catalog.go:11-13\nsource:\n11\tWorkflowCatalog struct {\n12\t\tworkflows map[string]Workflow\n13\t}\n\n#9 matchedBy=fts+vector internal/execution/runner.go:5-12\nsource:\n5\tfunc ValidateWorkflowParameters(required []string, provided map[string]string) error {\n6\t\tfor _, name := range required {\n7\t\t\tif provided[name] == \"\" {\n8\t\t\t\treturn fmt.Errorf(\"missing workflow parameter %q\", name)\n9\t\t\t}\n10\t\t}\n11\t\treturn nil\n12\t}\n\n#10 matchedBy=fts+vector internal/tools/list_workflows.go:9-17\nsource:\n9\tfunc ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {\n10\t\tworkflows := catalog.ListWorkflows(ctx, filters)\n11\t\tids := make([]string, 0, len(workflows))\n12\t\tfor _, workflow := range workflows {\n13\t\t\tids = append(ids, workflow.ID)\n14\t\t}\n15\t\tRecordDiscovered(state, ids)\n16\t\treturn workflows\n17\t}\n",
+            "stderr": ""
+          }
+        },
+        {
+          "id": "empty-discovery-fails-closed",
+          "query": "What happens when workflow discovery returns no IDs and a selection is attempted?",
+          "response": {
+            "stdout": "query groups (1):\nQ1 [primary]: What happens when workflow discovery returns no IDs and a selection is attempted?\nhits: 10\n\n#1 matchedBy=fts+vector internal/tools/list_workflows.go:9-17\nsource:\n9\tfunc ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {\n10\t\tworkflows := catalog.ListWorkflows(ctx, filters)\n11\t\tids := make([]string, 0, len(workflows))\n12\t\tfor _, workflow := range workflows {\n13\t\t\tids = append(ids, workflow.ID)\n14\t\t}\n15\t\tRecordDiscovered(state, ids)\n16\t\treturn workflows\n17\t}\n\n#2 matchedBy=fts+vector internal/tools/select_workflow.go:50-52\nsource:\n50\tfunc applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {\n51\t\treturn WorkflowResult{ID: workflow.ID, Parameters: lookupDiscoveredParameters(workflow.ID, result)}\n52\t}\n\n#3 matchedBy=fts+vector internal/discovery/state.go:20-34\ndocumentation:\n  Add records every non-empty workflow ID returned by discovery.\nsource:\n20\tfunc (s *WorkflowState) Add(workflowIDs ...string) {\n21\t\tif s == nil {\n22\t\t\treturn\n23\t\t}\n24\t\ts.mu.Lock()\n25\t\tdefer s.mu.Unlock()\n26\t\tif s.ids == nil {\n27\t\t\ts.ids = make(map[string]struct{})\n28\t\t}\n29\t\tfor _, id := range workflowIDs {\n30\t\t\tif id != \"\" {\n31\t\t\t\ts.ids[id] = struct{}{}\n32\t\t\t}\n33\t\t}\n34\t}\n\n#4 matchedBy=fts+vector internal/tools/select_workflow.go:34-43\nsource:\n34\tfunc HandleSelectWorkflow(ctx context.Context, workflowID string, result DiscoveryResult, catalog *discovery.WorkflowCatalog) (WorkflowResult, error) {\n35\t\tif err := authorizeSelectionDriver(workflowID, result); err != nil {\n36\t\t\treturn WorkflowResult{}, err\n37\t\t}\n38\t\tworkflow, ok := catalog.GetWorkflow(ctx, workflowID)\n39\t\tif !ok {\n40\t\t\treturn WorkflowResult{}, fmt.Errorf(\"workflow %q not found\", workflowID)\n41\t\t}\n42\t\treturn applySelectedWorkflow(workflow, result), nil\n43\t}\n\n#5 matchedBy=fts+vector internal/discovery/state.go:36-44\nsource:\n36\tfunc (s *WorkflowState) Contains(workflowID string) bool {\n37\t\tif s == nil {\n38\t\t\treturn false\n39\t\t}\n40\t\ts.mu.RLock()\n41\t\tdefer s.mu.RUnlock()\n42\t\t_, ok := s.ids[workflowID]\n43\t\treturn ok\n44\t}\n\n#6 matchedBy=fts+vector internal/discovery/state.go:10-13\nsource:\n10\tWorkflowState struct {\n11\t\tmu  sync.RWMutex\n12\t\tids map[string]struct{}\n13\t}\n\n#7 matchedBy=fts+vector internal/discovery/state.go:15-17\nsource:\n15\tfunc NewWorkflowState() *WorkflowState {\n16\t\treturn &WorkflowState{ids: make(map[string]struct{})}\n17\t}\n\n#8 matchedBy=fts+vector internal/selection/validator.go:18-21\nsource:\n18\tValidator struct {\n19\t\tallowed map[string]struct{}\n20\t\tstate   *discovery.WorkflowState\n21\t}\n\n#9 matchedBy=fts+vector internal/selection/validator.go:31-33\nsource:\n31\tfunc (v *Validator) SetWorkflowState(state *discovery.WorkflowState) {\n32\t\tv.state = state\n33\t}\n\n#10 matchedBy=fts+vector internal/execution/runner.go:5-12\nsource:\n5\tfunc ValidateWorkflowParameters(required []string, provided map[string]string) error {\n6\t\tfor _, name := range required {\n7\t\t\tif provided[name] == \"\" {\n8\t\t\t\treturn fmt.Errorf(\"missing workflow parameter %q\", name)\n9\t\t\t}\n10\t\t}\n11\t\treturn nil\n12\t}\n",
+            "stderr": ""
+          }
+        },
+        {
+          "id": "copy-selected-workflow-details",
+          "query": "How are selected workflow details copied into the final investigation result?",
+          "response": {
+            "stdout": "query groups (1):\nQ1 [primary]: How are selected workflow details copied into the final investigation result?\nhits: 10\n\n#1 matchedBy=fts+vector internal/tools/select_workflow.go:50-52\nsource:\n50\tfunc applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {\n51\t\treturn WorkflowResult{ID: workflow.ID, Parameters: lookupDiscoveredParameters(workflow.ID, result)}\n52\t}\n\n#2 matchedBy=fts+vector internal/tools/select_workflow.go:34-43\nsource:\n34\tfunc HandleSelectWorkflow(ctx context.Context, workflowID string, result DiscoveryResult, catalog *discovery.WorkflowCatalog) (WorkflowResult, error) {\n35\t\tif err := authorizeSelectionDriver(workflowID, result); err != nil {\n36\t\t\treturn WorkflowResult{}, err\n37\t\t}\n38\t\tworkflow, ok := catalog.GetWorkflow(ctx, workflowID)\n39\t\tif !ok {\n40\t\t\treturn WorkflowResult{}, fmt.Errorf(\"workflow %q not found\", workflowID)\n41\t\t}\n42\t\treturn applySelectedWorkflow(workflow, result), nil\n43\t}\n\n#3 matchedBy=fts+vector internal/tools/select_workflow.go:27-32\nsource:\n27\tfunc authorizeSelectionDriver(workflowID string, result DiscoveryResult) error {\n28\t\tif !isWorkflowInDiscoveryResult(workflowID, result) {\n29\t\t\treturn fmt.Errorf(\"workflow %q was not discovered\", workflowID)\n30\t\t}\n31\t\treturn nil\n32\t}\n\n#4 matchedBy=fts+vector internal/tools/select_workflow.go:15-25\nsource:\n15\tfunc isWorkflowInDiscoveryResult(workflowID string, result DiscoveryResult) bool {\n16\t\tif result.Recommended == workflowID {\n17\t\t\treturn true\n18\t\t}\n19\t\tfor _, alternative := range result.Alternatives {\n20\t\t\tif alternative == workflowID {\n21\t\t\t\treturn true\n22\t\t\t}\n23\t\t}\n24\t\treturn false\n25\t}\n\n#5 matchedBy=fts+vector internal/tools/select_workflow.go:54-59\nsource:\n54\tfunc lookupDiscoveredParameters(workflowID string, result DiscoveryResult) map[string]string {\n55\t\tif workflowID == result.Recommended {\n56\t\t\treturn map[string]string{\"source\": \"recommended\"}\n57\t\t}\n58\t\treturn map[string]string{\"source\": \"alternative\"}\n59\t}\n\n#6 matchedBy=fts+vector internal/discovery/catalog.go:30-34\nsource:\n30\tfunc (c *WorkflowCatalog) GetWorkflow(ctx context.Context, workflowID string) (Workflow, bool) {\n31\t\t_ = ctx\n32\t\tworkflow, ok := c.workflows[workflowID]\n33\t\treturn workflow, ok\n34\t}\n\n#7 matchedBy=fts+vector internal/discovery/catalog.go:15-23\nsource:\n15\tfunc (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {\n16\t\t_ = ctx\n17\t\t_ = filters\n18\t\tresult := make([]Workflow, 0, len(c.workflows))\n19\t\tfor _, workflow := range c.workflows {\n20\t\t\tresult = append(result, workflow)\n21\t\t}\n22\t\treturn result\n23\t}\n\n#8 matchedBy=fts+vector internal/discovery/filters.go:23-39\nsource:\n23\tfunc ApplyLabelFilters(ctx context.Context, workflows []Workflow, filters DiscoveryFilters) []Workflow {\n24\t\t_ = ctx\n25\t\tfiltered := make([]Workflow, 0, len(workflows))\n26\t\tfor _, workflow := range workflows {\n27\t\t\tif filters.Component != \"\" && workflow.Labels[\"component\"] != filters.Component {\n28\t\t\t\tcontinue\n29\t\t\t}\n30\t\t\tif filters.Environment != \"\" && workflow.Labels[\"environment\"] != filters.Environment {\n31\t\t\t\tcontinue\n32\t\t\t}\n33\t\t\tif filters.Severity != \"\" && workflow.Labels[\"severity\"] != filters.Severity {\n34\t\t\t\tcontinue\n35\t\t\t}\n36\t\t\tfiltered = append(filtered, workflow)\n37\t\t}\n38\t\treturn filtered\n39\t}\n\n#9 matchedBy=fts+vector internal/selection/retry.go:24-26\nsource:\n24\tfunc retrySelection(ctx context.Context, validator *Validator, candidate string) error {\n25\t\treturn SelfCorrectSelection(ctx, validator, candidate)\n26\t}\n\n#10 matchedBy=fts+vector internal/discovery/catalog.go:11-13\nsource:\n11\tWorkflowCatalog struct {\n12\t\tworkflows map[string]Workflow\n13\t}\n",
+            "stderr": ""
+          }
+        }
+      ]
+    },
+    "sense": {
+      "root": "/private/var/folders/r7/gktmmltd1zq7wqhsjjslwsm80000gn/T/opencode/synthetic-go-workflow-discovery-coco",
+      "queries": [
+        {
+          "id": "record-discovered-membership",
+          "query": "Where are workflow IDs returned by list_workflows recorded for later validation?",
+          "response": {
+            "results": [
+              {
+                "symbol": "tools.ListWorkflows",
+                "file": "internal/tools/list_workflows.go",
+                "line": 9,
+                "kind": "function",
+                "score": 1.12,
+                "snippet": "func ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowCatalog.GetWorkflow",
+                "file": "internal/discovery/catalog.go",
+                "line": 30,
+                "kind": "method",
+                "score": 1.05,
+                "snippet": "func (c *WorkflowCatalog) GetWorkflow(ctx context.Context, workflowID string) (Workflow, bool) {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.applySelectedWorkflow",
+                "file": "internal/tools/select_workflow.go",
+                "line": 50,
+                "kind": "function",
+                "score": 0.96,
+                "snippet": "func applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowCatalog.ListWorkflows",
+                "file": "internal/discovery/catalog.go",
+                "line": 15,
+                "kind": "method",
+                "score": 0.89,
+                "snippet": "func (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.WorkflowResult",
+                "file": "internal/tools/select_workflow.go",
+                "line": 45,
+                "kind": "class",
+                "score": 0.87,
+                "snippet": "type WorkflowResult struct {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowState.Add",
+                "file": "internal/discovery/state.go",
+                "line": 20,
+                "kind": "method",
+                "score": 0.84,
+                "snippet": "func (s *WorkflowState) Add(workflowIDs ...string) {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowCatalog",
+                "file": "internal/discovery/catalog.go",
+                "line": 11,
+                "kind": "class",
+                "score": 0.82,
+                "snippet": "type WorkflowCatalog struct {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowState",
+                "file": "internal/discovery/state.go",
+                "line": 10,
+                "kind": "class",
+                "score": 0.77,
+                "snippet": "type WorkflowState struct {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.Workflow",
+                "file": "internal/discovery/catalog.go",
+                "line": 5,
+                "kind": "class",
+                "score": 0.73,
+                "snippet": "type Workflow struct {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "selection.Validator.IsAllowed",
+                "file": "internal/selection/validator.go",
+                "line": 37,
+                "kind": "method",
+                "score": 0.66,
+                "snippet": "func (v *Validator) IsAllowed(workflowID string) bool {",
+                "references": 1,
+                "source": "hybrid"
+              }
+            ],
+            "search_mode": "hybrid",
+            "fusion_weights": {
+              "keyword": 0.5,
+              "vector": 0.5
+            },
+            "next_steps": []
+          }
+        },
+        {
+          "id": "reject-undiscovered-workflow",
+          "query": "How is a catalog-valid workflow rejected when it was not returned by workflow discovery?",
+          "response": {
+            "results": [
+              {
+                "symbol": "tools.isWorkflowInDiscoveryResult",
+                "file": "internal/tools/select_workflow.go",
+                "line": 15,
+                "kind": "function",
+                "score": 1.05,
+                "snippet": "func isWorkflowInDiscoveryResult(workflowID string, result DiscoveryResult) bool {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "selection.Validator.IsAllowed",
+                "file": "internal/selection/validator.go",
+                "line": 37,
+                "kind": "method",
+                "score": 0.97,
+                "snippet": "func (v *Validator) IsAllowed(workflowID string) bool {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.Workflow",
+                "file": "internal/discovery/catalog.go",
+                "line": 5,
+                "kind": "class",
+                "score": 0.8,
+                "snippet": "type Workflow struct {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowState",
+                "file": "internal/discovery/state.go",
+                "line": 10,
+                "kind": "class",
+                "score": 0.77,
+                "snippet": "type WorkflowState struct {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowCatalog",
+                "file": "internal/discovery/catalog.go",
+                "line": 11,
+                "kind": "class",
+                "score": 0.77,
+                "snippet": "type WorkflowCatalog struct {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowCatalog.GetWorkflow",
+                "file": "internal/discovery/catalog.go",
+                "line": 30,
+                "kind": "method",
+                "score": 0.76,
+                "snippet": "func (c *WorkflowCatalog) GetWorkflow(ctx context.Context, workflowID string) (Workflow, bool) {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowCatalog.ListWorkflows",
+                "file": "internal/discovery/catalog.go",
+                "line": 15,
+                "kind": "method",
+                "score": 0.76,
+                "snippet": "func (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowCatalog.ListActions",
+                "file": "internal/discovery/catalog.go",
+                "line": 26,
+                "kind": "method",
+                "score": 0.63,
+                "snippet": "func (c *WorkflowCatalog) ListActions(ctx context.Context, filters DiscoveryFilters) []Workflow {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "metrics.ValidateMetricName",
+                "file": "internal/metrics/validator.go",
+                "line": 7,
+                "kind": "function",
+                "score": 0.61,
+                "snippet": "func ValidateMetricName(name string) bool {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowState.Contains",
+                "file": "internal/discovery/state.go",
+                "line": 36,
+                "kind": "method",
+                "score": 0.57,
+                "snippet": "func (s *WorkflowState) Contains(workflowID string) bool {",
+                "references": 1,
+                "source": "hybrid"
+              }
+            ],
+            "search_mode": "hybrid",
+            "fusion_weights": {
+              "keyword": 0.5,
+              "vector": 0.5
+            },
+            "next_steps": []
+          }
+        },
+        {
+          "id": "forward-labels-to-discovery",
+          "query": "How are signal labels converted into filters before workflow discovery lists actions?",
+          "response": {
+            "results": [
+              {
+                "symbol": "discovery.WorkflowCatalog.ListActions",
+                "file": "internal/discovery/catalog.go",
+                "line": 26,
+                "kind": "method",
+                "score": 1.0,
+                "snippet": "func (c *WorkflowCatalog) ListActions(ctx context.Context, filters DiscoveryFilters) []Workflow {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.FiltersFromSignal",
+                "file": "internal/discovery/filters.go",
+                "line": 15,
+                "kind": "function",
+                "score": 1.0,
+                "snippet": "func FiltersFromSignal(signal Signal) DiscoveryFilters {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.Signal",
+                "file": "internal/discovery/filters.go",
+                "line": 5,
+                "kind": "class",
+                "score": 0.98,
+                "snippet": "type Signal struct {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowCatalog.ListWorkflows",
+                "file": "internal/discovery/catalog.go",
+                "line": 15,
+                "kind": "method",
+                "score": 0.95,
+                "snippet": "func (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.ApplyLabelFilters",
+                "file": "internal/discovery/filters.go",
+                "line": 23,
+                "kind": "function",
+                "score": 0.9,
+                "snippet": "func ApplyLabelFilters(ctx context.Context, workflows []Workflow, filters DiscoveryFilters) []Workflow {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.DiscoveryFilters",
+                "file": "internal/discovery/filters.go",
+                "line": 9,
+                "kind": "class",
+                "score": 0.8,
+                "snippet": "type DiscoveryFilters struct {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.Workflow",
+                "file": "internal/discovery/catalog.go",
+                "line": 5,
+                "kind": "class",
+                "score": 0.77,
+                "snippet": "type Workflow struct {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowCatalog",
+                "file": "internal/discovery/catalog.go",
+                "line": 11,
+                "kind": "class",
+                "score": 0.7,
+                "snippet": "type WorkflowCatalog struct {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.workflowStateKey",
+                "file": "internal/discovery/state.go",
+                "line": 46,
+                "kind": "class",
+                "score": 0.67,
+                "snippet": "type workflowStateKey struct{}",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowState",
+                "file": "internal/discovery/state.go",
+                "line": 10,
+                "kind": "class",
+                "score": 0.65,
+                "snippet": "type WorkflowState struct {",
+                "references": 1,
+                "source": "hybrid"
+              }
+            ],
+            "search_mode": "hybrid",
+            "fusion_weights": {
+              "keyword": 0.5,
+              "vector": 0.5
+            },
+            "next_steps": []
+          }
+        },
+        {
+          "id": "preserve-membership-on-retry",
+          "query": "How does discovered workflow membership survive self-correction retries?",
+          "response": {
+            "results": [
+              {
+                "symbol": "tools.RecordDiscovered",
+                "file": "internal/tools/list_workflows.go",
+                "line": 19,
+                "kind": "function",
+                "score": 1.05,
+                "snippet": "func RecordDiscovered(state *discovery.WorkflowState, workflowIDs []string) {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.Workflow",
+                "file": "internal/discovery/catalog.go",
+                "line": 5,
+                "kind": "class",
+                "score": 0.94,
+                "snippet": "type Workflow struct {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowCatalog.GetWorkflow",
+                "file": "internal/discovery/catalog.go",
+                "line": 30,
+                "kind": "method",
+                "score": 0.93,
+                "snippet": "func (c *WorkflowCatalog) GetWorkflow(ctx context.Context, workflowID string) (Workflow, bool) {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowState",
+                "file": "internal/discovery/state.go",
+                "line": 10,
+                "kind": "class",
+                "score": 0.89,
+                "snippet": "type WorkflowState struct {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowCatalog",
+                "file": "internal/discovery/catalog.go",
+                "line": 11,
+                "kind": "class",
+                "score": 0.73,
+                "snippet": "type WorkflowCatalog struct {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowState.Contains",
+                "file": "internal/discovery/state.go",
+                "line": 36,
+                "kind": "method",
+                "score": 0.73,
+                "snippet": "func (s *WorkflowState) Contains(workflowID string) bool {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowState.Add",
+                "file": "internal/discovery/state.go",
+                "line": 20,
+                "kind": "method",
+                "score": 0.72,
+                "snippet": "func (s *WorkflowState) Add(workflowIDs ...string) {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WithWorkflowState",
+                "file": "internal/discovery/state.go",
+                "line": 48,
+                "kind": "function",
+                "score": 0.71,
+                "snippet": "func WithWorkflowState(ctx context.Context, state *WorkflowState) context.Context {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.lookupDiscoveredParameters",
+                "file": "internal/tools/select_workflow.go",
+                "line": 54,
+                "kind": "function",
+                "score": 0.7,
+                "snippet": "func lookupDiscoveredParameters(workflowID string, result DiscoveryResult) map[string]string {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.ListWorkflows",
+                "file": "internal/tools/list_workflows.go",
+                "line": 9,
+                "kind": "function",
+                "score": 0.67,
+                "snippet": "func ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {",
+                "references": 1,
+                "source": "hybrid"
+              }
+            ],
+            "search_mode": "hybrid",
+            "fusion_weights": {
+              "keyword": 0.5,
+              "vector": 0.5
+            },
+            "next_steps": []
+          }
+        },
+        {
+          "id": "interactive-selection-guard",
+          "query": "Where does interactive selection reject a workflow absent from the current discovery result?",
+          "response": {
+            "results": [
+              {
+                "symbol": "tools.authorizeSelectionDriver",
+                "file": "internal/tools/select_workflow.go",
+                "line": 27,
+                "kind": "function",
+                "score": 1.09,
+                "snippet": "func authorizeSelectionDriver(workflowID string, result DiscoveryResult) error {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.HandleSelectWorkflow",
+                "file": "internal/tools/select_workflow.go",
+                "line": 34,
+                "kind": "function",
+                "score": 1.0,
+                "snippet": "func HandleSelectWorkflow(ctx context.Context, workflowID string, result DiscoveryResult, catalog *discovery.WorkflowCatalog) (WorkflowResult, error) {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowStateFromContext",
+                "file": "internal/discovery/state.go",
+                "line": 52,
+                "kind": "function",
+                "score": 0.96,
+                "snippet": "func WorkflowStateFromContext(ctx context.Context) (*WorkflowState, bool) {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.applySelectedWorkflow",
+                "file": "internal/tools/select_workflow.go",
+                "line": 50,
+                "kind": "function",
+                "score": 0.9,
+                "snippet": "func applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.isWorkflowInDiscoveryResult",
+                "file": "internal/tools/select_workflow.go",
+                "line": 15,
+                "kind": "function",
+                "score": 0.77,
+                "snippet": "func isWorkflowInDiscoveryResult(workflowID string, result DiscoveryResult) bool {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WithWorkflowState",
+                "file": "internal/discovery/state.go",
+                "line": 48,
+                "kind": "function",
+                "score": 0.76,
+                "snippet": "func WithWorkflowState(ctx context.Context, state *WorkflowState) context.Context {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.ListWorkflows",
+                "file": "internal/tools/list_workflows.go",
+                "line": 9,
+                "kind": "function",
+                "score": 0.75,
+                "snippet": "func ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.Workflow",
+                "file": "internal/discovery/catalog.go",
+                "line": 5,
+                "kind": "class",
+                "score": 0.72,
+                "snippet": "type Workflow struct {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.DiscoveryResult",
+                "file": "internal/tools/select_workflow.go",
+                "line": 10,
+                "kind": "class",
+                "score": 0.69,
+                "snippet": "type DiscoveryResult struct {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "selection.SelfCorrectSelection",
+                "file": "internal/selection/retry.go",
+                "line": 9,
+                "kind": "function",
+                "score": 0.69,
+                "snippet": "func SelfCorrectSelection(ctx context.Context, validator *Validator, candidate string) error {",
+                "references": 2,
+                "source": "hybrid"
+              }
+            ],
+            "search_mode": "hybrid",
+            "fusion_weights": {
+              "keyword": 0.5,
+              "vector": 0.5
+            },
+            "next_steps": []
+          }
+        },
+        {
+          "id": "validate-workflow-parameters",
+          "query": "Where are remediation workflow parameters validated before execution?",
+          "response": {
+            "results": [
+              {
+                "symbol": "tools.lookupDiscoveredParameters",
+                "file": "internal/tools/select_workflow.go",
+                "line": 54,
+                "kind": "function",
+                "score": 1.11,
+                "snippet": "func lookupDiscoveredParameters(workflowID string, result DiscoveryResult) map[string]string {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.applySelectedWorkflow",
+                "file": "internal/tools/select_workflow.go",
+                "line": 50,
+                "kind": "function",
+                "score": 1.03,
+                "snippet": "func applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowCatalog.ListActions",
+                "file": "internal/discovery/catalog.go",
+                "line": 26,
+                "kind": "method",
+                "score": 1.0,
+                "snippet": "func (c *WorkflowCatalog) ListActions(ctx context.Context, filters DiscoveryFilters) []Workflow {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowCatalog.ListWorkflows",
+                "file": "internal/discovery/catalog.go",
+                "line": 15,
+                "kind": "method",
+                "score": 0.91,
+                "snippet": "func (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowCatalog.GetWorkflow",
+                "file": "internal/discovery/catalog.go",
+                "line": 30,
+                "kind": "method",
+                "score": 0.87,
+                "snippet": "func (c *WorkflowCatalog) GetWorkflow(ctx context.Context, workflowID string) (Workflow, bool) {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.ApplyLabelFilters",
+                "file": "internal/discovery/filters.go",
+                "line": 23,
+                "kind": "function",
+                "score": 0.78,
+                "snippet": "func ApplyLabelFilters(ctx context.Context, workflows []Workflow, filters DiscoveryFilters) []Workflow {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.ListWorkflows",
+                "file": "internal/tools/list_workflows.go",
+                "line": 9,
+                "kind": "function",
+                "score": 0.77,
+                "snippet": "func ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.WorkflowResult",
+                "file": "internal/tools/select_workflow.go",
+                "line": 45,
+                "kind": "class",
+                "score": 0.75,
+                "snippet": "type WorkflowResult struct {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowCatalog",
+                "file": "internal/discovery/catalog.go",
+                "line": 11,
+                "kind": "class",
+                "score": 0.75,
+                "snippet": "type WorkflowCatalog struct {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.Workflow",
+                "file": "internal/discovery/catalog.go",
+                "line": 5,
+                "kind": "class",
+                "score": 0.7,
+                "snippet": "type Workflow struct {",
+                "references": 1,
+                "source": "hybrid"
+              }
+            ],
+            "search_mode": "hybrid",
+            "fusion_weights": {
+              "keyword": 0.5,
+              "vector": 0.5
+            },
+            "next_steps": []
+          }
+        },
+        {
+          "id": "empty-discovery-fails-closed",
+          "query": "What happens when workflow discovery returns no IDs and a selection is attempted?",
+          "response": {
+            "results": [
+              {
+                "symbol": "selection.Validator.IsAllowed",
+                "file": "internal/selection/validator.go",
+                "line": 37,
+                "kind": "method",
+                "score": 1.2,
+                "snippet": "func (v *Validator) IsAllowed(workflowID string) bool {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "selection.Validator.Validate",
+                "file": "internal/selection/validator.go",
+                "line": 44,
+                "kind": "method",
+                "score": 1.1,
+                "snippet": "func (v *Validator) Validate(workflowID string) error {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowStateFromContext",
+                "file": "internal/discovery/state.go",
+                "line": 52,
+                "kind": "function",
+                "score": 1.0,
+                "snippet": "func WorkflowStateFromContext(ctx context.Context) (*WorkflowState, bool) {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "selection.SelfCorrectSelection",
+                "file": "internal/selection/retry.go",
+                "line": 9,
+                "kind": "function",
+                "score": 1.0,
+                "snippet": "func SelfCorrectSelection(ctx context.Context, validator *Validator, candidate string) error {",
+                "references": 2,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.ListWorkflows",
+                "file": "internal/tools/list_workflows.go",
+                "line": 9,
+                "kind": "function",
+                "score": 0.85,
+                "snippet": "func ListWorkflows(ctx context.Context, catalog *discovery.WorkflowCatalog, state *discovery.WorkflowState, filters discovery.DiscoveryFilters) []discovery.Workflow {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowState",
+                "file": "internal/discovery/state.go",
+                "line": 10,
+                "kind": "class",
+                "score": 0.84,
+                "snippet": "type WorkflowState struct {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.isWorkflowInDiscoveryResult",
+                "file": "internal/tools/select_workflow.go",
+                "line": 15,
+                "kind": "function",
+                "score": 0.82,
+                "snippet": "func isWorkflowInDiscoveryResult(workflowID string, result DiscoveryResult) bool {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowState.Contains",
+                "file": "internal/discovery/state.go",
+                "line": 36,
+                "kind": "method",
+                "score": 0.81,
+                "snippet": "func (s *WorkflowState) Contains(workflowID string) bool {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "selection.retrySelection",
+                "file": "internal/selection/retry.go",
+                "line": 24,
+                "kind": "function",
+                "score": 0.8,
+                "snippet": "func retrySelection(ctx context.Context, validator *Validator, candidate string) error {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.authorizeSelectionDriver",
+                "file": "internal/tools/select_workflow.go",
+                "line": 27,
+                "kind": "function",
+                "score": 0.76,
+                "snippet": "func authorizeSelectionDriver(workflowID string, result DiscoveryResult) error {",
+                "references": 1,
+                "source": "hybrid"
+              }
+            ],
+            "search_mode": "hybrid",
+            "fusion_weights": {
+              "keyword": 0.5,
+              "vector": 0.5
+            },
+            "next_steps": []
+          }
+        },
+        {
+          "id": "copy-selected-workflow-details",
+          "query": "How are selected workflow details copied into the final investigation result?",
+          "response": {
+            "results": [
+              {
+                "symbol": "tools.applySelectedWorkflow",
+                "file": "internal/tools/select_workflow.go",
+                "line": 50,
+                "kind": "function",
+                "score": 1.05,
+                "snippet": "func applySelectedWorkflow(workflow discovery.Workflow, result DiscoveryResult) WorkflowResult {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.lookupDiscoveredParameters",
+                "file": "internal/tools/select_workflow.go",
+                "line": 54,
+                "kind": "function",
+                "score": 1.0,
+                "snippet": "func lookupDiscoveredParameters(workflowID string, result DiscoveryResult) map[string]string {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.WorkflowResult",
+                "file": "internal/tools/select_workflow.go",
+                "line": 45,
+                "kind": "class",
+                "score": 0.84,
+                "snippet": "type WorkflowResult struct {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.DiscoveryResult",
+                "file": "internal/tools/select_workflow.go",
+                "line": 10,
+                "kind": "class",
+                "score": 0.81,
+                "snippet": "type DiscoveryResult struct {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.isWorkflowInDiscoveryResult",
+                "file": "internal/tools/select_workflow.go",
+                "line": 15,
+                "kind": "function",
+                "score": 0.76,
+                "snippet": "func isWorkflowInDiscoveryResult(workflowID string, result DiscoveryResult) bool {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.HandleSelectWorkflow",
+                "file": "internal/tools/select_workflow.go",
+                "line": 34,
+                "kind": "function",
+                "score": 0.75,
+                "snippet": "func HandleSelectWorkflow(ctx context.Context, workflowID string, result DiscoveryResult, catalog *discovery.WorkflowCatalog) (WorkflowResult, error) {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "tools.authorizeSelectionDriver",
+                "file": "internal/tools/select_workflow.go",
+                "line": 27,
+                "kind": "function",
+                "score": 0.55,
+                "snippet": "func authorizeSelectionDriver(workflowID string, result DiscoveryResult) error {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowCatalog.ListActions",
+                "file": "internal/discovery/catalog.go",
+                "line": 26,
+                "kind": "method",
+                "score": 0.5,
+                "snippet": "func (c *WorkflowCatalog) ListActions(ctx context.Context, filters DiscoveryFilters) []Workflow {",
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.Workflow",
+                "file": "internal/discovery/catalog.go",
+                "line": 5,
+                "kind": "class",
+                "score": 0.46,
+                "snippet": "type Workflow struct {",
+                "references": 1,
+                "source": "hybrid"
+              },
+              {
+                "symbol": "discovery.WorkflowCatalog.ListWorkflows",
+                "file": "internal/discovery/catalog.go",
+                "line": 15,
+                "kind": "method",
+                "score": 0.45,
+                "snippet": "func (c *WorkflowCatalog) ListWorkflows(ctx context.Context, filters DiscoveryFilters) []Workflow {",
+                "references": 1,
+                "source": "hybrid"
+              }
+            ],
+            "search_mode": "hybrid",
+            "fusion_weights": {
+              "keyword": 0.5,
+              "vector": 0.5
+            },
+            "next_steps": []
+          }
+        }
+      ]
+    }
+  }
+}

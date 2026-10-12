@@ -14,18 +14,27 @@ Usage:
 
 import argparse
 import json
-import os
 import sys
 import time
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-_config = {"hindsight_url": os.environ.get("HINDSIGHT_URL", "http://localhost:8888")}
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from engram.project_config import (  # noqa: E402
+    DEFAULT_HINDSIGHT_URL,
+    load_configured_mental_models,
+    load_default_settings,
+)
+
+DEPLOYMENT_SETTINGS = load_default_settings()
+HINDSIGHT_URL = DEPLOYMENT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+assert HINDSIGHT_URL is not None
 
 MENTAL_MODELS = [
-    # cursor-memory: behavioral patterns (delta, auto-refresh after consolidation)
+    # shared-memory: behavioral patterns (delta, auto-refresh after consolidation)
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "coding-conventions",
         "name": "Coding Conventions",
         "source_query": "What are the user's coding conventions, naming patterns, and style preferences?",
@@ -33,7 +42,7 @@ MENTAL_MODELS = [
         "trigger": {"mode": "delta", "refresh_after_consolidation": True},
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "testing-methodology",
         "name": "Testing Methodology",
         "source_query": "What testing approach, frameworks, and patterns does the user follow?",
@@ -41,7 +50,7 @@ MENTAL_MODELS = [
         "trigger": {"mode": "delta", "refresh_after_consolidation": True},
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "workflow-preferences",
         "name": "Development Workflow",
         "source_query": "What is the user's preferred development workflow, review process, and tooling?",
@@ -49,7 +58,7 @@ MENTAL_MODELS = [
         "trigger": {"mode": "delta", "refresh_after_consolidation": True},
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "architecture-decisions",
         "name": "Architecture Decisions",
         "source_query": "What architectural decisions and design patterns has the user established?",
@@ -170,11 +179,11 @@ MENTAL_MODELS = [
         "max_tokens": 4096,
         "trigger": {"mode": "delta", "refresh_after_consolidation": False},
     },
-    # cursor-memory, tag-isolated (tags=["koku"], strict match) sibling of
+    # shared-memory, tag-isolated (tags=["koku"], strict match) sibling of
     # kubernaut's/dcm's/engram's own scoped models -- same 2026-07-27 fix
     # pattern applied from day one for koku's onboarding, see docs/FINDINGS.md.
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "koku-coding-conventions",
         "name": "Koku Coding Conventions",
         "source_query": "What are the user's coding conventions, naming patterns, and style preferences when working on koku (Python/Django)?",
@@ -183,7 +192,7 @@ MENTAL_MODELS = [
         "tags": ["koku"],
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "koku-testing-methodology",
         "name": "Koku Testing Methodology",
         "source_query": "What testing approach, frameworks, and patterns does the user follow when working on koku?",
@@ -192,7 +201,7 @@ MENTAL_MODELS = [
         "tags": ["koku"],
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "koku-workflow-preferences",
         "name": "Koku Development Workflow",
         "source_query": "What is the user's preferred development workflow, review process, and tooling when working on koku?",
@@ -201,7 +210,7 @@ MENTAL_MODELS = [
         "tags": ["koku"],
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "koku-architecture-decisions",
         "name": "Koku Architecture Decisions",
         "source_query": "What architectural decisions and design patterns has the user established while working on koku?",
@@ -232,11 +241,11 @@ MENTAL_MODELS = [
         "max_tokens": 4096,
         "trigger": {"mode": "delta", "refresh_after_consolidation": False},
     },
-    # cursor-memory, tag-isolated (tags=["rhdh-plugins"]) sibling of
+    # shared-memory, tag-isolated (tags=["rhdh-plugins"]) sibling of
     # koku's/kubernaut's/dcm's/engram's own scoped models -- same 2026-07-27
     # fix pattern applied from day one for this onboarding.
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "rhdh-plugins-coding-conventions",
         "name": "rhdh-plugins Coding Conventions",
         "source_query": "What are the user's coding conventions, naming patterns, and style preferences when working on rhdh-plugins (TypeScript/React Backstage plugins)?",
@@ -245,7 +254,7 @@ MENTAL_MODELS = [
         "tags": ["rhdh-plugins"],
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "rhdh-plugins-testing-methodology",
         "name": "rhdh-plugins Testing Methodology",
         "source_query": "What testing approach, frameworks, and patterns does the user follow when working on rhdh-plugins?",
@@ -254,7 +263,7 @@ MENTAL_MODELS = [
         "tags": ["rhdh-plugins"],
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "rhdh-plugins-workflow-preferences",
         "name": "rhdh-plugins Development Workflow",
         "source_query": "What is the user's preferred development workflow, review process, and tooling when working on rhdh-plugins?",
@@ -263,7 +272,7 @@ MENTAL_MODELS = [
         "tags": ["rhdh-plugins"],
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "rhdh-plugins-architecture-decisions",
         "name": "rhdh-plugins Architecture Decisions",
         "source_query": "What architectural decisions and design patterns has the user established while working on rhdh-plugins?",
@@ -326,11 +335,11 @@ MENTAL_MODELS = [
         "max_tokens": 4096,
         "trigger": {"mode": "delta", "refresh_after_consolidation": False},
     },
-    # cursor-memory, tag-isolated (tags=["praxis"], strict match) sibling of
+    # shared-memory, tag-isolated (tags=["praxis"], strict match) sibling of
     # kubernaut's/dcm's/engram's/koku's own scoped models -- same 2026-07-27
     # fix pattern applied from day one, see docs/FINDINGS.md.
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "praxis-coding-conventions",
         "name": "Praxis Coding Conventions",
         "source_query": "What are the user's coding conventions, naming patterns, and style preferences when working on praxis-proxy (Rust)?",
@@ -339,7 +348,7 @@ MENTAL_MODELS = [
         "tags": ["praxis"],
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "praxis-testing-methodology",
         "name": "Praxis Testing Methodology",
         "source_query": "What testing approach, frameworks, and patterns does the user follow when working on praxis-proxy?",
@@ -348,7 +357,7 @@ MENTAL_MODELS = [
         "tags": ["praxis"],
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "praxis-workflow-preferences",
         "name": "Praxis Development Workflow",
         "source_query": "What is the user's preferred development workflow, review process, and tooling when working on praxis-proxy?",
@@ -357,7 +366,7 @@ MENTAL_MODELS = [
         "tags": ["praxis"],
     },
     {
-        "bank": "cursor-memory",
+        "bank": "shared-memory",
         "id": "praxis-architecture-decisions",
         "name": "Praxis Architecture Decisions",
         "source_query": "What architectural decisions and design patterns has the user established while working on praxis-proxy?",
@@ -366,8 +375,8 @@ MENTAL_MODELS = [
         "tags": ["praxis"],
     },
     # kuadrant-docs/kuadrant-issues: ingestion-only prior-art reference for
-    # praxis-proxy (2026-08-27 onboarding) -- see engram.flows.kuadrant's
-    # module docstring. No cursor-memory entry: nobody develops against
+    # praxis-proxy (2026-08-27 onboarding) -- see the deployment-local
+    # project configuration. No shared-memory entry: nobody develops against
     # these 8 read-only reference checkouts, so there's no coding-
     # conventions/workflow-preferences signal to extract a model from.
     {
@@ -388,9 +397,14 @@ MENTAL_MODELS = [
     },
 ]
 
+# Built-in models preserve the historical installation. New project models
+# are declarative records in projects.toml and are appended without a source
+# change.
+MENTAL_MODELS.extend(load_configured_mental_models())
+
 
 def api_request(method, path, payload=None):
-    url = f"{_config['hindsight_url']}{path}"
+    url = f"{HINDSIGHT_URL}{path}"
     data = json.dumps(payload).encode() if payload else None
     req = Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
     try:
@@ -433,7 +447,7 @@ def refresh_model(bank: str, model_id: str) -> bool:
 
 
 def list_models():
-    banks = ["cursor-memory", "kubernaut-docs", "kubernaut-issues", "dcm-docs", "dcm-issues", "engram-docs", "koku-docs", "koku-issues", "praxis-docs", "praxis-issues", "rhdh-plugins-docs", "rhdh-plugins-issues", "kuadrant-docs", "kuadrant-issues"]
+    banks = sorted({model["bank"] for model in MENTAL_MODELS})
     for bank in banks:
         result = api_request("GET", f"/v1/default/banks/{bank}/mental-models")
         items = result.get("items", [])
@@ -476,14 +490,15 @@ def wait_for_refresh(banks_models: list[tuple[str, str]], timeout: int = 300):
 
 
 def main():
+    global HINDSIGHT_URL
     parser = argparse.ArgumentParser(description="Create and refresh Hindsight mental models")
     parser.add_argument("--list", action="store_true", help="List existing mental models")
     parser.add_argument("--refresh", action="store_true", help="Refresh existing models (skip creation)")
     parser.add_argument("--no-wait", action="store_true", help="Don't wait for refresh to complete")
-    parser.add_argument("--hindsight-url", default=_config["hindsight_url"], help="Hindsight API URL")
+    parser.add_argument("--hindsight-url", default=HINDSIGHT_URL, help="Hindsight API URL")
     args = parser.parse_args()
 
-    _config["hindsight_url"] = args.hindsight_url
+    HINDSIGHT_URL = args.hindsight_url
 
     if args.list:
         list_models()

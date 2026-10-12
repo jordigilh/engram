@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""One-off/rerunnable backfill: retag every pre-existing, untagged cursor-memory
+"""One-off/rerunnable backfill: retag every pre-existing, untagged shared-memory
 document with its originating project (kubernaut/dcm/engram).
 
 Why this exists: the 2026-07-27 fix to retain_windows() (see docs/FINDINGS.md)
-tags every *new* cursor-memory retain with its project going forward, but
+tags every *new* shared-memory retain with its project going forward, but
 Hindsight's memory-curation API has no way to retag existing facts -- the only
 supported write path for tags on already-retained content is
 `PATCH /v1/default/banks/{bank_id}/documents/{document_id}` (tags on the
@@ -24,7 +24,7 @@ intentionally left untouched by this script:
     which classifies by fact *content* rather than transcript lineage.
 
 Usage:
-    python3 backfill-memory-tags.py [--dry-run] [--bank cursor-memory]
+    python3 backfill-memory-tags.py [--dry-run] [--bank shared-memory]
 """
 from __future__ import annotations
 
@@ -41,11 +41,16 @@ from urllib.request import Request, urlopen
 # (src/engram/maintenance/), three directories below the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from engram import project_scope  # noqa: E402
+from engram.project_config import DEFAULT_HINDSIGHT_URL, load_default_settings  # noqa: E402
 
-HINDSIGHT_URL = "http://localhost:8888"
-TRANSCRIPTS_GLOB = os.path.expanduser(
-    "~/.cursor/projects/*/agent-transcripts/**/*.jsonl"
-)
+DEPLOYMENT_SETTINGS = load_default_settings()
+HINDSIGHT_URL = DEPLOYMENT_SETTINGS.text("hindsight_url", DEFAULT_HINDSIGHT_URL)
+assert HINDSIGHT_URL is not None
+TRANSCRIPTS_ROOT = DEPLOYMENT_SETTINGS.path("transcripts_dir", "~/.cursor/projects")
+assert TRANSCRIPTS_ROOT is not None
+TRANSCRIPTS_GLOB = str(TRANSCRIPTS_ROOT / "*" / "agent-transcripts" / "**" / "*.jsonl")
+LOG_DIR = DEPLOYMENT_SETTINGS.path("log_dir", "~/.engram/logs")
+assert LOG_DIR is not None
 
 
 def build_transcript_workspace_index() -> dict[str, str]:
@@ -120,7 +125,7 @@ def apply_retag(bank_id: str, document_id: str, project: str) -> tuple[bool, str
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="Show the plan without writing")
-    ap.add_argument("--bank", default="cursor-memory")
+    ap.add_argument("--bank", default="shared-memory")
     args = ap.parse_args()
 
     print("Indexing transcript files on disk...")

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """One-off, re-runnable audit/cleanup tool: content-based sibling of
-purge-out-of-scope-memories.py, for the untagged cursor-memory backlog that
+purge-out-of-scope-memories.py, for the untagged shared-memory backlog that
 script's transcript-path check can't reach.
 
 purge-out-of-scope-memories.py only deletes documents it can CONFIRM are
 out-of-scope via transcript_id -> workspace resolution; it explicitly leaves
 documents with no resolvable transcript alone ("conservative: we can't
-confirm out-of-scope, so we don't delete"). After the 2026-07-27 cursor-memory
+confirm out-of-scope, so we don't delete"). After the 2026-07-27 shared-memory
 retagging backfill (see docs/FINDINGS.md), 359 documents remain untagged --
 sampling confirmed most are genuinely universal coding-hygiene lessons (this
 bank's actual intended content), but a handful are confirmed off-topic
@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,8 +45,8 @@ from engram import classify  # noqa: E402
 from engram.contradiction_resolution import delete_document  # noqa: E402
 from engram.maintenance import backfill_memory_tags as bmt  # noqa: E402
 
-HINDSIGHT_URL = "http://localhost:8888"
-AUDIT_LOG = Path(os.path.expanduser("~/.engram/logs/off-topic-purge-audit.jsonl"))
+HINDSIGHT_URL = bmt.HINDSIGHT_URL
+AUDIT_LOG = bmt.LOG_DIR / "off-topic-purge-audit.jsonl"
 DEFAULT_MIN_CONFIDENCE = 0.85  # higher bar than tagging (0.75) -- deletion is irreversible
 
 
@@ -73,7 +72,7 @@ def fetch_document_text(bank_id: str, document_id: str) -> str:
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--execute", action="store_true", help="Actually delete flagged documents (default: dry run)")
-    ap.add_argument("--bank", default="cursor-memory")
+    ap.add_argument("--bank", default="shared-memory")
     ap.add_argument("--min-confidence", type=float, default=DEFAULT_MIN_CONFIDENCE)
     args = ap.parse_args()
 

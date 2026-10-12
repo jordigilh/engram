@@ -1,0 +1,10 @@
+{
+  "name": "engram-git-native-spike",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bunx --bun @napi-rs/cli@3.10.8 build --platform --release",
+    "probe": "bun probe.ts"
+  }
+}

@@ -73,3 +73,48 @@ pub fn inspect_git_repository(directory: String) -> Result<GitRepositoryInfo> {
         remotes,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn non_worktree_value_has_no_git_metadata() {
+        let value = not_a_worktree();
+
+        assert!(!value.is_git_worktree);
+        assert_eq!(value.branch, None);
+        assert_eq!(value.commit, None);
+        assert!(value.remotes.is_empty());
+    }
+
+    #[test]
+    fn missing_and_non_git_paths_are_safe() {
+        let missing = inspect_git_repository(
+            std::env::temp_dir()
+                .join(format!("engram-git-native-missing-{}", std::process::id()))
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .expect("repository discovery should degrade to a non-worktree result");
+        assert!(!missing.is_git_worktree);
+
+        let directory =
+            std::env::temp_dir().join(format!("engram-git-native-non-git-{}", std::process::id()));
+        fs::create_dir_all(&directory).expect("create temporary directory");
+        let result = inspect_git_repository(directory.to_string_lossy().into_owned())
+            .expect("non-Git discovery should not fail");
+        fs::remove_dir_all(&directory).expect("remove temporary directory");
+        assert!(!result.is_git_worktree);
+    }
+
+    #[test]
+    fn discovers_the_repository_containing_the_crate() {
+        let result = inspect_git_repository(env!("CARGO_MANIFEST_DIR").to_owned())
+            .expect("the crate is checked out inside a Git repository");
+
+        assert!(result.is_git_worktree);
+        assert!(result.commit.is_some());
+    }
+}

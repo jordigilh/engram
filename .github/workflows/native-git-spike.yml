@@ -1,0 +1,64 @@
+name: Native Git spike matrix
+
+on:
+  pull_request:
+    paths:
+      - "opencode-plugin/git-native-spike/**"
+      - "opencode-plugin/index.ts"
+      - "opencode-plugin/worktree-index.ts"
+      - ".github/workflows/native-git-spike.yml"
+  push:
+    branches: [main]
+    paths:
+      - "opencode-plugin/git-native-spike/**"
+      - "opencode-plugin/index.ts"
+      - "opencode-plugin/worktree-index.ts"
+      - ".github/workflows/native-git-spike.yml"
+
+jobs:
+  host-artifacts:
+    name: Host artifact (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # These are the native Bun/Node-API publishing lanes. ARM64 Linux and
+        # Windows are checked below because public hosted ARM runners are not
+        # available consistently across GitHub plans.
+        os: [macos-14, macos-13, ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Rust format, test, and check
+        working-directory: opencode-plugin/git-native-spike
+        run: |
+          cargo fmt -- --check
+          cargo test
+          cargo check
+      - name: Build the host N-API artifact
+        working-directory: opencode-plugin/git-native-spike
+        run: bun run build
+      - name: Bun native smoke probe
+        working-directory: opencode-plugin/git-native-spike
+        run: bun run probe
+
+  cross-target-checks:
+    name: Cross-target check (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-unknown-linux-gnu
+          - aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Check the cross-platform Rust surface
+        working-directory: opencode-plugin/git-native-spike
+        run: cargo check --target ${{ matrix.target }}

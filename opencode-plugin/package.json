@@ -5,7 +5,8 @@
   "type": "module",
   "main": "index.ts",
   "scripts": {
-    "test": "bun test ./"
+    "test": "bun test ./",
+    "coverage:check": "bun test --coverage --coverage-reporter=lcov ./ && bun check-coverage.ts"
   },
   "dependencies": {
     "@opencode/plugin": "2.0.18"

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import plugin from "./index"
+import plugin, { repositoryDirectoryBasename } from "./index"
 import "./test-config"
 
 function fakeContext() {
@@ -27,6 +27,11 @@ describe("V2 plugin entrypoint", () => {
   test("exports the V2 setup API without the V1 server entrypoint", () => {
     expect(typeof plugin.setup).toBe("function")
     expect("server" in plugin).toBe(false)
+  })
+
+  test("derives a repository basename without assuming POSIX separators", () => {
+    expect(repositoryDirectoryBasename("C:\\worktrees\\service-api")).toBe("service-api")
+    expect(repositoryDirectoryBasename("/worktrees/service-api")).toBe("service-api")
   })
 
   test("keeps hooks non-blocking for unrelated and failed tool calls", async () => {

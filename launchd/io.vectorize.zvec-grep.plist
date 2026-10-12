@@ -26,6 +26,17 @@
         <string>quay.io/jordigilh/zvec-grep:latest</string>
         <key>ZVEC_GREP_PROXY_IMAGE</key>
         <string>quay.io/jordigilh/zg-loopback-proxy:latest</string>
+        <!-- Keep the container's filesystem authority narrow. Add each
+             deployment-specific parent that contains authorized checkouts;
+             never fall back to mounting HOME or /private/var/folders. -->
+        <key>ZVEC_GREP_WORKSPACE_ROOTS</key>
+        <string>__HOME__/go/src/github.com:__HOME__/.local/share/opencode/worktree</string>
+        <!-- latest remains the update channel, but startup is fail-closed
+             unless the operator records the digest verified for this host. -->
+        <key>ZVEC_GREP_REQUIRE_DIGEST</key>
+        <string>true</string>
+        <key>ZVEC_GREP_TRUSTED_DIGEST_FILE</key>
+        <string>__HOME__/.engram/zvec-grep/trusted-digests.env</string>
     </dict>
     <!-- ZG keeps several RocksDB/vector index files open across the shared
          workspace pool. launchd's default soft limit is 256, which causes

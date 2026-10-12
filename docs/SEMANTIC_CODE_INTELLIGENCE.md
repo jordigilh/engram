@@ -428,12 +428,14 @@ loopback inside the container and a namespace-local bridge exposes only host
 `127.0.0.1:7999`. The native gateway continues to use
 `http://127.0.0.1:7999/mcp`. The image contains the matching Linux
 `libzvec_c_api.so` and Jieba dictionaries, so the host's macOS library path is
-not used by this backend. The container wrapper also bind-mounts macOS
-`/private/var/folders`, where OpenCode temporary worktrees live, so their
-absolute roots remain visible to the daemon.
+not used by this backend. The container wrapper requires an explicit
+`ZVEC_GREP_WORKSPACE_ROOTS` allowlist and bind-mounts only those configured
+parents; it never falls back to mounting the whole home directory or
+`/private/var/folders`.
 The comparison log is `~/.engram/logs/zvec-cocoindex-shadow.jsonl`. It records
-query/tool arguments, canonical root, branch, commit, dirty state, both full
-responses, per-backend latency, and shadow errors. A shadow is issued only when
+the canonical root, branch, commit, dirty state, per-backend latency, and
+redacted query/response metadata; source/query content is not persisted. A
+shadow is issued only when
 the absolute root exactly matches a configured CocoIndex live source; this
 avoids comparing unrelated or unindexed worktrees. The primary response is
 returned without waiting for the shadow. Each completed entry also identifies

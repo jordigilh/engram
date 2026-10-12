@@ -1,13 +1,22 @@
 import { describe, expect, test } from "bun:test"
+import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import * as path from "node:path"
 import {
   buildZvecIndexArgs,
   createWorktreeIndexer,
+  getZvecGitRevision,
+  hasZvecManifest,
   isZvecWorkspaceReadTool,
+  readZvecProvenance,
+  resolveZvecBinary,
+  runZvecIndex,
   shouldGateSessions,
   shouldAutoIndexWorktrees,
   type ZvecGitRevision,
   type ZvecIndexProvenance,
   buildZvecIndexEnvironment,
+  writeZvecProvenance,
 } from "./worktree-index"
 
 describe("worktree indexing policy", () => {
@@ -58,11 +67,68 @@ describe("worktree indexing policy", () => {
     expect(environment).not.toHaveProperty("ZVEC_JIEBA_DICT_DIR")
   })
 
+  test("resolves an explicit binary and falls back to the home binary or PATH", () => {
+    expect(resolveZvecBinary(" /opt/zg ")).toBe("/opt/zg")
+    const fallback = resolveZvecBinary("   ")
+    expect(fallback === "zg" || fallback.endsWith("/bin/zg")).toBe(true)
+  })
+
   test("recognizes zvec workspace reads without matching the explicit index tool", () => {
     expect(isZvecWorkspaceReadTool("engram_zvec_grep_search")).toBe(true)
     expect(isZvecWorkspaceReadTool("mcp:engram:zvec_grep_callgraph_cluster")).toBe(true)
     expect(isZvecWorkspaceReadTool("zvec_grep_index")).toBe(false)
     expect(isZvecWorkspaceReadTool("grep")).toBe(false)
+  })
+
+  test("reads and writes manifest and Git provenance safely", async () => {
+    const fixture = await mkdtemp(path.join(tmpdir(), "engram-zvec-provenance-"))
+    const revision: ZvecGitRevision = { branch: "main", commit: "abc", dirty: true }
+    try {
+      expect(await hasZvecManifest(fixture)).toBe(false)
+      await mkdir(path.join(fixture, ".zvec-grep"))
+      await writeFile(path.join(fixture, ".zvec-grep", "manifest.json"), "{}\n")
+      expect(await hasZvecManifest(fixture)).toBe(true)
+      expect(await readZvecProvenance(fixture)).toBeUndefined()
+
+      await writeZvecProvenance(fixture, revision)
+      expect(await readZvecProvenance(fixture)).toEqual({
+        version: 2,
+        root: path.resolve(fixture),
+        ...revision,
+      })
+
+      await writeFile(path.join(fixture, ".zvec-grep", "engram-git-provenance.json"), "not-json")
+      expect(await readZvecProvenance(fixture)).toBeUndefined()
+      await writeFile(
+        path.join(fixture, ".zvec-grep", "engram-git-provenance.json"),
+        JSON.stringify({ version: 2, root: "/other", ...revision }),
+      )
+      expect(await readZvecProvenance(fixture)).toBeUndefined()
+    } finally {
+      await rm(fixture, { recursive: true, force: true })
+    }
+  })
+
+  test("gets Git provenance including dirty state", async () => {
+    const revision = await getZvecGitRevision(process.cwd())
+    expect(revision?.commit).toMatch(/^[0-9a-f]+$/)
+    expect(typeof revision?.dirty).toBe("boolean")
+  })
+
+  test("reports indexing child success and failure", async () => {
+    const fixture = await mkdtemp(path.join(tmpdir(), "engram-zvec-run-"))
+    const success = path.join(fixture, "success.sh")
+    const failure = path.join(fixture, "failure.sh")
+    try {
+      await writeFile(success, "#!/bin/sh\nexit 0\n")
+      await writeFile(failure, "#!/bin/sh\necho failed >&2\nexit 1\n")
+      await chmod(success, 0o755)
+      await chmod(failure, 0o755)
+      await runZvecIndex(success, fixture, "local/test", false)
+      await expect(runZvecIndex(failure, fixture, "local/test", true)).rejects.toThrow("failed")
+    } finally {
+      await rm(fixture, { recursive: true, force: true })
+    }
   })
 })
 
@@ -71,7 +137,7 @@ describe("createWorktreeIndexer", () => {
     const indexed = new Set<string>(["/worktrees/already-indexed"])
     const calls: string[] = []
     const logs: string[] = []
-    const revision: ZvecGitRevision = { branch: "main", commit: "same-commit" }
+    const revision: ZvecGitRevision = { branch: "main", commit: "same-commit", dirty: false }
     const indexer = createWorktreeIndexer({
       projectID: "project-service-api",
       canonicalDirectory: "/repos/service-api",
@@ -81,14 +147,15 @@ describe("createWorktreeIndexer", () => {
         { directory: "/worktrees/already-indexed" },
       ],
       hasManifest: async (directory) => indexed.has(directory),
-      getRevision: async (directory) => directory === "/worktrees/already-indexed" ? revision : undefined,
+      getRevision: async () => revision,
       readProvenance: async (directory) => directory === "/worktrees/already-indexed"
-        ? { version: 1, root: directory, ...revision }
+        ? { version: 2, root: directory, ...revision }
         : undefined,
       runIndex: async (directory) => {
         calls.push(directory)
         indexed.add(directory)
       },
+      writeProvenance: async () => {},
       log: (message) => logs.push(message),
     })
 
@@ -105,8 +172,18 @@ describe("createWorktreeIndexer", () => {
     const indexer = createWorktreeIndexer({
       projectID: "project-service-api",
       canonicalDirectory: "/repos/service-api",
+      allowedRoots: ["/worktrees/current"],
       listWorktrees: async () => [],
       hasManifest: async () => indexed,
+      getRevision: async () => ({ branch: "main", commit: "current", dirty: false }),
+      readProvenance: async () => ({
+        version: 2,
+        root: "/worktrees/current",
+        branch: "main",
+        commit: "current",
+        dirty: false,
+      }),
+      writeProvenance: async () => {},
       runIndex: async () => {
         await new Promise<void>((resolve) => setTimeout(resolve, 5))
         indexed = true
@@ -123,6 +200,7 @@ describe("createWorktreeIndexer", () => {
     const indexer = createWorktreeIndexer({
       projectID: "project-service-api",
       canonicalDirectory: "/repos/service-api",
+      allowedRoots: ["/worktrees/current"],
       listWorktrees: async () => [],
       hasManifest: async () => false,
       runIndex: async () => {
@@ -140,6 +218,7 @@ describe("createWorktreeIndexer", () => {
     const indexer = createWorktreeIndexer({
       projectID: "project-service-api",
       canonicalDirectory: "/repos/service-api",
+      aggregateRoots: ["/worktree-pool"],
       listWorktrees: async () => [],
       hasManifest: async () => true,
       getRevision: async () => undefined,
@@ -154,6 +233,77 @@ describe("createWorktreeIndexer", () => {
     await indexer.ensureIndexed("/worktree-pool")
 
     expect(runCount).toBe(0)
+    indexer.dispose()
+  })
+
+  test("rejects a workspace-read root outside the explicit allowlist", async () => {
+    let runCount = 0
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
+      allowedRoots: ["/worktrees/allowed"],
+      listWorktrees: async () => [],
+      hasManifest: async () => true,
+      runIndex: async () => {
+        runCount += 1
+      },
+      log: () => {},
+    })
+
+    await expect(indexer.ensureIndexed("/worktrees/not-allowed")).rejects.toThrow("not authorized")
+    expect(runCount).toBe(0)
+    indexer.dispose()
+  })
+
+  test("rebuilds when dirty state changes even if branch and commit stay the same", async () => {
+    const revision: ZvecGitRevision = { branch: "main", commit: "same-commit", dirty: true }
+    const previous: ZvecIndexProvenance = {
+      version: 2,
+      root: "/worktrees/dirty",
+      branch: "main",
+      commit: "same-commit",
+      dirty: false,
+    }
+    const calls: Array<{ directory: string; rebuild: boolean }> = []
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
+      listWorktrees: async () => [{ directory: "/worktrees/dirty" }],
+      hasManifest: async () => true,
+      getRevision: async () => revision,
+      readProvenance: async () => previous,
+      writeProvenance: async () => {},
+      runIndex: async (directory, rebuild) => calls.push({ directory, rebuild }),
+      log: () => {},
+    })
+
+    await indexer.refresh()
+    await indexer.waitForIdle()
+
+    expect(calls).toEqual([{ directory: "/worktrees/dirty", rebuild: true }])
+    indexer.dispose()
+  })
+
+  test("fails readiness when provenance cannot be persisted", async () => {
+    let indexed = false
+    const revision: ZvecGitRevision = { branch: "main", commit: "commit", dirty: false }
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
+      allowedRoots: ["/worktrees/provenance-failure"],
+      listWorktrees: async () => [],
+      hasManifest: async () => indexed,
+      getRevision: async () => revision,
+      runIndex: async () => {
+        indexed = true
+      },
+      writeProvenance: async () => {
+        throw new Error("sidecar is read-only")
+      },
+      log: () => {},
+    })
+
+    await expect(indexer.ensureIndexed("/worktrees/provenance-failure")).rejects.toThrow("read-only")
     indexer.dispose()
   })
 
@@ -231,12 +381,13 @@ describe("createWorktreeIndexer", () => {
   })
 
   test("rebuilds an existing manifest when its Engram Git provenance is stale", async () => {
-    const revision: ZvecGitRevision = { branch: "fix/new-route", commit: "new-commit" }
+    const revision: ZvecGitRevision = { branch: "fix/new-route", commit: "new-commit", dirty: false }
     const previous: ZvecIndexProvenance = {
-      version: 1,
+      version: 2,
       root: "/worktrees/stale-branch",
       branch: "main",
       commit: "old-commit",
+      dirty: false,
     }
     const calls: Array<{ directory: string; rebuild: boolean }> = []
     let saved: ZvecIndexProvenance | undefined
@@ -248,7 +399,7 @@ describe("createWorktreeIndexer", () => {
       getRevision: async () => revision,
       readProvenance: async () => previous,
       writeProvenance: async (directory, value) => {
-        saved = { version: 1, root: directory, ...value }
+        saved = { version: 2, root: directory, ...value }
       },
       runIndex: async (directory, rebuild) => calls.push({ directory, rebuild }),
       log: () => {},
@@ -258,14 +409,14 @@ describe("createWorktreeIndexer", () => {
     await indexer.waitForIdle()
 
     expect(calls).toEqual([{ directory: "/worktrees/stale-branch", rebuild: true }])
-    expect(saved).toEqual({ version: 1, root: "/worktrees/stale-branch", ...revision })
+    expect(saved).toEqual({ version: 2, root: "/worktrees/stale-branch", ...revision })
     indexer.dispose()
   })
 
   test("does not rebuild again when the recorded Git provenance matches", async () => {
-    const revision: ZvecGitRevision = { branch: "main", commit: "same-commit" }
+    const revision: ZvecGitRevision = { branch: "main", commit: "same-commit", dirty: false }
     const provenance: ZvecIndexProvenance = {
-      version: 1,
+      version: 2,
       root: "/worktrees/current",
       ...revision,
     }
@@ -291,17 +442,18 @@ describe("createWorktreeIndexer", () => {
 
   test("serializes a branch refresh and preserves a follow-up when Git changes during a build", async () => {
     const revisions: ZvecGitRevision[] = [
-      { branch: "fix/new-route", commit: "new-commit" },
-      { branch: "fix/new-route", commit: "new-commit" },
-      { branch: "fix/new-route", commit: "newer-commit" },
-      { branch: "fix/new-route", commit: "newer-commit" },
-      { branch: "fix/new-route", commit: "newer-commit" },
+      { branch: "fix/new-route", commit: "new-commit", dirty: false },
+      { branch: "fix/new-route", commit: "new-commit", dirty: false },
+      { branch: "fix/new-route", commit: "newer-commit", dirty: false },
+      { branch: "fix/new-route", commit: "newer-commit", dirty: false },
+      { branch: "fix/new-route", commit: "newer-commit", dirty: false },
     ]
     const previous: ZvecIndexProvenance = {
-      version: 1,
+      version: 2,
       root: "/worktrees/branch-race",
       branch: "main",
       commit: "old-commit",
+      dirty: false,
     }
     const calls: Array<{ directory: string; rebuild: boolean }> = []
     const saved: ZvecIndexProvenance[] = []
@@ -314,7 +466,7 @@ describe("createWorktreeIndexer", () => {
       hasManifest: async () => true,
       getRevision: async () => revisions[Math.min(getRevisionCall++, revisions.length - 1)],
       readProvenance: async () => previous,
-      writeProvenance: async (directory, revision) => saved.push({ version: 1, root: directory, ...revision }),
+      writeProvenance: async (directory, revision) => saved.push({ version: 2, root: directory, ...revision }),
       runIndex: async (directory, rebuild) => {
         calls.push({ directory, rebuild })
         if (calls.length === 1) {
@@ -336,7 +488,7 @@ describe("createWorktreeIndexer", () => {
       { directory: "/worktrees/branch-race", rebuild: true },
       { directory: "/worktrees/branch-race", rebuild: true },
     ])
-    expect(saved).toEqual([{ version: 1, root: "/worktrees/branch-race", ...revisions[2] }])
+    expect(saved).toEqual([{ version: 2, root: "/worktrees/branch-race", ...revisions[2] }])
     indexer.dispose()
   })
 })

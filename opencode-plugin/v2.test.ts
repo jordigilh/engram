@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import * as path from "node:path"
 import pluginDefault, { appendV2Nudge } from "./index"
 import { buildMcpServerConfigV2, mergeMcpEditor } from "./identity"
 import "./test-config"
@@ -35,6 +38,7 @@ function fakeV2Ctx(mcpInitial: Record<string, unknown> = {}) {
         cb(editor)
         return { dispose: async () => {} }
       },
+      list: async () => ({ data: [{ name: "engram", status: "connected" }] }),
     },
     session: {
       hook: async (name: string, cb: (event: any) => void | Promise<void>) => {
@@ -110,7 +114,7 @@ describe("mergeMcpEditor", () => {
 describe("v2 setup", () => {
   test("registers a fallback engram MCP entry", async () => {
     const { ctx, editor } = fakeV2Ctx()
-    ctx.options = { gatewayUrl: "http://127.0.0.1:8896" }
+    ctx.options = { gatewayUrl: "http://127.0.0.1:8896", project: "engram" }
     const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
     const cleanup = await def.setup(ctx)
     expect(editor.store.get("engram")).toEqual({
@@ -122,6 +126,16 @@ describe("v2 setup", () => {
     })
     expect(typeof cleanup).toBe("function")
     ;(cleanup as () => void)()
+  })
+
+  test("does not invent a route for an unconfigured non-repository location", async () => {
+    const { ctx, editor } = fakeV2Ctx()
+    ctx.location = { directory: "/workspace/openchamber-chat" }
+    ctx.options = { gatewayUrl: "http://127.0.0.1:8896" }
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    await def.setup(ctx)
+
+    expect(editor.store.has("engram")).toBe(false)
   })
 
   test("preserves an explicit engram route from config", async () => {
@@ -203,6 +217,81 @@ describe("v2 setup", () => {
     } finally {
       if (timeout) clearTimeout(timeout)
       if (typeof cleanup === "function") cleanup()
+    }
+  })
+
+  test("does not gate prompts merely because background indexing is configured", async () => {
+    const { ctx, sessionHooks } = fakeV2Ctx()
+    ctx.location = {
+      directory: "/worktrees/fix-123",
+      project: { id: "project-service-api", canonical: "/repos/service-api" },
+    }
+    ctx.options = { worktreeIndex: { projects: ["service-api"] } }
+    ctx.worktree = { list: async () => [] }
+
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    const cleanup = await def.setup(ctx)
+    expect(sessionHooks["prompt"]).toBeUndefined()
+    if (typeof cleanup === "function") cleanup()
+  })
+
+  test("registers a prompt gate only when explicitly configured", async () => {
+    const { ctx, sessionHooks } = fakeV2Ctx()
+    ctx.location = {
+      directory: "/worktrees/fix-123",
+      project: { id: "project-service-api", canonical: "/repos/service-api" },
+    }
+    ctx.options = {
+      project: "service-api",
+      gatewayUrl: "http://127.0.0.1:8896",
+      worktreeIndex: { projects: ["service-api"], gateSessions: true },
+    }
+    ctx.worktree = {
+      list: async () => [],
+    }
+
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    const cleanup = await def.setup(ctx)
+    expect(sessionHooks["prompt"]?.length).toBe(1)
+    if (typeof cleanup === "function") cleanup()
+  })
+
+  test("preflights the exact root supplied to a zvec workspace read", async () => {
+    const fixture = await mkdtemp(path.join(tmpdir(), "engram-zvec-preflight-"))
+    const requestedRoot = path.join(fixture, "openchamber-worktree-pool")
+    const fakeZg = path.join(fixture, "fake-zg")
+    await mkdir(requestedRoot)
+    await writeFile(
+      fakeZg,
+      "#!/bin/sh\nmkdir -p \"$2/.zvec-grep\"\nprintf '{}\\n' > \"$2/.zvec-grep/manifest.json\"\n",
+    )
+    await chmod(fakeZg, 0o755)
+
+    const { ctx, toolHooks } = fakeV2Ctx()
+    ctx.location = {
+      directory: fixture,
+      project: { id: "project-service-api", canonical: fixture },
+    }
+    ctx.options = {
+      project: "service-api",
+      gatewayUrl: "http://127.0.0.1:8896",
+      worktreeIndex: { projects: ["service-api"], binary: fakeZg },
+    }
+    ctx.worktree = { list: async () => [] }
+
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    let cleanup: (() => void) | void = undefined
+    try {
+      cleanup = await def.setup(ctx)
+      await toolHooks["execute.before"][0]({
+        tool: "engram_zvec_grep_search",
+        sessionID: "session-zvec-preflight",
+        input: { root: requestedRoot, query: "worktree" },
+      })
+      expect(await Bun.file(path.join(requestedRoot, ".zvec-grep", "manifest.json")).exists()).toBe(true)
+    } finally {
+      if (typeof cleanup === "function") cleanup()
+      await rm(fixture, { recursive: true, force: true })
     }
   })
 })

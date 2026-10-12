@@ -1080,6 +1080,40 @@ class TestBuildBackendAdapters:
 
 
 class TestZvecShadowRelayAdapter:
+    def test_managed_search_waits_for_fresh_index_before_returning(self, engram_gateway, tmp_path):
+        async def scenario():
+            primary_result = {"content": [{"type": "text", "text": "fresh"}], "isError": True}
+            primary = FakeAdapter(call_results={"zvec_grep_search": primary_result})
+            adapter = engram_gateway.ZvecShadowRelayAdapter(
+                primary,
+                FakeAdapter(),
+                log_path=tmp_path / "shadow.jsonl",
+                shadow_timeout_seconds=0.1,
+            )
+
+            result = await adapter.call_tool(
+                "zvec_grep_search",
+                {
+                    "root": str(tmp_path),
+                    "query": "workflow",
+                    "freshness": "eventual",
+                    "autoUpdate": False,
+                },
+            )
+
+            assert result is primary_result
+            assert primary.call_log == [(
+                "zvec_grep_search",
+                {
+                    "root": str(tmp_path),
+                    "query": "workflow",
+                    "freshness": "wait_for_fresh",
+                    "autoUpdate": True,
+                },
+            )]
+
+        asyncio.run(scenario())
+
     def test_workspace_metadata_reports_untracked_worktree_content(self, engram_gateway, tmp_path):
         subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True)
         (tmp_path / "untracked.go").write_text("package sample\n")

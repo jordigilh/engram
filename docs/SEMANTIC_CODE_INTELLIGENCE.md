@@ -428,7 +428,9 @@ loopback inside the container and a namespace-local bridge exposes only host
 `127.0.0.1:7999`. The native gateway continues to use
 `http://127.0.0.1:7999/mcp`. The image contains the matching Linux
 `libzvec_c_api.so` and Jieba dictionaries, so the host's macOS library path is
-not used by this backend.
+not used by this backend. The container wrapper also bind-mounts macOS
+`/private/var/folders`, where OpenCode temporary worktrees live, so their
+absolute roots remain visible to the daemon.
 The comparison log is `~/.engram/logs/zvec-cocoindex-shadow.jsonl`. It records
 query/tool arguments, canonical root, branch, commit, dirty state, both full
 responses, per-backend latency, and shadow errors. A shadow is issued only when

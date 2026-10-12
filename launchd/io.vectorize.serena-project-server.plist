@@ -12,6 +12,8 @@
          up front. See docs/findings/2026-08.md, 2026-08-13 (eighth follow-up). -->
     <key>ProgramArguments</key>
     <array>
+        <string>__HOME__/.engram/venv/bin/python3</string>
+        <string>__HOME__/.engram/scripts/serena-launchd-supervisor.py</string>
         <string>__HOME__/.local/bin/uvx</string>
         <string>--from</string>
         <string>git+https://github.com/oraios/serena@1bbe53546124c00e4238972f1599a91fbf8c6539</string>
@@ -38,5 +40,21 @@
     </dict>
     <key>RunAtLoad</key>
     <true/>
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+    <key>ExitTimeOut</key>
+    <integer>10</integer>
+    <key>AbandonProcessGroup</key>
+    <false/>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>ResidentSetSize</key>
+        <integer>2147483648</integer>
+    </dict>
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>ResidentSetSize</key>
+        <integer>2147483648</integer>
+    </dict>
 </dict>
 </plist>

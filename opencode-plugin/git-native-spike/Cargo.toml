@@ -1,0 +1,17 @@
+[package]
+name = "engram-git-native-spike"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+gix = { version = "0.89.0", default-features = false, features = ["sha1", "sha256"] }
+napi = "3.14.2"
+napi-derive = "3.6.12"
+
+[build-dependencies]
+napi-build = "2.6.0"

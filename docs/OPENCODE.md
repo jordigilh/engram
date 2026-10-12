@@ -211,7 +211,9 @@ template defaults it to `~/.engram/zvec-grep/trusted-digests.env`) with verified
 pulls first, verifies the digests, health-checks the replacement, and restores
 the previous local image IDs if the replacement is unhealthy. See
 `docs/zvec-grep-trusted-digests.env.example`; update the file only after an
-authorized image publication has been independently verified.
+authorized image publication has been independently verified. The scheduled
+`Refresh zvec trusted digests` workflow now captures platform digests and opens
+an approval PR automatically whenever `latest` changes.
 
 ```jsonc
 {

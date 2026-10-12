@@ -1,0 +1,30 @@
+name: Refresh zvec trusted digests
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve published multi-architecture digests
+        run: python3 scripts/update-zvec-trusted-digests.py
+      - name: Open approval PR when latest changed
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: automation/zvec-trusted-digests
+          delete-branch: true
+          title: "chore: refresh approved zvec image digests"
+          commit-message: "chore: refresh approved zvec image digests"
+          body: |
+            Automated digest capture for the authorized zvec-grep `latest` channel.
+
+            Review the platform digests and merge this PR before restarting any host that mounts workspaces.
+          add-paths: deploy/zvec-grep/trusted-digests.env

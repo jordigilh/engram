@@ -62,8 +62,21 @@ cleanup() {
 read_trusted_digest() {
     local key="$1"
     [[ -r "$TRUSTED_DIGEST_FILE" ]] || return 0
-    awk -F= -v wanted="$key" '$1 == wanted { gsub(/[[:space:]]/, "", $2); print $2; exit }' \
-        "$TRUSTED_DIGEST_FILE"
+    local value
+    value="$(awk -F= -v wanted="$key" '$1 == wanted { gsub(/[[:space:]]/, "", $2); print $2; exit }' \
+        "$TRUSTED_DIGEST_FILE")"
+    if [[ -n "$value" ]]; then
+        printf '%s\n' "$value"
+        return 0
+    fi
+    local platform_arch
+    case "$(uname -m)" in
+        arm64|aarch64) platform_arch=ARM64 ;;
+        x86_64|amd64) platform_arch=AMD64 ;;
+        *) return 0 ;;
+    esac
+    awk -F= -v wanted="${key}_LINUX_${platform_arch}" \
+        '$1 == wanted { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$TRUSTED_DIGEST_FILE"
 }
 
 image_digest() {

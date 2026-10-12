@@ -65,12 +65,13 @@ a fully separate bank/table/pipeline (e.g. `kubernaut-operator`/
 `kubernaut-console`, which are still ingested into the shared `kubernaut-docs`
 bank / `code_embeddings` table, already tagged by repo at ingestion time). No
 new bank, no new CocoIndex app, no new launchd service — just:
-1. `create_mental_model` with a `tags: ["<repo>"]` filter, scoped to the
-   existing shared bank (see `engram.maintenance.create_mental_models`'s
-   `operator-architecture`/`console-architecture` entries).
-2. An optional `repo` parameter on the configured search server's
-   `search_code()` / code-search MCP tool, which adds a
-   `filepath LIKE '<repo>/%'` filter to scope code search the same way.
+1. Have the agent recall the repo-tagged source material, generate the complete
+   Markdown itself, and store it with the gateway's manual mental-model tool
+   using `tags: ["<repo>"]`. Do not delegate creation or refresh to
+   Hindsight's LLM-backed `create_mental_model`/`refresh_mental_model` tools.
+2. An optional `repo` parameter on `engram.search.kubernaut`'s `search_code()` /
+   `cocoindex_search` MCP tool, which adds a `filepath LIKE '<repo>/%'` filter
+   to scope code search the same way.
 3. A hand-authored `.cursor/rules/hindsight-memory.mdc` that defaults to the
    repo's own tag/prefix for own-repo work, and explicitly drops the filter
    for cross-repo/upstream triage (see `cursor/operator-hindsight-memory.mdc`).
@@ -461,12 +462,19 @@ Mount the registry read-only and expose the gateway port:
 mkdir -p ~/.engram/runtime
 $EDITOR ~/.engram/runtime/<project>.toml
 
+podman pull --policy=always quay.io/jordigilh/engram:runtime-latest
 podman run --rm \
   --add-host host.containers.internal:host-gateway \
   -v "$HOME/.engram/runtime/<project>.toml:/etc/engram/instances.toml:ro" \
   -p 127.0.0.1:8896:8896 \
+  --pull=never \
   quay.io/jordigilh/engram:runtime-latest
 ```
+
+Pull the image explicitly so a restart never silently serves a cached tag. The
+separate pull/run form is also required on Podman 5.8, where `podman run
+--pull=always` can pull a multi-architecture manifest but fail to resolve the
+same reference for the container.
 
 The image is stateless and non-root. It validates backend URLs, rejects
 credentials embedded in URLs, queries configured backends concurrently, and
@@ -488,13 +496,12 @@ duplicate tools and bypass the gateway's isolation and routing. OpenChamber
 should connect to the OpenCode server's resolved configuration rather than
 adding a second Engram entry in its MCP settings.
 
-For a managed zvec-grep code route, no additional per-project refresh job is
-needed. The Engram gateway sends `zvec_grep_search` with
-`autoUpdate: true` and `freshness: "wait_for_fresh"`, so a query refreshes only
-the requested workspace and waits for indexing to finish before returning.
-This policy is inherited by new routes that use the managed zvec adapter; do
-not add a continuous watcher solely to keep unused repositories fresh. Direct
-zvec-grep clients that bypass the gateway retain zvec-grep's eventual mode.
+For managed zvec-grep code routes, no additional per-project refresh job is
+needed. The gateway forces `zvec_grep_search` to use `autoUpdate: true` and
+`freshness: "wait_for_fresh"`, so a query refreshes only its requested
+workspace and waits for indexing to finish before returning. Do not add a
+continuous watcher solely to keep unused repositories fresh; direct zvec-grep
+clients that bypass the gateway retain zvec-grep's eventual mode.
 
 > **Legacy native-backend note**: the shared-daemon notes below apply only
 > when deliberately running individual backend processes instead of the

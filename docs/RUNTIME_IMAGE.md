@@ -50,9 +50,12 @@ The existing GitHub Actions workflow publishes a new multi-architecture
 
 On macOS, the image-backed public gateway is supervised by
 `launchd/io.vectorize.engram-runtime.plist`. The runner waits for the Podman
-machine, refreshes `runtime-latest` when possible, starts the named container
-in the foreground, and retries after Podman or the container exits. This is
-intentional: a Podman machine restart is treated as a normal recovery event.
+machine, pulls the configured image with `podman pull --policy=always` before
+every container start, and starts only that pulled image with
+`podman run --pull=never`. It retries after a pull failure, Podman failure, or
+container exit; it does not silently fall back to a cached runtime revision.
+The separate pull/run form avoids a Podman 5.8 multi-architecture manifest
+resolution failure observed with `podman run --pull=always`.
 
 The complete macOS setup keeps the native gateway as an upstream because its
 stdio backends need the host's macOS tools and checkout paths:
@@ -68,6 +71,17 @@ Install the two plist templates after replacing `__HOME__` with the user's
 home directory, then bootstrap them into the user's launchd domain. The native
 gateway listens privately on `8898`; the container owns the public `8896`.
 Do not run a second hand-started gateway on either port.
+
+### Reconnect MCP clients after a restart
+
+Restarting either gateway process invalidates the existing MCP client
+connection/session. OpenCode or OpenChamber clients must reconnect the Engram
+entry from `/mcps` (or reload the client session) after `8896` is healthy.
+Until then, code-navigation calls may report `MCP server "engram" is not
+connected` or `ConnectionRefused` even though the restarted gateway is
+working. That client-side stale/disconnected state is distinct from a gateway
+tool result such as `backend 'host' failed:`; verify the route with a POST
+`tools/list` before diagnosing backend or zvec failures.
 
 The runtime image remains stateless. The TOML file contains deployment-specific
 routing only; keep it under `~/.engram/runtime/` alongside the host config,

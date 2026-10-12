@@ -67,6 +67,23 @@ intentional: Hindsight 0.10.0 requires a patched LiteLLM/protobuf combination
 that cannot coexist with Engram's Vertex AI environment. Data persists at
 `~/.pg0/instances/hindsight/data/`.
 
+### Bound local reranking CPU
+
+The example configuration sets
+`HINDSIGHT_API_RERANKER_MAX_CANDIDATES=50`. Hindsight's upstream default is
+300, but the local cross-encoder scores every candidate on the CPU before the
+final token budget is applied. A cap of 50 keeps a useful reranking pool while
+bounding latency and CPU for interactive, single-user recalls; it does not set
+the final response count, which remains controlled by the recall budget and
+token limit.
+
+The cap is a deployment default, not a correctness requirement. Increase it
+for workloads that need more recall from broad or ambiguous queries, or lower
+it further when latency matters more than reranking depth. Apply the same
+setting in `~/.engram/config.env` for an existing installation and restart
+Hindsight after changing it. The Linux/container setup reads this same config
+file; see [`INSTALL-linux.md`](INSTALL-linux.md).
+
 ### Recommended for always-on/multi-project setups: decouple Postgres
 
 By default `hindsight-api` starts, stops, and health-checks its own embedded
@@ -294,28 +311,17 @@ Do not use the retired standalone importer for a CocoIndex-managed project.
 
 ## 13. Create mental models (Knowledge Graph)
 
-Mental models are LLM-synthesized documents that sit above raw facts in the recall
-hierarchy. They provide pre-digested, coherent context blocks — reducing the need
-for the agent to synthesize scattered individual facts at query time.
+Mental-model content is authored by the agent. The gateway keeps model listing
+and retrieval available, but does not expose Hindsight's LLM-backed creation or
+refresh delegation. Recall the relevant facts, generate the complete Markdown,
+and call the appropriate manual writer:
 
-```bash
-python3 -m engram.maintenance.create_mental_models
-```
+- `docs_manual_mental_model` for a docs bank
+- `issues_manual_mental_model` for an issues bank
 
-This creates and refreshes the models configured for the deployment (the
-reference Kubernaut setup has 9 models; initial refresh costs about $0.50 with
-Sonnet 4.6). To check status:
-
-```bash
-python3 -m engram.maintenance.create_mental_models --list
-```
-
-Behavioral, issue, and docs models refresh during an explicit maintenance run.
-Refresh them manually after documentation or issue scope changes:
-
-```bash
-python3 -m engram.maintenance.create_mental_models --refresh
-```
+Pass a stable `model_id` and complete `content`; include project tags and a
+`source_query` when useful. The writer replaces the prior manual document and
+does not invoke Hindsight's synthesis backend.
 
 ## 14. Configure code intelligence
 

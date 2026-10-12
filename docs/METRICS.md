@@ -306,10 +306,9 @@ python3 -m engram.maintenance.report --csv
   `gh auth status`; use the [Issue Ingestion](ISSUE_INGESTION.md) guide for a
   scoped backfill
 - **High corrections with recall active**: Retained patterns may be outdated — run reflect manually
-- **Mental models stale**: Run `python3 -m engram.maintenance.create_mental_models --refresh` to force refresh
-- **Low proactive recall**: Strengthen the plugin/rule wording, ensure it says "ALWAYS recall before starting work"
-- **Serena not being used**: Check the Serena/OpenCode gateway route and restart
-  the language-server backend
+- **Mental models stale**: Have the agent recall current facts, regenerate the Markdown, and replace it with `docs_manual_mental_model` or `issues_manual_mental_model`
+- **Low proactive recall**: Strengthen the `alwaysApply` rule wording, ensure it says "ALWAYS recall before starting work"
+- **gopls not being used**: Check the Serena/OpenCode gateway route and restart the language-server daemon
 
 ## Memory Triage
 

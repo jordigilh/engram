@@ -425,10 +425,16 @@ def _serena_pattern_result(result: dict) -> dict:
             lines.pop()
         lines.append(suffix.lstrip("\n"))
     structured["truncated"] = truncated or display_truncated
+    # Serena's published output schema requires a top-level `result` string.
+    # Keep the gateway's richer compact fields, but retain that required field
+    # so MCP clients validate this transformed response the same way as the
+    # ordinary upstream response.
+    display_text = "\n".join(lines)
+    structured["result"] = display_text
 
     normalized = {
         **result,
-        "content": [{"type": "text", "text": "\n".join(lines)}],
+        "content": [{"type": "text", "text": display_text}],
         "structuredContent": structured,
         "isError": False,
     }

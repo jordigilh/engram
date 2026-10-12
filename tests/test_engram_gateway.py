@@ -670,6 +670,7 @@ class TestSerenaPatternResponseNormalization:
         structured = response["structuredContent"]
         assert response["isError"] is False
         assert structured["schema_version"] == "engram-serena-pattern-search.v1"
+        assert structured["result"] == response["content"][0]["text"]
         assert structured["status"] == "partial"
         assert structured["answer_chars"] == 20109
         assert structured["max_answer_chars"] == 7000

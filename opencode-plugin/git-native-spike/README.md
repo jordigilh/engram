@@ -35,10 +35,13 @@ fixtures covering:
 6. a bare repository;
 7. SHA-256 and unusual remote/config layouts where available.
 
-The production package would need `napi-rs` platform artifacts for macOS
-(`arm64`, `x64`), Linux (`x64`, `arm64`), and Windows (`x64`, `arm64`), plus a
-Bun runtime smoke test. Until that matrix is green, the existing Git adapter
-remains the safe fallback.
+The repository CI workflow `.github/workflows/native-git-spike.yml` builds and
+smoke-tests native artifacts on macOS ARM64/x64, Linux x64, and Windows x64,
+and performs cross-target Rust checks for Linux ARM64 and Windows ARM64. It
+also runs the Bun probe and Rust unit tests on every host lane. Publishing and
+production-plugin wiring remain intentionally deferred until the ARM64 cross
+targets have a real linker/package lane; the existing Git CLI adapter remains
+the safe fallback until then.
 
 The local ARM64 spike was validated against the current checkout, a linked
 worktree (both attached and detached), an unborn repository, a bare repository,

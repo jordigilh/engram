@@ -23,7 +23,14 @@ jobs:
         run: ruff check .
 
       - name: pytest (unit tier)
-        run: pytest tests/ -m "not integration" -q
+        run: |
+          coverage erase
+          coverage run --branch --source=src \
+            -m pytest tests/ -m "not integration" -q
+          # The managed zvec policy is a dedicated, unit-testable business
+          # boundary. Keep its release gate strict while the legacy gateway
+          # catalog/transport remains a much larger separately-reported surface.
+          coverage report --include='*/src/engram/pipeline/zvec_policy.py' --fail-under=90
 
   opencode-plugin-tests:
     runs-on: ubuntu-latest
@@ -40,7 +47,7 @@ jobs:
         working-directory: opencode-plugin
 
       - name: bun test (opencode plugin)
-        run: bun test ./
+        run: bun run coverage:check
         working-directory: opencode-plugin
 
   integration-tests:

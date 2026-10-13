@@ -17,7 +17,7 @@ jobs:
       - name: Resolve published multi-architecture digests
         run: python3 scripts/update-zvec-trusted-digests.py
       - name: Open approval PR when latest changed
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           branch: automation/zvec-trusted-digests
           delete-branch: true

@@ -204,16 +204,11 @@ FTS tokenizer. Set `jiebaDictionary` to the installed `jieba_dict` directory
 when `zg --index` reports `JiebaTokenizer: jieba_dict_dir not configured`; the
 plugin passes it only to the indexing child as `ZVEC_JIEBA_DICT_DIR`.
 
-The container supervisor uses mutable `latest` as the update channel but does
-not trust the tag by itself. Set `ZVEC_GREP_TRUSTED_DIGEST_FILE` (the launchd
-template defaults it to `~/.engram/zvec-grep/trusted-digests.env`) with verified
-`ZVEC_GREP_IMAGE_DIGEST` and `ZVEC_GREP_PROXY_IMAGE_DIGEST` values. Startup
-pulls first, verifies the digests, health-checks the replacement, and restores
-the previous local image IDs if the replacement is unhealthy. See
-`docs/zvec-grep-trusted-digests.env.example`; update the file only after an
-authorized image publication has been independently verified. The scheduled
-`Refresh zvec trusted digests` workflow now captures platform digests and opens
-an approval PR automatically whenever `latest` changes.
+The container supervisor uses mutable `latest` as the update channel. Every
+startup pulls both images first, starts the replacement with pulling disabled,
+health-checks it, and restores the previous local image IDs if the replacement
+is unhealthy. Image publication is controlled by the zvec-grep release
+workflow; no separate digest approval file is required in Engram.
 
 ```jsonc
 {

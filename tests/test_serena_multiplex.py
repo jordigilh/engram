@@ -436,9 +436,12 @@ class TestHandleJsonRpcMessage:
 
         assert record == []  # neither the real activate nor forward ran
         assert result["id"] == 7  # echoes the caller's own JSON-RPC id
-        assert "kubernaut-operator" in result["result"]["content"][0]["text"]
+        text = result["result"]["content"][0]["text"]
+        assert "kubernaut-operator" in text
+        assert "successful no-op" in text
+        assert "zvec_grep_search" in text
         assert result["result"]["structuredContent"] == {
-            "result": result["result"]["content"][0]["text"]
+            "result": text
         }
 
     def test_scoped_tool_call_activates_before_forwarding(self, serena_multiplex):

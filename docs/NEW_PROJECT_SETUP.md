@@ -496,6 +496,15 @@ duplicate tools and bypass the gateway's isolation and routing. OpenChamber
 should connect to the OpenCode server's resolved configuration rather than
 adding a second Engram entry in its MCP settings.
 
+For a repository family, configure one shared `worktreeIndex.familyRoots`
+entry keyed by the family name in `~/.engram/opencode.json`. Every route that
+resolves to that family inherits the exact listed checkout roots for read-only
+Engram code search; do not repeat the same roots under every project route.
+Keep `allowedRoots` for deployment-wide or one-off roots, and use
+`aggregateRoots` only for explicitly managed non-Git aggregate indexes. The
+current checkout remains authorized automatically, while unrelated paths stay
+fail-closed.
+
 For managed zvec-grep code routes, no additional per-project refresh job is
 needed. The gateway forces `zvec_grep_search` to use `autoUpdate: true` and
 `freshness: "wait_for_fresh"`, so a query refreshes only its requested

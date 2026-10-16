@@ -22,6 +22,9 @@
     "projects": ["<project-route>"],
     "mcpUrl": "http://127.0.0.1:7999/mcp",
     "embedding": "local/potion-code-16m-v2",
+    "familyRoots": {
+      "<shared-family>": ["/absolute/path/to/family-checkout"]
+    },
     "gateSessions": true
   }
 }

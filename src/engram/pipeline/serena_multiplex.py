@@ -255,7 +255,12 @@ def _intercept_response(message: dict, project: str) -> dict:
     text = (
         f"This mount is permanently pinned to project "
         f"'{project}' -- activate_project is managed "
-        f"automatically and does not need to be called."
+        f"automatically and does not need to be called. This is a successful "
+        f"no-op, not a routing failure. Do not use activate_project to switch "
+        f"to another family repository through this mount; call Engram's "
+        f"zvec_grep_search or zvec_search_code with the target root, or use "
+        f"the target repository's own Engram mount for cross-repository "
+        f"read-only access."
     )
     return {
         "jsonrpc": "2.0",

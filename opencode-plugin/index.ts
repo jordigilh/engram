@@ -48,6 +48,7 @@ import {
   createWorktreeIndexer,
   DEFAULT_ZVEC_EMBEDDING,
   isZvecWorkspaceReadTool,
+  allowedRootsForFamily,
   shouldGateSessions,
   shouldAutoIndexWorktrees,
 } from "./worktree-index"
@@ -120,7 +121,12 @@ async function resolveEngramState(directory: string, options: EngramPluginOption
   const remotes = await detectRemotes(directory)
   const identityOptions = resolveRepositoryOptions(directoryBasename, remotes, options)
 
-  const identity = deriveIdentity({ directoryBasename, branch, options: identityOptions })
+  const identity = deriveIdentity({
+    directoryBasename,
+    branch,
+    options: identityOptions,
+    projectFromRepositoryMapping: !options.project && Boolean(identityOptions.project),
+  })
   // A global plugin is also initialized for OpenChamber's home/chat roots.
   // Those locations are not Engram projects, so deriving a route from an
   // arbitrary directory name would create a guaranteed gateway 404. A plain
@@ -334,11 +340,13 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
   // every sibling worktree receives an independent local zvec index. A gated
   // route also blocks prompt admission until the current checkout is ready.
   const worktreePolicy = options.worktreeIndex || {}
-  const autoIndex = shouldAutoIndexWorktrees(
-    worktreeProjectIdentity.project,
-    worktreePolicy,
-  )
-  const gateSessions = shouldGateSessions(worktreeProjectIdentity.project, worktreePolicy)
+  // A linked worktree can resolve to a release route while its canonical
+  // checkout remains on main. Enable the indexer when either route is listed;
+  // family/root identity still comes from the canonical checkout below.
+  const autoIndex = shouldAutoIndexWorktrees(identity.project, worktreePolicy)
+    || shouldAutoIndexWorktrees(worktreeProjectIdentity.project, worktreePolicy)
+  const gateSessions = shouldGateSessions(identity.project, worktreePolicy)
+    || shouldGateSessions(worktreeProjectIdentity.project, worktreePolicy)
   worktreeIndexer = (autoIndex || gateSessions)
     ? createWorktreeIndexer({
         projectID: ctx.location.project.id,
@@ -346,7 +354,7 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
         listWorktrees: () => ctx.worktree.list({ projectID: ctx.location.project.id }),
         mcpUrl: worktreePolicy.mcpUrl,
         embedding: worktreePolicy.embedding || DEFAULT_ZVEC_EMBEDDING,
-        allowedRoots: worktreePolicy.allowedRoots,
+        allowedRoots: allowedRootsForFamily(worktreePolicy, worktreeProjectIdentity.family),
         aggregateRoots: worktreePolicy.aggregateRoots,
       })
     : undefined

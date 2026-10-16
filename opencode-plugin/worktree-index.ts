@@ -49,6 +49,7 @@ export interface WorktreeIndexerOptions {
   hasManifest?: (directory: string) => Promise<boolean>
   getRevision?: (directory: string) => Promise<ZvecGitRevision | undefined>
   isGitWorktree?: (directory: string) => Promise<boolean>
+  isBareRepository?: (directory: string) => Promise<boolean>
   readProvenance?: (directory: string) => Promise<ZvecIndexProvenance | undefined>
   writeProvenance?: (directory: string, revision: ZvecGitRevision) => Promise<void>
   log?: (message: string) => void
@@ -60,8 +61,16 @@ export interface WorktreeIndexPolicy {
   /** Containerized zvec-grep MCP endpoint used for index lifecycle operations. */
   mcpUrl?: string
   embedding?: string
-  /** Exact absolute roots permitted in zvec workspace-read tool arguments. */
+  /** Exact absolute roots permitted in zvec workspace-read tool arguments.
+   *
+   * This is deployment-wide rather than current-project-only: a family route
+   * can use Engram's shared code index to compare a sibling repository. The
+   * current checkout is always authorized separately; sibling roots must be
+   * listed here (or in aggregateRoots for a managed non-Git aggregate).
+   */
   allowedRoots?: string[]
+  /** Exact roots inherited by every route with the named repository family. */
+  familyRoots?: Record<string, string[]>
   /** Explicit non-Git roots with an aggregate zvec manifest. */
   aggregateRoots?: string[]
   /** Block the first prompt in a session until Engram and zvec-grep are ready. */
@@ -72,6 +81,27 @@ export function shouldAutoIndexWorktrees(project: string, policy: WorktreeIndexP
   if (policy.enabled === false) return false
   if (policy.enabled === true) return true
   return policy.projects?.includes(project) === true
+}
+
+/**
+ * Combine deployment-wide and family-scoped zvec authorization without
+ * weakening the exact-root check performed by createWorktreeIndexer().
+ * Family roots are inherited by every route in that family, so onboarding a
+ * sibling repository does not require repeating the same list per project
+ * route.
+ */
+export function allowedRootsForFamily(
+  policy: WorktreeIndexPolicy = {},
+  family?: string,
+): string[] {
+  const familyRoots = family && policy.familyRoots && Object.prototype.hasOwnProperty.call(policy.familyRoots, family)
+    ? policy.familyRoots[family]
+    : []
+  const roots = [
+    ...(policy.allowedRoots || []),
+    ...(familyRoots || []),
+  ]
+  return [...new Set(roots)]
 }
 
 /** Session gating is opt-in because MCP and indexing are optional enhancements. */
@@ -259,6 +289,8 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
   const getRevision = options.getRevision || getZvecGitRevision
   const isGitWorktree = options.isGitWorktree || (async (directory: string) =>
     (await readGitValue(directory, ["rev-parse", "--is-inside-work-tree"])) === "true")
+  const isBareRepository = options.isBareRepository || (async (directory: string) =>
+    (await readGitValue(directory, ["rev-parse", "--is-bare-repository"])) === "true")
   const readProvenance = options.readProvenance || readZvecProvenance
   const writeProvenance = options.writeProvenance || writeZvecProvenance
   const mcpClient = options.runIndex
@@ -311,7 +343,7 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
       }
     }
     throw new Error(
-      `zvec root is not authorized: ${requested}; configure worktreeIndex.allowedRoots or aggregateRoots`,
+      `zvec root is not authorized: ${requested}; configure worktreeIndex.allowedRoots, familyRoots, or aggregateRoots`,
     )
   }
 
@@ -323,6 +355,19 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
   }
 
   async function decideIndex(directory: string, aggregate = false): Promise<IndexDecision> {
+    let bareRepository = false
+    try {
+      bareRepository = await isBareRepository(directory)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      log(`could not determine whether ${directory} is a bare Git repository: ${message}`)
+    }
+    if (bareRepository) {
+      throw new Error(
+        `bare Git repository ${directory} is not an authorized zvec workspace; use a non-bare checkout`,
+      )
+    }
+
     if (!(await hasManifest(directory))) {
       return { shouldIndex: true, rebuild: false, reason: "missing" }
     }

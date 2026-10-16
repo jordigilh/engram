@@ -134,6 +134,9 @@ project receives automatic indexing implicitly; list each route explicitly:
       "mcpUrl": "http://127.0.0.1:7999/mcp",
       "embedding": "local/potion-code-16m-v2",
       "allowedRoots": ["/absolute/path/to/authorized-checkout"],
+      "familyRoots": {
+        "<shared-family>": ["/absolute/path/to/family-checkout"]
+      },
       "aggregateRoots": ["/absolute/path/to/authorized/worktree-pool"],
       "gateSessions": true
   }
@@ -160,11 +163,28 @@ For configured routes, every zvec workspace-read tool also performs a
 synchronous readiness check for its requested absolute `root` immediately
 before the MCP call. The root must be the canonical checkout, a worktree
 returned by OpenCode's project inventory, or an exact path in
-`worktreeIndex.allowedRoots`. Non-Git aggregate roots must additionally be
-listed in `aggregateRoots`; arbitrary paths, symlink escapes, bare repositories,
-and unconfigured OpenChamber storage directories fail closed. The explicit
-index tool is not intercepted; routes without `worktreeIndex` configuration
-remain unchanged.
+`worktreeIndex.allowedRoots`/`familyRoots`. Non-Git aggregate roots must
+additionally be listed in `aggregateRoots`; arbitrary paths, symlink escapes,
+bare repositories, and unconfigured OpenChamber storage directories fail
+closed. The explicit index tool is not intercepted; routes without
+`worktreeIndex` configuration remain unchanged.
+
+For a shared repository family, `worktreeIndex.familyRoots` is the default
+deployment policy: every route whose resolved `family` matches the key inherits
+the exact sibling checkout roots. `allowedRoots` remains available for global
+or one-off roots. The current checkout is authorized automatically, but family
+identity alone does not authorize a sibling root; list every family checkout
+that agents must compare (including any release mirrors). Use `aggregateRoots`
+only for explicitly managed non-Git aggregate indexes. This is separate from
+Serena's project mount: a route such as `/mcp/kubernaut-operator` remains
+pinned to `kubernaut-operator`, so cross-repository reads should use
+root-scoped Engram code search rather than attempting
+`activate_project("kubernaut")` on that mount.
+
+`familyRoots` controls the OpenCode plugin's preflight gate. The gateway's
+independent backend root policy must also expose the same roots when the
+deployment uses a gateway adapter with its own `allowed_roots`/`source_roots`
+allowlist.
 
 The managed zvec search route also requests `freshness: "wait_for_fresh"` with
 `autoUpdate: true`. A search therefore refreshes only its requested workspace

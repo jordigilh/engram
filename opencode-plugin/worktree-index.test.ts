@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import {
   createWorktreeIndexer,
+  allowedRootsForFamily,
   getZvecGitRevision,
   hasZvecManifest,
   isZvecWorkspaceReadTool,
@@ -36,6 +37,16 @@ describe("worktree indexing policy", () => {
     expect(isZvecWorkspaceReadTool("mcp:engram:zvec_grep_callgraph_cluster")).toBe(true)
     expect(isZvecWorkspaceReadTool("zvec_grep_index")).toBe(false)
     expect(isZvecWorkspaceReadTool("grep")).toBe(false)
+  })
+
+  test("inherits exact zvec roots from the resolved repository family", () => {
+    expect(allowedRootsForFamily({
+      allowedRoots: ["/global", "/shared"],
+      familyRoots: { kubernaut: ["/shared", "/kubernaut"], praxis: ["/praxis"] },
+    }, "kubernaut")).toEqual(["/global", "/shared", "/kubernaut"])
+    expect(allowedRootsForFamily({ familyRoots: { kubernaut: ["/kubernaut"] } }, "dcm")).toEqual([])
+    expect(allowedRootsForFamily({ familyRoots: { constructor: ["/constructor"] } }, "constructor"))
+      .toEqual(["/constructor"])
   })
 
   test("reads and writes manifest and Git provenance safely", async () => {
@@ -194,6 +205,23 @@ describe("createWorktreeIndexer", () => {
     await indexer.ensureIndexed("/worktree-pool")
 
     expect(runCount).toBe(0)
+    indexer.dispose()
+  })
+
+  test("rejects a bare Git repository even when listed as an aggregate root", async () => {
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
+      aggregateRoots: ["/bare-repository"],
+      listWorktrees: async () => [],
+      hasManifest: async () => false,
+      getRevision: async () => undefined,
+      isBareRepository: async () => true,
+      isGitWorktree: async () => false,
+      log: () => {},
+    })
+
+    await expect(indexer.ensureIndexed("/bare-repository")).rejects.toThrow("bare Git repository")
     indexer.dispose()
   })
 

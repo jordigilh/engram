@@ -59,6 +59,26 @@ function fakeV2Ctx(mcpInitial: Record<string, unknown> = {}) {
   return { ctx, editor, sessionHooks, toolHooks }
 }
 
+async function initializeGitIdentity(directory: string, branch: string, remote?: string): Promise<void> {
+  const run = async (args: string[]): Promise<void> => {
+    const child = Bun.spawn(["git", "-C", directory, ...args], { stdout: "ignore", stderr: "ignore" })
+    const exitCode = await child.exited
+    if (exitCode !== 0) throw new Error(`git ${args.join(" ")} failed in ${directory}`)
+  }
+  await mkdir(directory, { recursive: true })
+  await run(["init", "-q"])
+  await run(["symbolic-ref", "HEAD", `refs/heads/${branch}`])
+  await writeFile(path.join(directory, ".gitignore"), ".zvec-grep/\n")
+  await writeFile(path.join(directory, "fixture.txt"), "fixture\n")
+  if (remote) await run(["remote", "add", "origin", remote])
+  await run(["add", ".gitignore", "fixture.txt"])
+  await run([
+    "-c", "user.name=Engram Test",
+    "-c", "user.email=engram-test@example.com",
+    "commit", "-qm", "fixture",
+  ])
+}
+
 describe("V2 plugin export", () => {
   test("default export exposes only the V2 setup entrypoint", () => {
     const def = pluginDefault as unknown as Record<string, unknown>
@@ -306,6 +326,147 @@ describe("v2 setup", () => {
         input: { root: requestedRoot, query: "worktree" },
       })
       expect(await Bun.file(path.join(requestedRoot, ".zvec-grep", "manifest.json")).exists()).toBe(true)
+    } finally {
+      globalThis.fetch = previousFetch
+      if (typeof cleanup === "function") cleanup()
+      await rm(fixture, { recursive: true, force: true })
+    }
+  })
+
+  test("uses the canonical route family for sibling authorization and rejects unrelated roots", async () => {
+    const fixture = await mkdtemp(path.join(tmpdir(), "engram-family-root-preflight-"))
+    const canonical = path.join(fixture, "service-api")
+    const worktree = path.join(canonical, "worktree")
+    const familyRoot = path.join(fixture, "service-ui")
+    const unrelatedRoot = path.join(fixture, "unrelated")
+    await mkdir(worktree, { recursive: true })
+    await initializeGitIdentity(familyRoot, "main")
+    await mkdir(unrelatedRoot)
+
+    const { ctx, toolHooks } = fakeV2Ctx()
+    ctx.location = {
+      directory: worktree,
+      project: { id: "project-service-api", canonical },
+    }
+    ctx.options = {
+      repositories: {
+        directories: {
+          "service-api": { project: "service-api", family: "platform" },
+        },
+      },
+      worktreeIndex: {
+        projects: ["service-api"],
+        mcpUrl: "http://zvec.test/mcp",
+        familyRoots: { platform: [familyRoot] },
+      },
+    }
+    ctx.worktree = { list: async () => [] }
+
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    let cleanup: (() => void) | void = undefined
+    const previousFetch = globalThis.fetch
+    globalThis.fetch = (async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as {
+        method: string
+        params?: { arguments?: { root?: string } }
+      }
+      if (request.method === "initialize") {
+        return new Response('data: {"jsonrpc":"2.0","id":1,"result":{}}\n\n', {
+          headers: { "content-type": "text/event-stream", "mcp-session-id": "family-session" },
+        })
+      }
+      if (request.method === "notifications/initialized") return new Response(null, { status: 202 })
+      const root = request.params?.arguments?.root || familyRoot
+      await mkdir(path.join(root, ".zvec-grep"), { recursive: true })
+      await writeFile(path.join(root, ".zvec-grep", "manifest.json"), "{}\n")
+      return new Response('data: {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"state":"succeeded"}}}\n\n', {
+        headers: { "content-type": "text/event-stream", "mcp-session-id": "family-session" },
+      })
+    }) as typeof fetch
+    try {
+      cleanup = await def.setup(ctx)
+      await toolHooks["execute.before"][0]({
+        tool: "engram_zvec_grep_search",
+        sessionID: "session-family-root",
+        input: { root: familyRoot, query: "shared family" },
+      })
+      await expect(toolHooks["execute.before"][0]({
+        tool: "engram_zvec_grep_search",
+        sessionID: "session-unrelated-root",
+        input: { root: unrelatedRoot, query: "must fail closed" },
+      })).rejects.toThrow("not authorized")
+    } finally {
+      globalThis.fetch = previousFetch
+      if (typeof cleanup === "function") cleanup()
+      await rm(fixture, { recursive: true, force: true })
+    }
+  })
+
+  test("enables family preflight when a linked release worktree is the configured route", async () => {
+    const fixture = await mkdtemp(path.join(tmpdir(), "engram-release-family-preflight-"))
+    const canonical = path.join(fixture, "service-api")
+    const worktree = path.join(fixture, "service-api-v1.5")
+    const familyRoot = path.join(fixture, "service-ui")
+    const unrelatedRoot = path.join(fixture, "unrelated")
+    const remote = "https://example.com/service-api"
+    await initializeGitIdentity(canonical, "main", remote)
+    await initializeGitIdentity(worktree, "release/v1.5", remote)
+    await initializeGitIdentity(familyRoot, "main")
+    await mkdir(unrelatedRoot)
+
+    const { ctx, toolHooks } = fakeV2Ctx()
+    ctx.location = {
+      directory: worktree,
+      project: { id: "project-service-api", canonical },
+    }
+    ctx.options = {
+      branchRoutes: { main: "service-api", "v1.5": "service-api-v1.5", "release/v1.5": "service-api-v1.5" },
+      repositories: {
+        remotes: {
+          [remote]: { project: "service-api", family: "platform" },
+        },
+      },
+      worktreeIndex: {
+        projects: ["service-api-v1.5"],
+        mcpUrl: "http://zvec.test/mcp",
+        familyRoots: { platform: [familyRoot] },
+      },
+    }
+    ctx.worktree = { list: async () => [] }
+
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    let cleanup: (() => void) | void = undefined
+    const previousFetch = globalThis.fetch
+    globalThis.fetch = (async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as {
+        method: string
+        params?: { arguments?: { root?: string } }
+      }
+      if (request.method === "initialize") {
+        return new Response('data: {"jsonrpc":"2.0","id":1,"result":{}}\n\n', {
+          headers: { "content-type": "text/event-stream", "mcp-session-id": "release-family-session" },
+        })
+      }
+      if (request.method === "notifications/initialized") return new Response(null, { status: 202 })
+      const root = request.params?.arguments?.root || familyRoot
+      await mkdir(path.join(root, ".zvec-grep"), { recursive: true })
+      await writeFile(path.join(root, ".zvec-grep", "manifest.json"), "{}\n")
+      return new Response('data: {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"state":"succeeded"}}}\n\n', {
+        headers: { "content-type": "text/event-stream", "mcp-session-id": "release-family-session" },
+      })
+    }) as typeof fetch
+    try {
+      cleanup = await def.setup(ctx)
+      await toolHooks["execute.before"][0]({
+        tool: "engram_zvec_grep_search",
+        sessionID: "session-release-family-root",
+        input: { root: familyRoot, query: "release family" },
+      })
+      await expect(toolHooks["execute.before"][0]({
+        tool: "engram_zvec_grep_search",
+        sessionID: "session-release-unrelated-root",
+        input: { root: unrelatedRoot, query: "must fail closed" },
+      })).rejects.toThrow("not authorized")
     } finally {
       globalThis.fetch = previousFetch
       if (typeof cleanup === "function") cleanup()

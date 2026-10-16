@@ -45,6 +45,8 @@ describe("worktree indexing policy", () => {
       familyRoots: { kubernaut: ["/shared", "/kubernaut"], praxis: ["/praxis"] },
     }, "kubernaut")).toEqual(["/global", "/shared", "/kubernaut"])
     expect(allowedRootsForFamily({ familyRoots: { kubernaut: ["/kubernaut"] } }, "dcm")).toEqual([])
+    expect(allowedRootsForFamily({ familyRoots: { constructor: ["/constructor"] } }, "constructor"))
+      .toEqual(["/constructor"])
   })
 
   test("reads and writes manifest and Git provenance safely", async () => {

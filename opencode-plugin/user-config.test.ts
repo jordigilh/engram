@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtemp, writeFile } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import * as path from "node:path"
 import {
   mergeEngramOptions,
   readEngramConfig,
   resolveEngramConfigPath,
+  validateEngramOptions,
 } from "./user-config"
 
 describe("deployment-local plugin config", () => {
@@ -16,29 +17,44 @@ describe("deployment-local plugin config", () => {
   test("loads identity and worktree policy from JSON", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "engram-plugin-config-"))
     const configPath = path.join(directory, "opencode.json")
-    await writeFile(configPath, JSON.stringify({
-      gatewayUrl: "http://127.0.0.1:9999",
-      repositories: { remotes: { "https://example.com/service-api": { project: "service-api", family: "platform" } } },
-      worktreeIndex: { projects: ["service-api"], mcpUrl: "http://127.0.0.1:7999/mcp", embedding: "local/test-model" },
-    }))
+    try {
+      await writeFile(configPath, JSON.stringify({
+        gatewayUrl: "http://127.0.0.1:9999",
+        repositories: { remotes: { "https://example.com/service-api": { project: "service-api", family: "platform" } } },
+        worktreeIndex: { projects: ["service-api"], mcpUrl: "http://127.0.0.1:7999/mcp", embedding: "local/test-model" },
+      }))
 
-    await expect(readEngramConfig(configPath)).resolves.toEqual({
-      gatewayUrl: "http://127.0.0.1:9999",
-      repositories: { remotes: { "https://example.com/service-api": { project: "service-api", family: "platform" } } },
-      worktreeIndex: { projects: ["service-api"], mcpUrl: "http://127.0.0.1:7999/mcp", embedding: "local/test-model" },
-    })
+      await expect(readEngramConfig(configPath)).resolves.toEqual({
+        gatewayUrl: "http://127.0.0.1:9999",
+        repositories: { remotes: { "https://example.com/service-api": { project: "service-api", family: "platform" } } },
+        worktreeIndex: { projects: ["service-api"], mcpUrl: "http://127.0.0.1:7999/mcp", embedding: "local/test-model" },
+      })
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 
   test("rejects malformed root authorization instead of returning unsafe policy", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "engram-plugin-config-invalid-"))
     const configPath = path.join(directory, "opencode.json")
-    await writeFile(configPath, JSON.stringify({
-      worktreeIndex: {
-        familyRoots: { platform: ["relative/root"] },
-      },
-    }))
+    try {
+      await writeFile(configPath, JSON.stringify({
+        worktreeIndex: {
+          familyRoots: { platform: ["relative/root"] },
+        },
+      }))
 
-    await expect(readEngramConfig(configPath)).rejects.toThrow("absolute paths")
+      await expect(readEngramConfig(configPath)).rejects.toThrow("absolute paths")
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("rejects malformed top-level and nested identity options", () => {
+    expect(() => validateEngramOptions({ gatewayUrl: 123 }, "explicit options")).toThrow("gatewayUrl")
+    expect(() => validateEngramOptions({
+      repositories: { remotes: { "https://example.com/service": { family: 123 } } },
+    }, "explicit options")).toThrow("family")
   })
 
   test("explicit options override deployment config without dropping nested mappings", () => {

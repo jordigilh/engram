@@ -93,9 +93,12 @@ export function allowedRootsForFamily(
   policy: WorktreeIndexPolicy = {},
   family?: string,
 ): string[] {
+  const familyRoots = family && policy.familyRoots && Object.prototype.hasOwnProperty.call(policy.familyRoots, family)
+    ? policy.familyRoots[family]
+    : []
   const roots = [
     ...(policy.allowedRoots || []),
-    ...(family ? policy.familyRoots?.[family] || [] : []),
+    ...(familyRoots || []),
   ]
   return [...new Set(roots)]
 }

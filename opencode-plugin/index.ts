@@ -335,11 +335,13 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
   // every sibling worktree receives an independent local zvec index. A gated
   // route also blocks prompt admission until the current checkout is ready.
   const worktreePolicy = options.worktreeIndex || {}
-  const autoIndex = shouldAutoIndexWorktrees(
-    worktreeProjectIdentity.project,
-    worktreePolicy,
-  )
-  const gateSessions = shouldGateSessions(worktreeProjectIdentity.project, worktreePolicy)
+  // A linked worktree can resolve to a release route while its canonical
+  // checkout remains on main. Enable the indexer when either route is listed;
+  // family/root identity still comes from the canonical checkout below.
+  const autoIndex = shouldAutoIndexWorktrees(identity.project, worktreePolicy)
+    || shouldAutoIndexWorktrees(worktreeProjectIdentity.project, worktreePolicy)
+  const gateSessions = shouldGateSessions(identity.project, worktreePolicy)
+    || shouldGateSessions(worktreeProjectIdentity.project, worktreePolicy)
   worktreeIndexer = (autoIndex || gateSessions)
     ? createWorktreeIndexer({
         projectID: ctx.location.project.id,

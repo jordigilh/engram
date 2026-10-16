@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import * as path from "node:path"
-import type { EngramPluginOptions } from "./identity"
+import type { EngramPluginOptions, EngramRepositoryMappings, RepositoryIdentityOptions } from "./identity"
 import type { WorktreeIndexPolicy } from "./worktree-index"
 
 export const DEFAULT_ENGRAM_PLUGIN_CONFIG = ".engram/opencode.json"
@@ -25,6 +25,49 @@ function validateAbsoluteRoots(value: unknown, label: string): string[] {
     throw new Error(`${label} must contain only absolute paths`)
   }
   return roots
+}
+
+function validateStringRecord(value: unknown, label: string): Record<string, string> {
+  if (!isObject(value)) throw new Error(`${label} must be an object`)
+  const result = Object.create(null) as Record<string, string>
+  for (const [key, item] of Object.entries(value)) {
+    if (!key.trim() || typeof item !== "string" || !item.trim()) {
+      throw new Error(`${label} must map non-empty names to non-empty strings`)
+    }
+    result[key.trim()] = item.trim()
+  }
+  return result
+}
+
+function validateRepositoryIdentity(value: unknown, label: string): RepositoryIdentityOptions {
+  if (!isObject(value)) throw new Error(`${label} must be an object`)
+  const validated = { ...value } as RepositoryIdentityOptions
+  for (const key of ["project", "family"] as const) {
+    if (value[key] !== undefined && (typeof value[key] !== "string" || !value[key].trim())) {
+      throw new Error(`${label}.${key} must be a non-empty string`)
+    }
+    if (typeof value[key] === "string") validated[key] = value[key].trim()
+  }
+  if (value.branchRoutes !== undefined) {
+    validated.branchRoutes = validateStringRecord(value.branchRoutes, `${label}.branchRoutes`)
+  }
+  return validated
+}
+
+function validateRepositoryMappings(value: unknown, label: string): EngramRepositoryMappings {
+  if (!isObject(value)) throw new Error(`${label} must be an object`)
+  const validated = { ...value } as EngramRepositoryMappings
+  for (const key of ["directories", "remotes"] as const) {
+    if (value[key] === undefined) continue
+    if (!isObject(value[key])) throw new Error(`${label}.${key} must be an object`)
+    const mappings = Object.create(null) as Record<string, RepositoryIdentityOptions>
+    for (const [name, options] of Object.entries(value[key])) {
+      if (!name.trim()) throw new Error(`${label}.${key} contains an empty repository name`)
+      mappings[name.trim()] = validateRepositoryIdentity(options, `${label}.${key}.${name}`)
+    }
+    validated[key] = mappings
+  }
+  return validated
 }
 
 /** Validate the untyped JSON policy before it reaches path/indexer code. */
@@ -76,12 +119,24 @@ export function validateWorktreeIndexPolicy(
   return validated
 }
 
-function validateEngramOptions(value: unknown, label: string): Partial<EngramPluginOptions> {
+export function validateEngramOptions(value: unknown, label: string): Partial<EngramPluginOptions> {
   if (!isObject(value)) throw new Error(`${label} must be an object`)
+  const validated = { ...value } as Partial<EngramPluginOptions>
+  for (const key of ["project", "family", "gatewayUrl"] as const) {
+    if (value[key] !== undefined && (typeof value[key] !== "string" || !value[key].trim())) {
+      throw new Error(`${label}.${key} must be a non-empty string`)
+    }
+    if (typeof value[key] === "string") validated[key] = value[key].trim()
+  }
+  if (value.branchRoutes !== undefined) {
+    validated.branchRoutes = validateStringRecord(value.branchRoutes, `${label}.branchRoutes`)
+  }
+  if (value.repositories !== undefined) {
+    validated.repositories = validateRepositoryMappings(value.repositories, `${label}.repositories`)
+  }
   const worktreeIndex = validateWorktreeIndexPolicy(value.worktreeIndex, `${label}.worktreeIndex`)
-  return worktreeIndex === undefined
-    ? value as Partial<EngramPluginOptions>
-    : { ...value, worktreeIndex } as Partial<EngramPluginOptions>
+  if (worktreeIndex !== undefined) validated.worktreeIndex = worktreeIndex
+  return validated
 }
 
 /** Resolve the deployment-local plugin configuration path. */
@@ -124,10 +179,9 @@ function mergeWorktreeIndex(
   if (!configured && !explicit) return undefined
   const merged = { ...(configured || {}), ...(explicit || {}) }
   if (configured?.familyRoots || explicit?.familyRoots) {
-    merged.familyRoots = {
-      ...(configured?.familyRoots || {}),
-      ...(explicit?.familyRoots || {}),
-    }
+    const familyRoots = Object.create(null) as Record<string, string[]>
+    Object.assign(familyRoots, configured?.familyRoots || {}, explicit?.familyRoots || {})
+    merged.familyRoots = familyRoots
   }
   return merged
 }

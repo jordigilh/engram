@@ -6,6 +6,7 @@ import {
   mergeEngramOptions,
   readEngramConfig,
   resolveEngramConfigPath,
+  resolveEngramOptions,
   validateEngramOptions,
 } from "./user-config"
 
@@ -55,6 +56,12 @@ describe("deployment-local plugin config", () => {
     expect(() => validateEngramOptions({
       repositories: { remotes: { "https://example.com/service": { family: 123 } } },
     }, "explicit options")).toThrow("family")
+  })
+
+  test("does not silently drop malformed explicit security policy", async () => {
+    await expect(resolveEngramOptions({
+      worktreeIndex: { allowedRoots: ["relative/root"] },
+    })).rejects.toThrow("absolute paths")
   })
 
   test("explicit options override deployment config without dropping nested mappings", () => {

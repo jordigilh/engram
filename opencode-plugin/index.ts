@@ -121,7 +121,12 @@ async function resolveEngramState(directory: string, options: EngramPluginOption
   const remotes = await detectRemotes(directory)
   const identityOptions = resolveRepositoryOptions(directoryBasename, remotes, options)
 
-  const identity = deriveIdentity({ directoryBasename, branch, options: identityOptions })
+  const identity = deriveIdentity({
+    directoryBasename,
+    branch,
+    options: identityOptions,
+    projectFromRepositoryMapping: !options.project && Boolean(identityOptions.project),
+  })
   // A global plugin is also initialized for OpenChamber's home/chat roots.
   // Those locations are not Engram projects, so deriving a route from an
   // arbitrary directory name would create a guaranteed gateway 404. A plain

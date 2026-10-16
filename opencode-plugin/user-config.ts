@@ -6,6 +6,13 @@ import type { WorktreeIndexPolicy } from "./worktree-index"
 
 export const DEFAULT_ENGRAM_PLUGIN_CONFIG = ".engram/opencode.json"
 
+export class EngramConfigValidationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "EngramConfigValidationError"
+  }
+}
+
 type JsonObject = Record<string, unknown>
 
 function isObject(value: unknown): value is JsonObject {
@@ -14,7 +21,7 @@ function isObject(value: unknown): value is JsonObject {
 
 function validateStringArray(value: unknown, label: string): string[] {
   if (!Array.isArray(value) || !value.every((item) => typeof item === "string" && item.trim())) {
-    throw new Error(`${label} must be an array of non-empty strings`)
+    throw new EngramConfigValidationError(`${label} must be an array of non-empty strings`)
   }
   return value.map((item) => item.trim())
 }
@@ -22,17 +29,17 @@ function validateStringArray(value: unknown, label: string): string[] {
 function validateAbsoluteRoots(value: unknown, label: string): string[] {
   const roots = validateStringArray(value, label)
   if (!roots.every((root) => path.isAbsolute(root))) {
-    throw new Error(`${label} must contain only absolute paths`)
+    throw new EngramConfigValidationError(`${label} must contain only absolute paths`)
   }
   return roots
 }
 
 function validateStringRecord(value: unknown, label: string): Record<string, string> {
-  if (!isObject(value)) throw new Error(`${label} must be an object`)
+  if (!isObject(value)) throw new EngramConfigValidationError(`${label} must be an object`)
   const result = Object.create(null) as Record<string, string>
   for (const [key, item] of Object.entries(value)) {
     if (!key.trim() || typeof item !== "string" || !item.trim()) {
-      throw new Error(`${label} must map non-empty names to non-empty strings`)
+      throw new EngramConfigValidationError(`${label} must map non-empty names to non-empty strings`)
     }
     result[key.trim()] = item.trim()
   }
@@ -40,11 +47,11 @@ function validateStringRecord(value: unknown, label: string): Record<string, str
 }
 
 function validateRepositoryIdentity(value: unknown, label: string): RepositoryIdentityOptions {
-  if (!isObject(value)) throw new Error(`${label} must be an object`)
+  if (!isObject(value)) throw new EngramConfigValidationError(`${label} must be an object`)
   const validated = { ...value } as RepositoryIdentityOptions
   for (const key of ["project", "family"] as const) {
     if (value[key] !== undefined && (typeof value[key] !== "string" || !value[key].trim())) {
-      throw new Error(`${label}.${key} must be a non-empty string`)
+      throw new EngramConfigValidationError(`${label}.${key} must be a non-empty string`)
     }
     if (typeof value[key] === "string") validated[key] = value[key].trim()
   }
@@ -55,14 +62,14 @@ function validateRepositoryIdentity(value: unknown, label: string): RepositoryId
 }
 
 function validateRepositoryMappings(value: unknown, label: string): EngramRepositoryMappings {
-  if (!isObject(value)) throw new Error(`${label} must be an object`)
+  if (!isObject(value)) throw new EngramConfigValidationError(`${label} must be an object`)
   const validated = { ...value } as EngramRepositoryMappings
   for (const key of ["directories", "remotes"] as const) {
     if (value[key] === undefined) continue
-    if (!isObject(value[key])) throw new Error(`${label}.${key} must be an object`)
+    if (!isObject(value[key])) throw new EngramConfigValidationError(`${label}.${key} must be an object`)
     const mappings = Object.create(null) as Record<string, RepositoryIdentityOptions>
     for (const [name, options] of Object.entries(value[key])) {
-      if (!name.trim()) throw new Error(`${label}.${key} contains an empty repository name`)
+      if (!name.trim()) throw new EngramConfigValidationError(`${label}.${key} contains an empty repository name`)
       mappings[name.trim()] = validateRepositoryIdentity(options, `${label}.${key}.${name}`)
     }
     validated[key] = mappings
@@ -76,22 +83,22 @@ export function validateWorktreeIndexPolicy(
   label = "worktreeIndex",
 ): WorktreeIndexPolicy | undefined {
   if (value === undefined) return undefined
-  if (!isObject(value)) throw new Error(`${label} must be an object`)
+  if (!isObject(value)) throw new EngramConfigValidationError(`${label} must be an object`)
 
   const validated = { ...value } as WorktreeIndexPolicy
 
   if (value.enabled !== undefined && typeof value.enabled !== "boolean") {
-    throw new Error(`${label}.enabled must be a boolean`)
+    throw new EngramConfigValidationError(`${label}.enabled must be a boolean`)
   }
   if (value.gateSessions !== undefined && typeof value.gateSessions !== "boolean") {
-    throw new Error(`${label}.gateSessions must be a boolean`)
+    throw new EngramConfigValidationError(`${label}.gateSessions must be a boolean`)
   }
   if (value.projects !== undefined) {
     validated.projects = validateStringArray(value.projects, `${label}.projects`)
   }
   for (const key of ["mcpUrl", "embedding"] as const) {
     if (value[key] !== undefined && (typeof value[key] !== "string" || !value[key].trim())) {
-      throw new Error(`${label}.${key} must be a non-empty string`)
+      throw new EngramConfigValidationError(`${label}.${key} must be a non-empty string`)
     }
     if (typeof value[key] === "string") validated[key] = value[key].trim()
   }
@@ -100,13 +107,13 @@ export function validateWorktreeIndexPolicy(
   }
 
   if (value.familyRoots !== undefined) {
-    if (!isObject(value.familyRoots)) throw new Error(`${label}.familyRoots must be an object`)
+    if (!isObject(value.familyRoots)) throw new EngramConfigValidationError(`${label}.familyRoots must be an object`)
     const familyRoots = Object.create(null) as Record<string, string[]>
     for (const [family, roots] of Object.entries(value.familyRoots)) {
-      if (!family.trim()) throw new Error(`${label}.familyRoots contains an empty family name`)
+      if (!family.trim()) throw new EngramConfigValidationError(`${label}.familyRoots contains an empty family name`)
       const normalizedFamily = family.trim()
       if (Object.prototype.hasOwnProperty.call(familyRoots, normalizedFamily)) {
-        throw new Error(`${label}.familyRoots contains duplicate family name ${normalizedFamily}`)
+        throw new EngramConfigValidationError(`${label}.familyRoots contains duplicate family name ${normalizedFamily}`)
       }
       familyRoots[normalizedFamily] = validateAbsoluteRoots(
         roots,
@@ -120,11 +127,11 @@ export function validateWorktreeIndexPolicy(
 }
 
 export function validateEngramOptions(value: unknown, label: string): Partial<EngramPluginOptions> {
-  if (!isObject(value)) throw new Error(`${label} must be an object`)
+  if (!isObject(value)) throw new EngramConfigValidationError(`${label} must be an object`)
   const validated = { ...value } as Partial<EngramPluginOptions>
   for (const key of ["project", "family", "gatewayUrl"] as const) {
     if (value[key] !== undefined && (typeof value[key] !== "string" || !value[key].trim())) {
-      throw new Error(`${label}.${key} must be a non-empty string`)
+      throw new EngramConfigValidationError(`${label}.${key} must be a non-empty string`)
     }
     if (typeof value[key] === "string") validated[key] = value[key].trim()
   }
@@ -212,6 +219,7 @@ export async function resolveEngramOptions(rawOptions: unknown): Promise<EngramP
     try {
       explicit = validateEngramOptions(rawOptions, "explicit plugin options")
     } catch (error) {
+      if (error instanceof EngramConfigValidationError) throw error
       const message = error instanceof Error ? error.message : String(error)
       console.error(`[engram-plugin] ${message}`)
     }
@@ -220,6 +228,7 @@ export async function resolveEngramOptions(rawOptions: unknown): Promise<EngramP
   try {
     configured = await readEngramConfig()
   } catch (error) {
+    if (error instanceof EngramConfigValidationError) throw error
     const message = error instanceof Error ? error.message : String(error)
     console.error(`[engram-plugin] ${message}`)
   }

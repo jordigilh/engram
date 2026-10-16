@@ -39,6 +39,8 @@ export interface DeriveIdentityInput {
   /** Current git branch name, or undefined if it couldn't be detected. */
   branch: string | undefined
   options?: EngramPluginOptions
+  /** Repository-mapped projects are defaults and may be replaced by a branch route. */
+  projectFromRepositoryMapping?: boolean
 }
 
 export interface ResolvedIdentity {
@@ -107,7 +109,8 @@ export function deriveIdentity(input: DeriveIdentityInput): ResolvedIdentity {
     branchSuffix,
     branchSuffix === "main" ? "main" : `release/${branchSuffix}`,
   ].filter((key): key is string => Boolean(key)).map((key) => options.branchRoutes?.[key]).find(Boolean)
-  const project = options.project || branchRoute || input.directoryBasename
+  const mappedProject = input.projectFromRepositoryMapping ? undefined : options.project
+  const project = mappedProject || branchRoute || options.project || input.directoryBasename
   const family = options.family || baseName
 
   return { project, family, branchSuffix }

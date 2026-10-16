@@ -59,6 +59,18 @@ function fakeV2Ctx(mcpInitial: Record<string, unknown> = {}) {
   return { ctx, editor, sessionHooks, toolHooks }
 }
 
+async function initializeGitIdentity(directory: string, branch: string, remote: string): Promise<void> {
+  const run = async (args: string[]): Promise<void> => {
+    const child = Bun.spawn(["git", "-C", directory, ...args], { stdout: "ignore", stderr: "ignore" })
+    const exitCode = await child.exited
+    if (exitCode !== 0) throw new Error(`git ${args.join(" ")} failed in ${directory}`)
+  }
+  await mkdir(directory, { recursive: true })
+  await run(["init", "-q"])
+  await run(["symbolic-ref", "HEAD", `refs/heads/${branch}`])
+  await run(["remote", "add", "origin", remote])
+}
+
 describe("V2 plugin export", () => {
   test("default export exposes only the V2 setup entrypoint", () => {
     const def = pluginDefault as unknown as Record<string, unknown>
@@ -369,7 +381,9 @@ describe("v2 setup", () => {
     const worktree = path.join(fixture, "service-api-v1.5")
     const familyRoot = path.join(fixture, "service-ui")
     const unrelatedRoot = path.join(fixture, "unrelated")
-    await mkdir(worktree, { recursive: true })
+    const remote = "https://example.com/service-api"
+    await initializeGitIdentity(canonical, "main", remote)
+    await initializeGitIdentity(worktree, "release/v1.5", remote)
     await mkdir(path.join(familyRoot, ".zvec-grep"), { recursive: true })
     await writeFile(path.join(familyRoot, ".zvec-grep", "manifest.json"), "{}\n")
     await mkdir(unrelatedRoot)
@@ -382,8 +396,8 @@ describe("v2 setup", () => {
     ctx.options = {
       branchRoutes: { main: "service-api", "v1.5": "service-api-v1.5", "release/v1.5": "service-api-v1.5" },
       repositories: {
-        directories: {
-          "service-api": { project: "service-api", family: "platform" },
+        remotes: {
+          [remote]: { project: "service-api", family: "platform" },
         },
       },
       worktreeIndex: {

@@ -63,6 +63,22 @@ describe("deriveIdentity", () => {
     expect(id.family).toBe("platform")
   })
 
+  test("configured branch route overrides a repository-mapped default project", () => {
+    const id = deriveIdentity({
+      directoryBasename: "service-api",
+      branch: "release/v1.5",
+      options: {
+        project: "service-api",
+        family: "platform",
+        branchRoutes: { main: "service-api", "release/v1.5": "service-api-v1.5" },
+      },
+      projectFromRepositoryMapping: true,
+    })
+
+    expect(id.project).toBe("service-api-v1.5")
+    expect(id.family).toBe("platform")
+  })
+
   test("explicit project takes precedence over configured branch route", () => {
     const id = deriveIdentity({
       directoryBasename: "service-api",

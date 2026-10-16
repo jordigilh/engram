@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import * as path from "node:path"
 import type { EngramPluginOptions } from "./identity"
+import type { WorktreeIndexPolicy } from "./worktree-index"
 
 export const DEFAULT_ENGRAM_PLUGIN_CONFIG = ".engram/opencode.json"
 
@@ -44,6 +45,21 @@ function mergeRecord<T extends JsonObject>(base: T | undefined, override: T | un
   return { ...(base || {}), ...(override || {}) } as T
 }
 
+function mergeWorktreeIndex(
+  configured: WorktreeIndexPolicy | undefined,
+  explicit: WorktreeIndexPolicy | undefined,
+): WorktreeIndexPolicy | undefined {
+  if (!configured && !explicit) return undefined
+  const merged = { ...(configured || {}), ...(explicit || {}) }
+  if (configured?.familyRoots || explicit?.familyRoots) {
+    merged.familyRoots = {
+      ...(configured?.familyRoots || {}),
+      ...(explicit?.familyRoots || {}),
+    }
+  }
+  return merged
+}
+
 /** Merge deployment config first, with explicit OpenCode options as an override. */
 export function mergeEngramOptions(
   configured: Partial<EngramPluginOptions>,
@@ -59,7 +75,7 @@ export function mergeEngramOptions(
       remotes: mergeRecord(configured.repositories?.remotes, explicit.repositories?.remotes),
     }
   }
-  merged.worktreeIndex = mergeRecord(configured.worktreeIndex, explicit.worktreeIndex)
+  merged.worktreeIndex = mergeWorktreeIndex(configured.worktreeIndex, explicit.worktreeIndex)
   return merged
 }
 

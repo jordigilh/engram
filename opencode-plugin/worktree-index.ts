@@ -60,8 +60,16 @@ export interface WorktreeIndexPolicy {
   /** Containerized zvec-grep MCP endpoint used for index lifecycle operations. */
   mcpUrl?: string
   embedding?: string
-  /** Exact absolute roots permitted in zvec workspace-read tool arguments. */
+  /** Exact absolute roots permitted in zvec workspace-read tool arguments.
+   *
+   * This is deployment-wide rather than current-project-only: a family route
+   * can use Engram's shared code index to compare a sibling repository. The
+   * current checkout is always authorized separately; sibling roots must be
+   * listed here (or in aggregateRoots for a managed non-Git aggregate).
+   */
   allowedRoots?: string[]
+  /** Exact roots inherited by every route with the named repository family. */
+  familyRoots?: Record<string, string[]>
   /** Explicit non-Git roots with an aggregate zvec manifest. */
   aggregateRoots?: string[]
   /** Block the first prompt in a session until Engram and zvec-grep are ready. */
@@ -72,6 +80,24 @@ export function shouldAutoIndexWorktrees(project: string, policy: WorktreeIndexP
   if (policy.enabled === false) return false
   if (policy.enabled === true) return true
   return policy.projects?.includes(project) === true
+}
+
+/**
+ * Combine deployment-wide and family-scoped zvec authorization without
+ * weakening the exact-root check performed by createWorktreeIndexer().
+ * Family roots are inherited by every route in that family, so onboarding a
+ * sibling repository does not require repeating the same list per project
+ * route.
+ */
+export function allowedRootsForFamily(
+  policy: WorktreeIndexPolicy = {},
+  family?: string,
+): string[] {
+  const roots = [
+    ...(policy.allowedRoots || []),
+    ...(family ? policy.familyRoots?.[family] || [] : []),
+  ]
+  return [...new Set(roots)]
 }
 
 /** Session gating is opt-in because MCP and indexing are optional enhancements. */

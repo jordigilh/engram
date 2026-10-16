@@ -48,6 +48,7 @@ import {
   createWorktreeIndexer,
   DEFAULT_ZVEC_EMBEDDING,
   isZvecWorkspaceReadTool,
+  allowedRootsForFamily,
   shouldGateSessions,
   shouldAutoIndexWorktrees,
 } from "./worktree-index"
@@ -346,7 +347,7 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
         listWorktrees: () => ctx.worktree.list({ projectID: ctx.location.project.id }),
         mcpUrl: worktreePolicy.mcpUrl,
         embedding: worktreePolicy.embedding || DEFAULT_ZVEC_EMBEDDING,
-        allowedRoots: worktreePolicy.allowedRoots,
+        allowedRoots: allowedRootsForFamily(worktreePolicy, worktreeProjectIdentity.family),
         aggregateRoots: worktreePolicy.aggregateRoots,
       })
     : undefined

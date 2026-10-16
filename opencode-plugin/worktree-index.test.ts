@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import {
   createWorktreeIndexer,
+  allowedRootsForFamily,
   getZvecGitRevision,
   hasZvecManifest,
   isZvecWorkspaceReadTool,
@@ -36,6 +37,14 @@ describe("worktree indexing policy", () => {
     expect(isZvecWorkspaceReadTool("mcp:engram:zvec_grep_callgraph_cluster")).toBe(true)
     expect(isZvecWorkspaceReadTool("zvec_grep_index")).toBe(false)
     expect(isZvecWorkspaceReadTool("grep")).toBe(false)
+  })
+
+  test("inherits exact zvec roots from the resolved repository family", () => {
+    expect(allowedRootsForFamily({
+      allowedRoots: ["/global", "/shared"],
+      familyRoots: { kubernaut: ["/shared", "/kubernaut"], praxis: ["/praxis"] },
+    }, "kubernaut")).toEqual(["/global", "/shared", "/kubernaut"])
+    expect(allowedRootsForFamily({ familyRoots: { kubernaut: ["/kubernaut"] } }, "dcm")).toEqual([])
   })
 
   test("reads and writes manifest and Git provenance safely", async () => {

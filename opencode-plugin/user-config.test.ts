@@ -37,12 +37,19 @@ describe("deployment-local plugin config", () => {
           directories: { "service-api": { family: "platform" } },
           remotes: { "https://example.com/service-api": { family: "platform" } },
         },
-        worktreeIndex: { projects: ["service-api"], embedding: "local/configured" },
+        worktreeIndex: {
+          projects: ["service-api"],
+          embedding: "local/configured",
+          familyRoots: { platform: ["/repos/platform"], shared: ["/repos/shared"] },
+        },
       },
       {
         gatewayUrl: "http://explicit",
         repositories: { remotes: { "https://example.com/service-ui": { family: "platform" } } },
-        worktreeIndex: { mcpUrl: "http://127.0.0.1:7999/mcp" },
+        worktreeIndex: {
+          mcpUrl: "http://127.0.0.1:7999/mcp",
+          familyRoots: { platform: ["/repos/platform-override"] },
+        },
       },
     )
 
@@ -54,6 +61,7 @@ describe("deployment-local plugin config", () => {
       projects: ["service-api"],
       embedding: "local/configured",
       mcpUrl: "http://127.0.0.1:7999/mcp",
+      familyRoots: { platform: ["/repos/platform-override"], shared: ["/repos/shared"] },
     })
   })
 

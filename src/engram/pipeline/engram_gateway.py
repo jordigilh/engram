@@ -678,6 +678,18 @@ RECALL_ONLY_HINDSIGHT_TOOLS = frozenset({"recall"})
 # tooling for a read-only reference corpus).
 RECALL_ONLY_CODE_TOOLS = frozenset({"kuadrant_code_search"})
 
+# The loopback zvec endpoint uses the full MCP toolset so the OpenCode plugin
+# can manage root-scoped indexes. Keep lifecycle/admin tools off the aggregated
+# Engram route: agents use the search/graph surface here, while only the local
+# plugin talks directly to the management endpoint.
+ZVEC_MANAGEMENT_TOOLS = frozenset({
+    "zvec_grep_index",
+    "zvec_grep_index_drop",
+    "zvec_grep_index_status",
+    "zvec_grep_server_status",
+    "zvec_grep_rg",
+})
+
 MANUAL_MENTAL_MODEL_TOOLS = frozenset({"manual_mental_model"})
 
 RELEVANT_SERENA_TOOLS = frozenset(
@@ -739,6 +751,9 @@ def filter_relevant_tools(backend_key: str, tools: list[dict]) -> list[dict]:
     oversized catalog. Add usage guidance to selected tools where the
     upstream description needs project-specific routing advice. See
     `RELEVANT_TOOLS_BY_BACKEND`'s module-level comment for why this exists."""
+    if backend_key == "code":
+        return [tool for tool in tools if tool.get("name") not in ZVEC_MANAGEMENT_TOOLS]
+
     allowed = RELEVANT_TOOLS_BY_BACKEND.get(backend_key)
     if allowed is None:
         return tools

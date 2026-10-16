@@ -241,12 +241,17 @@ class TestFilterRelevantTools:
         assert "multiline" in pattern_description.lower()
         assert tools[0]["description"] == original_description
 
-    def test_unfiltered_backend_passes_through_unchanged(self, engram_gateway):
-        tools = [_tool("praxis_code_search")]
+    def test_code_backend_hides_zvec_management_tools(self, engram_gateway):
+        tools = [
+            _tool("praxis_code_search"),
+            _tool("zvec_grep_search"),
+            _tool("zvec_grep_index"),
+            _tool("zvec_grep_index_status"),
+        ]
 
         filtered = engram_gateway.filter_relevant_tools("code", tools)
 
-        assert filtered == tools
+        assert {tool["name"] for tool in filtered} == {"praxis_code_search", "zvec_grep_search"}
 
     def test_empty_tool_list_stays_empty(self, engram_gateway):
         assert engram_gateway.filter_relevant_tools("docs", []) == []

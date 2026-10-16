@@ -212,7 +212,7 @@ export function mergeEngramOptions(
   return merged
 }
 
-/** Load deployment config without making a malformed optional file fatal to a session. */
+/** Load deployment config; a missing file is optional, but invalid policy is fatal. */
 export async function resolveEngramOptions(rawOptions: unknown): Promise<EngramPluginOptions> {
   let explicit: Partial<EngramPluginOptions> = {}
   if (isObject(rawOptions)) {
@@ -224,13 +224,6 @@ export async function resolveEngramOptions(rawOptions: unknown): Promise<EngramP
       console.error(`[engram-plugin] ${message}`)
     }
   }
-  let configured: Partial<EngramPluginOptions> = {}
-  try {
-    configured = await readEngramConfig()
-  } catch (error) {
-    if (error instanceof EngramConfigValidationError) throw error
-    const message = error instanceof Error ? error.message : String(error)
-    console.error(`[engram-plugin] ${message}`)
-  }
+  const configured = await readEngramConfig()
   return mergeEngramOptions(configured, explicit)
 }

@@ -51,6 +51,17 @@ describe("deployment-local plugin config", () => {
     }
   })
 
+  test("surfaces invalid deployment JSON instead of disabling policy", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "engram-plugin-config-json-"))
+    const configPath = path.join(directory, "opencode.json")
+    try {
+      await writeFile(configPath, "{not-json")
+      await expect(readEngramConfig(configPath)).rejects.toThrow("invalid Engram plugin config")
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   test("rejects malformed top-level and nested identity options", () => {
     expect(() => validateEngramOptions({ gatewayUrl: 123 }, "explicit options")).toThrow("gatewayUrl")
     expect(() => validateEngramOptions({

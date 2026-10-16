@@ -59,7 +59,7 @@ function fakeV2Ctx(mcpInitial: Record<string, unknown> = {}) {
   return { ctx, editor, sessionHooks, toolHooks }
 }
 
-async function initializeGitIdentity(directory: string, branch: string, remote: string): Promise<void> {
+async function initializeGitIdentity(directory: string, branch: string, remote?: string): Promise<void> {
   const run = async (args: string[]): Promise<void> => {
     const child = Bun.spawn(["git", "-C", directory, ...args], { stdout: "ignore", stderr: "ignore" })
     const exitCode = await child.exited
@@ -68,7 +68,15 @@ async function initializeGitIdentity(directory: string, branch: string, remote: 
   await mkdir(directory, { recursive: true })
   await run(["init", "-q"])
   await run(["symbolic-ref", "HEAD", `refs/heads/${branch}`])
-  await run(["remote", "add", "origin", remote])
+  await writeFile(path.join(directory, ".gitignore"), ".zvec-grep/\n")
+  await writeFile(path.join(directory, "fixture.txt"), "fixture\n")
+  if (remote) await run(["remote", "add", "origin", remote])
+  await run(["add", ".gitignore", "fixture.txt"])
+  await run([
+    "-c", "user.name=Engram Test",
+    "-c", "user.email=engram-test@example.com",
+    "commit", "-qm", "fixture",
+  ])
 }
 
 describe("V2 plugin export", () => {
@@ -332,8 +340,7 @@ describe("v2 setup", () => {
     const familyRoot = path.join(fixture, "service-ui")
     const unrelatedRoot = path.join(fixture, "unrelated")
     await mkdir(worktree, { recursive: true })
-    await mkdir(path.join(familyRoot, ".zvec-grep"), { recursive: true })
-    await writeFile(path.join(familyRoot, ".zvec-grep", "manifest.json"), "{}\n")
+    await initializeGitIdentity(familyRoot, "main")
     await mkdir(unrelatedRoot)
 
     const { ctx, toolHooks } = fakeV2Ctx()
@@ -349,14 +356,33 @@ describe("v2 setup", () => {
       },
       worktreeIndex: {
         projects: ["service-api"],
+        mcpUrl: "http://zvec.test/mcp",
         familyRoots: { platform: [familyRoot] },
-        aggregateRoots: [familyRoot],
       },
     }
     ctx.worktree = { list: async () => [] }
 
     const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
     let cleanup: (() => void) | void = undefined
+    const previousFetch = globalThis.fetch
+    globalThis.fetch = (async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as {
+        method: string
+        params?: { arguments?: { root?: string } }
+      }
+      if (request.method === "initialize") {
+        return new Response('data: {"jsonrpc":"2.0","id":1,"result":{}}\n\n', {
+          headers: { "content-type": "text/event-stream", "mcp-session-id": "family-session" },
+        })
+      }
+      if (request.method === "notifications/initialized") return new Response(null, { status: 202 })
+      const root = request.params?.arguments?.root || familyRoot
+      await mkdir(path.join(root, ".zvec-grep"), { recursive: true })
+      await writeFile(path.join(root, ".zvec-grep", "manifest.json"), "{}\n")
+      return new Response('data: {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"state":"succeeded"}}}\n\n', {
+        headers: { "content-type": "text/event-stream", "mcp-session-id": "family-session" },
+      })
+    }) as typeof fetch
     try {
       cleanup = await def.setup(ctx)
       await toolHooks["execute.before"][0]({
@@ -370,6 +396,7 @@ describe("v2 setup", () => {
         input: { root: unrelatedRoot, query: "must fail closed" },
       })).rejects.toThrow("not authorized")
     } finally {
+      globalThis.fetch = previousFetch
       if (typeof cleanup === "function") cleanup()
       await rm(fixture, { recursive: true, force: true })
     }
@@ -384,8 +411,7 @@ describe("v2 setup", () => {
     const remote = "https://example.com/service-api"
     await initializeGitIdentity(canonical, "main", remote)
     await initializeGitIdentity(worktree, "release/v1.5", remote)
-    await mkdir(path.join(familyRoot, ".zvec-grep"), { recursive: true })
-    await writeFile(path.join(familyRoot, ".zvec-grep", "manifest.json"), "{}\n")
+    await initializeGitIdentity(familyRoot, "main")
     await mkdir(unrelatedRoot)
 
     const { ctx, toolHooks } = fakeV2Ctx()
@@ -402,14 +428,33 @@ describe("v2 setup", () => {
       },
       worktreeIndex: {
         projects: ["service-api-v1.5"],
+        mcpUrl: "http://zvec.test/mcp",
         familyRoots: { platform: [familyRoot] },
-        aggregateRoots: [familyRoot],
       },
     }
     ctx.worktree = { list: async () => [] }
 
     const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
     let cleanup: (() => void) | void = undefined
+    const previousFetch = globalThis.fetch
+    globalThis.fetch = (async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as {
+        method: string
+        params?: { arguments?: { root?: string } }
+      }
+      if (request.method === "initialize") {
+        return new Response('data: {"jsonrpc":"2.0","id":1,"result":{}}\n\n', {
+          headers: { "content-type": "text/event-stream", "mcp-session-id": "release-family-session" },
+        })
+      }
+      if (request.method === "notifications/initialized") return new Response(null, { status: 202 })
+      const root = request.params?.arguments?.root || familyRoot
+      await mkdir(path.join(root, ".zvec-grep"), { recursive: true })
+      await writeFile(path.join(root, ".zvec-grep", "manifest.json"), "{}\n")
+      return new Response('data: {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"state":"succeeded"}}}\n\n', {
+        headers: { "content-type": "text/event-stream", "mcp-session-id": "release-family-session" },
+      })
+    }) as typeof fetch
     try {
       cleanup = await def.setup(ctx)
       await toolHooks["execute.before"][0]({
@@ -423,6 +468,7 @@ describe("v2 setup", () => {
         input: { root: unrelatedRoot, query: "must fail closed" },
       })).rejects.toThrow("not authorized")
     } finally {
+      globalThis.fetch = previousFetch
       if (typeof cleanup === "function") cleanup()
       await rm(fixture, { recursive: true, force: true })
     }

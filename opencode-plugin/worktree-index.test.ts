@@ -208,6 +208,23 @@ describe("createWorktreeIndexer", () => {
     indexer.dispose()
   })
 
+  test("rejects a bare Git repository even when listed as an aggregate root", async () => {
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
+      aggregateRoots: ["/bare-repository"],
+      listWorktrees: async () => [],
+      hasManifest: async () => true,
+      getRevision: async () => undefined,
+      isBareRepository: async () => true,
+      isGitWorktree: async () => false,
+      log: () => {},
+    })
+
+    await expect(indexer.ensureIndexed("/bare-repository")).rejects.toThrow("bare Git repository")
+    indexer.dispose()
+  })
+
   test("rejects a workspace-read root outside the explicit allowlist", async () => {
     let runCount = 0
     const indexer = createWorktreeIndexer({

@@ -131,9 +131,8 @@ project receives automatic indexing implicitly; list each route explicitly:
 {
     "worktreeIndex": {
       "projects": ["<project-route>"],
-      "binary": "~/bin/zg",
+      "mcpUrl": "http://127.0.0.1:7999/mcp",
       "embedding": "local/potion-code-16m-v2",
-      "jiebaDictionary": "/path/to/zvec-grep/node_modules/@zvec/bindings-darwin-arm64/jieba_dict",
       "allowedRoots": ["/absolute/path/to/authorized-checkout"],
       "aggregateRoots": ["/absolute/path/to/authorized/worktree-pool"],
       "gateSessions": true
@@ -142,12 +141,20 @@ project receives automatic indexing implicitly; list each route explicitly:
 ```
 
 For every configured route, the plugin watches OpenCode's
-`worktree.updated` events and runs `zg --index` for each sibling worktree that
-does not have a usable local index. It also reconciles the worktree inventory
-when the plugin starts, so a worktree created while the event stream was
-disconnected is not missed. The canonical checkout is left unchanged. Each
-sibling worktree gets its own `.zvec-grep` index; the local embedding setting
-keeps source code on the host.
+`worktree.updated` events and calls the loopback zvec-grep MCP endpoint's
+`zvec_grep_index` tool for each sibling worktree that does not have a usable
+local index. It also reconciles the worktree inventory when the plugin starts,
+so a worktree created while the event stream was disconnected is not missed.
+The canonical checkout is left unchanged. The container mounts the authorized
+host roots and writes each sibling's `.zvec-grep` index in place; source and
+embedding execution stay inside the container.
+
+The default management endpoint is `http://127.0.0.1:7999/mcp`; set
+`worktreeIndex.mcpUrl` or `ZVEC_GREP_MCP_URL` when the container uses another
+loopback address. The zvec supervisor must run the `full` MCP toolset because
+the `agent` toolset intentionally omits index lifecycle operations. The
+container's scheduler deduplicates same-root requests and queues independent
+roots, so separate OpenCode sessions do not contend on a host `zg` process.
 
 For configured routes, every zvec workspace-read tool also performs a
 synchronous readiness check for its requested absolute `root` immediately
@@ -172,13 +179,13 @@ that root is the canonical checkout.
 
 When `gateSessions` is explicitly true, the plugin also installs a V2
 prompt-admission gate. The first prompt for each session waits for the `engram`
-MCP server to report `connected`, then waits for `zg --index` and its
-provenance sidecar to finish for the current checkout. A failed MCP connection
-or index operation rejects prompt admission with an actionable error instead
-of allowing the agent to work against an unindexed tree. Concurrent prompts
-share the same readiness operation. This is intentionally a prompt hook rather
-than a model-context hook: the prompt is not admitted until the prerequisite
-is complete.
+MCP server to report `connected`, then waits for the container's
+`zvec_grep_index` operation and the provenance sidecar to finish for the
+current checkout. A failed MCP connection or index operation rejects prompt
+admission with an actionable error instead of allowing the agent to work
+against an unindexed tree. Concurrent prompts share the same readiness
+operation. This is intentionally a prompt hook rather than a model-context
+hook: the prompt is not admitted until the prerequisite is complete.
 
 Session gating is opt-in. Listing a route in `projects` continues to enable
 background worktree indexing, but does not make an optional Engram or zvec-grep
@@ -188,21 +195,17 @@ ZG's manifest does not record Git branch, commit, or dirty-worktree provenance.
 After a successful setup, the plugin therefore writes an Engram-owned
 `.zvec-grep/engram-git-provenance.json` sidecar. A missing sidecar, a changed
 branch/commit/dirty state, or a provenance record for another root invokes
-`zg --index <worktree> --rebuild` before the worktree is considered ready.
-Index operations are serialized and a checkout that changes during a rebuild
-gets a follow-up rebuild rather than being marked fresh with the old revision.
+`zvec_grep_index(root, rebuild: true)` before the worktree is considered ready.
+The container scheduler serializes and deduplicates index operations, and a
+checkout that changes during a rebuild gets a follow-up rebuild rather than
+being marked fresh with the old revision.
 Readiness has a finite retry budget and provenance persistence failures reject
 the gate instead of retrying forever.
 
-The default executable is `~/bin/zg` when present, otherwise `zg` from `PATH`.
-Set `binary` or `embedding` in the deployment-local policy when needed. An
-explicit OpenCode plugin option can temporarily override the file for testing,
-but persistent identity and indexing configuration belongs under `~/.engram/`:
-
-Some host builds of `zg` also require the Jieba dictionary directory for their
-FTS tokenizer. Set `jiebaDictionary` to the installed `jieba_dict` directory
-when `zg --index` reports `JiebaTokenizer: jieba_dict_dir not configured`; the
-plugin passes it only to the indexing child as `ZVEC_JIEBA_DICT_DIR`.
+There is no host `zg` executable or host Jieba configuration in this path. The
+container image supplies the matching runtime and dictionary. Persistent
+endpoint, root-allowlist, and image configuration belongs under the deployment
+supervisor and `~/.engram/`.
 
 The container supervisor uses mutable `latest` as the update channel. Every
 startup pulls both images first, starts the replacement with pulling disabled,
@@ -217,7 +220,7 @@ workflow; no separate digest approval file is required in Engram.
     "options": {
       "worktreeIndex": {
         "projects": ["<project-route>"],
-        "binary": "/path/to/zg",
+        "mcpUrl": "http://127.0.0.1:7999/mcp",
         "embedding": "local/potion-code-16m-v2"
       }
     }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import pluginDefault, { appendV2Nudge } from "./index"
@@ -259,13 +259,7 @@ describe("v2 setup", () => {
   test("preflights the exact root supplied to a zvec workspace read", async () => {
     const fixture = await mkdtemp(path.join(tmpdir(), "engram-zvec-preflight-"))
     const requestedRoot = path.join(fixture, "openchamber-worktree-pool")
-    const fakeZg = path.join(fixture, "fake-zg")
     await mkdir(requestedRoot)
-    await writeFile(
-      fakeZg,
-      "#!/bin/sh\nmkdir -p \"$2/.zvec-grep\"\nprintf '{}\\n' > \"$2/.zvec-grep/manifest.json\"\n",
-    )
-    await chmod(fakeZg, 0o755)
 
     const { ctx, toolHooks } = fakeV2Ctx()
     ctx.location = {
@@ -277,7 +271,7 @@ describe("v2 setup", () => {
       gatewayUrl: "http://127.0.0.1:8896",
       worktreeIndex: {
         projects: ["service-api"],
-        binary: fakeZg,
+        mcpUrl: "http://zvec.test/mcp",
         aggregateRoots: [requestedRoot],
       },
     }
@@ -285,6 +279,25 @@ describe("v2 setup", () => {
 
     const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
     let cleanup: (() => void) | void = undefined
+    const previousFetch = globalThis.fetch
+    globalThis.fetch = (async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as {
+        method: string
+        params?: { arguments?: { root?: string } }
+      }
+      if (request.method === "initialize") {
+        return new Response('data: {"jsonrpc":"2.0","id":1,"result":{}}\n\n', {
+          headers: { "content-type": "text/event-stream", "mcp-session-id": "test-session" },
+        })
+      }
+      if (request.method === "notifications/initialized") return new Response(null, { status: 202 })
+      const root = request.params?.arguments?.root || requestedRoot
+      await mkdir(path.join(root, ".zvec-grep"), { recursive: true })
+      await writeFile(path.join(root, ".zvec-grep", "manifest.json"), "{}\n")
+      return new Response('data: {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"state":"succeeded"}}}\n\n', {
+        headers: { "content-type": "text/event-stream", "mcp-session-id": "test-session" },
+      })
+    }) as typeof fetch
     try {
       cleanup = await def.setup(ctx)
       await toolHooks["execute.before"][0]({
@@ -294,6 +307,7 @@ describe("v2 setup", () => {
       })
       expect(await Bun.file(path.join(requestedRoot, ".zvec-grep", "manifest.json")).exists()).toBe(true)
     } finally {
+      globalThis.fetch = previousFetch
       if (typeof cleanup === "function") cleanup()
       await rm(fixture, { recursive: true, force: true })
     }

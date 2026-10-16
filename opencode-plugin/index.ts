@@ -344,9 +344,8 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
         projectID: ctx.location.project.id,
         canonicalDirectory,
         listWorktrees: () => ctx.worktree.list({ projectID: ctx.location.project.id }),
-        binary: worktreePolicy.binary,
+        mcpUrl: worktreePolicy.mcpUrl,
         embedding: worktreePolicy.embedding || DEFAULT_ZVEC_EMBEDDING,
-        jiebaDictionary: worktreePolicy.jiebaDictionary,
         allowedRoots: worktreePolicy.allowedRoots,
         aggregateRoots: worktreePolicy.aggregateRoots,
       })

@@ -1,8 +1,12 @@
 import { execFile } from "node:child_process"
-import { existsSync } from "node:fs"
 import { access, mkdir, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises"
-import { homedir } from "node:os"
 import * as path from "node:path"
+import {
+  ZvecMcpClient,
+  resolveZvecMcpUrl,
+  runZvecMcpIndex,
+  type FetchLike,
+} from "./zvec-mcp"
 
 export const DEFAULT_ZVEC_EMBEDDING = "local/potion-code-16m-v2"
 const ZVEC_PROVENANCE_FILE = "engram-git-provenance.json"
@@ -34,10 +38,9 @@ export interface WorktreeIndexerOptions {
   projectID: string
   canonicalDirectory: string
   listWorktrees: () => Promise<readonly WorktreeEntry[]>
-  binary?: string
+  mcpUrl?: string
+  mcpFetch?: FetchLike
   embedding?: string
-  /** Optional environment setting required by local zvec builds (for example Jieba dictionaries). */
-  jiebaDictionary?: string
   /** Additional exact roots authorized for zvec indexing (for example aggregates). */
   allowedRoots?: readonly string[]
   /** Authorized roots whose freshness is managed by an external aggregate index. */
@@ -54,10 +57,9 @@ export interface WorktreeIndexerOptions {
 export interface WorktreeIndexPolicy {
   enabled?: boolean
   projects?: string[]
-  binary?: string
+  /** Containerized zvec-grep MCP endpoint used for index lifecycle operations. */
+  mcpUrl?: string
   embedding?: string
-  /** Optional environment setting required by local zvec builds (for example Jieba dictionaries). */
-  jiebaDictionary?: string
   /** Exact absolute roots permitted in zvec workspace-read tool arguments. */
   allowedRoots?: string[]
   /** Explicit non-Git roots with an aggregate zvec manifest. */
@@ -76,35 +78,6 @@ export function shouldAutoIndexWorktrees(project: string, policy: WorktreeIndexP
 export function shouldGateSessions(project: string, policy: WorktreeIndexPolicy = {}): boolean {
   if (policy.enabled === false || policy.gateSessions === false) return false
   return policy.gateSessions === true
-}
-
-export function resolveZvecBinary(configured?: string): string {
-  const explicit = configured?.trim()
-  if (explicit) return explicit
-
-  const homeBinary = path.join(homedir(), "bin", "zg")
-  return existsSync(homeBinary) ? homeBinary : "zg"
-}
-
-export function buildZvecIndexArgs(directory: string, embedding: string, rebuild = false): string[] {
-  return [
-    "--index",
-    directory,
-    ...(rebuild ? ["--rebuild"] : []),
-    "--mode",
-    "auto",
-    "--embedding",
-    embedding,
-  ]
-}
-
-/** Build the child environment without changing the plugin process environment. */
-export function buildZvecIndexEnvironment(jiebaDictionary?: string): NodeJS.ProcessEnv {
-  const configured = jiebaDictionary?.trim()
-  return {
-    ...process.env,
-    ...(configured ? { ZVEC_JIEBA_DICT_DIR: configured } : {}),
-  }
 }
 
 const ZVEC_WORKSPACE_READ_TOOLS = [
@@ -259,44 +232,6 @@ async function realpathOrResolved(directory: string): Promise<string> {
   }
 }
 
-export function runZvecIndex(
-  binary: string,
-  directory: string,
-  embedding: string,
-  rebuild = false,
-  jiebaDictionary?: string,
-): Promise<void> {
-  const home = process.env["HOME"] || homedir()
-  const zvecHome = process.env["ZVEC_GREP_HOME"] || path.join(home, ".engram", "zvec-grep")
-
-  return new Promise((resolve, reject) => {
-    execFile(
-      binary,
-      buildZvecIndexArgs(directory, embedding, rebuild),
-      {
-        cwd: directory,
-        env: {
-          ...buildZvecIndexEnvironment(jiebaDictionary),
-          ZVEC_GREP_HOME: zvecHome,
-        },
-        timeout: 60 * 60 * 1000,
-        maxBuffer: 16 * 1024 * 1024,
-        encoding: "utf8",
-      },
-      (error, stdout, stderr) => {
-        if (!error) {
-          resolve()
-          return
-        }
-        const details = [error.message, String(stderr || "").trim(), String(stdout || "").trim()]
-          .filter(Boolean)
-          .join("\n")
-        reject(new Error(details))
-      },
-    )
-  })
-}
-
 /**
  * Watches OpenCode's worktree inventory and serially maintains each configured
  * sibling worktree's local zvec index. The canonical checkout is deliberately
@@ -326,13 +261,18 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
     (await readGitValue(directory, ["rev-parse", "--is-inside-work-tree"])) === "true")
   const readProvenance = options.readProvenance || readZvecProvenance
   const writeProvenance = options.writeProvenance || writeZvecProvenance
+  const mcpClient = options.runIndex
+    ? undefined
+    : new ZvecMcpClient({
+        url: resolveZvecMcpUrl(options.mcpUrl),
+        fetch: options.mcpFetch,
+      })
   const runIndex = options.runIndex
-    || ((directory: string, rebuild: boolean) => runZvecIndex(
-      resolveZvecBinary(options.binary),
+    || ((directory: string, rebuild: boolean) => runZvecMcpIndex(
+      mcpClient!,
       directory,
       options.embedding || DEFAULT_ZVEC_EMBEDDING,
       rebuild,
-      options.jiebaDictionary,
     ))
 
   let disposed = false
@@ -593,6 +533,7 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
     },
     dispose: () => {
       disposed = true
+      void mcpClient?.close()
     },
   }
 }

@@ -456,6 +456,11 @@ indexed the current worktree's matched production-Go scope at 1,071 files and
 comparisons. Keep the gateway shadow log under observation; this exploratory
 sample is not an acceptance decision.
 
+The loopback zvec endpoint runs the `full` toolset for the OpenCode plugin's
+root-scoped index lifecycle calls. The Engram gateway filters those management
+tools from its aggregated agent catalog; ordinary agents receive the search
+and graph surface only.
+
 Praxis routes follow the same gateway pattern: explicitly enabled
 `praxis-proxy` checkouts resolve to the zvec HTTP backend from the native
 Engram registry, while each OpenCode workspace continues to use only its own

@@ -1,23 +1,20 @@
 import { describe, expect, test } from "bun:test"
-import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import {
-  buildZvecIndexArgs,
   createWorktreeIndexer,
   getZvecGitRevision,
   hasZvecManifest,
   isZvecWorkspaceReadTool,
   readZvecProvenance,
-  resolveZvecBinary,
-  runZvecIndex,
   shouldGateSessions,
   shouldAutoIndexWorktrees,
   type ZvecGitRevision,
   type ZvecIndexProvenance,
-  buildZvecIndexEnvironment,
   writeZvecProvenance,
 } from "./worktree-index"
+import { runZvecMcpIndex } from "./zvec-mcp"
 
 describe("worktree indexing policy", () => {
   test("requires explicit project configuration and supports global opt-in", () => {
@@ -32,45 +29,6 @@ describe("worktree indexing policy", () => {
     expect(shouldGateSessions("service-ui")).toBe(false)
     expect(shouldGateSessions("service-ui", { gateSessions: true })).toBe(true)
     expect(shouldGateSessions("service-api", { projects: ["service-api"], gateSessions: false })).toBe(false)
-  })
-
-  test("uses auto mode and the configured local embedding for a new worktree", () => {
-    expect(buildZvecIndexArgs("/worktrees/fix-123", "local/potion-code-16m-v2")).toEqual([
-      "--index",
-      "/worktrees/fix-123",
-      "--mode",
-      "auto",
-      "--embedding",
-      "local/potion-code-16m-v2",
-    ])
-  })
-
-  test("adds --rebuild only when a branch-aware refresh is required", () => {
-    expect(buildZvecIndexArgs("/worktrees/fix-123", "local/potion-code-16m-v2", true)).toEqual([
-      "--index",
-      "/worktrees/fix-123",
-      "--rebuild",
-      "--mode",
-      "auto",
-      "--embedding",
-      "local/potion-code-16m-v2",
-    ])
-  })
-
-  test("passes an optional local Jieba dictionary only to the index child", () => {
-    const environment = buildZvecIndexEnvironment(" /opt/zvec/jieba_dict ")
-    expect(environment.ZVEC_JIEBA_DICT_DIR).toBe("/opt/zvec/jieba_dict")
-  })
-
-  test("does not add a Jieba override when it is not configured", () => {
-    const environment = buildZvecIndexEnvironment("   ")
-    expect(environment).not.toHaveProperty("ZVEC_JIEBA_DICT_DIR")
-  })
-
-  test("resolves an explicit binary and falls back to the home binary or PATH", () => {
-    expect(resolveZvecBinary(" /opt/zg ")).toBe("/opt/zg")
-    const fallback = resolveZvecBinary("   ")
-    expect(fallback === "zg" || fallback.endsWith("/bin/zg")).toBe(true)
   })
 
   test("recognizes zvec workspace reads without matching the explicit index tool", () => {
@@ -115,20 +73,23 @@ describe("worktree indexing policy", () => {
     expect(typeof revision?.dirty).toBe("boolean")
   })
 
-  test("reports indexing child success and failure", async () => {
-    const fixture = await mkdtemp(path.join(tmpdir(), "engram-zvec-run-"))
-    const success = path.join(fixture, "success.sh")
-    const failure = path.join(fixture, "failure.sh")
-    try {
-      await writeFile(success, "#!/bin/sh\nexit 0\n")
-      await writeFile(failure, "#!/bin/sh\necho failed >&2\nexit 1\n")
-      await chmod(success, 0o755)
-      await chmod(failure, 0o755)
-      await runZvecIndex(success, fixture, "local/test", false)
-      await expect(runZvecIndex(failure, fixture, "local/test", true)).rejects.toThrow("failed")
-    } finally {
-      await rm(fixture, { recursive: true, force: true })
-    }
+  test("submits root-scoped indexing through the container MCP tool", async () => {
+    const calls: Array<{ name: string; arguments: Record<string, unknown> }> = []
+    await runZvecMcpIndex({
+      callTool: async (name, arguments_) => {
+        calls.push({ name, arguments: arguments_ })
+        return { structuredContent: { state: "succeeded" } }
+      },
+    }, "/worktrees/fix-123", "local/test", true)
+    expect(calls).toEqual([{
+      name: "zvec_grep_index",
+      arguments: {
+        root: "/worktrees/fix-123",
+        embedding: "local/test",
+        rebuild: true,
+        wait: true,
+      },
+    }])
   })
 })
 

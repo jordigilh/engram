@@ -20,7 +20,7 @@
   },
   "worktreeIndex": {
     "projects": ["<project-route>"],
-    "binary": "~/bin/zg",
+    "mcpUrl": "http://127.0.0.1:7999/mcp",
     "embedding": "local/potion-code-16m-v2",
     "gateSessions": true
   }

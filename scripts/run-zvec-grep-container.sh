@@ -71,6 +71,9 @@ start_containers() {
     local proxy_image="$2"
     cleanup
 
+    # The OpenCode worktree indexer uses the root-scoped management tools over
+    # MCP. Keep the endpoint loopback-only; the full toolset is not exposed
+    # through the public Engram route.
     "$RUNTIME" run \
         --pull=never \
         --detach \
@@ -85,7 +88,7 @@ start_containers() {
         "$zvec_image" \
         --server run \
         --listen 127.0.0.1:7999 \
-        --mcp-toolset agent >/dev/null || return 1
+        --mcp-toolset full >/dev/null || return 1
 
     "$RUNTIME" run \
         --pull=never \

@@ -19,13 +19,13 @@ describe("deployment-local plugin config", () => {
     await writeFile(configPath, JSON.stringify({
       gatewayUrl: "http://127.0.0.1:9999",
       repositories: { remotes: { "https://example.com/service-api": { project: "service-api", family: "platform" } } },
-      worktreeIndex: { projects: ["service-api"], binary: "~/bin/zg", embedding: "local/test-model" },
+      worktreeIndex: { projects: ["service-api"], mcpUrl: "http://127.0.0.1:7999/mcp", embedding: "local/test-model" },
     }))
 
     await expect(readEngramConfig(configPath)).resolves.toEqual({
       gatewayUrl: "http://127.0.0.1:9999",
       repositories: { remotes: { "https://example.com/service-api": { project: "service-api", family: "platform" } } },
-      worktreeIndex: { projects: ["service-api"], binary: "~/bin/zg", embedding: "local/test-model" },
+      worktreeIndex: { projects: ["service-api"], mcpUrl: "http://127.0.0.1:7999/mcp", embedding: "local/test-model" },
     })
   })
 
@@ -42,7 +42,7 @@ describe("deployment-local plugin config", () => {
       {
         gatewayUrl: "http://explicit",
         repositories: { remotes: { "https://example.com/service-ui": { family: "platform" } } },
-        worktreeIndex: { binary: "/opt/zg" },
+        worktreeIndex: { mcpUrl: "http://127.0.0.1:7999/mcp" },
       },
     )
 
@@ -53,7 +53,7 @@ describe("deployment-local plugin config", () => {
     expect(merged.worktreeIndex).toEqual({
       projects: ["service-api"],
       embedding: "local/configured",
-      binary: "/opt/zg",
+      mcpUrl: "http://127.0.0.1:7999/mcp",
     })
   })
 

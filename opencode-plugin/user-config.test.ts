@@ -29,6 +29,18 @@ describe("deployment-local plugin config", () => {
     })
   })
 
+  test("rejects malformed root authorization instead of returning unsafe policy", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "engram-plugin-config-invalid-"))
+    const configPath = path.join(directory, "opencode.json")
+    await writeFile(configPath, JSON.stringify({
+      worktreeIndex: {
+        familyRoots: { platform: ["relative/root"] },
+      },
+    }))
+
+    await expect(readEngramConfig(configPath)).rejects.toThrow("absolute paths")
+  })
+
   test("explicit options override deployment config without dropping nested mappings", () => {
     const merged = mergeEngramOptions(
       {

@@ -312,6 +312,56 @@ describe("v2 setup", () => {
       await rm(fixture, { recursive: true, force: true })
     }
   })
+
+  test("uses the canonical route family for sibling authorization and rejects unrelated roots", async () => {
+    const fixture = await mkdtemp(path.join(tmpdir(), "engram-family-root-preflight-"))
+    const canonical = path.join(fixture, "service-api")
+    const worktree = path.join(canonical, "worktree")
+    const familyRoot = path.join(fixture, "service-ui")
+    const unrelatedRoot = path.join(fixture, "unrelated")
+    await mkdir(worktree, { recursive: true })
+    await mkdir(path.join(familyRoot, ".zvec-grep"), { recursive: true })
+    await writeFile(path.join(familyRoot, ".zvec-grep", "manifest.json"), "{}\n")
+    await mkdir(unrelatedRoot)
+
+    const { ctx, toolHooks } = fakeV2Ctx()
+    ctx.location = {
+      directory: worktree,
+      project: { id: "project-service-api", canonical },
+    }
+    ctx.options = {
+      repositories: {
+        directories: {
+          "service-api": { project: "service-api", family: "platform" },
+        },
+      },
+      worktreeIndex: {
+        projects: ["service-api"],
+        familyRoots: { platform: [familyRoot] },
+        aggregateRoots: [familyRoot],
+      },
+    }
+    ctx.worktree = { list: async () => [] }
+
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    let cleanup: (() => void) | void = undefined
+    try {
+      cleanup = await def.setup(ctx)
+      await toolHooks["execute.before"][0]({
+        tool: "engram_zvec_grep_search",
+        sessionID: "session-family-root",
+        input: { root: familyRoot, query: "shared family" },
+      })
+      await expect(toolHooks["execute.before"][0]({
+        tool: "engram_zvec_grep_search",
+        sessionID: "session-unrelated-root",
+        input: { root: unrelatedRoot, query: "must fail closed" },
+      })).rejects.toThrow("not authorized")
+    } finally {
+      if (typeof cleanup === "function") cleanup()
+      await rm(fixture, { recursive: true, force: true })
+    }
+  })
 })
 
 describe("appendV2Nudge", () => {

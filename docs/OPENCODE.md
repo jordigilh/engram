@@ -181,6 +181,11 @@ pinned to `kubernaut-operator`, so cross-repository reads should use
 root-scoped Engram code search rather than attempting
 `activate_project("kubernaut")` on that mount.
 
+`familyRoots` controls the OpenCode plugin's preflight gate. The gateway's
+independent backend root policy must also expose the same roots when the
+deployment uses a gateway adapter with its own `allowed_roots`/`source_roots`
+allowlist.
+
 The managed zvec search route also requests `freshness: "wait_for_fresh"` with
 `autoUpdate: true`. A search therefore refreshes only its requested workspace
 and waits for the pending index work to finish before returning results; Engram

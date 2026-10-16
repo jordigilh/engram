@@ -163,11 +163,11 @@ For configured routes, every zvec workspace-read tool also performs a
 synchronous readiness check for its requested absolute `root` immediately
 before the MCP call. The root must be the canonical checkout, a worktree
 returned by OpenCode's project inventory, or an exact path in
-`worktreeIndex.allowedRoots`. Non-Git aggregate roots must additionally be
-listed in `aggregateRoots`; arbitrary paths, symlink escapes, bare repositories,
-and unconfigured OpenChamber storage directories fail closed. The explicit
-index tool is not intercepted; routes without `worktreeIndex` configuration
-remain unchanged.
+`worktreeIndex.allowedRoots`/`familyRoots`. Non-Git aggregate roots must
+additionally be listed in `aggregateRoots`; arbitrary paths, symlink escapes,
+bare repositories, and unconfigured OpenChamber storage directories fail
+closed. The explicit index tool is not intercepted; routes without
+`worktreeIndex` configuration remain unchanged.
 
 For a shared repository family, `worktreeIndex.familyRoots` is the default
 deployment policy: every route whose resolved `family` matches the key inherits

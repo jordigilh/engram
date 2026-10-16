@@ -104,13 +104,14 @@ export function deriveIdentity(input: DeriveIdentityInput): ResolvedIdentity {
   // Gateway routes are explicit registry keys. A configured branch route is
   // safe to select automatically; without one, keep the historical exact
   // directory-name behavior rather than inventing an unregistered route.
-  const branchRoute = options.branchRoutes && [
+  const branchRoutes = options.branchRoutes
+  const branchRoute = branchRoutes && [
     input.branch,
     branchSuffix,
     branchSuffix === "main" ? "main" : `release/${branchSuffix}`,
   ].filter((key): key is string => Boolean(key)).map((key) => {
-    if (!Object.prototype.hasOwnProperty.call(options.branchRoutes, key)) return undefined
-    return options.branchRoutes[key]
+    if (!Object.prototype.hasOwnProperty.call(branchRoutes, key)) return undefined
+    return branchRoutes[key]
   }).find(Boolean)
   const mappedProject = input.projectFromRepositoryMapping ? undefined : options.project
   const project = mappedProject || branchRoute || options.project || input.directoryBasename

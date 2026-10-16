@@ -355,6 +355,19 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
   }
 
   async function decideIndex(directory: string, aggregate = false): Promise<IndexDecision> {
+    let bareRepository = false
+    try {
+      bareRepository = await isBareRepository(directory)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      log(`could not determine whether ${directory} is a bare Git repository: ${message}`)
+    }
+    if (bareRepository) {
+      throw new Error(
+        `bare Git repository ${directory} is not an authorized zvec workspace; use a non-bare checkout`,
+      )
+    }
+
     if (!(await hasManifest(directory))) {
       return { shouldIndex: true, rebuild: false, reason: "missing" }
     }
@@ -367,18 +380,6 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
       log(`could not inspect Git revision for ${directory}: ${message}`)
     }
     if (!revision) {
-      let bareRepository = false
-      try {
-        bareRepository = await isBareRepository(directory)
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        log(`could not determine whether ${directory} is a bare Git repository: ${message}`)
-      }
-      if (bareRepository) {
-        throw new Error(
-          `bare Git repository ${directory} is not an authorized zvec workspace; use a non-bare checkout`,
-        )
-      }
       let gitWorktree = true
       try {
         gitWorktree = await isGitWorktree(directory)

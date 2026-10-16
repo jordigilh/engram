@@ -108,7 +108,10 @@ export function deriveIdentity(input: DeriveIdentityInput): ResolvedIdentity {
     input.branch,
     branchSuffix,
     branchSuffix === "main" ? "main" : `release/${branchSuffix}`,
-  ].filter((key): key is string => Boolean(key)).map((key) => options.branchRoutes?.[key]).find(Boolean)
+  ].filter((key): key is string => Boolean(key)).map((key) => {
+    if (!Object.prototype.hasOwnProperty.call(options.branchRoutes, key)) return undefined
+    return options.branchRoutes[key]
+  }).find(Boolean)
   const mappedProject = input.projectFromRepositoryMapping ? undefined : options.project
   const project = mappedProject || branchRoute || options.project || input.directoryBasename
   const family = options.family || baseName

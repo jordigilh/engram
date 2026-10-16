@@ -92,6 +92,17 @@ describe("deriveIdentity", () => {
     expect(id.project).toBe("custom-route")
   })
 
+  test("ignores inherited branch-route properties", () => {
+    const branchRoutes = Object.create({ main: "inherited-route" }) as Record<string, string>
+    const id = deriveIdentity({
+      directoryBasename: "service-api",
+      branch: "main",
+      options: { branchRoutes },
+    })
+
+    expect(id.project).toBe("service-api")
+  })
+
   test("git branch detection failing (e.g. not a git repo) falls back to main, not an error", () => {
     const id = deriveIdentity({ directoryBasename: "engram", branch: undefined, options: {} })
     expect(id.branchSuffix).toBe("main")

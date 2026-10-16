@@ -176,7 +176,9 @@ export async function readEngramConfig(configPath = resolveEngramConfigPath()): 
 
 function mergeRecord<T extends JsonObject>(base: T | undefined, override: T | undefined): T | undefined {
   if (!base && !override) return undefined
-  return { ...(base || {}), ...(override || {}) } as T
+  const merged = Object.create(null) as T
+  Object.assign(merged, base || {}, override || {})
+  return merged
 }
 
 function mergeWorktreeIndex(
@@ -214,16 +216,9 @@ export function mergeEngramOptions(
 
 /** Load deployment config; a missing file is optional, but invalid policy is fatal. */
 export async function resolveEngramOptions(rawOptions: unknown): Promise<EngramPluginOptions> {
-  let explicit: Partial<EngramPluginOptions> = {}
-  if (isObject(rawOptions)) {
-    try {
-      explicit = validateEngramOptions(rawOptions, "explicit plugin options")
-    } catch (error) {
-      if (error instanceof EngramConfigValidationError) throw error
-      const message = error instanceof Error ? error.message : String(error)
-      console.error(`[engram-plugin] ${message}`)
-    }
-  }
+  const explicit = rawOptions === undefined
+    ? {}
+    : validateEngramOptions(rawOptions, "explicit plugin options")
   const configured = await readEngramConfig()
   return mergeEngramOptions(configured, explicit)
 }

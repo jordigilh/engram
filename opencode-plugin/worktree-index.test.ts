@@ -214,7 +214,7 @@ describe("createWorktreeIndexer", () => {
       canonicalDirectory: "/repos/service-api",
       aggregateRoots: ["/bare-repository"],
       listWorktrees: async () => [],
-      hasManifest: async () => true,
+      hasManifest: async () => false,
       getRevision: async () => undefined,
       isBareRepository: async () => true,
       isGitWorktree: async () => false,

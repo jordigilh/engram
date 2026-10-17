@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import pluginDefault, { appendV2Nudge } from "./index"
 import { buildMcpServerConfigV2, mergeMcpEditor } from "./identity"
+import { PLUGIN_BUILD_INFO } from "./build-info"
 import "./test-config"
 
 function fakeEditor(initial: Record<string, unknown> = {}) {
@@ -173,6 +174,35 @@ describe("v2 setup", () => {
 
     expect(editor.store.has("engram")).toBe(false)
     expect(sessionHooks["context"]?.length).toBe(1)
+  })
+
+  test("rejects a production setup when the loaded artifact is not the expected source", async () => {
+    const { ctx } = fakeV2Ctx()
+    ctx.options = {
+      pluginArtifact: {
+        package: "engram-opencode-plugin",
+        version: PLUGIN_BUILD_INFO.version,
+        source: "npm",
+      },
+    }
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    await expect(def.setup(ctx)).rejects.toThrow("source mismatch")
+  })
+
+  test("allows the explicit local development artifact", async () => {
+    const { ctx, sessionHooks } = fakeV2Ctx()
+    ctx.options = {
+      pluginArtifact: {
+        package: "engram-opencode-plugin",
+        version: PLUGIN_BUILD_INFO.version,
+        revision: "development",
+        source: "local-checkout",
+      },
+    }
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    const cleanup = await def.setup(ctx)
+    expect(sessionHooks["context"]?.length).toBe(1)
+    if (typeof cleanup === "function") cleanup()
   })
 
   test("context hook re-applies methodology recall to every request", async () => {

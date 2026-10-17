@@ -3,6 +3,7 @@ import { homedir } from "node:os"
 import * as path from "node:path"
 import type { EngramPluginOptions, EngramRepositoryMappings, RepositoryIdentityOptions } from "./identity"
 import type { WorktreeIndexPolicy } from "./worktree-index"
+import type { PluginArtifactExpectation, PluginArtifactSource } from "./build-info"
 
 export const DEFAULT_ENGRAM_PLUGIN_CONFIG = ".engram/opencode.json"
 
@@ -77,6 +78,25 @@ function validateRepositoryMappings(value: unknown, label: string): EngramReposi
   return validated
 }
 
+function validatePluginArtifact(value: unknown, label: string): PluginArtifactExpectation {
+  if (!isObject(value)) throw new EngramConfigValidationError(`${label} must be an object`)
+  const validated = { ...value } as PluginArtifactExpectation
+  for (const key of ["package", "version", "revision"] as const) {
+    if (value[key] !== undefined && (typeof value[key] !== "string" || !value[key].trim())) {
+      throw new EngramConfigValidationError(`${label}.${key} must be a non-empty string`)
+    }
+    if (typeof value[key] === "string") validated[key] = value[key].trim()
+  }
+  if (value.source !== undefined && value.source !== "npm" && value.source !== "local-checkout") {
+    throw new EngramConfigValidationError(`${label}.source must be npm or local-checkout`)
+  }
+  if (typeof value.source === "string") validated.source = value.source as PluginArtifactSource
+  if (!validated.package && !validated.version) {
+    throw new EngramConfigValidationError(`${label} must specify package or version`)
+  }
+  return validated
+}
+
 /** Validate the untyped JSON policy before it reaches path/indexer code. */
 export function validateWorktreeIndexPolicy(
   value: unknown,
@@ -141,6 +161,9 @@ export function validateEngramOptions(value: unknown, label: string): Partial<En
   if (value.repositories !== undefined) {
     validated.repositories = validateRepositoryMappings(value.repositories, `${label}.repositories`)
   }
+  if (value.pluginArtifact !== undefined) {
+    validated.pluginArtifact = validatePluginArtifact(value.pluginArtifact, `${label}.pluginArtifact`)
+  }
   const worktreeIndex = validateWorktreeIndexPolicy(value.worktreeIndex, `${label}.worktreeIndex`)
   if (worktreeIndex !== undefined) validated.worktreeIndex = worktreeIndex
   return validated
@@ -195,6 +218,14 @@ function mergeWorktreeIndex(
   return merged
 }
 
+function mergePluginArtifact(
+  configured: PluginArtifactExpectation | undefined,
+  explicit: PluginArtifactExpectation | undefined,
+): PluginArtifactExpectation | undefined {
+  if (!configured && !explicit) return undefined
+  return { ...(configured || {}), ...(explicit || {}) }
+}
+
 /** Merge deployment config first, with explicit OpenCode options as an override. */
 export function mergeEngramOptions(
   configured: Partial<EngramPluginOptions>,
@@ -210,6 +241,7 @@ export function mergeEngramOptions(
       remotes: mergeRecord(configured.repositories?.remotes, explicit.repositories?.remotes),
     }
   }
+  merged.pluginArtifact = mergePluginArtifact(configured.pluginArtifact, explicit.pluginArtifact)
   merged.worktreeIndex = mergeWorktreeIndex(configured.worktreeIndex, explicit.worktreeIndex)
   return merged
 }

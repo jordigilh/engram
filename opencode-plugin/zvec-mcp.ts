@@ -1,4 +1,5 @@
 import * as path from "node:path"
+import { PLUGIN_BUILD_INFO } from "./build-info"
 
 const MCP_PROTOCOL_VERSION = "2025-06-18"
 const DEFAULT_REQUEST_TIMEOUT_MS = 60 * 60 * 1000
@@ -223,7 +224,7 @@ export class ZvecMcpClient implements ZvecMcpToolCaller {
         params: {
           protocolVersion: MCP_PROTOCOL_VERSION,
           capabilities: {},
-          clientInfo: { name: "engram-opencode-plugin", version: "0.1.0" },
+          clientInfo: { name: PLUGIN_BUILD_INFO.packageName, version: PLUGIN_BUILD_INFO.version },
         },
       })
       if (message?.error) {

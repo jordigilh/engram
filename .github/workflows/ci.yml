@@ -50,6 +50,10 @@ jobs:
         run: bun run coverage:check
         working-directory: opencode-plugin
 
+      - name: Build distributable plugin
+        run: bun run build
+        working-directory: opencode-plugin
+
   integration-tests:
     runs-on: ubuntu-latest
     services:

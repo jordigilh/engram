@@ -12,6 +12,7 @@
 // and https://github.com/jordigilh/engram/issues/22 for the design spikes
 // this implements.
 import type { WorktreeIndexPolicy } from "./worktree-index"
+import type { PluginArtifactExpectation } from "./build-info"
 
 export interface RepositoryIdentityOptions {
   project?: string
@@ -30,6 +31,8 @@ export interface EngramRepositoryMappings {
 export interface EngramPluginOptions extends RepositoryIdentityOptions {
   gatewayUrl?: string
   repositories?: EngramRepositoryMappings
+  /** Expected metadata for the immutable production plugin artifact. */
+  pluginArtifact?: PluginArtifactExpectation
   /** Deployment-local worktree indexing policy; projects must be explicitly listed. */
   worktreeIndex?: WorktreeIndexPolicy
 }

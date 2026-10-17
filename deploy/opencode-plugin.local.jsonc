@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    "-engram",
+    {
+      "package": "../opencode-plugin/index.ts",
+      "options": {
+        "pluginArtifact": {
+          "package": "engram-opencode-plugin",
+          "version": "0.1.0",
+          "revision": "development",
+          "source": "local-checkout"
+        }
+      }
+    }
+  ]
+}

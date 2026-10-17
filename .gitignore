@@ -9,6 +9,7 @@ node_modules/
 coverage/
 .coverage
 opencode-plugin/dist/
+opencode-plugin/release/
 
 # Local OpenCode/Codex configuration and Cursor hook installation. These files
 # contain machine-specific localhost endpoints and absolute home-directory

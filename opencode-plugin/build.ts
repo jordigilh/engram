@@ -38,7 +38,7 @@ const buildInfo = {
   packageName: manifest.name,
   version: manifest.version,
   revision,
-  source: "npm" as const,
+  source: "github-release" as const,
 }
 
 const outputDirectory = path.join(packageDirectory, "dist")
@@ -54,11 +54,8 @@ const result = await Bun.build({
   define: {
     ENGRAM_PLUGIN_VERSION: JSON.stringify(manifest.version),
     ENGRAM_PLUGIN_REVISION: JSON.stringify(revision),
-    ENGRAM_PLUGIN_SOURCE: JSON.stringify("npm"),
+    ENGRAM_PLUGIN_SOURCE: JSON.stringify("github-release"),
   },
-  // OpenCode installs declared package dependencies alongside the plugin.
-  // Keeping the host API external avoids bundling a second OpenCode runtime.
-  external: ["@opencode/plugin"],
 })
 
 if (!result.success) {

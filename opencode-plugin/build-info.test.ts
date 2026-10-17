@@ -35,13 +35,13 @@ describe("plugin build metadata", () => {
     })).toThrow("version mismatch")
   })
 
-  test("rejects a local checkout when production requires npm", () => {
+  test("rejects a local checkout when production requires a release artifact", () => {
     let error: unknown
     try {
       validatePluginArtifact({
         package: "engram-opencode-plugin",
         version: PACKAGE_VERSION,
-        source: "npm",
+        source: "github-release",
       })
     } catch (caught) {
       error = caught
@@ -50,18 +50,18 @@ describe("plugin build metadata", () => {
   })
 
   test("rejects an incomplete expectation", () => {
-    expect(() => validatePluginArtifact({ source: "npm" })).toThrow("package and version are required")
+    expect(() => validatePluginArtifact({ source: "github-release" })).toThrow("package and version are required")
   })
 
   test("validates an embedded revision when the deployment pins one", () => {
     expect(() => validatePluginArtifact(
       { package: "engram-opencode-plugin", version: PACKAGE_VERSION, revision: "abc123" },
-      { packageName: "engram-opencode-plugin", version: PACKAGE_VERSION, revision: "abc123", source: "npm" },
+      { packageName: "engram-opencode-plugin", version: PACKAGE_VERSION, revision: "abc123", source: "github-release" },
     )).not.toThrow()
 
     expect(() => validatePluginArtifact(
       { package: "engram-opencode-plugin", version: PACKAGE_VERSION, revision: "wrong" },
-      { packageName: "engram-opencode-plugin", version: PACKAGE_VERSION, revision: "abc123", source: "npm" },
+      { packageName: "engram-opencode-plugin", version: PACKAGE_VERSION, revision: "abc123", source: "github-release" },
     )).toThrow("revision mismatch")
   })
 

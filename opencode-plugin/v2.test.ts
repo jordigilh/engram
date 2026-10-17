@@ -182,7 +182,7 @@ describe("v2 setup", () => {
       pluginArtifact: {
         package: "engram-opencode-plugin",
         version: PLUGIN_BUILD_INFO.version,
-        source: "npm",
+        source: "github-release",
       },
     }
     const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }

@@ -75,16 +75,16 @@ describe("deployment-local plugin config", () => {
       pluginArtifact: {
         package: "engram-opencode-plugin",
         version: PLUGIN_BUILD_INFO.version,
-        source: "npm",
+        source: "github-release",
       },
     }, "explicit options")).toEqual({
       pluginArtifact: {
         package: "engram-opencode-plugin",
         version: PLUGIN_BUILD_INFO.version,
-        source: "npm",
+        source: "github-release",
       },
     })
-    expect(() => validateEngramOptions({ pluginArtifact: { source: "npm" } }, "explicit options"))
+    expect(() => validateEngramOptions({ pluginArtifact: { source: "github-release" } }, "explicit options"))
       .toThrow("package or version")
     expect(() => validateEngramOptions({
       pluginArtifact: { package: "engram-opencode-plugin", version: PLUGIN_BUILD_INFO.version, source: "checkout" },
@@ -113,7 +113,7 @@ describe("deployment-local plugin config", () => {
       },
       {
         gatewayUrl: "http://explicit",
-        pluginArtifact: { package: "engram-opencode-plugin", version: PLUGIN_BUILD_INFO.version, source: "npm" },
+        pluginArtifact: { package: "engram-opencode-plugin", version: PLUGIN_BUILD_INFO.version, source: "github-release" },
         repositories: { remotes: { "https://example.com/service-ui": { family: "platform" } } },
         worktreeIndex: {
           mcpUrl: "http://127.0.0.1:7999/mcp",
@@ -126,7 +126,7 @@ describe("deployment-local plugin config", () => {
     expect(merged.pluginArtifact).toEqual({
       package: "engram-opencode-plugin",
       version: PLUGIN_BUILD_INFO.version,
-      source: "npm",
+      source: "github-release",
     })
     expect(merged.repositories?.directories?.["service-api"]).toEqual({ family: "platform" })
     expect(merged.repositories?.remotes?.["https://example.com/service-api"]).toEqual({ family: "platform" })

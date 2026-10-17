@@ -1,0 +1,78 @@
+name: Release OpenCode plugin artifact
+
+on:
+  push:
+    tags:
+      - "opencode-plugin-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: opencode-plugin
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install plugin build dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify release tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          package_version="$(node -p 'require("./package.json").version')"
+          tag_version="${RELEASE_TAG#opencode-plugin-v}"
+          test "${package_version}" = "${tag_version}"
+
+      - name: Build and test plugin
+        run: |
+          bun run build
+          bun test ./
+
+      - name: Build pinned release artifact
+        run: bun run artifact
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: engram-opencode-plugin-release
+          path: opencode-plugin/release/
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: engram-opencode-plugin-release
+          path: opencode-plugin/release
+
+      - name: Create GitHub release with checksummed artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version="${RELEASE_TAG#opencode-plugin-v}"
+          gh release create "${RELEASE_TAG}" \
+            "release/engram-opencode-plugin-${version}.tar.gz" \
+            "release/engram-opencode-plugin-${version}.tar.gz.sha256" \
+            --verify-tag \
+            --title "Engram OpenCode plugin ${version}" \
+            --generate-notes

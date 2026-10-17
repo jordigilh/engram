@@ -16,13 +16,24 @@ BASE_URL="https://github.com/${REPOSITORY}/releases/download/opencode-plugin-v${
 TEMP_ROOT="$(mktemp -d)"
 STAGING="${INSTALL_ROOT}/.engram-opencode-plugin-${VERSION}.tmp-$$"
 DESTINATION="${INSTALL_ROOT}/engram-opencode-plugin-${VERSION}"
+LOCK_DIRECTORY="${INSTALL_ROOT}/.engram-opencode-plugin-${VERSION}.lock"
+LOCK_ACQUIRED=0
 
 cleanup() {
   rm -rf "${TEMP_ROOT}" "${STAGING}"
+  if [[ "${LOCK_ACQUIRED}" -eq 1 ]]; then
+    rmdir "${LOCK_DIRECTORY}" 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT
 
 mkdir -p "${INSTALL_ROOT}"
+if ! mkdir "${LOCK_DIRECTORY}" 2>/dev/null; then
+  printf 'another installation for version %s is in progress\n' "${VERSION}" >&2
+  exit 1
+fi
+LOCK_ACQUIRED=1
+
 curl --fail --location --silent --show-error "${BASE_URL}/${ASSET}" -o "${TEMP_ROOT}/${ASSET}"
 curl --fail --location --silent --show-error "${BASE_URL}/${ASSET}.sha256" -o "${TEMP_ROOT}/${ASSET}.sha256"
 

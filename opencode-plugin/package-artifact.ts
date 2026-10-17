@@ -52,7 +52,7 @@ await writeFile(
   "utf8",
 )
 
-execFileSync("tar", [
+const tarArguments = [
   "-czf",
   archivePath,
   "-C",
@@ -60,7 +60,13 @@ execFileSync("tar", [
   "package.json",
   "index.js",
   "build-info.json",
-])
+]
+if (process.platform !== "darwin") {
+  tarArguments.unshift("--owner=0", "--group=0", "--numeric-owner", "--sort=name", "--mtime=@0")
+}
+execFileSync("tar", tarArguments, {
+  env: { ...process.env, COPYFILE_DISABLE: "1" },
+})
 const checksum = execFileSync("shasum", ["-a", "256", archivePath], { encoding: "utf8" }).trim().split(/\s+/)[0]
 await writeFile(`${archivePath}.sha256`, `${checksum}  ${path.basename(archivePath)}\n`, "utf8")
 

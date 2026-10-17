@@ -21,6 +21,39 @@ export interface ZvecMcpToolCaller {
   callTool(name: string, arguments_: Record<string, unknown>): Promise<ZvecMcpToolResult>
 }
 
+const SESSION_LOSS_MARKERS = ["session not found", "missing session", "invalid session"]
+
+export class ZvecMcpSessionLostError extends Error {
+  readonly code = "MCP_SESSION_LOST"
+  readonly status: number
+
+  constructor(status: number, body: string) {
+    super(`zvec-grep MCP session lost (HTTP ${status}): ${body.slice(0, 500)}`)
+    this.name = "ZvecMcpSessionLostError"
+    this.status = status
+  }
+}
+
+function isSessionLossResponse(status: number, body: string): boolean {
+  if (status !== 400 && status !== 404) return false
+  const normalized = body.toLowerCase()
+  return SESSION_LOSS_MARKERS.some((marker) => normalized.includes(marker))
+}
+
+export function zvecMcpErrorCode(error: unknown): string {
+  if (error instanceof ZvecMcpSessionLostError) return error.code
+  if (error && typeof error === "object") {
+    const code = (error as { code?: unknown }).code
+    if (
+      typeof code === "string" &&
+      (code === "MCP_SESSION_LOST" || code.startsWith("ZVEC_"))
+    ) {
+      return code
+    }
+  }
+  return "ZVEC_READINESS_FAILED"
+}
+
 export function resolveZvecMcpUrl(configured?: string): string {
   const value = configured?.trim() || process.env["ZVEC_GREP_MCP_URL"]?.trim() || DEFAULT_ZVEC_MCP_URL
   return value.replace(/\/+$/, "")
@@ -71,6 +104,9 @@ export async function runZvecMcpIndex(
 async function readJsonRpcMessage(response: Response): Promise<JsonRpcMessage> {
   if (!response.ok) {
     const body = await response.text().catch(() => "")
+    if (isSessionLossResponse(response.status, body)) {
+      throw new ZvecMcpSessionLostError(response.status, body)
+    }
     throw new Error(`zvec-grep MCP HTTP ${response.status}: ${body.slice(0, 500)}`)
   }
 
@@ -115,6 +151,10 @@ export class ZvecMcpClient implements ZvecMcpToolCaller {
   private nextID = 1
   private sessionID: string | undefined
   private initialization: Promise<void> | undefined
+  private recovery: Promise<void> | undefined
+  private sessionGeneration = 0
+  private closed = false
+  private readonly activeControllers = new Set<AbortController>()
 
   constructor(options: ZvecMcpClientOptions) {
     this.url = options.url.trim().replace(/\/+$/, "")
@@ -124,7 +164,11 @@ export class ZvecMcpClient implements ZvecMcpToolCaller {
   }
 
   private async request(message: Record<string, unknown>, expectResponse = true): Promise<JsonRpcMessage | undefined> {
+    if (this.closed) throw new Error("zvec-grep MCP client is closed")
+
+    const requestGeneration = this.sessionGeneration
     const controller = new AbortController()
+    this.activeControllers.add(controller)
     const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs)
     try {
       const headers: Record<string, string> = {
@@ -139,10 +183,18 @@ export class ZvecMcpClient implements ZvecMcpToolCaller {
         signal: controller.signal,
       })
       const sessionID = response.headers.get("mcp-session-id")
-      if (sessionID) this.sessionID = sessionID
+      // A delayed response from the previous session must not overwrite the
+      // session established by a recovery that completed while this request
+      // was in flight.
+      if (sessionID && requestGeneration === this.sessionGeneration && !this.closed) {
+        this.sessionID = sessionID
+      }
       if (!expectResponse) {
         if (!response.ok) {
           const body = await response.text().catch(() => "")
+          if (isSessionLossResponse(response.status, body)) {
+            throw new ZvecMcpSessionLostError(response.status, body)
+          }
           throw new Error(`zvec-grep MCP HTTP ${response.status}: ${body.slice(0, 500)}`)
         }
         await response.body?.cancel().catch(() => {})
@@ -156,10 +208,12 @@ export class ZvecMcpClient implements ZvecMcpToolCaller {
       throw error
     } finally {
       clearTimeout(timeout)
+      this.activeControllers.delete(controller)
     }
   }
 
   private async initialize(): Promise<void> {
+    if (this.closed) throw new Error("zvec-grep MCP client is closed")
     if (this.initialization) return this.initialization
     this.initialization = (async () => {
       const message = await this.request({
@@ -181,36 +235,94 @@ export class ZvecMcpClient implements ZvecMcpToolCaller {
         params: {},
       }, false)
     })().catch((error) => {
+      this.sessionID = undefined
       this.initialization = undefined
       throw error
     })
     return this.initialization
   }
 
+  private resetSession(): void {
+    this.sessionGeneration += 1
+    this.sessionID = undefined
+    this.initialization = undefined
+  }
+
+  private async recoverSession(staleSessionID: string | undefined): Promise<void> {
+    if (this.closed) throw new Error("zvec-grep MCP client is closed")
+
+    // Await an active recovery before inspecting the session ID. The new ID
+    // is assigned during initialize, before notifications/initialized has
+    // completed, so a different ID alone is not proof that recovery is ready.
+    if (this.recovery) {
+      await this.recovery
+      if (this.closed) throw new Error("zvec-grep MCP client is closed")
+      return
+    }
+
+    // A concurrent caller may already have completed a recovery. Do not
+    // discard the healthy replacement.
+    if (staleSessionID && this.sessionID && this.sessionID !== staleSessionID) return
+
+    const recovery = (async () => {
+      if (this.closed) throw new Error("zvec-grep MCP client is closed")
+      this.resetSession()
+      await this.initialize()
+      if (this.closed) throw new Error("zvec-grep MCP client is closed")
+    })()
+    this.recovery = recovery
+    try {
+      await recovery
+    } finally {
+      if (this.recovery === recovery) this.recovery = undefined
+    }
+  }
+
   async callTool(name: string, arguments_: Record<string, unknown>): Promise<ZvecMcpToolResult> {
-    await this.initialize()
-    const message = await this.request({
-      jsonrpc: "2.0",
-      id: this.nextID++,
-      method: "tools/call",
-      params: { name, arguments: arguments_ },
-    })
-    if (message?.error) {
-      throw new Error(`zvec-grep MCP ${name} failed: ${message.error.message || "unknown error"}`)
+    let staleSessionID = this.sessionID
+    try {
+      await this.initialize()
+    } catch (error) {
+      if (!(error instanceof ZvecMcpSessionLostError)) throw error
+      await this.recoverSession(staleSessionID)
     }
-    const result = message?.result
-    if (!result) throw new Error(`zvec-grep MCP ${name} returned no result`)
-    if (result.isError) {
-      throw new Error(`zvec-grep MCP ${name} failed${toolResultText(result) ? `: ${toolResultText(result)}` : ""}`)
+    if (this.closed) throw new Error("zvec-grep MCP client is closed")
+    staleSessionID = this.sessionID
+
+    const call = async (): Promise<ZvecMcpToolResult> => {
+      const message = await this.request({
+        jsonrpc: "2.0",
+        id: this.nextID++,
+        method: "tools/call",
+        params: { name, arguments: arguments_ },
+      })
+      if (message?.error) {
+        throw new Error(`zvec-grep MCP ${name} failed: ${message.error.message || "unknown error"}`)
+      }
+      const result = message?.result
+      if (!result) throw new Error(`zvec-grep MCP ${name} returned no result`)
+      if (result.isError) {
+        throw new Error(`zvec-grep MCP ${name} failed${toolResultText(result) ? `: ${toolResultText(result)}` : ""}`)
+      }
+      return result
     }
-    return result
+
+    try {
+      return await call()
+    } catch (error) {
+      if (!(error instanceof ZvecMcpSessionLostError)) throw error
+      await this.recoverSession(staleSessionID)
+      if (this.closed) throw new Error("zvec-grep MCP client is closed")
+      return call()
+    }
   }
 
   async close(): Promise<void> {
-    if (!this.sessionID) return
     const sessionID = this.sessionID
-    this.sessionID = undefined
-    this.initialization = undefined
+    this.closed = true
+    this.resetSession()
+    for (const controller of this.activeControllers) controller.abort()
+    if (!sessionID) return
     try {
       await this.fetcher(this.url, {
         method: "DELETE",

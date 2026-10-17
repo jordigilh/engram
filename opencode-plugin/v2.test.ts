@@ -333,6 +333,52 @@ describe("v2 setup", () => {
     }
   })
 
+  test("exposes a typed readiness code when zvec loses its MCP session", async () => {
+    const fixture = await mkdtemp(path.join(tmpdir(), "engram-zvec-session-error-"))
+    const { ctx, toolHooks } = fakeV2Ctx()
+    ctx.location = {
+      directory: fixture,
+      project: { id: "project-service-api", canonical: fixture },
+    }
+    ctx.options = {
+      project: "service-api",
+      gatewayUrl: "http://127.0.0.1:8896",
+      worktreeIndex: {
+        projects: ["service-api"],
+        mcpUrl: "http://zvec.test/mcp",
+      },
+    }
+    ctx.worktree = { list: async () => [] }
+
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    const previousFetch = globalThis.fetch
+    globalThis.fetch = (async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { method: string }
+      if (request.method === "initialize") {
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }), {
+          headers: { "content-type": "application/json", "mcp-session-id": "session-stale" },
+        })
+      }
+      if (request.method === "notifications/initialized") return new Response(null, { status: 202 })
+      return new Response("Not Found: Session not found", { status: 404 })
+    }) as typeof fetch
+
+    let cleanup: (() => void) | void = undefined
+    try {
+      cleanup = await def.setup(ctx)
+      const failure = toolHooks["execute.before"][0]({
+        tool: "engram_zvec_grep_search",
+        sessionID: "session-zvec-error",
+        input: { root: fixture, query: "session recovery" },
+      })
+      await expect(failure).rejects.toMatchObject({ code: "MCP_SESSION_LOST" })
+    } finally {
+      globalThis.fetch = previousFetch
+      if (typeof cleanup === "function") cleanup()
+      await rm(fixture, { recursive: true, force: true })
+    }
+  })
+
   test("uses the canonical route family for sibling authorization and rejects unrelated roots", async () => {
     const fixture = await mkdtemp(path.join(tmpdir(), "engram-family-root-preflight-"))
     const canonical = path.join(fixture, "service-api")

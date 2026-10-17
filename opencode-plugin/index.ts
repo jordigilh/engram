@@ -54,6 +54,17 @@ import {
 } from "./worktree-index"
 import { ensureEngramSessionReady } from "./session-readiness"
 import { resolveEngramOptions } from "./user-config"
+import { zvecMcpErrorCode } from "./zvec-mcp"
+
+export class EngramZvecReadinessError extends Error {
+  readonly code: string
+
+  constructor(code: string, message: string, cause: unknown) {
+    super(message, { cause })
+    this.name = "EngramZvecReadinessError"
+    this.code = code
+  }
+}
 
 function runGit(args: string[], directory: string, timeoutMs = 5000): Promise<string> {
   return new Promise((resolve) => {
@@ -287,7 +298,12 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
       return worktreeIndexer.ensureIndexed(requestedRoot)
         .catch((error: unknown) => {
           const message = error instanceof Error ? error.message : String(error)
-          throw new Error(`[engram-plugin] zvec-grep is not ready for ${requestedRoot}: ${message}`)
+          throw new EngramZvecReadinessError(
+            zvecMcpErrorCode(error),
+            `[engram-plugin] zvec-grep readiness failed for ${requestedRoot} ` +
+              `(${zvecMcpErrorCode(error)}): ${message}`,
+            error,
+          )
         })
         .then(() => {
           if (isEngramTool(event.tool)) {

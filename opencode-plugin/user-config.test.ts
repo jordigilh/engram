@@ -69,6 +69,27 @@ describe("deployment-local plugin config", () => {
     }, "explicit options")).toThrow("family")
   })
 
+  test("validates the expected immutable plugin artifact", () => {
+    expect(validateEngramOptions({
+      pluginArtifact: {
+        package: "engram-opencode-plugin",
+        version: "0.1.0",
+        source: "npm",
+      },
+    }, "explicit options")).toEqual({
+      pluginArtifact: {
+        package: "engram-opencode-plugin",
+        version: "0.1.0",
+        source: "npm",
+      },
+    })
+    expect(() => validateEngramOptions({ pluginArtifact: { source: "npm" } }, "explicit options"))
+      .toThrow("package or version")
+    expect(() => validateEngramOptions({
+      pluginArtifact: { package: "engram-opencode-plugin", version: "0.1.0", source: "checkout" },
+    }, "explicit options")).toThrow("source")
+  })
+
   test("does not silently drop malformed explicit security policy", async () => {
     await expect(resolveEngramOptions({
       worktreeIndex: { allowedRoots: ["relative/root"] },
@@ -91,6 +112,7 @@ describe("deployment-local plugin config", () => {
       },
       {
         gatewayUrl: "http://explicit",
+        pluginArtifact: { package: "engram-opencode-plugin", version: "0.1.0", source: "npm" },
         repositories: { remotes: { "https://example.com/service-ui": { family: "platform" } } },
         worktreeIndex: {
           mcpUrl: "http://127.0.0.1:7999/mcp",
@@ -100,6 +122,11 @@ describe("deployment-local plugin config", () => {
     )
 
     expect(merged.gatewayUrl).toBe("http://explicit")
+    expect(merged.pluginArtifact).toEqual({
+      package: "engram-opencode-plugin",
+      version: "0.1.0",
+      source: "npm",
+    })
     expect(merged.repositories?.directories?.["service-api"]).toEqual({ family: "platform" })
     expect(merged.repositories?.remotes?.["https://example.com/service-api"]).toEqual({ family: "platform" })
     expect(merged.repositories?.remotes?.["https://example.com/service-ui"]).toEqual({ family: "platform" })

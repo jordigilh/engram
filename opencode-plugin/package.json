@@ -3,10 +3,32 @@
   "version": "0.1.0",
   "description": "Engram plugin for OpenCode and OpenChamber: exposes the unified Engram gateway through a minimal project+family config surface.",
   "type": "module",
-  "main": "index.ts",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jordigilh/engram.git",
+    "directory": "opencode-plugin"
+  },
+  "bugs": {
+    "url": "https://github.com/jordigilh/engram/issues"
+  },
+  "homepage": "https://github.com/jordigilh/engram/tree/main/opencode-plugin",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
+    "build": "bun build.ts",
     "test": "bun test ./",
-    "coverage:check": "bun test --coverage --coverage-reporter=lcov ./ && bun check-coverage.ts"
+    "coverage:check": "bun test --coverage --coverage-reporter=lcov ./ && bun check-coverage.ts",
+    "pack:check": "bun run build && npm pack --dry-run",
+    "prepack": "bun run build"
   },
   "dependencies": {
     "@opencode/plugin": "2.0.18"

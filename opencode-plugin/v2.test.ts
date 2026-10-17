@@ -175,6 +175,35 @@ describe("v2 setup", () => {
     expect(sessionHooks["context"]?.length).toBe(1)
   })
 
+  test("rejects a production setup when the loaded artifact is not the expected source", async () => {
+    const { ctx } = fakeV2Ctx()
+    ctx.options = {
+      pluginArtifact: {
+        package: "engram-opencode-plugin",
+        version: "0.1.0",
+        source: "npm",
+      },
+    }
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    await expect(def.setup(ctx)).rejects.toThrow("source mismatch")
+  })
+
+  test("allows the explicit local development artifact", async () => {
+    const { ctx, sessionHooks } = fakeV2Ctx()
+    ctx.options = {
+      pluginArtifact: {
+        package: "engram-opencode-plugin",
+        version: "0.1.0",
+        revision: "development",
+        source: "local-checkout",
+      },
+    }
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    const cleanup = await def.setup(ctx)
+    expect(sessionHooks["context"]?.length).toBe(1)
+    if (typeof cleanup === "function") cleanup()
+  })
+
   test("context hook re-applies methodology recall to every request", async () => {
     const { ctx, sessionHooks } = fakeV2Ctx()
     const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }

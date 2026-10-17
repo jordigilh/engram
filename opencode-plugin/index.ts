@@ -55,6 +55,12 @@ import {
 import { ensureEngramSessionReady } from "./session-readiness"
 import { resolveEngramOptions } from "./user-config"
 import { zvecMcpErrorCode } from "./zvec-mcp"
+import {
+  PLUGIN_BUILD_INFO,
+  validatePluginArtifactManifest,
+} from "./build-info"
+
+export { PLUGIN_BUILD_INFO } from "./build-info"
 
 export class EngramZvecReadinessError extends Error {
   readonly code: string
@@ -188,6 +194,14 @@ function logProjectLine(identity: ResolvedIdentity, directory: string): void {
   )
 }
 
+function logBuildLine(): void {
+  console.error(
+    `[engram-plugin] package=${PLUGIN_BUILD_INFO.packageName} ` +
+    `version=${PLUGIN_BUILD_INFO.version} revision=${PLUGIN_BUILD_INFO.revision} ` +
+    `source=${PLUGIN_BUILD_INFO.source}`,
+  )
+}
+
 // Append a probe nudge to a V2 Tool.Result without changing its shape:
 // string content stays a string, array content gains a text part, and
 // missing content becomes the nudge text. Never duplicates.
@@ -243,7 +257,9 @@ type PluginContext = Parameters<Parameters<typeof Plugin.define>[0]["setup"]>[0]
 
 async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | void> {
   const directory = ctx.location.directory || ""
+  logBuildLine()
   const options = await resolveEngramOptions(ctx.options)
+  await validatePluginArtifactManifest(options.pluginArtifact)
   const { identity, mcpV2, gatewayUrl: configuredGatewayUrl } = await resolveEngramState(directory, options)
   let gatewayUrl = configuredGatewayUrl
   const canonicalDirectory = ctx.location.project?.canonical || directory

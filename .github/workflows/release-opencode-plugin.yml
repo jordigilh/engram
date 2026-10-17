@@ -1,4 +1,4 @@
-name: Publish OpenCode plugin
+name: Release OpenCode plugin artifact
 
 on:
   push:
@@ -6,11 +6,10 @@ on:
       - "opencode-plugin-v*"
 
 permissions:
-  contents: read
-  id-token: write
+  contents: write
 
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -23,14 +22,7 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Set up npm for trusted publishing
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
-          package-manager-cache: false
-
-      - name: Install plugin dependencies
+      - name: Install plugin build dependencies
         run: bun install --frozen-lockfile
 
       - name: Verify release tag matches package version
@@ -46,5 +38,18 @@ jobs:
           bun run build
           bun test ./
 
-      - name: Stage immutable versioned package
-        run: npm stage publish
+      - name: Build pinned release artifact
+        run: bun run artifact
+
+      - name: Create GitHub release with checksummed artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version="${RELEASE_TAG#opencode-plugin-v}"
+          gh release create "${RELEASE_TAG}" \
+            "release/engram-opencode-plugin-${version}.tar.gz" \
+            "release/engram-opencode-plugin-${version}.tar.gz.sha256" \
+            --verify-tag \
+            --title "Engram OpenCode plugin ${version}" \
+            --generate-notes

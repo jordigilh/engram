@@ -8,9 +8,6 @@
   "exports": {
     ".": "./dist/index.js"
   },
-  "files": [
-    "dist"
-  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/jordigilh/engram.git",
@@ -20,15 +17,12 @@
     "url": "https://github.com/jordigilh/engram/issues"
   },
   "homepage": "https://github.com/jordigilh/engram/tree/main/opencode-plugin",
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
     "build": "bun build.ts",
     "test": "bun test ./",
     "coverage:check": "bun test --coverage --coverage-reporter=lcov ./ && bun check-coverage.ts",
-    "pack:check": "bun run build && npm pack --dry-run",
-    "prepack": "bun run build"
+    "artifact": "bun run build && bun package-artifact.ts",
+    "artifact:check": "bun run artifact"
   },
   "dependencies": {
     "@opencode/plugin": "2.0.18"

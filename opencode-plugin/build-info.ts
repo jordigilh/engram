@@ -3,8 +3,8 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import packageManifest from "./package.json" with { type: "json" }
 
-/** Build metadata embedded in the published plugin and reported at startup. */
-export type PluginArtifactSource = "npm" | "local-checkout"
+/** Build metadata embedded in the release artifact and reported at startup. */
+export type PluginArtifactSource = "github-release" | "local-checkout"
 
 export interface PluginBuildInfo {
   packageName: string
@@ -20,7 +20,7 @@ export interface PluginArtifactExpectation {
   version?: string
   /** Optional source revision embedded by the package build. */
   revision?: string
-  /** `npm` rejects a mutable local checkout in production. */
+  /** `github-release` rejects a mutable local checkout in production. */
   source?: PluginArtifactSource
 }
 

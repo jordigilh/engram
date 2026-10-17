@@ -18,8 +18,8 @@ The recommended setup is **hybrid**:
 
 > **OpenCode V2:** V2 does not run V1 plugin implementations. Engram uses the
 > V2 `Plugin.define` API to register MCP configuration, session hooks, tool
-> hooks, and its event subscription. Production loads the immutable npm
-> package shown below. A checkout path is reserved for the explicit development
+> hooks, and its event subscription. Production loads the immutable GitHub
+> Release artifact shown below. A checkout path is reserved for the explicit development
 > override documented in [Plugin distribution](#plugin-distribution).
 
 Load the plugin globally from `opencode.jsonc` or configure it per repository.
@@ -28,7 +28,7 @@ host. Native V2 form:
 
 Remove the old singular `plugin` tuple that points at a checkout. The
 production entry belongs in the native plural `plugins` array and must use the
-same exact version in both the package specifier and `pluginArtifact` guard.
+same exact version in the artifact path and `pluginArtifact` guard.
 
 Keep the deployment-specific gateway, repository, branch, and worktree policy
 in `~/.engram/opencode.json`; the inline `options` object below is useful for a
@@ -38,12 +38,12 @@ temporary override or an isolated test.
 {
   "plugins": [
     {
-      "package": "engram-opencode-plugin@0.1.0",
+      "package": "/path/to/.engram/opencode-plugins/engram-opencode-plugin-0.1.0",
       "options": {
         "pluginArtifact": {
           "package": "engram-opencode-plugin",
           "version": "0.1.0",
-          "source": "npm"
+          "source": "github-release"
         },
         "repositories": {
           "directories": {
@@ -83,13 +83,13 @@ the plugin keeps its behavioral hooks but does not invent an MCP endpoint. An
 explicit config entry must include `oauth: false`.
 
 For a standalone repository whose directory name matches a registered gateway
-route, the npm plugin can be used with zero repository mappings. Keep the
+route, the release artifact can be used with zero repository mappings. Keep the
 explicit gateway entry when the route is an alias, the checkout is an umbrella
 directory, or the route differs from the directory name:
 
 ```json
 {
-  "plugins": ["engram-opencode-plugin@0.1.0"],
+  "plugins": ["/path/to/.engram/opencode-plugins/engram-opencode-plugin-0.1.0"],
   "mcp": {
     "servers": {
       "engram": {
@@ -132,80 +132,55 @@ use the OpenCode server's resolved configuration.
 
 ## Plugin distribution
 
-Production must use an exact npm package version, never a path into a mutable
-developer checkout and never a floating `latest` tag. OpenCode installs the
-package and its declared dependencies into its own cache. The tracked template
-at [`deploy/opencode-plugin.production.jsonc`](../deploy/opencode-plugin.production.jsonc)
-contains the minimal production entry.
+Production must use an exact, checksummed GitHub Release artifact, never a path
+into a mutable developer checkout. The tracked template at
+[`deploy/opencode-plugin.production.jsonc`](../deploy/opencode-plugin.production.jsonc)
+contains the minimal production entry. Replace its placeholder path with the
+absolute path printed by the installer.
 
 The `pluginArtifact` option is a startup guard. When present, Engram checks the
 loaded package name, exact version, optional source revision, and source type.
-Production should require `source: "npm"`; a checkout loaded accidentally by a
+Production should require `source: "github-release"`; a checkout loaded accidentally by a
 long-lived OpenCode/OpenChamber process then fails closed instead of silently
 running developer code. Every startup reports a line like:
 
 ```text
-[engram-plugin] package=engram-opencode-plugin version=0.1.0 revision=<git-sha> source=npm
+[engram-plugin] package=engram-opencode-plugin version=0.1.0 revision=<git-sha> source=github-release
 ```
 
-The revision is embedded by the package build. It identifies the source commit
-that produced the npm tarball even when the developer checkout has moved on.
+The revision is embedded by the artifact build. It identifies the source commit
+that produced the release bundle even when the developer checkout has moved on.
 
 ### Publish, update, and rollback
 
-Because npm requires the package to exist before its trusted-publisher
-relationship can be created, bootstrap `0.1.0` interactively once. This uses
-your local npm login/2FA and does not create a GitHub secret:
+The release workflow runs on tags named `opencode-plugin-v<version>` after
+checking that the tag matches `opencode-plugin/package.json`. It creates a
+GitHub Release containing the bundle and a SHA-256 sidecar:
 
 ```bash
-cd opencode-plugin
-npm login
-bun run build
-npm stage publish
-npm stage list engram-opencode-plugin
-# Approve the stage in npm with 2FA, or run:
-npm stage approve <stage-id>
+git tag opencode-plugin-v0.1.0 <release-commit>
+git push origin opencode-plugin-v0.1.0
 ```
 
-Then configure npm Trusted Publishing in the package's
-**Settings -> Trusted Publisher** section, selecting GitHub Actions and entering:
+Install and verify an artifact on the host with:
 
-- Organization or user: `jordigilh`
-- Repository: `engram`
-- Workflow filename: `publish-opencode-plugin.yml`
-- Allowed action: `npm stage publish`
-
-For subsequent releases, bump `opencode-plugin/package.json`, commit the
-change, and push a tag named `opencode-plugin-v<version>`; the workflow stages
-that exact version after checking the tag.
-
-The workflow uses GitHub OIDC (`id-token: write`) and stores no long-lived npm
-or Quay credential. Later tagged releases follow the same staged review flow.
-After approval, update the production `plugins` entry and its
-`pluginArtifact.version` together, then restart the long-lived OpenCode server:
-
-```json
-{
-  "package": "engram-opencode-plugin@0.1.0",
-  "options": {
-    "pluginArtifact": {
-      "package": "engram-opencode-plugin",
-      "version": "0.1.0",
-      "source": "npm"
-    }
-  }
-}
+```bash
+scripts/install-opencode-plugin 0.1.0
 ```
 
-Verify the startup line contains the expected version, revision, and
-`source=npm`. Reconnect the Engram MCP entry or reload the OpenCode session
+The installer downloads the versioned GitHub Release asset, verifies its
+`.sha256` sidecar before extraction, and installs it under an immutable version
+directory. Point the production `plugins` entry at that directory and set
+`pluginArtifact.version` together. Verify the startup line contains the
+expected version, revision, and `source=github-release`. Reconnect the Engram
+MCP entry or reload the OpenCode session
 after the restart; existing process-bound sessions do not automatically adopt a
 new plugin.
 
-To roll back, restore the previous known-good package version and matching
-`pluginArtifact.version`, restart OpenCode/OpenChamber, and verify its startup
-line. Do not republish or mutate an existing npm version; publish a new version
-for every change.
+To roll back, run the installer for the previous known-good release and restore
+the previous immutable path and matching `pluginArtifact.version`, then restart
+OpenCode/OpenChamber. Release assets are immutable; publish a new version for
+every change.
 
 ### Explicit local development override
 
@@ -232,8 +207,9 @@ bun run build
 bun test ./
 ```
 
-The package is compiled to `dist/` with the current git revision and is ignored
-by Git; only the npm release contains that built artifact.
+The release build is compiled to `dist/` with the current git revision and is
+bundled into the GitHub Release artifact; `dist/` and `release/` are ignored by
+Git.
 
 ### Configured worktree indexes
 
@@ -349,7 +325,7 @@ workflow; no separate digest approval file is required in Engram.
 ```jsonc
 {
   "plugins": [{
-    "package": "engram-opencode-plugin@0.1.0",
+    "package": "/path/to/.engram/opencode-plugins/engram-opencode-plugin-0.1.0",
     "options": {
       "worktreeIndex": {
         "projects": ["<project-route>"],
@@ -393,7 +369,7 @@ routes when one checkout switches between release lines:
 ```json
 {
   "plugins": [{
-      "package": "engram-opencode-plugin@0.1.0",
+      "package": "/path/to/.engram/opencode-plugins/engram-opencode-plugin-0.1.0",
       "options": {
         "family": "<shared-family>",
         "branchRoutes": {

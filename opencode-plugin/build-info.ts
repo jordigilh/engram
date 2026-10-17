@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import packageManifest from "./package.json" with { type: "json" }
 
 /** Build metadata embedded in the published plugin and reported at startup. */
 export type PluginArtifactSource = "npm" | "local-checkout"
@@ -42,7 +43,7 @@ export class EngramPluginArtifactValidationError extends Error {
 }
 
 const PACKAGE_NAME = "engram-opencode-plugin"
-const SOURCE_VERSION = "0.1.0"
+const SOURCE_VERSION = typeof packageManifest.version === "string" ? packageManifest.version : "unknown"
 
 // Bun replaces these identifiers during the package build. `typeof` keeps the
 // source checkout usable without a generated file or runtime build step.

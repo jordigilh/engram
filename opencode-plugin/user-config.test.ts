@@ -9,6 +9,7 @@ import {
   resolveEngramOptions,
   validateEngramOptions,
 } from "./user-config"
+import { PLUGIN_BUILD_INFO } from "./build-info"
 
 describe("deployment-local plugin config", () => {
   test("missing config is optional", async () => {
@@ -73,20 +74,20 @@ describe("deployment-local plugin config", () => {
     expect(validateEngramOptions({
       pluginArtifact: {
         package: "engram-opencode-plugin",
-        version: "0.1.0",
+        version: PLUGIN_BUILD_INFO.version,
         source: "npm",
       },
     }, "explicit options")).toEqual({
       pluginArtifact: {
         package: "engram-opencode-plugin",
-        version: "0.1.0",
+        version: PLUGIN_BUILD_INFO.version,
         source: "npm",
       },
     })
     expect(() => validateEngramOptions({ pluginArtifact: { source: "npm" } }, "explicit options"))
       .toThrow("package or version")
     expect(() => validateEngramOptions({
-      pluginArtifact: { package: "engram-opencode-plugin", version: "0.1.0", source: "checkout" },
+      pluginArtifact: { package: "engram-opencode-plugin", version: PLUGIN_BUILD_INFO.version, source: "checkout" },
     }, "explicit options")).toThrow("source")
   })
 
@@ -112,7 +113,7 @@ describe("deployment-local plugin config", () => {
       },
       {
         gatewayUrl: "http://explicit",
-        pluginArtifact: { package: "engram-opencode-plugin", version: "0.1.0", source: "npm" },
+        pluginArtifact: { package: "engram-opencode-plugin", version: PLUGIN_BUILD_INFO.version, source: "npm" },
         repositories: { remotes: { "https://example.com/service-ui": { family: "platform" } } },
         worktreeIndex: {
           mcpUrl: "http://127.0.0.1:7999/mcp",
@@ -124,7 +125,7 @@ describe("deployment-local plugin config", () => {
     expect(merged.gatewayUrl).toBe("http://explicit")
     expect(merged.pluginArtifact).toEqual({
       package: "engram-opencode-plugin",
-      version: "0.1.0",
+      version: PLUGIN_BUILD_INFO.version,
       source: "npm",
     })
     expect(merged.repositories?.directories?.["service-api"]).toEqual({ family: "platform" })

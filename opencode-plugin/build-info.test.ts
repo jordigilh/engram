@@ -5,12 +5,15 @@ import {
   validatePluginArtifact,
   validatePluginArtifactManifest,
 } from "./build-info"
+import packageManifest from "./package.json" with { type: "json" }
+
+const PACKAGE_VERSION = packageManifest.version
 
 describe("plugin build metadata", () => {
   test("identifies a source checkout without pretending it is a release", () => {
     expect(PLUGIN_BUILD_INFO).toEqual({
       packageName: "engram-opencode-plugin",
-      version: "0.1.0",
+      version: PACKAGE_VERSION,
       revision: "development",
       source: "local-checkout",
     })
@@ -19,7 +22,7 @@ describe("plugin build metadata", () => {
   test("accepts the expected local development artifact", () => {
     expect(() => validatePluginArtifact({
       package: "engram-opencode-plugin",
-      version: "0.1.0",
+      version: PACKAGE_VERSION,
       revision: "development",
       source: "local-checkout",
     })).not.toThrow()
@@ -37,7 +40,7 @@ describe("plugin build metadata", () => {
     try {
       validatePluginArtifact({
         package: "engram-opencode-plugin",
-        version: "0.1.0",
+        version: PACKAGE_VERSION,
         source: "npm",
       })
     } catch (caught) {
@@ -52,20 +55,20 @@ describe("plugin build metadata", () => {
 
   test("validates an embedded revision when the deployment pins one", () => {
     expect(() => validatePluginArtifact(
-      { package: "engram-opencode-plugin", version: "0.1.0", revision: "abc123" },
-      { packageName: "engram-opencode-plugin", version: "0.1.0", revision: "abc123", source: "npm" },
+      { package: "engram-opencode-plugin", version: PACKAGE_VERSION, revision: "abc123" },
+      { packageName: "engram-opencode-plugin", version: PACKAGE_VERSION, revision: "abc123", source: "npm" },
     )).not.toThrow()
 
     expect(() => validatePluginArtifact(
-      { package: "engram-opencode-plugin", version: "0.1.0", revision: "wrong" },
-      { packageName: "engram-opencode-plugin", version: "0.1.0", revision: "abc123", source: "npm" },
+      { package: "engram-opencode-plugin", version: PACKAGE_VERSION, revision: "wrong" },
+      { packageName: "engram-opencode-plugin", version: PACKAGE_VERSION, revision: "abc123", source: "npm" },
     )).toThrow("revision mismatch")
   })
 
   test("confirms the source checkout manifest exists and matches", async () => {
     await expect(validatePluginArtifactManifest({
       package: "engram-opencode-plugin",
-      version: "0.1.0",
+      version: PACKAGE_VERSION,
       revision: "development",
       source: "local-checkout",
     })).resolves.toBeUndefined()
@@ -73,7 +76,7 @@ describe("plugin build metadata", () => {
 
   test("rejects a module URL whose package manifest is missing", async () => {
     await expect(validatePluginArtifactManifest(
-      { package: "engram-opencode-plugin", version: "0.1.0" },
+      { package: "engram-opencode-plugin", version: PACKAGE_VERSION },
       PLUGIN_BUILD_INFO,
       "file:///definitely/not/a/plugin/index.js",
     )).rejects.toBeInstanceOf(EngramPluginArtifactValidationError)

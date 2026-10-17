@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import pluginDefault, { appendV2Nudge } from "./index"
 import { buildMcpServerConfigV2, mergeMcpEditor } from "./identity"
+import { PLUGIN_BUILD_INFO } from "./build-info"
 import "./test-config"
 
 function fakeEditor(initial: Record<string, unknown> = {}) {
@@ -180,7 +181,7 @@ describe("v2 setup", () => {
     ctx.options = {
       pluginArtifact: {
         package: "engram-opencode-plugin",
-        version: "0.1.0",
+        version: PLUGIN_BUILD_INFO.version,
         source: "npm",
       },
     }
@@ -193,7 +194,7 @@ describe("v2 setup", () => {
     ctx.options = {
       pluginArtifact: {
         package: "engram-opencode-plugin",
-        version: "0.1.0",
+        version: PLUGIN_BUILD_INFO.version,
         revision: "development",
         source: "local-checkout",
       },

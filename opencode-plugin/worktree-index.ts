@@ -55,6 +55,23 @@ export interface WorktreeIndexerOptions {
   log?: (message: string) => void
 }
 
+export type ZvecReadinessCode =
+  | "ZVEC_ROOT_NOT_AUTHORIZED"
+  | "ZVEC_INDEX_FAILED"
+  | "ZVEC_FRESHNESS_UNPROVEN"
+  | "ZVEC_FRESHNESS_UNSTABLE"
+  | "ZVEC_READINESS_FAILED"
+
+export class ZvecReadinessError extends Error {
+  readonly code: ZvecReadinessCode
+
+  constructor(code: ZvecReadinessCode, message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = "ZvecReadinessError"
+    this.code = code
+  }
+}
+
 export interface WorktreeIndexPolicy {
   enabled?: boolean
   projects?: string[]
@@ -342,7 +359,8 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
         aggregate: aggregateRoots.has(configured),
       }
     }
-    throw new Error(
+    throw new ZvecReadinessError(
+      "ZVEC_ROOT_NOT_AUTHORIZED",
       `zvec root is not authorized: ${requested}; configure worktreeIndex.allowedRoots, familyRoots, or aggregateRoots`,
     )
   }
@@ -363,7 +381,8 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
       log(`could not determine whether ${directory} is a bare Git repository: ${message}`)
     }
     if (bareRepository) {
-      throw new Error(
+      throw new ZvecReadinessError(
+        "ZVEC_ROOT_NOT_AUTHORIZED",
         `bare Git repository ${directory} is not an authorized zvec workspace; use a non-bare checkout`,
       )
     }
@@ -389,7 +408,8 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
       }
       if (!gitWorktree) {
         if (!aggregate) {
-          throw new Error(
+          throw new ZvecReadinessError(
+            "ZVEC_ROOT_NOT_AUTHORIZED",
             `non-Git zvec root ${directory} is not authorized; declare it in worktreeIndex.aggregateRoots`,
           )
         }
@@ -433,9 +453,22 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
       const revisionBefore = decision.revision
       const operation = decision.rebuild ? "rebuild" : "index"
       log(`starting zg ${operation} for worktree ${normalized} (${decision.reason})`)
-      await runIndex(normalized, decision.rebuild)
+      try {
+        await runIndex(normalized, decision.rebuild)
+      } catch (error) {
+        if (error && typeof error === "object" && "code" in error) throw error
+        const message = error instanceof Error ? error.message : String(error)
+        throw new ZvecReadinessError(
+          "ZVEC_INDEX_FAILED",
+          `zvec index failed for ${normalized}: ${message}`,
+          { cause: error },
+        )
+      }
       if (!(await hasManifest(normalized))) {
-        throw new Error("zg --index completed without creating .zvec-grep/manifest.json")
+        throw new ZvecReadinessError(
+          "ZVEC_INDEX_FAILED",
+          "zg --index completed without creating .zvec-grep/manifest.json",
+        )
       }
 
       // A checkout can change while a long local embedding run is in
@@ -455,10 +488,17 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           log(`could not persist Engram ZG provenance for ${normalized}: ${message}`)
-          throw new Error(`could not persist Engram ZG provenance for ${normalized}: ${message}`, { cause: error })
+          throw new ZvecReadinessError(
+            "ZVEC_FRESHNESS_UNPROVEN",
+            `could not persist Engram ZG provenance for ${normalized}: ${message}`,
+            { cause: error },
+          )
         }
       } else if (!aggregate) {
-        throw new Error(`could not prove Git freshness for ${normalized}; refusing to mark zvec ready`)
+        throw new ZvecReadinessError(
+          "ZVEC_FRESHNESS_UNPROVEN",
+          `could not prove Git freshness for ${normalized}; refusing to mark zvec ready`,
+        )
       }
       log(`finished zg index for worktree ${normalized}`)
     })
@@ -486,7 +526,7 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
   async function ensureIndexed(directory: string): Promise<void> {
     const authorization = await authorizeRoot(directory)
     const normalized = authorization.normalized
-    if (disposed) throw new Error("worktree indexer is disposed")
+    if (disposed) throw new ZvecReadinessError("ZVEC_READINESS_FAILED", "worktree indexer is disposed")
 
     for (let attempt = 1; attempt <= MAX_READINESS_ATTEMPTS; attempt += 1) {
       const pendingIndex = pendingPromises.get(normalized)
@@ -512,10 +552,14 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
       const revision = await getRevision(normalized).catch(() => undefined)
       if (!revision) {
         if (authorization.aggregate && (await hasManifest(normalized))) return
-        throw new Error(`could not prove Git freshness for ${normalized}; refusing to mark zvec ready`)
+        throw new ZvecReadinessError(
+          "ZVEC_FRESHNESS_UNPROVEN",
+          `could not prove Git freshness for ${normalized}; refusing to mark zvec ready`,
+        )
       }
     }
-    throw new Error(
+    throw new ZvecReadinessError(
+      "ZVEC_FRESHNESS_UNSTABLE",
       `worktree ${normalized} changed during ${MAX_READINESS_ATTEMPTS} zvec index attempts; retry after the checkout settles`,
     )
   }

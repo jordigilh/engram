@@ -261,9 +261,9 @@ same boundary and also accepts registered linked Git worktrees of its
 configured `source_roots`/`allowed_roots`; it does not accept arbitrary
 descendants, forged Git metadata, or unrelated repositories. Non-Git aggregate
 roots must additionally be listed in `aggregateRoots`; arbitrary paths,
-symlink escapes, bare repositories, and unconfigured OpenChamber storage
-directories fail closed. The explicit index tool is not intercepted; routes
-without `worktreeIndex` configuration remain unchanged.
+symlink escapes, unallowlisted bare repositories, and unconfigured OpenChamber
+storage directories fail closed. The explicit index tool is not intercepted;
+routes without `worktreeIndex` configuration remain unchanged.
 
 For a shared repository family, `worktreeIndex.familyRoots` is the default
 deployment policy: every route whose resolved `family` matches the key inherits

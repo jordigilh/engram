@@ -92,6 +92,7 @@ from engram.pipeline.zvec_policy import (  # noqa: E402
     ZVEC_WORKSPACE_READ_TOOLS,
     append_shadow_jsonl as _append_shadow_jsonl,
     authorized_zvec_root as _authorized_zvec_root,
+    is_git_worktree_of as _is_git_worktree_of,
     managed_zvec_arguments as _managed_zvec_arguments,
 )
 
@@ -1478,10 +1479,16 @@ class ZvecShadowRelayAdapter:
             "comparison_reference": "cocoindex",
             **metadata,
         }
-        indexed_repo = next(
-            (repo for repo, indexed_root in self.source_roots.items() if root == indexed_root),
-            None,
-        )
+        indexed_repo = None
+        if root is not None:
+            indexed_repo = next(
+                (
+                    repo
+                    for repo, indexed_root in self.source_roots.items()
+                    if root == indexed_root or _is_git_worktree_of(root, indexed_root)
+                ),
+                None,
+            )
         if root is None:
             entry["shadow"].update({"skipped": "missing_or_unavailable_absolute_root"})
         elif indexed_repo is None:

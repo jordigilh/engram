@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import pathlib
+import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -80,3 +82,138 @@ def test_authorized_root_requires_existing_exact_real_path(tmp_path):
     link.symlink_to(allowed, target_is_directory=True)
     assert zvec_policy.authorized_zvec_root(str(link), allowed_roots) == allowed.resolve()
     assert zvec_policy.authorized_zvec_root(str(allowed), frozenset({tmp_path / "missing"})) is None
+
+
+def test_git_workspace_identity_fails_closed_for_unusable_git_output(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    root.mkdir()
+
+    def raise_os_error(*args, **kwargs):
+        raise OSError("git unavailable")
+
+    monkeypatch.setattr(zvec_policy.subprocess, "run", raise_os_error)
+    assert zvec_policy.git_workspace_identity(root) is None
+
+    monkeypatch.setattr(
+        zvec_policy.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout=""),
+    )
+    assert zvec_policy.git_workspace_identity(root) is None
+
+    monkeypatch.setattr(
+        zvec_policy.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="only-one-line\n"),
+    )
+    assert zvec_policy.git_workspace_identity(root) is None
+
+    relative_top = root / "relative-top"
+    (relative_top / ".git").mkdir(parents=True)
+    monkeypatch.setattr(
+        zvec_policy.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="relative-top\n.git\n"),
+    )
+    assert zvec_policy.git_workspace_identity(root) == (relative_top.resolve(), (relative_top / ".git").resolve())
+
+    regular_file = root / "not-a-directory"
+    regular_file.write_text("file\n")
+    common = root / "common"
+    common.mkdir()
+    monkeypatch.setattr(
+        zvec_policy.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=f"{regular_file}\n{common}\n",
+        ),
+    )
+    assert zvec_policy.git_workspace_identity(root) is None
+
+    monkeypatch.setattr(
+        zvec_policy.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=f"{root / 'missing'}\n{common}\n",
+        ),
+    )
+    assert zvec_policy.git_workspace_identity(root) is None
+
+
+def test_registered_git_worktrees_ignores_invalid_entries_and_git_failures(tmp_path, monkeypatch):
+    valid = tmp_path / "valid"
+    valid.mkdir()
+    regular_file = tmp_path / "file"
+    regular_file.write_text("file\n")
+    missing = tmp_path / "missing"
+    output = (
+        f"worktree {valid}\n"
+        "HEAD abc\n"
+        "not-a-worktree-entry\n"
+        f"worktree {missing}\n"
+        f"worktree {regular_file}\n"
+    )
+    monkeypatch.setattr(
+        zvec_policy.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=output),
+    )
+    assert zvec_policy._registered_git_worktrees(tmp_path) == frozenset({valid.resolve()})
+
+    def raise_subprocess_error(*args, **kwargs):
+        raise subprocess.SubprocessError("git failed")
+
+    monkeypatch.setattr(zvec_policy.subprocess, "run", raise_subprocess_error)
+    assert zvec_policy._registered_git_worktrees(tmp_path) == frozenset()
+
+    monkeypatch.setattr(
+        zvec_policy.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout=""),
+    )
+    assert zvec_policy._registered_git_worktrees(tmp_path) == frozenset()
+
+
+def test_git_worktree_match_requires_both_git_identities(monkeypatch, tmp_path):
+    monkeypatch.setattr(zvec_policy, "git_workspace_identity", lambda root: None)
+    assert not zvec_policy.is_git_worktree_of(tmp_path / "requested", tmp_path / "allowed")
+
+
+def test_authorized_root_accepts_only_a_registered_linked_worktree_of_an_allowed_checkout(tmp_path, monkeypatch):
+    for variable in zvec_policy._GIT_REPOSITORY_ENVIRONMENT:
+        monkeypatch.delenv(variable, raising=False)
+    canonical = tmp_path / "canonical"
+    linked = tmp_path / "worktree"
+    unrelated = tmp_path / "unrelated"
+    canonical.mkdir()
+    subprocess.run(["git", "-C", str(canonical), "init", "--quiet"], check=True)
+    subprocess.run(
+        [
+            "git", "-C", str(canonical), "-c", "user.name=Engram Test",
+            "-c", "user.email=engram-test@example.com", "commit", "--quiet", "--allow-empty", "-m", "init",
+        ],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(canonical), "worktree", "add", "--quiet", "--detach", str(linked)], check=True)
+
+    allowed_roots = frozenset({canonical})
+    assert zvec_policy.authorized_zvec_root(str(linked), allowed_roots) == linked.resolve()
+
+    forged = tmp_path / "forged"
+    forged.mkdir()
+    (forged / ".git").write_text(f"gitdir: {canonical / '.git'}\n")
+    assert zvec_policy.authorized_zvec_root(str(forged), allowed_roots) is None
+
+    nested = linked / "nested"
+    nested.mkdir()
+    assert zvec_policy.authorized_zvec_root(str(nested), allowed_roots) is None
+
+    unrelated.mkdir()
+    subprocess.run(["git", "-C", str(unrelated), "init", "--quiet"], check=True)
+    assert zvec_policy.authorized_zvec_root(str(unrelated), allowed_roots) is None
+
+    monkeypatch.setenv("GIT_DIR", str(canonical / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(unrelated))
+    assert zvec_policy.authorized_zvec_root(str(linked), allowed_roots) == linked.resolve()

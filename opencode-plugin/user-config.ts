@@ -87,8 +87,8 @@ function validatePluginArtifact(value: unknown, label: string): PluginArtifactEx
     }
     if (typeof value[key] === "string") validated[key] = value[key].trim()
   }
-  if (value.source !== undefined && value.source !== "npm" && value.source !== "local-checkout") {
-    throw new EngramConfigValidationError(`${label}.source must be npm or local-checkout`)
+  if (value.source !== undefined && value.source !== "github-release" && value.source !== "local-checkout") {
+    throw new EngramConfigValidationError(`${label}.source must be github-release or local-checkout`)
   }
   if (typeof value.source === "string") validated.source = value.source as PluginArtifactSource
   if (!validated.package && !validated.version) {

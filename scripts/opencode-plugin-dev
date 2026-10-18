@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Explicitly opt into the mutable checkout while keeping production config
-# pointed at the versioned npm package.
+# pointed at the versioned GitHub Release artifact.
 
 set -euo pipefail
 

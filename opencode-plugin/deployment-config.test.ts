@@ -10,14 +10,14 @@ async function readDeploymentConfig(name: string): Promise<Record<string, any>> 
 }
 
 describe("OpenCode deployment templates", () => {
-  test("production pins the npm package and rejects checkout sources", async () => {
+  test("production pins the release artifact and rejects checkout sources", async () => {
     const config = await readDeploymentConfig("opencode-plugin.production.jsonc")
     const entry = config.plugins[0]
-    expect(entry.package).toBe(`engram-opencode-plugin@${PACKAGE_VERSION}`)
+    expect(entry.package).toContain(`engram-opencode-plugin-${PACKAGE_VERSION}`)
     expect(entry.options.pluginArtifact).toEqual({
       package: "engram-opencode-plugin",
       version: PACKAGE_VERSION,
-      source: "npm",
+      source: "github-release",
     })
   })
 

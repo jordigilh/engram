@@ -29,7 +29,7 @@ trap cleanup EXIT
 
 mkdir -p "${INSTALL_ROOT}"
 if ! mkdir "${LOCK_DIRECTORY}" 2>/dev/null; then
-  printf 'another installation for version %s is in progress\n' "${VERSION}" >&2
+  printf 'another installation for version %s is in progress (remove %s if stale)\n' "${VERSION}" "${LOCK_DIRECTORY}" >&2
   exit 1
 fi
 LOCK_ACQUIRED=1

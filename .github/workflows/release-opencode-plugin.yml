@@ -67,12 +67,13 @@ jobs:
       - name: Create GitHub release with checksummed artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           version="${RELEASE_TAG#opencode-plugin-v}"
           gh release create "${RELEASE_TAG}" \
-            "release/engram-opencode-plugin-${version}.tar.gz" \
-            "release/engram-opencode-plugin-${version}.tar.gz.sha256" \
+            "opencode-plugin/release/engram-opencode-plugin-${version}.tar.gz" \
+            "opencode-plugin/release/engram-opencode-plugin-${version}.tar.gz.sha256" \
             --verify-tag \
             --title "Engram OpenCode plugin ${version}" \
             --generate-notes

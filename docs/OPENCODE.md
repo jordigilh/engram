@@ -162,6 +162,10 @@ git tag opencode-plugin-v0.1.0 <release-commit>
 git push origin opencode-plugin-v0.1.0
 ```
 
+Protect the `opencode-plugin-v*` tag pattern with a GitHub repository ruleset:
+allow intended tag creation, but deny tag updates and deletions. This prevents
+an already-published release tag from moving to a different commit.
+
 Install and verify an artifact on the host with:
 
 ```bash

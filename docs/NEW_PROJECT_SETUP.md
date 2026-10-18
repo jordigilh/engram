@@ -490,6 +490,19 @@ falls back to its repository identity mapping only when one is not configured.
 See [OpenCode Integration](OPENCODE.md) for directory/remote mappings and
 branch-route options.
 
+On a new host, install the pinned production plugin artifact before configuring
+the route:
+
+```bash
+scripts/install-opencode-plugin <version>
+```
+
+Point the global OpenCode `plugins` entry at the resulting immutable
+`~/.engram/opencode-plugins/engram-opencode-plugin-<version>` directory. Do not
+use the source checkout for production; use
+[Plugin distribution](OPENCODE.md#plugin-distribution) for checksum verification,
+updates, rollback, and the explicit local-development override.
+
 The gateway owns the Hindsight, CocoIndex, Serena, and project-specific backend
 connections. Do not register those backends separately, or the client will see
 duplicate tools and bypass the gateway's isolation and routing. OpenChamber

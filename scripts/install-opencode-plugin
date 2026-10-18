@@ -38,7 +38,14 @@ curl --fail --location --silent --show-error "${BASE_URL}/${ASSET}" -o "${TEMP_R
 curl --fail --location --silent --show-error "${BASE_URL}/${ASSET}.sha256" -o "${TEMP_ROOT}/${ASSET}.sha256"
 
 expected="$(awk '{print $1}' "${TEMP_ROOT}/${ASSET}.sha256")"
-actual="$(shasum -a 256 "${TEMP_ROOT}/${ASSET}" | awk '{print $1}')"
+if command -v shasum >/dev/null 2>&1; then
+  actual="$(shasum -a 256 "${TEMP_ROOT}/${ASSET}" | awk '{print $1}')"
+elif command -v sha256sum >/dev/null 2>&1; then
+  actual="$(sha256sum "${TEMP_ROOT}/${ASSET}" | awk '{print $1}')"
+else
+  printf 'missing shasum or sha256sum; cannot verify %s\n' "${ASSET}" >&2
+  exit 1
+fi
 if [[ -z "${expected}" || "${actual}" != "${expected}" ]]; then
   printf 'checksum mismatch for %s\n' "${ASSET}" >&2
   exit 1

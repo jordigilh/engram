@@ -465,7 +465,44 @@ explicitly selectable on-demand app under the cost policy. See
 > [NEW_PROJECT_SETUP.md](NEW_PROJECT_SETUP.md) for the full walkthrough,
 > including the lighter tag-scoped-recall variant.
 
-## 17. Reload the client
+## 17. Install the OpenCode/OpenChamber plugin
+
+The production plugin is a pinned, self-contained GitHub Release artifact. Do
+not point production OpenCode at the Engram checkout.
+
+Install the exact release after it has been published:
+
+```bash
+scripts/install-opencode-plugin 0.1.0
+```
+
+The installer downloads the release tarball and its SHA-256 sidecar, verifies
+the checksum, and installs the artifact under:
+
+```text
+~/.engram/opencode-plugins/engram-opencode-plugin-0.1.0
+```
+
+Replace the placeholder path in
+[`deploy/opencode-plugin.production.jsonc`](../deploy/opencode-plugin.production.jsonc)
+with that absolute path, then apply that `plugins` entry to the active global
+OpenCode configuration at `~/.config/opencode/opencode.jsonc`. OpenCode does
+not load the tracked deployment template automatically. Remove the old
+singular `plugin` tuple that points into the checkout, preserve the other global
+plugin entries and repository mappings, and set `pluginArtifact.version` and
+`pluginArtifact.source: "github-release"` to match the installed release.
+The full update, rollback, and startup-verification procedure is in
+[OpenCode Integration — Plugin distribution](OPENCODE.md#plugin-distribution).
+
+For local plugin development only, use the explicit checkout override:
+
+```bash
+scripts/opencode-plugin-dev
+```
+
+This sets `source: "local-checkout"` and must not replace the production path.
+
+## 18. Reload the client
 
 Reload the OpenCode/OpenChamber host after changing the gateway route, plugin,
 rule, or hook configuration.

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import subprocess
 
 import pytest
 
@@ -80,3 +81,30 @@ def test_authorized_root_requires_existing_exact_real_path(tmp_path):
     link.symlink_to(allowed, target_is_directory=True)
     assert zvec_policy.authorized_zvec_root(str(link), allowed_roots) == allowed.resolve()
     assert zvec_policy.authorized_zvec_root(str(allowed), frozenset({tmp_path / "missing"})) is None
+
+
+def test_authorized_root_accepts_only_a_linked_worktree_of_an_allowed_checkout(tmp_path):
+    canonical = tmp_path / "canonical"
+    linked = tmp_path / "worktree"
+    unrelated = tmp_path / "unrelated"
+    canonical.mkdir()
+    subprocess.run(["git", "-C", str(canonical), "init", "--quiet"], check=True)
+    subprocess.run(
+        [
+            "git", "-C", str(canonical), "-c", "user.name=Engram Test",
+            "-c", "user.email=engram-test@example.com", "commit", "--quiet", "--allow-empty", "-m", "init",
+        ],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(canonical), "worktree", "add", "--quiet", "--detach", str(linked)], check=True)
+
+    allowed_roots = frozenset({canonical})
+    assert zvec_policy.authorized_zvec_root(str(linked), allowed_roots) == linked.resolve()
+
+    nested = linked / "nested"
+    nested.mkdir()
+    assert zvec_policy.authorized_zvec_root(str(nested), allowed_roots) is None
+
+    unrelated.mkdir()
+    subprocess.run(["git", "-C", str(unrelated), "init", "--quiet"], check=True)
+    assert zvec_policy.authorized_zvec_root(str(unrelated), allowed_roots) is None

@@ -1183,6 +1183,44 @@ class TestZvecShadowRelayAdapter:
 
         asyncio.run(scenario())
 
+    def test_forwards_a_linked_worktree_of_a_configured_source_root(self, engram_gateway, tmp_path):
+        canonical = tmp_path / "canonical"
+        linked = tmp_path / "worktree"
+        canonical.mkdir()
+        subprocess.run(["git", "-C", str(canonical), "init", "--quiet"], check=True)
+        subprocess.run(
+            [
+                "git", "-C", str(canonical), "-c", "user.name=Engram Test",
+                "-c", "user.email=engram-test@example.com", "commit", "--quiet", "--allow-empty", "-m", "init",
+            ],
+            check=True,
+        )
+        subprocess.run(["git", "-C", str(canonical), "worktree", "add", "--quiet", "--detach", str(linked)], check=True)
+
+        async def scenario():
+            primary = FakeAdapter(call_results={"zvec_grep_search": {"isError": False}})
+            adapter = engram_gateway.ZvecShadowRelayAdapter(
+                primary,
+                FakeAdapter(),
+                log_path=tmp_path / "shadow.jsonl",
+                shadow_timeout_seconds=0.1,
+                source_roots={"repo": canonical},
+                allowed_roots=frozenset({canonical}),
+            )
+
+            result = await adapter.call_tool(
+                "zvec_grep_search", {"root": str(linked), "query": "resource normalization"}
+            )
+            await asyncio.gather(*tuple(adapter._shadow_tasks))
+
+            assert result["isError"] is False
+            assert primary.call_log[0][1]["root"] == str(linked.resolve())
+            shadow_entry = json.loads((tmp_path / "shadow.jsonl").read_text())
+            assert shadow_entry["shadow"]["tool"] == "cocoindex_search"
+            assert shadow_entry["shadow"]["arguments"]["repo"] == "repo"
+
+        asyncio.run(scenario())
+
     def test_shadow_log_redacts_queries_and_responses_and_sets_private_mode(
         self, engram_gateway, tmp_path
     ):

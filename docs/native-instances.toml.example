@@ -25,8 +25,8 @@ args = ["start-mcp-server", "--project", "/path/to/my-project"]
 
 # A shadow backend is optional. Its source_roots and callgraph_repos are
 # deployment-local because they authorize which local workspaces may be used
-# for comparisons. A configured Git checkout also covers its linked Git
-# worktrees; non-Git aggregate roots still need an exact allowed_roots entry.
+# for comparisons. A configured Git checkout also covers its registered linked
+# Git worktrees; non-Git aggregate roots still need an exact allowed_roots entry.
 #
 # [instances."my-project".backends.code_shadow]
 # kind = "shadow_http"

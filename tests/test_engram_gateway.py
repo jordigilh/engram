@@ -1183,7 +1183,18 @@ class TestZvecShadowRelayAdapter:
 
         asyncio.run(scenario())
 
-    def test_forwards_a_linked_worktree_of_a_configured_source_root(self, engram_gateway, tmp_path):
+    def test_forwards_a_linked_worktree_of_a_configured_source_root(
+        self, engram_gateway, tmp_path, monkeypatch
+    ):
+        for variable in (
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        ):
+            monkeypatch.delenv(variable, raising=False)
         canonical = tmp_path / "canonical"
         linked = tmp_path / "worktree"
         canonical.mkdir()

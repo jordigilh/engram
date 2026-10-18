@@ -257,13 +257,13 @@ synchronous readiness check for its requested absolute `root` immediately
 before the MCP call. The root must be the canonical checkout, a worktree
 returned by OpenCode's project inventory, or an exact path in
 `worktreeIndex.allowedRoots`/`familyRoots`. The native gateway applies the
-same boundary and also accepts linked Git worktrees of its configured
-`source_roots`/`allowed_roots`; it does not accept arbitrary descendants or
-unrelated repositories. Non-Git aggregate roots must additionally be listed
-in `aggregateRoots`; arbitrary paths, symlink escapes, bare repositories, and
-unconfigured OpenChamber storage directories fail closed. The explicit index
-tool is not intercepted; routes without `worktreeIndex` configuration remain
-unchanged.
+same boundary and also accepts registered linked Git worktrees of its
+configured `source_roots`/`allowed_roots`; it does not accept arbitrary
+descendants, forged Git metadata, or unrelated repositories. Non-Git aggregate
+roots must additionally be listed in `aggregateRoots`; arbitrary paths,
+symlink escapes, bare repositories, and unconfigured OpenChamber storage
+directories fail closed. The explicit index tool is not intercepted; routes
+without `worktreeIndex` configuration remain unchanged.
 
 For a shared repository family, `worktreeIndex.familyRoots` is the default
 deployment policy: every route whose resolved `family` matches the key inherits
@@ -280,8 +280,8 @@ root-scoped Engram code search rather than attempting
 `familyRoots` controls the OpenCode plugin's preflight gate. The gateway's
 independent backend root policy must also expose the same canonical roots when
 the deployment uses a gateway adapter with its own
-`allowed_roots`/`source_roots` allowlist; linked Git worktrees of those roots
-are covered automatically.
+`allowed_roots`/`source_roots` allowlist; registered linked Git worktrees of
+those roots are covered automatically.
 
 The managed zvec search route also requests `freshness: "wait_for_fresh"` with
 `autoUpdate: true`. A search therefore refreshes only its requested workspace

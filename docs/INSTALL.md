@@ -485,8 +485,12 @@ the checksum, and installs the artifact under:
 
 Replace the placeholder path in
 [`deploy/opencode-plugin.production.jsonc`](../deploy/opencode-plugin.production.jsonc)
-with that absolute path. Keep `pluginArtifact.version` and
-`pluginArtifact.source: "github-release"` aligned with the installed release.
+with that absolute path, then apply that `plugins` entry to the active global
+OpenCode configuration at `~/.config/opencode/opencode.jsonc`. OpenCode does
+not load the tracked deployment template automatically. Remove the old
+singular `plugin` tuple that points into the checkout, preserve the other global
+plugin entries and repository mappings, and set `pluginArtifact.version` and
+`pluginArtifact.source: "github-release"` to match the installed release.
 The full update, rollback, and startup-verification procedure is in
 [OpenCode Integration — Plugin distribution](OPENCODE.md#plugin-distribution).
 

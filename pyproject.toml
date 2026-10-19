@@ -9,14 +9,14 @@ description = "Hindsight/CocoIndex ingestion and memory-management pipeline for 
 requires-python = ">=3.13"
 dependencies = [
     "cocoindex==1.0.25",
-    "anthropic==1.13.0",
-    "litellm==1.104.2",
+    "anthropic==1.15.0",
+    "litellm==1.105.1",
     # 2026-09-09: mcp 2.x removed `request_ctx`, breaking fastmcp 3.4.7's
     # server import (hindsight-api fails to start). Pin below 2.0 to match
     # the working live venv until fastmcp supports mcp 2.x.
     "mcp==2.3.0",
     "httpx==0.28.1",
-    "starlette==1.7.0",
+    "starlette==1.8.0",
     "uvicorn==0.54.0",
     "openai==2.54.0",
     "psycopg2-binary==2.9.13",
@@ -25,7 +25,7 @@ dependencies = [
     "requests==2.34.2",
     "watchdog==6.0.0",
     "PyYAML==6.0.3",
-    "numpy==2.5.3",
+    "numpy==2.5.4",
     "torch==2.14.1",
     "asyncpg==0.32.0",
     # engram.synthesis (deterministic TextRank key sentences + TF-IDF
@@ -48,7 +48,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=9.1.1", "ruff==0.17.0", "coverage[toml]>=7.16.2"]
+dev = ["pytest>=9.1.1", "ruff==0.17.1", "coverage[toml]>=7.16.2"]
 
 [tool.pytest.ini_options]
 markers = [

@@ -15,9 +15,11 @@ The configuration-driven launcher selects a project at runtime:
 
 import argparse
 import logging
+import os
 import pathlib
 import re
 import sys
+import threading
 from typing import Any
 
 # Keep direct source execution usable for this shared engine as well as the
@@ -78,6 +80,12 @@ _SCOPE_ALIASES: dict[str, frozenset[str]] = {}
 _SCOPE_INDEX_TAGS: dict[str, frozenset[str]] = {}
 
 _model = None
+_model_lock = threading.Lock()
+_embedding_lock = threading.Lock()
+# Query embeddings are small enough that CPU is the safe default for a long-
+# lived, multi-threaded MCP server.  Deployments that have validated a native
+# accelerator can opt in explicitly without changing the persisted index.
+EMBEDDING_DEVICE = os.environ.get("ENGRAM_CODE_SEARCH_DEVICE", "cpu").strip() or "cpu"
 
 
 def configure_project(
@@ -125,21 +133,31 @@ def configure_project(
         str(tag): frozenset({str(tag), *index_tags})
         for tag, index_tags in (scope_index_tags or {}).items()
     }
-    _model = None
+    with _model_lock:
+        _model = None
 
 
 def _get_model():
+    """Return the process-local query model, initializing it once safely."""
     global _model
     if _model is None:
-        from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer(EMBEDDING_MODEL)
-        log.info("Loaded embedding model: %s", EMBEDDING_MODEL)
+        with _model_lock:
+            if _model is None:
+                from sentence_transformers import SentenceTransformer
+
+                _model = SentenceTransformer(EMBEDDING_MODEL, device=EMBEDDING_DEVICE)
+                log.info("Loaded embedding model: %s on %s", EMBEDDING_MODEL, EMBEDDING_DEVICE)
     return _model
 
 
 def _embed_query(query: str) -> list[float]:
+    """Encode one search query while protecting native backend inference."""
     model = _get_model()
-    return model.encode(query, normalize_embeddings=True).tolist()
+    # SentenceTransformer inference is invoked from AnyIO worker threads by
+    # the synchronous MCP tool.  Serialize it because native accelerator
+    # backends, especially Apple MPS, are not safe under concurrent calls.
+    with _embedding_lock:
+        return model.encode(query, normalize_embeddings=True).tolist()
 
 
 def _rrf_fuse(

@@ -673,6 +673,12 @@ RELEVANT_HINDSIGHT_TOOLS = frozenset(
 # keeps the added footprint to 1 tool per backend.
 RECALL_ONLY_HINDSIGHT_TOOLS = frozenset({"recall"})
 
+# Shared methodology memory is read-only when cross-mounted into a project
+# route. Keep this narrower than the writable docs/issues bank set. Multi-user
+# deployments must require an explicit tag filter; a single-user deployment
+# may deliberately allow an unscoped recall after operator review.
+METHODOLOGY_HINDSIGHT_TOOLS = frozenset({"recall", "get_mental_model"})
+
 # Same rationale as RECALL_ONLY_HINDSIGHT_TOOLS, for the Kuadrant
 # code-search backend: only the semantic/BM25 search tool is exposed
 # cross-project, not pattern-search or call-graph tools (impact-analysis
@@ -692,6 +698,11 @@ ZVEC_MANAGEMENT_TOOLS = frozenset({
 })
 
 MANUAL_MENTAL_MODEL_TOOLS = frozenset({"manual_mental_model"})
+METHODOLOGY_BANK_PATHS = frozenset({"/mcp/shared-memory", "/mcp/hindsight"})
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    return host in {"localhost", "127.0.0.1", "::1"}
 
 RELEVANT_SERENA_TOOLS = frozenset(
     {
@@ -728,6 +739,7 @@ SERENA_PATTERN_SEARCH_GUIDANCE = (
 RELEVANT_TOOLS_BY_BACKEND: dict[str, frozenset[str]] = {
     "docs": RELEVANT_HINDSIGHT_TOOLS,
     "issues": RELEVANT_HINDSIGHT_TOOLS,
+    "hindsight": METHODOLOGY_HINDSIGHT_TOOLS,
     "serena": RELEVANT_SERENA_TOOLS,
     "docs_manual": MANUAL_MENTAL_MODEL_TOOLS,
     "issues_manual": MANUAL_MENTAL_MODEL_TOOLS,
@@ -1673,6 +1685,56 @@ class ManualMentalModelAdapter:
         return await self.hindsight_adapter.call_tool("retain", retain_arguments)
 
 
+class ScopedHindsightAdapter:
+    """Enforce route-owned scope for a read-only shared Hindsight bank."""
+
+    def __init__(
+        self,
+        upstream: BackendAdapter,
+        *,
+        scope_tags: tuple[str, ...] = (),
+        allow_unscoped: bool = False,
+        mental_model_ids: tuple[str, ...] = (),
+    ) -> None:
+        self.upstream = upstream
+        self.scope_tags = scope_tags
+        self.allow_unscoped = allow_unscoped
+        self.mental_model_ids = frozenset(mental_model_ids)
+
+    async def list_tools(self) -> list[dict]:
+        tools = await self.upstream.list_tools()
+        if self.mental_model_ids:
+            return tools
+        return [tool for tool in tools if tool.get("name") != "get_mental_model"]
+
+    @staticmethod
+    def _error(message: str) -> dict:
+        return {"content": [{"type": "text", "text": message}], "isError": True}
+
+    async def call_tool(self, name: str, arguments: dict) -> dict:
+        if name == "recall":
+            forwarded = dict(arguments)
+            forwarded.pop("tag_groups", None)
+            if self.scope_tags:
+                forwarded["tags"] = list(self.scope_tags)
+                forwarded["tags_match"] = "any_strict"
+            elif self.allow_unscoped:
+                # The single-user exception is route-owned: ignore caller
+                # supplied tags rather than allowing arbitrary scope changes.
+                forwarded.pop("tags", None)
+                forwarded.pop("tags_match", None)
+            else:
+                return self._error("shared methodology recall requires a configured route scope")
+            return await self.upstream.call_tool(name, forwarded)
+
+        if name == "get_mental_model":
+            model_id = arguments.get("mental_model_id")
+            if not isinstance(model_id, str) or model_id not in self.mental_model_ids:
+                return self._error("mental model is not authorized for this route")
+
+        return await self.upstream.call_tool(name, arguments)
+
+
 class StdioSubprocessAdapter:
     """Backend adapter that spawns a stdio MCP server (cocoindex-code,
     serena) ONCE and keeps it alive as this gateway's own long-lived child
@@ -1987,6 +2049,8 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
     kind = settings.get("kind")
     if kind not in {"http", "shadow_http", "stdio"}:
         raise ValueError(f"Backend {instance!r}/{backend!r} kind must be 'http', 'shadow_http', or 'stdio'")
+    if backend == "hindsight" and kind != "http":
+        raise ValueError("Backend 'hindsight' must use an HTTP Hindsight bank endpoint")
 
     if kind in {"http", "shadow_http"}:
         endpoint = settings.get("url")
@@ -1997,6 +2061,23 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
             raise ValueError(f"Backend {instance!r}/{backend!r} url must be an HTTP(S) URL: {endpoint!r}")
         if parsed.username is not None or parsed.password is not None:
             raise ValueError(f"Backend {instance!r}/{backend!r} url must not contain credentials")
+        if backend == "hindsight" and parsed.path.rstrip("/") not in METHODOLOGY_BANK_PATHS:
+            raise ValueError(
+                f"Backend {instance!r}/{backend!r} must point to /mcp/shared-memory/ or /mcp/hindsight/"
+            )
+        allow_insecure_http = settings.get("allow_insecure_http", False)
+        if not isinstance(allow_insecure_http, bool):
+            raise ValueError(f"Backend {instance!r}/{backend!r} allow_insecure_http must be a boolean")
+        if (
+            backend == "hindsight"
+            and parsed.scheme == "http"
+            and not _is_loopback_host(parsed.hostname)
+            and not allow_insecure_http
+        ):
+            raise ValueError(
+                f"Backend {instance!r}/{backend!r} must use HTTPS for non-loopback Hindsight URLs "
+                "or explicitly set allow_insecure_http=true"
+            )
 
         headers = settings.get("headers")
         if headers is not None:
@@ -2019,6 +2100,33 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
             )
 
         spec = {"kind": "http", "url": endpoint}
+        if backend == "hindsight":
+            spec["allow_insecure_http"] = allow_insecure_http
+        if backend == "hindsight":
+            scope_tags = settings.get("scope_tags", [])
+            if isinstance(scope_tags, str):
+                scope_tags = [scope_tags]
+            if not isinstance(scope_tags, list) or any(not isinstance(tag, str) or not tag.strip() for tag in scope_tags):
+                raise ValueError(f"Backend {instance!r}/{backend!r} scope_tags must be a string array")
+            allow_unscoped = settings.get("allow_unscoped", False)
+            if not isinstance(allow_unscoped, bool):
+                raise ValueError(f"Backend {instance!r}/{backend!r} allow_unscoped must be a boolean")
+            mental_model_ids = settings.get("mental_model_ids", [])
+            if isinstance(mental_model_ids, str):
+                mental_model_ids = [mental_model_ids]
+            if not isinstance(mental_model_ids, list) or any(
+                not isinstance(model_id, str) or not model_id.strip() for model_id in mental_model_ids
+            ):
+                raise ValueError(f"Backend {instance!r}/{backend!r} mental_model_ids must be a string array")
+            if not scope_tags and not allow_unscoped:
+                raise ValueError(
+                    f"Backend {instance!r}/{backend!r} requires scope_tags or explicit allow_unscoped=true"
+                )
+            spec.update({
+                "scope_tags": [tag.strip() for tag in scope_tags],
+                "allow_unscoped": allow_unscoped,
+                "mental_model_ids": [model_id.strip() for model_id in mental_model_ids],
+            })
         if headers:
             spec["headers"] = dict(headers)
         if timeout_seconds is not None:
@@ -2232,9 +2340,17 @@ def build_backend_adapters(registry: dict[str, dict[str, dict]]) -> dict[str, di
                 adapters[project][backend_key] = adapter
                 continue
             if spec["kind"] == "http":
-                adapters[project][backend_key] = HttpRelayAdapter(
+                adapter: BackendAdapter = HttpRelayAdapter(
                     spec["url"], spec.get("headers"), spec.get("timeout_seconds", FORWARD_TIMEOUT_S)
                 )
+                if backend_key == "hindsight":
+                    adapter = ScopedHindsightAdapter(
+                        adapter,
+                        scope_tags=tuple(spec.get("scope_tags", [])),
+                        allow_unscoped=spec.get("allow_unscoped", False),
+                        mental_model_ids=tuple(spec.get("mental_model_ids", [])),
+                    )
+                adapters[project][backend_key] = adapter
                 continue
 
             shared_key = spec.get("shared_key")

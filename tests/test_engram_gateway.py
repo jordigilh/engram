@@ -216,6 +216,49 @@ class TestFilterRelevantTools:
 
         assert {t["name"] for t in filtered} == {"recall", "reflect"}
 
+    def test_methodology_backend_is_read_only_and_minimal(self, engram_gateway):
+        tools = [_tool("recall"), _tool("get_mental_model"), _tool("retain"), _tool("delete_bank")]
+
+        filtered = engram_gateway.filter_relevant_tools("hindsight", tools)
+
+        assert {t["name"] for t in filtered} == {"recall", "get_mental_model"}
+
+    def test_methodology_scope_overrides_caller_tags_and_models(self, engram_gateway):
+        upstream = FakeAdapter(tools=[_tool("recall"), _tool("get_mental_model")])
+        adapter = engram_gateway.ScopedHindsightAdapter(
+            upstream,
+            scope_tags=("example",),
+            mental_model_ids=("example-methodology",),
+        )
+
+        recall = asyncio.run(adapter.call_tool("recall", {
+            "query": "workflow",
+            "tags": ["other-project"],
+            "tags_match": "any",
+            "tag_groups": [{"tags": ["other-project"], "match": "any_strict"}],
+        }))
+        allowed = asyncio.run(adapter.call_tool("get_mental_model", {"mental_model_id": "example-methodology"}))
+        denied = asyncio.run(adapter.call_tool("get_mental_model", {"mental_model_id": "other-methodology"}))
+
+        assert recall["isError"] is False
+        assert upstream.call_log[0] == ("recall", {
+            "query": "workflow",
+            "tags": ["example"],
+            "tags_match": "any_strict",
+        })
+        assert allowed["isError"] is False
+        assert denied["isError"] is True
+        assert len(upstream.call_log) == 2
+
+    def test_methodology_scope_requires_tags_unless_explicitly_single_user(self, engram_gateway):
+        upstream = FakeAdapter()
+        adapter = engram_gateway.ScopedHindsightAdapter(upstream)
+
+        denied = asyncio.run(adapter.call_tool("recall", {"query": "workflow", "tags": ["other"]}))
+
+        assert denied["isError"] is True
+        assert upstream.call_log == []
+
     def test_serena_backend_keeps_only_relevant_tools(self, engram_gateway):
         tools = [_tool("find_symbol"), _tool("write_memory"), _tool("open_dashboard")]
 
@@ -395,6 +438,25 @@ class TestAggregateToolsList:
         assert {tool["name"] for tool in tool_defs} == set(graph_tools)
         assert {name: catalog[name] for name in graph_tools} == {
             name: ("code", name) for name in graph_tools
+        }
+        assert errors == {}
+
+    def test_methodology_backend_exposes_only_read_tools_without_admin_surface(self, engram_gateway):
+        hindsight = FakeAdapter(tools=[
+            _tool("recall"),
+            _tool("get_mental_model"),
+            _tool("retain"),
+            _tool("delete_bank"),
+        ])
+
+        tool_defs, catalog, errors = asyncio.run(
+            engram_gateway.aggregate_tools_list({"hindsight": hindsight})
+        )
+
+        assert {tool["name"] for tool in tool_defs} == {"recall", "get_mental_model"}
+        assert catalog == {
+            "recall": ("hindsight", "recall"),
+            "get_mental_model": ("hindsight", "get_mental_model"),
         }
         assert errors == {}
 
@@ -1536,9 +1598,12 @@ class TestLoadInstanceRegistry:
         registry = engram_gateway.load_instance_registry(example)
 
         assert set(registry) == {"my-project"}
-        assert set(registry["my-project"]) == {"docs", "issues", "code", "serena"}
+        assert set(registry["my-project"]) == {"docs", "issues", "hindsight", "code", "serena"}
         assert all(spec["kind"] == "http" for spec in registry["my-project"].values())
         assert registry["my-project"]["code"]["timeout_seconds"] == 180
+        assert registry["my-project"]["hindsight"]["url"].endswith("/mcp/shared-memory/")
+        assert registry["my-project"]["hindsight"]["scope_tags"] == ["my-project"]
+        assert registry["my-project"]["hindsight"]["allow_insecure_http"] is True
 
     def test_native_runtime_example_is_valid_for_the_registry_loader(self, engram_gateway):
         example = pathlib.Path(__file__).parents[1] / "docs" / "native-instances.toml.example"
@@ -1546,9 +1611,11 @@ class TestLoadInstanceRegistry:
         registry = engram_gateway.load_instance_registry(example)
 
         assert set(registry) == {"my-project"}
-        assert set(registry["my-project"]) == {"docs", "issues", "code", "serena"}
+        assert set(registry["my-project"]) == {"docs", "issues", "hindsight", "code", "serena"}
         assert registry["my-project"]["code"]["kind"] == "stdio"
         assert registry["my-project"]["serena"]["args"][-1] == "/path/to/my-project"
+        assert registry["my-project"]["hindsight"]["url"].endswith("/mcp/shared-memory/")
+        assert registry["my-project"]["hindsight"]["mental_model_ids"] == ["my-project-methodology"]
 
     def test_loads_http_host_adapter_instances(self, engram_gateway, tmp_path):
         config = tmp_path / "instances.toml"
@@ -1604,6 +1671,49 @@ url = "http://host.containers.internal:8897/mcp"
         adapters = engram_gateway.build_backend_adapters(registry)
         assert adapters["kubernaut"]["code"].headers == {"Host": "localhost:8891"}
         assert adapters["kubernaut"]["code"].timeout_seconds == 180
+
+    def test_methodology_backend_requires_a_known_read_only_bank_endpoint(self, engram_gateway, tmp_path):
+        valid = tmp_path / "valid.toml"
+        valid.write_text(
+            "[instances.console.backends.hindsight]\n"
+            'kind = "http"\n'
+            'url = "http://localhost:8888/mcp/shared-memory/"\n'
+            'scope_tags = ["console"]\n'
+        )
+
+        registry = engram_gateway.load_instance_registry(valid)
+
+        assert registry["console"]["hindsight"]["url"].endswith("/mcp/shared-memory/")
+
+        invalid = tmp_path / "invalid.toml"
+        invalid.write_text(
+            "[instances.console.backends.hindsight]\n"
+            'kind = "http"\n'
+            'url = "http://localhost:8888/mcp/other-docs/"\n'
+        )
+
+        with pytest.raises(ValueError, match="shared-memory|hindsight"):
+            engram_gateway.load_instance_registry(invalid)
+
+        invalid_kind = tmp_path / "invalid-kind.toml"
+        invalid_kind.write_text(
+            "[instances.console.backends.hindsight]\n"
+            'kind = "stdio"\n'
+            'command = "/bin/false"\n'
+        )
+
+        with pytest.raises(ValueError, match="must use an HTTP"):
+            engram_gateway.load_instance_registry(invalid_kind)
+
+        invalid_transport = tmp_path / "invalid-transport.toml"
+        invalid_transport.write_text(
+            "[instances.console.backends.hindsight]\n"
+            'kind = "http"\n'
+            'url = "http://remote.example:8888/mcp/shared-memory/"\n'
+        )
+
+        with pytest.raises(ValueError, match="HTTPS|allow_insecure_http"):
+            engram_gateway.load_instance_registry(invalid_transport)
 
     def test_loads_shadow_http_backend_with_independent_timeouts(self, engram_gateway, tmp_path):
         config = tmp_path / "instances.toml"

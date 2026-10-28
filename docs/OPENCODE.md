@@ -440,6 +440,17 @@ through `get_mental_model`. Malformed or non-Hindsight tool output passes
 through unchanged for diagnosis. Use a narrower query when the response
 reports omitted results.
 
+### Shared methodology memory
+
+Deployments may add a `hindsight` backend pointing only at the shared-memory
+bank endpoint (`/mcp/shared-memory/`). The gateway exposes only read-only
+`recall` and `get_mental_model` tools for that backend. Multi-user deployments
+must require the deployment's project tag with `tags_match: "any_strict"`; an
+unscoped shared-memory query is not a safe substitute for project
+documentation. A deliberately single-user deployment may allow an unscoped
+methodology query after operator review. The route is optional and should
+remain disabled until that deployment decision is made.
+
 ## Hybrid Examples
 
 These are the intended patterns for the currently onboarded families:

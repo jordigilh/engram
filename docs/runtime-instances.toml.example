@@ -20,6 +20,16 @@ url = "http://host.containers.internal:8888/mcp/my-project-docs/"
 kind = "http"
 url = "http://host.containers.internal:8888/mcp/my-project-issues/"
 
+# Optional read-only shared methodology memory. The gateway only exposes
+# recall/get_mental_model for this backend; callers must use the documented
+# project-tag filter and must not use it as a writable project bank.
+[instances."my-project".backends.hindsight]
+kind = "http"
+url = "http://host.containers.internal:8888/mcp/shared-memory/"
+scope_tags = ["my-project"]
+mental_model_ids = ["my-project-methodology"]
+allow_insecure_http = true # only for a trusted local container bridge; prefer HTTPS otherwise
+
 [instances."my-project".backends.code]
 kind = "http"
 url = "http://host.containers.internal:8891/mcp"

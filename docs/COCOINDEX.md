@@ -147,6 +147,17 @@ The MCP tool `cocoindex_search` accepts a `mode` parameter:
 | `dense` | Semantic similarity only. Best for conceptual, natural-language queries. |
 | `bm25` | Keyword matching only. Best for exact identifiers and function names. |
 
+### Bounded source follow-up
+
+Semantic results are intentionally compact. Each configured code server also
+exposes `<project>_code_read` for a bounded follow-up read using the returned
+relative path (or repository-prefixed path), an optional line range, and a
+character limit. It accepts both configured source tags and their public
+repository aliases, but rejects absolute paths, traversal, symlink escapes,
+excluded files, and unconfigured roots. The response includes repository,
+source-tag, branch, line, size, and truncation metadata; source content is not
+written to gateway audit logs.
+
 ### CLI testing
 
 ```bash
@@ -198,6 +209,11 @@ Omitting a body/block entirely means "don't care what's inside":
 # Any Python function/method, regardless of body:
 ~/.engram/venv/bin/engram-search-configured --project <project> --config ~/.engram/projects.toml --pattern 'def \NAME(\(A*\)):' --language python
 ```
+
+For a full exact function body, include the `\\BODY` capture in the pattern.
+Structural and call-graph queries accept configured source tags and their
+public repository aliases; qualified graph node output keeps the configured
+source tag for compatibility.
 
 ### What this is NOT: complementary to Serena, not a replacement
 

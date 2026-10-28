@@ -741,6 +741,17 @@ class TestQueryBlastRadius:
         result = callgraph.query_blast_radius(graph, "lonely")
         assert result["callers_by_depth"] == []
 
+    def test_scope_error_is_reported_before_empty_graph_lookup(self):
+        graph = nx.DiGraph()
+        graph.graph["scope_error"] = "unknown code repository scope 'missing'; valid scopes: repo"
+
+        result = callgraph.query_blast_radius(graph, "callee")
+
+        assert result == {
+            "error": "unknown code repository scope 'missing'; valid scopes: repo",
+            "candidates": [],
+        }
+
 
 class TestQueryShortestPath:
     def _graph(self):
@@ -767,6 +778,14 @@ class TestQueryShortestPath:
         assert result["path"] is None
         assert "error" not in result
 
+    def test_scope_error_is_reported_before_path_lookup(self):
+        graph = nx.DiGraph()
+        graph.graph["scope_error"] = "unknown code repository scope 'missing'"
+
+        result = callgraph.query_shortest_path(graph, "start", "end")
+
+        assert result["error"] == "unknown code repository scope 'missing'"
+
 
 class TestQueryGetCluster:
     def test_unknown_function_returns_error(self):
@@ -781,6 +800,14 @@ class TestQueryGetCluster:
         result = callgraph.query_get_cluster(graph, "x")
         assert result["function"] == "a.py::x"
         assert set(result["members"]) == {"a.py::x", "a.py::y"}
+
+    def test_scope_error_is_reported_before_cluster_lookup(self):
+        graph = nx.DiGraph()
+        graph.graph["scope_error"] = "unknown code repository scope 'missing'"
+
+        result = callgraph.query_get_cluster(graph, "only")
+
+        assert result["error"] == "unknown code repository scope 'missing'"
 
 
 class TestFormatBlastRadiusResult:

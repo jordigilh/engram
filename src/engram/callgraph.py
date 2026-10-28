@@ -951,6 +951,9 @@ def query_blast_radius(graph: nx.DiGraph, function: str, depth: int = 2) -> dict
     """Who (transitively) calls `function`, up to `depth` hops -- "what
     breaks if I change this." See module docstring for the accuracy ceiling
     (name-based resolution, no type info)."""
+    if graph.graph.get("scope_error"):
+        return {"error": graph.graph["scope_error"], "candidates": []}
+
     resolved, candidates = resolve_node(graph, function)
     if resolved is None:
         return {"error": f"'{function}' not found or ambiguous", "candidates": candidates}
@@ -981,6 +984,9 @@ def query_blast_radius(graph: nx.DiGraph, function: str, depth: int = 2) -> dict
 
 def query_shortest_path(graph: nx.DiGraph, source: str, target: str) -> dict[str, Any]:
     """Does `source` ever reach `target` through a chain of calls, and how."""
+    if graph.graph.get("scope_error"):
+        return {"error": graph.graph["scope_error"], "candidates": []}
+
     resolved_source, source_candidates = resolve_node(graph, source)
     resolved_target, target_candidates = resolve_node(graph, target)
     if resolved_source is None:
@@ -1002,6 +1008,9 @@ def query_get_cluster(graph: nx.DiGraph, function: str) -> dict[str, Any]:
     a small, centralized codebase may legitimately produce one dominant
     cluster or many singletons -- that reflects the codebase, not a broken
     clustering step (see docs/CALL_GRAPH_CLUSTERING.md)."""
+    if graph.graph.get("scope_error"):
+        return {"error": graph.graph["scope_error"], "candidates": []}
+
     resolved, candidates = resolve_node(graph, function)
     if resolved is None:
         return {"error": f"'{function}' not found or ambiguous", "candidates": candidates}

@@ -244,6 +244,8 @@ class ProjectSource:
     language: str = "auto"
     document_format: str = "markdown"
     branch: str | None = None
+    aliases: tuple[str, ...] = ()
+    index_aliases: tuple[str, ...] = ()
 
 
 def effective_source_tag(source: ProjectSource) -> str:
@@ -265,6 +267,49 @@ def effective_source_tag(source: ProjectSource) -> str:
         return f"{source.tag}@release-{branch}"
     safe_branch = re.sub(r"[^A-Za-z0-9._-]+", "-", branch).strip("-")
     return f"{source.tag}@branch-{safe_branch or 'unknown'}"
+
+
+def source_scope_aliases(source: ProjectSource) -> tuple[str, ...]:
+    """Return safe public and legacy scope names for a configured source.
+
+    ``tag`` is the persisted/indexed identity, while callers often use the
+    repository checkout name (for example ``example`` for the historical
+    ``example-repo`` tag).  Keep both identities accepted without changing
+    persisted paths or qualified call-graph node names.
+    """
+    effective_tag = effective_source_tag(source)
+    aliases = {
+        source.tag,
+        effective_tag,
+        effective_tag.split("@", 1)[0],
+        *source.aliases,
+    }
+
+    root_name = source.root.name
+    if root_name:
+        aliases.add(root_name)
+
+    if source.tag.endswith("-repo"):
+        aliases.add(source.tag.removesuffix("-repo"))
+
+    branch = (source.branch or "").strip()
+    if branch and branch not in {"main", "default"}:
+        normalized_branch = branch.removeprefix("release/").removeprefix("release-")
+        for suffix in (f"-release-{normalized_branch}", f"-{normalized_branch}"):
+            if root_name.endswith(suffix):
+                aliases.add(root_name[: -len(suffix)])
+
+    return tuple(sorted(alias for alias in aliases if alias))
+
+
+def source_index_tags(source: ProjectSource) -> tuple[str, ...]:
+    """Return persisted filepath tags accepted by semantic search.
+
+    Public scope aliases are intentionally excluded.  A deployment must opt
+    in to legacy index prefixes explicitly so an alias matching another
+    repository's persisted tag cannot widen a SQL filepath filter.
+    """
+    return tuple(sorted({effective_source_tag(source), *source.index_aliases}))
 
 
 @dataclass(frozen=True)
@@ -348,6 +393,20 @@ def _patterns(raw: Any, field: str, project: str, source: str) -> tuple[str, ...
     if not isinstance(raw, list) or not all(isinstance(item, str) and item.strip() for item in raw):
         raise ValueError(f"project {project!r} source {source!r} {field} must be a string array")
     return tuple(item.strip() for item in raw)
+
+
+def _source_aliases(raw: Any, project: str, source: str) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list) or not all(isinstance(item, str) and item.strip() for item in raw):
+        raise ValueError(f"project {project!r} source {source!r} aliases must be a string array")
+    aliases = tuple(dict.fromkeys(item.strip() for item in raw))
+    invalid = [alias for alias in aliases if not _SOURCE_TAG_RE.fullmatch(alias)]
+    if invalid:
+        raise ValueError(f"project {project!r} source {source!r} aliases contain unsafe values: {invalid!r}")
+    return aliases
 
 
 def _boolean(settings: ProjectSettings, key: str, default: bool) -> bool:
@@ -588,6 +647,8 @@ def _load_sources(settings: ProjectSettings) -> tuple[ProjectSource, ...]:
             language=language.strip().lower(),
             document_format="pdf" if document_format.strip().lower() == "pdf" else "markdown",
             branch=branch.strip() if isinstance(branch, str) else None,
+            aliases=_source_aliases(raw.get("aliases"), settings.project, tag),
+            index_aliases=_source_aliases(raw.get("index_aliases"), settings.project, tag),
         )
         if not source.docs_include and not source.code_include:
             raise ValueError(f"project {settings.project!r} source {tag!r} must configure docs or code patterns")

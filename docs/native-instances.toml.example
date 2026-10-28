@@ -11,6 +11,15 @@ url = "http://127.0.0.1:8888/mcp/my-project-docs/"
 kind = "http"
 url = "http://127.0.0.1:8888/mcp/my-project-issues/"
 
+# Optional read-only shared methodology memory. The gateway only exposes
+# recall/get_mental_model for this backend; callers must use the documented
+# project-tag filter and must not use it as a writable project bank.
+[instances."my-project".backends.hindsight]
+kind = "http"
+url = "http://127.0.0.1:8888/mcp/shared-memory/"
+scope_tags = ["my-project"]
+mental_model_ids = ["my-project-methodology"]
+
 [instances."my-project".backends.code]
 kind = "stdio"
 command = "/path/to/engram-search-my-project"

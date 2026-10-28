@@ -9,7 +9,13 @@ from __future__ import annotations
 
 import argparse
 
-from engram.project_config import ProjectAdapterConfig, effective_source_tag, load_adapter_config
+from engram.project_config import (
+    ProjectAdapterConfig,
+    effective_source_tag,
+    load_adapter_config,
+    source_index_tags,
+    source_scope_aliases,
+)
 from engram.search import engram as engine
 
 
@@ -27,6 +33,14 @@ def configure(config: ProjectAdapterConfig) -> None:
         )
         for source in config.code_sources
     ]
+    scope_aliases = {
+        effective_source_tag(source): source_scope_aliases(source)
+        for source in config.code_sources
+    }
+    scope_index_tags = {
+        effective_source_tag(source): source_index_tags(source)
+        for source in config.code_sources
+    }
     # Structural pattern search can infer a grammar per file for ``auto``
     # sources.  Call-graph resolution, however, intentionally builds one
     # grammar-specific graph at a time; do not feed YAML/shell/mixed roots
@@ -46,6 +60,8 @@ def configure(config: ProjectAdapterConfig) -> None:
         call_graph_language=call_graph_language,
         call_graph_roots=call_graph_roots,
         default_branch=config.default_branch,
+        scope_aliases=scope_aliases,
+        scope_index_tags=scope_index_tags,
     )
 
 

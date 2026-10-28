@@ -1,12 +1,58 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
+import sys
+import threading
+import time
+import types
 
 import pytest
 
 from engram.search import engram as search
 from engram.search import configured
 from engram.project_config import ProjectSource
+
+
+def test_query_embedding_model_is_initialized_and_used_serially(monkeypatch):
+    model_creations = []
+    active_encodes = 0
+    max_active_encodes = 0
+    state_lock = threading.Lock()
+
+    class FakeVector:
+        def tolist(self):
+            return [0.1, 0.2]
+
+    class FakeModel:
+        def __init__(self, model_name, *, device):
+            model_creations.append((model_name, device))
+            time.sleep(0.01)
+
+        def encode(self, _query, *, normalize_embeddings):
+            nonlocal active_encodes, max_active_encodes
+            assert normalize_embeddings is True
+            with state_lock:
+                active_encodes += 1
+                max_active_encodes = max(max_active_encodes, active_encodes)
+            time.sleep(0.01)
+            with state_lock:
+                active_encodes -= 1
+            return FakeVector()
+
+    sentence_transformers = types.ModuleType("sentence_transformers")
+    sentence_transformers.SentenceTransformer = FakeModel
+    monkeypatch.setitem(sys.modules, "sentence_transformers", sentence_transformers)
+    monkeypatch.setattr(search, "_model", None)
+    monkeypatch.setattr(search, "EMBEDDING_MODEL", "test-model")
+    monkeypatch.setattr(search, "EMBEDDING_DEVICE", "cpu")
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        vectors = list(executor.map(search._embed_query, ["query"] * 8))
+
+    assert model_creations == [("test-model", "cpu")]
+    assert max_active_encodes == 1
+    assert vectors == [[0.1, 0.2]] * 8
 
 
 def test_branch_where_uses_release_source_tag():

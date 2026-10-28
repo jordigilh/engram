@@ -138,6 +138,7 @@ def configure_project(
 
 
 def _get_model():
+    """Return the process-local query model, initializing it once safely."""
     global _model
     if _model is None:
         with _model_lock:
@@ -150,6 +151,7 @@ def _get_model():
 
 
 def _embed_query(query: str) -> list[float]:
+    """Encode one search query while protecting native backend inference."""
     model = _get_model()
     # SentenceTransformer inference is invoked from AnyIO worker threads by
     # the synchronous MCP tool.  Serialize it because native accelerator

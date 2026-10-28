@@ -15,6 +15,7 @@ from engram.project_config import ProjectSource
 
 
 def test_query_embedding_model_is_initialized_and_used_serially(monkeypatch):
+    """Concurrent callers share one model and never overlap inference."""
     model_creations = []
     active_encodes = 0
     max_active_encodes = 0

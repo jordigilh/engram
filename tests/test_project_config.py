@@ -8,6 +8,8 @@ from engram.project_config import (
     load_project_settings,
     project_config_path,
     sql_identifier,
+    source_index_tags,
+    source_scope_aliases,
 )
 
 
@@ -110,6 +112,108 @@ code_exclude = ["**/vendor/**"]
     assert settings.docs_sources[0].root == tmp_path / "checkout"
     assert settings.code_sources[0].code_include == ("**/*.go",)
     assert settings.code_sources[0].language == "go"
+
+
+def test_source_scope_aliases_keep_public_and_legacy_names(tmp_path):
+    config_path = tmp_path / "projects.toml"
+    config_path.write_text(
+        """
+[projects.demo]
+code_table = "demo_code_embeddings"
+
+[[projects.demo.sources]]
+tag = "example-repo"
+aliases = ["core"]
+root = "example"
+code_include = ["**/*.go"]
+""".strip()
+    )
+
+    source = load_adapter_config("demo", config_path).code_sources[0]
+    aliases = set(source_scope_aliases(source))
+
+    assert {"example-repo", "example", "core"} <= aliases
+
+
+def test_source_scope_aliases_normalize_release_checkout_name(tmp_path):
+    config_path = tmp_path / "projects.toml"
+    config_path.write_text(
+        """
+[projects.release]
+code_table = "release_code_embeddings"
+
+[[projects.release.sources]]
+tag = "example"
+root = "example-release-v1.5"
+branch = "release/v1.5"
+code_include = ["**/*.go"]
+""".strip()
+    )
+
+    source = load_adapter_config("release", config_path).code_sources[0]
+
+    assert "example" in source_scope_aliases(source)
+
+
+def test_source_aliases_reject_unsafe_values(tmp_path):
+    config_path = tmp_path / "projects.toml"
+    config_path.write_text(
+        """
+[projects.demo]
+code_table = "demo_code_embeddings"
+
+[[projects.demo.sources]]
+tag = "demo"
+aliases = ["../outside"]
+root = "checkout"
+code_include = ["**/*.go"]
+""".strip()
+    )
+
+    with pytest.raises(ValueError, match="aliases contain unsafe"):
+        load_adapter_config("demo", config_path)
+
+
+def test_source_aliases_accept_single_string_form(tmp_path):
+    config_path = tmp_path / "projects.toml"
+    config_path.write_text(
+        """
+[projects.demo]
+code_table = "demo_code_embeddings"
+
+[[projects.demo.sources]]
+tag = "demo-repo"
+aliases = "demo"
+root = "demo"
+code_include = ["**/*.go"]
+""".strip()
+    )
+
+    source = load_adapter_config("demo", config_path).code_sources[0]
+
+    assert "demo" in source.aliases
+
+
+def test_source_index_aliases_are_explicit_and_separate_from_public_aliases(tmp_path):
+    config_path = tmp_path / "projects.toml"
+    config_path.write_text(
+        """
+[projects.demo]
+code_table = "demo_code_embeddings"
+
+[[projects.demo.sources]]
+tag = "example-repo"
+aliases = ["example"]
+index_aliases = ["legacy-example"]
+root = "example"
+code_include = ["**/*.go"]
+""".strip()
+    )
+
+    source = load_adapter_config("demo", config_path).code_sources[0]
+
+    assert source_scope_aliases(source) != source_index_tags(source)
+    assert source_index_tags(source) == ("example-repo", "legacy-example")
 
 
 def test_invalid_code_table_is_rejected():

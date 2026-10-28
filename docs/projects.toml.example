@@ -46,6 +46,8 @@ cocoindex_db = "~/.engram/example-cocoindex.db"
 # as written; no Python module or pyproject entry is added for this project.
 [[projects.example.sources]]
 tag = "example"
+aliases = ["example"] # optional public/legacy scope names accepted by code tools
+# index_aliases = ["example-old"] # optional persisted filepath prefixes only
 root = "~/src/example"
 language = "go"
 docs_include = ["**/*.md"]

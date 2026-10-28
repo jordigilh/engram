@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
 from engram.search import engram as search
+from engram.search import configured
+from engram.project_config import ProjectSource
 
 
 def test_branch_where_uses_release_source_tag():
@@ -23,6 +29,188 @@ def test_pattern_root_selection_is_repository_and_branch_aware(monkeypatch, tmp_
         "repo@release-v1.5"
     ]
     assert [root[0] for root in search._select_pattern_roots("repo", "main")] == ["repo"]
+
+
+def test_pattern_root_selection_accepts_public_alias_for_legacy_source_tag(monkeypatch, tmp_path):
+    roots = [
+        ("example-repo", tmp_path / "example", ["**/*.go"], [], "go", None),
+        ("example@release-v1.5", tmp_path / "example-release-v1.5", ["**/*.go"], [], "go", "v1.5"),
+    ]
+    monkeypatch.setattr(search, "_PATTERN_SEARCH_ROOTS", roots)
+    monkeypatch.setattr(search, "_SCOPE_ALIASES", {
+        "example-repo": frozenset({"example-repo", "example"}),
+        "example@release-v1.5": frozenset({"example@release-v1.5", "example"}),
+    })
+    monkeypatch.setattr(search, "_DEFAULT_BRANCH", "main")
+
+    assert [root[0] for root in search._select_pattern_roots("example", "main")] == [
+        "example-repo"
+    ]
+    assert [root[0] for root in search._select_pattern_roots("example", "v1.5")] == [
+        "example@release-v1.5"
+    ]
+
+
+def test_unknown_scope_error_lists_valid_aliases(monkeypatch, tmp_path):
+    roots = [("example-repo", tmp_path / "example", ["**/*.go"], [], "go", None)]
+    monkeypatch.setattr(search, "_PATTERN_SEARCH_ROOTS", roots)
+    monkeypatch.setattr(search, "_DEFAULT_BRANCH", "main")
+
+    error = search._scope_error("missing", "main", roots)
+
+    assert "missing" in str(error)
+    assert "valid scopes: example, example-repo" in str(error)
+
+
+def test_unknown_scope_error_identifies_requested_branch(monkeypatch, tmp_path):
+    roots = [("example", tmp_path / "example", ["**/*.go"], [], "go", None)]
+    monkeypatch.setattr(search, "_PATTERN_SEARCH_ROOTS", roots)
+    monkeypatch.setattr(search, "_DEFAULT_BRANCH", "main")
+
+    error = search._scope_error("example", "v9.9", roots)
+
+    assert "branch 'v9.9'" in str(error)
+
+
+def test_semantic_scope_expands_public_alias_and_legacy_index_prefix(monkeypatch, tmp_path):
+    roots = [("example-repo", tmp_path / "example", ["**/*.go"], [], "go", None)]
+    monkeypatch.setattr(search, "_PATTERN_SEARCH_ROOTS", roots)
+    monkeypatch.setattr(search, "_DEFAULT_BRANCH", "main")
+    monkeypatch.setattr(
+        search,
+        "_SCOPE_ALIASES",
+        {"example-repo": frozenset({"example-repo", "example"})},
+    )
+    monkeypatch.setattr(
+        search,
+        "_SCOPE_INDEX_TAGS",
+        {"example-repo": frozenset({"example-repo", "example"})},
+    )
+
+    where, params = search._branch_where("example", "main")
+
+    assert "filepath LIKE %s" in where
+    assert "example/%" in params
+    assert "example-repo/%" in params
+    assert "%@%" in params
+
+
+def test_branch_where_handles_release_and_unscoped_branch_filters(monkeypatch, tmp_path):
+    roots = [
+        ("example@release-v1.5", tmp_path / "release", ["**/*.go"], [], "go", "v1.5"),
+    ]
+    monkeypatch.setattr(search, "_PATTERN_SEARCH_ROOTS", roots)
+    monkeypatch.setattr(search, "_DEFAULT_BRANCH", None)
+    monkeypatch.setattr(search, "_SCOPE_ALIASES", {
+        "example@release-v1.5": frozenset({"example", "example@release-v1.5"}),
+    })
+    monkeypatch.setattr(search, "_SCOPE_INDEX_TAGS", {
+        "example@release-v1.5": frozenset({"example@release-v1.5"}),
+    })
+
+    release_where, release_params = search._branch_where("example", "v1.5")
+    unscoped_where, unscoped_params = search._branch_where(None, "v1.5")
+
+    assert "filepath LIKE" in release_where
+    assert "example@release-v1.5/%" in release_params
+    assert unscoped_where.endswith("filepath LIKE %s")
+    assert unscoped_params == ["%@release-v1.5/%"]
+
+
+def test_semantic_scope_does_not_expand_into_another_source_tag(monkeypatch, tmp_path):
+    roots = [
+        ("example-repo", tmp_path / "first", ["**/*.go"], [], "go", None),
+        ("example", tmp_path / "second", ["**/*.go"], [], "go", None),
+    ]
+    monkeypatch.setattr(search, "_PATTERN_SEARCH_ROOTS", roots)
+    monkeypatch.setattr(search, "_DEFAULT_BRANCH", "main")
+    monkeypatch.setattr(search, "_SCOPE_ALIASES", {
+        "example-repo": frozenset({"example-repo", "example"}),
+        "example": frozenset({"example"}),
+    })
+    monkeypatch.setattr(search, "_SCOPE_INDEX_TAGS", {
+        "example-repo": frozenset({"example-repo"}),
+        "example": frozenset({"example"}),
+    })
+
+    _where, params = search._branch_where("example-repo", "main")
+
+    assert "example-repo/%" in params
+    assert "example/%" not in params
+
+
+def test_semantic_scope_rejects_ambiguous_branch_qualified_alias(monkeypatch, tmp_path):
+    roots = [
+        ("alpha@release-v1.5", tmp_path / "alpha", ["**/*.go"], [], "go", "v1.5"),
+        ("example@release-v1.5", tmp_path / "example", ["**/*.go"], [], "go", "v1.5"),
+    ]
+    monkeypatch.setattr(search, "_PATTERN_SEARCH_ROOTS", roots)
+    monkeypatch.setattr(search, "_DEFAULT_BRANCH", "main")
+    monkeypatch.setattr(search, "_SCOPE_ALIASES", {
+        "alpha@release-v1.5": frozenset({"alpha@release-v1.5", "example@release-v1.5"}),
+        "example@release-v1.5": frozenset({"example@release-v1.5"}),
+    })
+    monkeypatch.setattr(search, "_SCOPE_INDEX_TAGS", {
+        "alpha@release-v1.5": frozenset({"alpha@release-v1.5"}),
+        "example@release-v1.5": frozenset({"example@release-v1.5"}),
+    })
+
+    with pytest.raises(ValueError, match="matching sources"):
+        search._branch_where("example@release-v1.5", "v1.5")
+
+
+def test_format_results_reports_scope_and_truncation():
+    result = search._format_results(
+        "HandleApprove",
+        [{"filepath": "example-repo/pkg/tools.go", "score": 1.0, "code": "x" * 600}],
+        repo="example",
+        branch="main",
+    )
+
+    assert "scope: repo=example branch=main" in result
+    assert "truncated=true" in result
+
+
+def test_search_and_pattern_paths_fail_closed_for_unknown_scope(monkeypatch, tmp_path):
+    roots = [("repo", tmp_path / "repo", ["**/*.py"], [], "python", None)]
+    monkeypatch.setattr(search, "_PATTERN_SEARCH_ROOTS", roots)
+    monkeypatch.setattr(search, "_DEFAULT_BRANCH", "main")
+
+    with pytest.raises(ValueError, match="unknown code repository scope"):
+        search.search_code("anything", repo="missing")
+    with pytest.raises(ValueError, match="unknown code repository scope"):
+        search.pattern_search_code("def \\NAME", "python", repo="missing")
+
+
+def test_configure_passes_source_scope_aliases_to_the_search_engine(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_configure_project(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(configured.engine, "configure_project", fake_configure_project)
+    source = ProjectSource(
+        tag="example-repo",
+        root=tmp_path / "example",
+        docs_include=(),
+        docs_exclude=(),
+        code_include=("**/*.go",),
+        code_exclude=(),
+        language="go",
+    )
+    config = SimpleNamespace(
+        project="example",
+        code_table="code_embeddings",
+        pg_dsn="postgresql://localhost/db",
+        embedding_model="test-model",
+        code_sources=(source,),
+        default_branch="main",
+    )
+
+    configured.configure(config)
+
+    assert "example" in captured["scope_aliases"]["example-repo"]
+    assert captured["scope_index_tags"]["example-repo"] == ("example-repo",)
 
 
 def test_call_graph_merges_explicitly_configured_languages(monkeypatch, tmp_path):

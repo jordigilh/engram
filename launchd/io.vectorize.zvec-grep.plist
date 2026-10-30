@@ -27,8 +27,11 @@
         <key>ZVEC_GREP_PROXY_IMAGE</key>
         <string>quay.io/jordigilh/zg-loopback-proxy:latest</string>
         <!-- Keep the container's filesystem authority narrow. Add each
-             deployment-specific parent that contains authorized checkouts;
-             never fall back to mounting HOME or /private/var/folders. -->
+             deployment-specific parent that contains authorized checkouts.
+             The wrapper separately detects only the current user's exact
+             host-temp/opencode subtree for temporary worktrees; it never
+             mounts HOME or a temp parent. Set ZVEC_GREP_OPENCODE_TEMP_ROOT
+             only for a non-standard subtree. -->
         <key>ZVEC_GREP_WORKSPACE_ROOTS</key>
         <string>__HOME__/go/src/github.com:__HOME__/.local/share/opencode/worktree</string>
         <!-- latest is the update channel. The wrapper pulls it before startup,

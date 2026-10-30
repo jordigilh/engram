@@ -245,6 +245,25 @@ The canonical checkout is left unchanged. The container mounts the authorized
 host roots and writes each sibling's `.zvec-grep` index in place; source and
 embedding execution stay inside the container.
 
+On macOS, the container wrapper detects the per-user temp directory with
+`getconf DARWIN_USER_TEMP_DIR` and bind-mounts only its exact `opencode` child
+(for example, `/private/var/folders/.../T/opencode`) at the same absolute path.
+This is an additional narrow mount for OpenCode/OpenChamber temporary
+worktrees; it does not replace the required explicit
+`ZVEC_GREP_WORKSPACE_ROOTS` allowlist and never mounts the temp parent or the
+user's home directory. Other hosts must set
+`ZVEC_GREP_OPENCODE_TEMP_ROOT` to the absolute `opencode` directory. The
+override must point to that exact directory and is still separate from the
+explicit workspace-root allowlist.
+
+The repository template intentionally contains no machine-specific temp path.
+For a host with a non-standard OpenCode location, add
+`ZVEC_GREP_OPENCODE_TEMP_ROOT` to that host's rendered service environment;
+do not add the temp parent or a home-directory mount to the shared template.
+This host's macOS LaunchAgent can leave the override unset and use the
+`getconf` discovery above, or set the exact rendered
+`/private/var/folders/.../T/opencode` path as a deployment-local override.
+
 The default management endpoint is `http://127.0.0.1:7999/mcp`; set
 `worktreeIndex.mcpUrl` or `ZVEC_GREP_MCP_URL` when the container uses another
 loopback address. The zvec supervisor must run the `full` MCP toolset because

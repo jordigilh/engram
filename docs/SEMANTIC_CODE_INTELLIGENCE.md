@@ -430,8 +430,11 @@ loopback inside the container and a namespace-local bridge exposes only host
 `libzvec_c_api.so` and Jieba dictionaries, so the host's macOS library path is
 not used by this backend. The container wrapper requires an explicit
 `ZVEC_GREP_WORKSPACE_ROOTS` allowlist and bind-mounts only those configured
-parents; it never falls back to mounting the whole home directory or
-`/private/var/folders`.
+parents, plus the exact macOS per-user `.../T/opencode` subtree used by
+OpenCode temporary worktrees. macOS uses `getconf DARWIN_USER_TEMP_DIR`; other
+hosts must use the explicit `ZVEC_GREP_OPENCODE_TEMP_ROOT` override. It never
+falls back to mounting the whole home directory or a temp parent; the override
+is restricted to that same exact `opencode` directory.
 The comparison log is `~/.engram/logs/zvec-cocoindex-shadow.jsonl`. It records
 the canonical root, branch, commit, dirty state, per-backend latency, and
 redacted query/response metadata; source/query content is not persisted. A

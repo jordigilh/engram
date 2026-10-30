@@ -15,6 +15,7 @@ ZG_NAME="${ZVEC_GREP_CONTAINER_NAME:-engram-zvec-grep}"
 PROXY_NAME="${ZVEC_GREP_PROXY_NAME:-engram-zvec-grep-proxy}"
 STATE_DIR="${ZVEC_GREP_STATE_DIR:-${HOME}/.engram/zvec-grep}"
 WORKSPACE_ROOTS="${ZVEC_GREP_WORKSPACE_ROOTS:-}"
+OPENCODE_TEMP_ROOT="${ZVEC_GREP_OPENCODE_TEMP_ROOT:-}"
 
 if [[ ! -x "$RUNTIME" ]]; then
     echo "zvec-grep container runtime is not executable: $RUNTIME" >&2
@@ -31,14 +32,18 @@ fi
 
 WORKSPACE_MOUNT_ARGS=()
 SEEN_WORKSPACE_ROOTS=()
-IFS=':' read -r -a CONFIGURED_WORKSPACE_ROOTS <<< "$WORKSPACE_ROOTS"
-for configured_root in "${CONFIGURED_WORKSPACE_ROOTS[@]}"; do
+
+add_workspace_mount() {
+    local configured_root="$1"
+    local description="$2"
     if [[ -z "$configured_root" || ! -d "$configured_root" ]]; then
-        echo "configured zvec workspace mount is not a directory: $configured_root" >&2
+        echo "${description} is not a directory: $configured_root" >&2
         exit 1
     fi
+
+    local workspace_root
     workspace_root="$(cd "$configured_root" && pwd -P)"
-    duplicate=false
+    local duplicate=false
     for seen_root in "${SEEN_WORKSPACE_ROOTS[@]}"; do
         if [[ "$seen_root" == "$workspace_root" ]]; then
             duplicate=true
@@ -46,11 +51,53 @@ for configured_root in "${CONFIGURED_WORKSPACE_ROOTS[@]}"; do
         fi
     done
     if [[ "$duplicate" == true ]]; then
-        continue
+        return 0
     fi
     SEEN_WORKSPACE_ROOTS+=("$workspace_root")
     WORKSPACE_MOUNT_ARGS+=(--volume "$workspace_root:$workspace_root:rw")
+}
+
+IFS=':' read -r -a CONFIGURED_WORKSPACE_ROOTS <<< "$WORKSPACE_ROOTS"
+for configured_root in "${CONFIGURED_WORKSPACE_ROOTS[@]}"; do
+    add_workspace_mount "$configured_root" "configured zvec workspace mount"
 done
+
+# OpenCode creates temporary worktrees below macOS's per-user temp directory,
+# which is not covered by the normal checkout roots. launchd may not export
+# TMPDIR, so use Apple's per-user query rather than a shared temp fallback.
+# Mount only the exact application subtree; never broaden this to the temp
+# parent or HOME. Other hosts must use the explicit override below.
+if [[ -z "$OPENCODE_TEMP_ROOT" &&
+    "$(uname -s 2>/dev/null || true)" == "Darwin" ]]; then
+    darwin_user_temp_dir="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)"
+    if [[ -n "$darwin_user_temp_dir" && "$darwin_user_temp_dir" != "/" &&
+        -d "$darwin_user_temp_dir" ]]; then
+        OPENCODE_TEMP_ROOT="${darwin_user_temp_dir%/}/opencode"
+    fi
+fi
+
+if [[ -n "$OPENCODE_TEMP_ROOT" ]]; then
+    if [[ "$OPENCODE_TEMP_ROOT" != /* ]]; then
+        echo "ZVEC_GREP_OPENCODE_TEMP_ROOT must be an absolute path: $OPENCODE_TEMP_ROOT" >&2
+        exit 1
+    fi
+    if [[ ! -d "$OPENCODE_TEMP_ROOT" ]]; then
+        if [[ -n "${ZVEC_GREP_OPENCODE_TEMP_ROOT:-}" ]]; then
+            echo "configured OpenCode temp mount is not a directory: $OPENCODE_TEMP_ROOT" >&2
+            exit 1
+        fi
+        # The LaunchAgent can start before OpenCode creates its first
+        # worktree. Creating only this known child keeps the future mount
+        # visible without authorizing the broader temp directory.
+        mkdir -p "$OPENCODE_TEMP_ROOT"
+    fi
+    canonical_opencode_temp_root="$(cd "$OPENCODE_TEMP_ROOT" && pwd -P)"
+    if [[ "$(basename "$canonical_opencode_temp_root")" != "opencode" ]]; then
+        echo "OpenCode temp mount must be the exact opencode directory: $OPENCODE_TEMP_ROOT" >&2
+        exit 1
+    fi
+    add_workspace_mount "$canonical_opencode_temp_root" "OpenCode temp workspace mount"
+fi
 
 cleanup() {
     "$RUNTIME" rm --force "$PROXY_NAME" "$ZG_NAME" >/dev/null 2>&1 || true

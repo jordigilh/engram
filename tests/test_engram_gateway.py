@@ -177,7 +177,7 @@ class TestFilterRelevantTools:
     2026-08-22 "MCP shows Disabled" entry): hindsight-shaped and serena
     backends get trimmed to their actually-used subset before ever reaching
     `build_catalog`, so a repo wired to multiple heavy backends can't blow
-    past Cursor's active-tool ceiling and get stuck `Disabled`."""
+    past an MCP client's active-tool ceiling and get stuck `Disabled`."""
 
     def test_hindsight_backend_keeps_only_relevant_tools(self, engram_gateway):
         tools = [_tool("recall"), _tool("retain"), _tool("delete_bank"), _tool("clear_memories")]
@@ -187,11 +187,10 @@ class TestFilterRelevantTools:
         assert {t["name"] for t in filtered} == {"recall", "retain"}
 
     def test_hindsight_backend_removes_llm_synthesis_tools(self, engram_gateway):
-        """The gateway must not delegate model content generation to Hindsight.
+        """The gateway must not delegate synthesis to Hindsight.
 
         Agents provide finished Markdown through the gateway-owned manual
-        writer instead; general reflection and model inventory/reads remain
-        available.
+        writer instead; model inventory/reads remain available.
         """
         tools = [
             _tool("reflect"),
@@ -204,7 +203,6 @@ class TestFilterRelevantTools:
         filtered = engram_gateway.filter_relevant_tools("docs", tools)
 
         assert {t["name"] for t in filtered} == {
-            "reflect",
             "list_mental_models",
             "get_mental_model",
         }
@@ -214,7 +212,7 @@ class TestFilterRelevantTools:
 
         filtered = engram_gateway.filter_relevant_tools("issues", tools)
 
-        assert {t["name"] for t in filtered} == {"recall", "reflect"}
+        assert {t["name"] for t in filtered} == {"recall"}
 
     def test_methodology_backend_is_read_only_and_minimal(self, engram_gateway):
         tools = [_tool("recall"), _tool("get_mental_model"), _tool("retain"), _tool("delete_bank")]
@@ -399,7 +397,7 @@ class TestAggregateToolsList:
         assert catalog["docs_recall"] == ("docs", "recall")
         assert errors == {}
 
-    def test_exposes_agent_authored_writer_but_not_hindsight_model_generation(self, engram_gateway):
+    def test_exposes_agent_authored_writer_but_not_hindsight_synthesis(self, engram_gateway):
         docs = FakeAdapter(tools=[
             _tool("reflect"),
             _tool("list_mental_models"),
@@ -415,7 +413,6 @@ class TestAggregateToolsList:
 
         names = {tool["name"] for tool in tool_defs}
         assert names == {
-            "docs_reflect",
             "docs_list_mental_models",
             "docs_get_mental_model",
             "docs_manual_mental_model",

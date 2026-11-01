@@ -28,11 +28,9 @@ flowchart LR
         G -->|LSP + refactoring| S[Serena]
     end
 
-    subgraph ondemand["On-Demand Learning (explicitly triggered, not scheduled)"]
-        C[Transcripts] -->|scan| D[Detect corrections]
-        D -->|retain| E["Haiku 4.5 (extract)"]
-        E -->|reflect| F["Sonnet 4.6 (synthesize)"]
-        F -->|triage| G["Prune noise"]
+    subgraph ondemand["Manual Model Maintenance (explicitly triggered)"]
+        C[Recall relevant facts] --> D["Agent writes and reviews Markdown"]
+        D -->|manual writer| E["Canonical mental model"]
     end
 
     subgraph cocoindex["CocoIndex (live sync)"]
@@ -49,26 +47,23 @@ flowchart LR
 default local configuration caps cross-encoder reranking at 50 candidates to
 bound CPU and interactive latency; increase it when deeper reranking is worth
 the cost.
-Retain/reflect/triage's LLM calls are on-demand only, triggered explicitly
-in-chat or by hand — there is no scheduled background job spending tokens
-automatically. This was a deliberate reversal (2026-08-13): the original
-design ran these hourly/nightly, but that schedule kept paying for
-extraction and synthesis passes regardless of whether the day's transcripts
-actually contained anything worth learning, with no visibility into that
-cost until the bill showed up. On-demand keeps LLM cost visible and bounded
-until there's a well-understood, worthwhile cost/value ratio for bringing
-scheduled automation back — see [docs/findings/2026-08.md](docs/findings/2026-08.md)'s
-2026-08-13 entries for the full incident and decision record.
+Retain and triage maintenance are on-demand only, triggered explicitly in-chat
+or by hand — there is no scheduled background job spending tokens
+automatically. Mental models are different: the agent recalls the relevant
+facts, writes and reviews complete Markdown, then stores it through the
+manual mental-model writer. The gateway does not expose Hindsight's
+Vertex-backed `reflect`, `create_mental_model`, or `refresh_mental_model`
+operations.
 
 ## Three services, distinct benefits
 
 Engram combines three complementary services behind one gateway. They are not
 three interchangeable ways to search the same data:
 
-- **Hindsight remembers and synthesizes** — persistent corrections, decisions,
-  conventions, and mental models survive across sessions. Its knowledge graph
-  connects entities and facts so recall can surface related context, not just
-  exact text matches.
+- **Hindsight remembers and serves** — persistent corrections, decisions,
+  conventions, and manually authored mental models survive across sessions.
+  Its knowledge graph connects entities and facts so recall can surface related
+  context, not just exact text matches.
 - **CocoIndex finds and keeps context fresh** — live filesystem/GitHub
   ingestion feeds Hindsight's document banks, while hybrid dense-plus-BM25
   search handles code. Its graphify-inspired code-graph extension, built on
@@ -160,9 +155,8 @@ graph TB
         coco_search --> pg
     end
 
-    subgraph vertex["Vertex AI"]
-        haiku["Haiku 4.5 (retain)"]
-        sonnet["Sonnet 4.6 (reflect)"]
+    subgraph vertex["Optional LLM backend"]
+        haiku["Haiku 4.5 (retain, if configured)"]
     end
 
     subgraph launchd["launchd"]
@@ -178,7 +172,7 @@ graph TB
     api --> pg
     api --> emb
     api --> rerank
-    api -->|"retain / reflect"| vertex
+    api -->|"retain (if configured)"| vertex
     launchd --> api
     nightly -.->|"manually triggered"| api
     coco_svc --> coco

@@ -19,14 +19,14 @@ features"). Lower token consumption follows directly from that (fewer
 sweeps, fewer correction loops to redo work) — it's a measured consequence,
 not the reason Engram exists. The numbers below quantify that side effect.
 
-**Engram's own operating cost** (retain/reflect run during explicit maintenance
-against Vertex AI; recall and CocoIndex sync are local and free):
+**Engram's own operating cost** (configured retain extraction during explicit
+maintenance may use an LLM; manual mental-model generation is agent-authored;
+recall and CocoIndex sync are local and free):
 
 | Operation | Model | Frequency | Cost |
 |-----------|-------|-----------|------|
 | Recall | Local (no LLM) | Every response | $0 |
 | Retain | Haiku 4.5 | Per maintenance run | Varies |
-| Reflect | Sonnet 4.6 | Per maintenance run | Varies |
 | CocoIndex sync | Local (no LLM) | Continuous | $0 |
 
 **≈ $0.12 per reference full learning cycle**; actual cost depends on the
@@ -138,7 +138,7 @@ An `engram-nightly-learn` run produces two outputs:
 **Daily report** (`~/.engram/logs/YYYY-MM-DD.json`):
 - Corrections detected per transcript
 - Instructions detected
-- Token usage for retain/reflect
+- Token usage for retain extraction
 - Bank stats (nodes, documents, links)
 - Recall probe latency and results
 
@@ -305,7 +305,7 @@ python3 -m engram.maintenance.report --csv
 - **Low hit rate on project docs/issues**: Check the configured CocoIndex flow and
   `gh auth status`; use the [Issue Ingestion](ISSUE_INGESTION.md) guide for a
   scoped backfill
-- **High corrections with recall active**: Retained patterns may be outdated — run reflect manually
+- **High corrections with recall active**: Retained patterns may be outdated — have the agent recall current facts and review the relevant manual model
 - **Mental models stale**: Have the agent recall current facts, regenerate the Markdown, and replace it with `docs_manual_mental_model` or `issues_manual_mental_model`
 - **Low proactive recall**: Strengthen the `alwaysApply` rule wording, ensure it says "ALWAYS recall before starting work"
 - **gopls not being used**: Check the Serena/OpenCode gateway route and restart the language-server daemon

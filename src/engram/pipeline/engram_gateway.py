@@ -627,11 +627,11 @@ def route_call(tool_name: str, catalog: dict[str, tuple[str, str]]) -> tuple[str
     return catalog.get(tool_name)
 
 
-# Tools rarely exercised by the documented recall/retain/reflect/mental-model
+# Tools rarely exercised by the documented recall/retain/manual-mental-model
 # workflow (hindsight-memory.mdc) or by Serena's symbol/search/edit tools
 # (local-mcp-tool-preference.mdc) get dropped from the aggregated catalog
 # entirely, not just hidden client-side -- every extra tool definition costs
-# context-window budget and counts against Cursor's own active-tool ceiling.
+# context-window budget and counts against an MCP client's active-tool ceiling.
 # A single hindsight-api backend's raw catalog is 29 tools (mostly bank/
 # document/operation/directive administration never used day-to-day); a repo
 # wired to BOTH hindsight-docs and hindsight-issues plus serena's 27 tools
@@ -644,18 +644,17 @@ def route_call(tool_name: str, catalog: dict[str, tuple[str, str]]) -> tuple[str
 # practice; the dropped administrative tools remain reachable via a direct
 # curl against hindsight-api / the serena daemon if ever genuinely needed.
 #
-# Hindsight's `create_mental_model` and `refresh_mental_model` delegate mental
-# model content generation to its configured LLM. That delegation is not a
-# supported gateway capability. The tools are deliberately absent from the
-# catalog, while `reflect` remains available for general analysis. Agents
-# generate finished mental-model Markdown themselves and use the gateway-owned
-# `*_manual_mental_model` tool to store it instead.
+# Hindsight's `reflect`, `create_mental_model`, and `refresh_mental_model`
+# delegate synthesis/content generation to its configured LLM. That delegation
+# is not a supported gateway capability: all three tools are deliberately
+# absent from the catalog. Agents generate finished mental-model Markdown
+# themselves and use the gateway-owned `*_manual_mental_model` tool to store it
+# instead.
 RELEVANT_HINDSIGHT_TOOLS = frozenset(
     {
         "retain",
         "sync_retain",
         "recall",
-        "reflect",
         "list_mental_models",
         "get_mental_model",
     }
@@ -664,11 +663,11 @@ RELEVANT_HINDSIGHT_TOOLS = frozenset(
 # Recall-only variant for cross-project reference mounts (2026-08-27,
 # Kuadrant onboarding): "kuadrant" is prior-art reference material ingested
 # for recall from *other* projects' workspaces, not something anyone
-# retains into, reflects on, or manages mental models for from a praxis
+# retains into or manages mental models for from a praxis
 # window -- that admin/curation work happens wherever the ingestion itself
-# runs. Cross-mounting the full RELEVANT_HINDSIGHT_TOOLS set (6 tools x 2
-# backends = 16) into every praxis-* repo on top of that repo's own ~33-35
-# tools would reliably blow past Cursor's ~40-tool ceiling (see
+# runs. Cross-mounting the full RELEVANT_HINDSIGHT_TOOLS set (5 tools x 2
+# backends = 10) into every praxis-* repo on top of that repo's own ~33-35
+# tools would reliably blow past an MCP client's tool ceiling (see
 # RELEVANT_HINDSIGHT_TOOLS's own comment above); trimming to just `recall`
 # keeps the added footprint to 1 tool per backend.
 RECALL_ONLY_HINDSIGHT_TOOLS = frozenset({"recall"})

@@ -30,11 +30,9 @@ flowchart LR
         B --- rnk[Local reranker]
     end
 
-    subgraph maintenance["On-Demand Learning"]
-        C[Transcripts] -->|scan| D[Correction windows]
-        D -->|retain| E["Haiku 4.5 (extract patterns)"]
-        E -->|reflect| F["Sonnet 4.6 (synthesize models)"]
-        F -->|triage| G["Remove noise (ephemeral, stale, dupes)"]
+    subgraph maintenance["Manual Model Maintenance"]
+        C[Recall relevant facts] --> D["Agent writes and reviews Markdown"]
+        D -->|manual writer| E["Canonical mental model"]
     end
 ```
 
@@ -43,9 +41,8 @@ flowchart LR
 | Decision | Rationale |
 |----------|-----------|
 | **Recall-only during sessions** | Zero token cost, pure local vector search (~600ms) |
-| **Retain/reflect on demand** | Explicit maintenance runs keep LLM cost visible and bounded; CocoIndex handles source freshness without an LLM |
+| **Manual mental-model generation** | The agent recalls and reviews the evidence, writes complete Markdown, and stores it through the manual writer; the gateway does not expose LLM-backed reflection |
 | **Haiku 4.5 for extraction** | 10x cheaper than Sonnet for structured pattern extraction |
-| **Sonnet 4.6 for reflection** | Complex reasoning about what patterns are effective |
 | **Correction and instruction-focused** | Learns from corrections and explicit instructions |
 | **Global endpoint** | Single Vertex AI endpoint, no region-specific routing |
 | **Local embeddings + reranker** | No network calls for recall; runs on-device |
@@ -99,9 +96,8 @@ graph TB
         coco_search["engram-search-configured --project <project>"]
     end
 
-    subgraph vertex["Vertex AI (global)"]
-        haiku["Haiku 4.5 (retain)"]
-        sonnet["Sonnet 4.6 (reflect)"]
+    subgraph vertex["Optional LLM backend"]
+        haiku["Haiku 4.5 (retain, if configured)"]
     end
 
     subgraph launchd["launchd (service manager)"]
@@ -121,7 +117,7 @@ graph TB
     api --> pg
     api --> emb
     api --> rerank
-    litellm -->|"retain / reflect"| vertex
+    litellm -->|"retain (if configured)"| vertex
     proxy_plist --> proxy
     svc --> api
     restart_plist -->|"health-checked swap, never 8888 downtime"| svc
@@ -199,15 +195,14 @@ makes an agent's context both fresh and correct:
   source. For code, it's fully self-contained — owns the configured project
   pgvector code table and serves hybrid search, structural pattern search, and
   call-graph extraction/clustering directly. No LLM anywhere in this layer.
-- **Hindsight — remembers, synthesizes, and forgets on purpose.** Raw facts
+- **Hindsight — remembers and forgets on purpose.** Raw facts
   (many arriving fresh via CocoIndex) are worth little on their own —
   Hindsight turns a messy correction exchange into a durable, generalized
-  lesson (`retain`, Haiku), synthesizes many such facts into one coherent
-  mental model (`reflect`, Sonnet), detects when a new fact contradicts
-  something already stored, and prunes ephemeral/stale/duplicate noise
-  during explicit maintenance runs. The only layer with any LLM involvement,
-  and the only one reasoning across sessions rather than answering one live
-  query.
+  lesson (`retain`, if configured), detects when a new fact contradicts
+  something already stored, and prunes ephemeral/stale/duplicate noise during
+  explicit maintenance runs. Mental models are generated and reviewed by the
+  agent, then stored through the gateway's manual writer. Hindsight remains the
+  memory store and retrieval layer rather than an exposed synthesis service.
 - **Serena — knows and safely edits, live and exact.** Neither of the above
   has real compiler-level understanding of code — Serena does, via each
   language's actual LSP (`gopls`/`pyright`/`rust-analyzer`/
@@ -231,11 +226,11 @@ makes an agent's context both fresh and correct:
 | Capability | Hindsight | CocoIndex | Serena |
 |---|---|---|---|
 | **Core job** | Memory: judge what's worth remembering, store it, reason about it, serve it back | Ingestion + search: detect what changed at the source, keep the index fresh, answer "about X" (semantic) and "shaped like X" (structural) queries | Code intelligence: real symbol lookup/find-references/diagnostics *and* semantic refactoring, via the language's actual LSP, anchored to a known symbol or file position |
-| **LLM involved** | Yes — Haiku extracts durable facts from raw windows (`retain`), Sonnet synthesizes mental models (`reflect`) | No — pure local embeddings (`all-MiniLM-L6-v2`) + tree-sitter parsing, zero LLM cost | No — delegates entirely to the LSP (`gopls`/`pyright`/`rust-analyzer`/`typescript-language-server`), zero LLM cost |
+| **LLM involved** | Optional/configured for retain extraction; manual mental-model generation is agent-authored and does not call Hindsight synthesis | No — pure local embeddings (`all-MiniLM-L6-v2`) + tree-sitter parsing, zero LLM cost | No — delegates entirely to the LSP (`gopls`/`pyright`/`rust-analyzer`/`typescript-language-server`), zero LLM cost |
 | **Storage it owns** | `shared-memory`, `<project>-docs`, `<project>-issues` banks (its own schema/API) | Configured project code table only (self-managed table in the same Postgres instance) | None persisted — no index, no database; per-session LSP process state only (`--add-mode no-memories` disables even Serena's own optional memory-notes feature, see `docs/findings/2026-08.md`'s 2026-08-21 entry) |
 | **Retrieval it serves** | `recall` — semantic vector search + local reranker over distilled facts | Hybrid dense + BM25 (RRF fusion) for "about X"; `CodePattern` structural by-example matching for "shaped like X" | `find_symbol` / `find_referencing_symbols` / `get_symbols_overview` / diagnostics — type-resolved, exact; **cannot** search by free-text concept or by shape at all |
 | **Edits it can perform** | None — read/reason/store only, no code mutation | None — indexing/search only, no code mutation | `rename_symbol` / `replace_symbol_body` — applied via the compiler's own understanding of the code, not text search-replace, so every real reference updates correctly and an unrelated same-named match in a different scope is never touched. The only one of the three that can safely mutate code at all |
-| **Higher-order reasoning** | Mental models (synthesizes many facts into a coherent doc), contradiction detection/resolution, project tagging | None — it doesn't synthesize or judge, it just chunks and indexes | None — no synthesis; every answer is a live fact from the compiler/LSP, nothing remembered between calls |
+| **Higher-order reasoning** | Agent-authored mental models, contradiction detection/resolution, project tagging | None — it doesn't synthesize or judge, it just chunks and indexes | None — no synthesis; every answer is a live fact from the compiler/LSP, nothing remembered between calls |
 | **Freshness mechanism** | None built-in — needs something to call `retain` (manual maintenance or CocoIndex) | File-watching / 5-min polling — the reason docs/issues/code went from legacy batch ingestion to sub-hour/sub-minute fresh | Always live by construction — queries the real LSP against the current checkout on every call, so there's no index to go stale (trade-off: slower per-call on cold cache, and only as correct as what's actually on disk right now) |
 | **Query starting point** | Free-text query (semantic) | Free-text query (semantic) or a shape/pattern (structural) | A **known** symbol name or file/line position — cannot answer "find code about rate limiting," only "what is/references/implements/should-become *this specific thing*" |
 | **Code-aware chunking / resolution** | None (would chunk by paragraph/token count) | Tree-sitter AST parsing — chunks by function/type/method boundary, syntactic only (no type resolution) | Full type resolution via the real compiler/LSP — the only one of the three that understands imports, generics, and interface satisfaction, not just syntax |
@@ -263,7 +258,7 @@ it live against the checkout through its own MCP tool surface
   contradicts something already stored. This isn't hypothetical: CocoIndex's
   own transcripts flow (regex-based, no LLM) is explicitly a *supplement*,
   not a replacement, for the manual Hindsight-based learning pipeline — it
-  can't do that extraction/reflection work itself.
+  can't do that extraction or manual model-authoring work itself.
 - **Hindsight replacing CocoIndex** for code search would be a real downgrade.
   Hindsight's zero-cost `chunks` extraction mode could technically hold code,
   but it lacks tree-sitter-aware chunking (chunk boundaries could land
@@ -388,11 +383,11 @@ synthesize mid-response, a mental model provides a pre-built document like:
 The unified gateway exposes `docs_manual_mental_model` and
 `issues_manual_mental_model` for caller-generated Markdown. Each call replaces
 the prior `manual-mental-model-<model-id>` canonical memory through `retain`,
-without invoking Hindsight's `create_mental_model` or `refresh_mental_model`
-LLM-backed synthesis path. The agent is responsible for generating and
-reviewing the complete Markdown before storing it. This is a replacement
-memory, not an overwrite of Hindsight's pinned mental-model record; the
-upstream API does not expose a content setter.
+without invoking Hindsight's `reflect`, `create_mental_model`, or
+`refresh_mental_model` LLM-backed synthesis path. The agent is responsible for
+generating and reviewing the complete Markdown before storing it. This is a
+replacement memory, not an overwrite of Hindsight's pinned mental-model
+record; the upstream API does not expose a content setter.
 
 #### Cross-Bank Association
 

@@ -143,7 +143,7 @@ graph TB
 | Example rules | `cursor/examples/*.mdc` | Ready-made rules for Go, Python, Rust, TypeScript, minimal |
 | Learning job | `engram-nightly-learn` | Processes transcripts, extracts patterns |
 | Doc/issue ingestion | `engram-flows-configured --project <project>` | Continuous docs/issues ingestion through the configured flow |
-| Mental models | `engram.maintenance.create_mental_models` | Create/refresh configured mental models |
+| Mental models | `docs_manual_mental_model` / `issues_manual_mental_model` | Store complete agent-generated Markdown replacements |
 | Memory triage | `python -m engram.pipeline.triage_memories` | On-demand cleanup of low-value memories (ephemeral, stale, duplicate) |
 | Memory recovery | `python -m engram.maintenance.recover_memories` | One-time full reprocessing of all transcripts to rebuild the bank |
 | Effectiveness report | `python -m engram.maintenance.report` | Metrics aggregation, token analysis, mental model stats |

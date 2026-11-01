@@ -48,12 +48,13 @@ default local configuration caps cross-encoder reranking at 50 candidates to
 bound CPU and interactive latency; increase it when deeper reranking is worth
 the cost.
 Retain and triage maintenance are on-demand only, triggered explicitly in-chat
-or by hand — there is no scheduled background job spending tokens
-automatically. Mental models are different: the agent recalls the relevant
-facts, writes and reviews complete Markdown, then stores it through the
-manual mental-model writer. The gateway does not expose Hindsight's
-Vertex-backed `reflect`, `create_mental_model`, or `refresh_mental_model`
-operations.
+or by hand. The always-on CocoIndex flow calls the Hindsight retain API
+automatically for docs, issues, and transcript changes. When retain extraction
+is configured to use an LLM, that flow can spend tokens without a maintenance
+command. Mental models are different: the agent recalls the relevant facts,
+writes and reviews complete Markdown, then stores it through the manual
+mental-model writer. The gateway does not expose Hindsight's Vertex-backed
+`reflect`, `create_mental_model`, or `refresh_mental_model` operations.
 
 ## Three services, distinct benefits
 

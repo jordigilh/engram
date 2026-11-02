@@ -263,6 +263,12 @@ Register each family repo's multiplex mount through the OpenCode plugin's
 project route and optional `branchRoutes`, as described in
 `docs/OPENCODE.md`. Keep client routing in the shared OpenCode configuration.
 
+Before enabling the systemd unit, edit its `ExecStart` to include one
+`--allowed-root <absolute canonical checkout>` for every family root. The
+plugin sends the active checkout as the URL's encoded `workspace` context;
+registered linked worktrees of those roots are accepted automatically, while
+unrelated or arbitrary descendant paths fail closed.
+
 Verify the daemons are up and correctly isolating per project:
 
 ```bash

@@ -19,7 +19,12 @@
          project's own .serena/project.yml `project_name:` field), not a repo
          path. koku is Python, koku-service-operator is Go -- both coexist
          fine since language servers are spawned per-project, not fixed at
-         daemon startup. -->
+         daemon startup.
+
+         --allowed-root is repeatable and names each canonical checkout that
+         may arrive as the URL's `workspace` context. Registered linked Git
+         worktrees of these roots are authorized automatically; keep these
+         deployment-local paths aligned with the actual checkouts. -->
     <key>ProgramArguments</key>
     <array>
         <string>__HOME__/.engram/venv/bin/engram-serena-multiplex</string>
@@ -33,6 +38,14 @@
         <string>koku</string>
         <string>--project</string>
         <string>koku-service-operator</string>
+        <string>--allowed-root</string>
+        <string>__HOME__/go/src/github.com/project-koku/koku</string>
+        <string>--allowed-root</string>
+        <string>__HOME__/go/src/github.com/project-koku/koku-service-operator</string>
+        <string>--allowed-root</string>
+        <string>__HOME__/.engram/watch/koku</string>
+        <string>--allowed-root</string>
+        <string>__HOME__/.engram/watch/koku-service-operator</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>

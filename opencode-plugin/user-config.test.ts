@@ -65,6 +65,8 @@ describe("deployment-local plugin config", () => {
 
   test("rejects malformed top-level and nested identity options", () => {
     expect(() => validateEngramOptions({ gatewayUrl: 123 }, "explicit options")).toThrow("gatewayUrl")
+    expect(() => validateEngramOptions({ workspaceRouting: "false" }, "explicit options"))
+      .toThrow("workspaceRouting")
     expect(() => validateEngramOptions({
       repositories: { remotes: { "https://example.com/service": { family: 123 } } },
     }, "explicit options")).toThrow("family")

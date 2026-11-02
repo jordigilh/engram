@@ -11,7 +11,9 @@
 # ~/.serena/serena_config.yml's `projects:` list (specifically each project's
 # own .serena/project.yml `project_name:` field), not a repo path -- same on
 # Linux as macOS, since Serena's own config format doesn't differ by
-# platform.
+# platform. --allowed-root is repeatable too; list each canonical checkout
+# that may arrive in the URL's `workspace` context. Registered linked Git
+# worktrees of those roots are authorized automatically.
 #
 # Requires engram's own package installed editable into the venv
 # (`uv pip install --python ~/.engram/venv/bin/python -e .` -- see
@@ -30,7 +32,7 @@ Wants=engram-serena-kubernaut-family.service
 
 [Service]
 Type=simple
-ExecStart=%h/.engram/venv/bin/engram-serena-multiplex --host 127.0.0.1 --port 8893 --upstream-url http://127.0.0.1:8892/mcp --project kubernaut --project kubernaut-operator --project kubernaut-console --project kubernaut-demo-scenarios --project kubernaut-v1.5 --project kubernaut-v1.6
+ExecStart=%h/.engram/venv/bin/engram-serena-multiplex --host 127.0.0.1 --port 8893 --upstream-url http://127.0.0.1:8892/mcp --project kubernaut --project kubernaut-operator --project kubernaut-console --project kubernaut-demo-scenarios --project kubernaut-v1.5 --project kubernaut-v1.6 --allowed-root %h/go/src/github.com/jordigilh/kubernaut --allowed-root %h/go/src/github.com/jordigilh/kubernaut-operator --allowed-root %h/go/src/github.com/jordigilh/kubernaut-console --allowed-root %h/go/src/github.com/jordigilh/kubernaut-demo-scenarios --allowed-root %h/go/src/github.com/jordigilh/kubernaut-v1.5 --allowed-root %h/go/src/github.com/jordigilh/kubernaut-v1.6 --allowed-root %h/.engram/watch/kubernaut --allowed-root %h/.engram/watch/kubernaut-operator --allowed-root %h/.engram/watch/kubernaut-console --allowed-root %h/.engram/watch/kubernaut-demo-scenarios --allowed-root %h/.engram/watch/kubernaut-release-v1.5 --allowed-root %h/.engram/watch/kubernaut-release-v1.6
 Restart=on-failure
 RestartSec=10
 StandardOutput=append:%h/.engram/logs/serena-multiplex-kubernaut-family-stdout.log

@@ -491,6 +491,28 @@ health(project) -> health/freshness snapshot
 Native source ingestion is not a gateway backend. It is a runtime task that
 updates Hindsight and zvec state independently of a client's MCP request.
 
+### 8.1 Active workspace context
+
+The client may add an encoded `workspace` query parameter containing the active
+checkout's absolute path. This is transport context, not route identity: the
+MCP path remains the canonical project route so a linked worktree does not
+create a second repository or bank route. The plugin derives that route from
+the canonical checkout while retaining the active branch for configured release
+routes.
+
+The gateway forwards `workspace` only to the Serena backend. The Serena
+multiplex authorizes the exact configured checkout or a registered linked Git
+worktree, binds the result to the downstream MCP session, and activates the
+absolute path inside the existing process-wide activation lock. A later request
+on that session with another workspace is rejected with `409`; an unauthorized
+workspace is rejected with `403`. Requests without the parameter preserve the
+legacy fixed-project behavior.
+
+The context must not override zvec's root policy. zvec workspace-read calls
+continue to take their explicit `root` argument and use the same exact-root /
+registered-linked-worktree authorization, allowing sibling-repository queries
+only when their roots are independently configured.
+
 ## 9. Reliability and resource design
 
 ### 9.1 Failure isolation

@@ -126,6 +126,42 @@ generated entry is only a fallback:
 }
 ```
 
+### Active checkout and worktree routing
+
+At setup time, the plugin adds an encoded `workspace` query parameter containing
+the active checkout's absolute path to both generated and explicit Engram URLs.
+The URL path remains the canonical `project` route: a linked worktree's
+temporary directory name does not create a new repository route. The active
+branch is still used for an explicitly configured release route.
+
+The gateway treats `workspace` as transport context only and forwards it to the
+Serena backend. The Serena multiplex binds the value to the MCP session,
+authorizes it, and activates that absolute path while holding the existing
+serialization lock. Reusing a session with a different workspace returns
+`409`; an unallowlisted or non-existent workspace returns `403`. Clients that
+omit the parameter retain the existing fixed-project behavior.
+
+Workspace-aware Serena routes must use an HTTP `serena-multiplex` backend. A
+stdio Serena process started with `--project` is fixed to one checkout and must
+declare `workspace_routing = false`; use it only with clients that omit the
+workspace context. The gateway rejects a stdio Serena configuration that claims
+`workspace_routing = true` and still fails closed if an unsupported workspace
+request reaches a fixed stdio backend.
+
+The OpenCode plugin sends workspace context by default. Set
+`workspaceRouting: false` in the plugin options only when the selected gateway
+route is backed by a fixed-workspace stdio Serena process; that mode cannot
+follow linked worktrees.
+
+Serena deployment templates must pass one repeatable `--allowed-root` for each
+canonical checkout. Exact configured roots and registered linked Git worktrees
+are accepted; arbitrary descendants, unrelated repositories, and forged Git
+metadata are rejected. Keep these roots aligned with the paths used by the
+OpenCode server. This is separate from zvec routing: zvec workspace-read tools
+continue to use their explicit `root` argument and the existing exact-root /
+registered-worktree authorization, so sibling-repository queries do not change
+Serena's active workspace.
+
 Users do not register Hindsight, CocoIndex, or Serena separately. Do not add a
 second gateway entry through OpenChamber's Settings -> MCP; OpenChamber should
 use the OpenCode server's resolved configuration.

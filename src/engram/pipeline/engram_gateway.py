@@ -77,7 +77,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Protocol
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 logging.basicConfig(
     level=logging.INFO,
@@ -101,6 +101,7 @@ DEFAULT_PORT = 8896
 DEFAULT_NATIVE_CONFIG = pathlib.Path("~/.engram/runtime/native-instances.toml")
 FORWARD_TIMEOUT_S = 60.0
 MAX_FORWARD_TIMEOUT_S = 600.0
+ENGRAM_WORKSPACE_QUERY_PARAMETER = "workspace"
 
 # A fresh MCP session is cheap compared with losing a client request, but a
 # retry is only safe when the operation is known to be read-only.  In
@@ -568,6 +569,18 @@ class BackendAdapter(Protocol):
     async def call_tool(self, name: str, arguments: dict) -> dict: ...
 
 
+def _url_with_workspace(url: str, workspace: str) -> str:
+    """Return ``url`` with the request-scoped workspace query parameter set."""
+    parsed = urlsplit(url)
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key != ENGRAM_WORKSPACE_QUERY_PARAMETER
+    ]
+    query.append((ENGRAM_WORKSPACE_QUERY_PARAMETER, workspace))
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
+
+
 def prefixed_tool_name(backend_key: str, raw_name: str) -> str:
     """Aggregated-catalog name for a tool `raw_name` from `backend_key`."""
     if backend_key in {"docs_manual", "issues_manual"} and raw_name == "manual_mental_model":
@@ -832,6 +845,7 @@ async def handle_tools_call(
     catalog: dict[str, tuple[str, str]],
     backends: dict[str, BackendAdapter],
     project: str | None = None,
+    workspace: str | None = None,
 ) -> dict | None:
     """Route a `tools/call` JSON-RPC message to whichever backend owns the
     (aggregated) tool name, returning a well-formed JSON-RPC response.
@@ -845,7 +859,9 @@ async def handle_tools_call(
 
     `project` is optional and only used for the call-metrics log line (see
     _log_gateway_call) -- existing callers/tests that predate that feature
-    don't need to pass it.
+    don't need to pass it. `workspace` is transport context supplied by the
+    OpenCode plugin; it is forwarded only to the Serena backend, whose
+    multiplex endpoint authorizes and activates the target path.
     """
     if message.get("method") != "tools/call":
         return None
@@ -868,7 +884,14 @@ async def handle_tools_call(
         return _jsonrpc_error_result(message_id, f"Backend {backend_key!r} for tool {tool_name!r} is not wired up")
 
     try:
-        result = await adapter.call_tool(raw_name, _managed_zvec_arguments(raw_name, arguments))
+        forwarded_arguments = _managed_zvec_arguments(raw_name, arguments)
+        if backend_key == "serena" and workspace is not None:
+            call_with_workspace = getattr(adapter, "call_tool_with_workspace", None)
+            if not callable(call_with_workspace):
+                raise RuntimeError("Serena backend does not support request-scoped workspace routing")
+            result = await call_with_workspace(raw_name, forwarded_arguments, workspace)
+        else:
+            result = await adapter.call_tool(raw_name, forwarded_arguments)
     except Exception as exc:  # noqa: BLE001 - degrade to a clean tool error, don't crash the gateway
         detail = _format_exception(exc)
         log.warning("backend %r failed on tools/call(%r): %s", backend_key, raw_name, detail)
@@ -959,7 +982,13 @@ class HttpRelayAdapter:
             return True
         return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in HTTP_RETRYABLE_STATUS_CODES
 
-    async def _roundtrip_once(self, method: str, params: dict | None = None) -> dict:
+    async def _roundtrip_once(
+        self,
+        method: str,
+        params: dict | None = None,
+        *,
+        workspace: str | None = None,
+    ) -> dict:
         import httpx
 
         # Some local MCP adapters route by the HTTP Host header and reject the
@@ -970,11 +999,12 @@ class HttpRelayAdapter:
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
+        request_url = _url_with_workspace(self.url, workspace) if workspace is not None else self.url
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
             session_id = None
             try:
                 init_resp = await client.post(
-                    self.url,
+                    request_url,
                     json={
                         "jsonrpc": "2.0",
                         "id": 1,
@@ -992,14 +1022,14 @@ class HttpRelayAdapter:
                 session_headers = {**headers, "mcp-session-id": session_id} if session_id else headers
 
                 initialized_resp = await client.post(
-                    self.url,
+                    request_url,
                     json={"jsonrpc": "2.0", "method": "notifications/initialized"},
                     headers=session_headers,
                 )
                 initialized_resp.raise_for_status()
 
                 call_resp = await client.post(
-                    self.url,
+                    request_url,
                     json={"jsonrpc": "2.0", "id": 2, "method": method, "params": params or {}},
                     headers=session_headers,
                 )
@@ -1012,7 +1042,7 @@ class HttpRelayAdapter:
             finally:
                 if session_id:
                     try:
-                        await client.delete(self.url, headers=session_headers)
+                        await client.delete(request_url, headers=session_headers)
                     except Exception as exc:  # noqa: BLE001 - cleanup must not mask the request failure
                         log.debug("could not close HTTP MCP session: %s", _format_exception(exc))
 
@@ -1022,11 +1052,12 @@ class HttpRelayAdapter:
         params: dict | None = None,
         *,
         retryable: bool = False,
+        workspace: str | None = None,
     ) -> dict:
         attempts = HTTP_RETRY_ATTEMPTS if retryable else 1
         for attempt in range(attempts):
             try:
-                return await self._roundtrip_once(method, params)
+                return await self._roundtrip_once(method, params, workspace=workspace)
             except Exception as exc:  # noqa: BLE001 - retry only known transient HTTP failures
                 if attempt + 1 >= attempts or not self._is_transient_failure(exc):
                     raise
@@ -1051,6 +1082,15 @@ class HttpRelayAdapter:
             "tools/call",
             {"name": name, "arguments": arguments},
             retryable=self._is_retryable_tool_call(name),
+        )
+
+    async def call_tool_with_workspace(self, name: str, arguments: dict, workspace: str) -> dict:
+        """Call this HTTP backend with a request-scoped workspace context."""
+        return await self._roundtrip(
+            "tools/call",
+            {"name": name, "arguments": arguments},
+            retryable=self._is_retryable_tool_call(name),
+            workspace=workspace,
         )
 
 
@@ -2003,7 +2043,13 @@ def build_app(projects: dict[str, dict[str, BackendAdapter]]):
                 )
 
             if method == "tools/call":
-                response = await handle_tools_call(message, state[project]["catalog"], backends, project=project)
+                response = await handle_tools_call(
+                    message,
+                    state[project]["catalog"],
+                    backends,
+                    project=project,
+                    workspace=request.query_params.get(ENGRAM_WORKSPACE_QUERY_PARAMETER),
+                )
                 return Response(
                     content=f"event: message\ndata: {json.dumps(response)}\n\n",
                     media_type="text/event-stream",
@@ -2048,6 +2094,13 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
     kind = settings.get("kind")
     if kind not in {"http", "shadow_http", "stdio"}:
         raise ValueError(f"Backend {instance!r}/{backend!r} kind must be 'http', 'shadow_http', or 'stdio'")
+    workspace_routing = settings.get("workspace_routing", backend == "serena")
+    if not isinstance(workspace_routing, bool):
+        raise ValueError(f"Backend {instance!r}/{backend!r} workspace_routing must be a boolean")
+    if backend == "serena" and workspace_routing and kind != "http":
+        raise ValueError(
+            f"Backend {instance!r}/{backend!r} workspace_routing=true requires an HTTP Serena multiplex endpoint"
+        )
     if backend == "hindsight" and kind != "http":
         raise ValueError("Backend 'hindsight' must use an HTTP Hindsight bank endpoint")
 
@@ -2099,6 +2152,8 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
             )
 
         spec = {"kind": "http", "url": endpoint}
+        if backend == "serena":
+            spec["workspace_routing"] = workspace_routing
         if backend == "hindsight":
             spec["allow_insecure_http"] = allow_insecure_http
         if backend == "hindsight":
@@ -2217,6 +2272,8 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
         raise ValueError(f"Backend {instance!r}/{backend!r} shared_key must be a non-empty string")
 
     spec = {"kind": "stdio", "command": command, "args": list(args), "env": dict(env) if env else None}
+    if backend == "serena":
+        spec["workspace_routing"] = workspace_routing
     if shared_key is not None:
         spec["shared_key"] = shared_key
     return spec
@@ -2305,6 +2362,16 @@ def build_backend_adapters(registry: dict[str, dict[str, dict]]) -> dict[str, di
     for project, specs in registry.items():
         adapters[project] = {}
         for backend_key, spec in specs.items():
+            workspace_routing = spec.get("workspace_routing", backend_key == "serena")
+            if not isinstance(workspace_routing, bool):
+                raise ValueError(
+                    f"Backend {project!r}/{backend_key!r} workspace_routing must be a boolean"
+                )
+            if backend_key == "serena" and workspace_routing and spec.get("kind") != "http":
+                raise ValueError(
+                    f"Backend {project!r}/{backend_key!r} workspace_routing=true requires an HTTP Serena "
+                    "multiplex endpoint"
+                )
             if spec["kind"] == "shadow_http":
                 shared_key = spec.get("shared_key")
                 source_roots = {

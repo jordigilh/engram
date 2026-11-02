@@ -14,6 +14,9 @@
 import type { WorktreeIndexPolicy } from "./worktree-index"
 import type { PluginArtifactExpectation } from "./build-info"
 
+/** Query parameter carried by every generated or explicit Engram MCP URL. */
+export const ENGRAM_WORKSPACE_QUERY_PARAMETER = "workspace"
+
 export interface RepositoryIdentityOptions {
   project?: string
   family?: string
@@ -30,6 +33,8 @@ export interface EngramRepositoryMappings {
 
 export interface EngramPluginOptions extends RepositoryIdentityOptions {
   gatewayUrl?: string
+  /** Set false only for fixed-workspace stdio Serena routes. */
+  workspaceRouting?: boolean
   repositories?: EngramRepositoryMappings
   /** Expected metadata for the immutable production plugin artifact. */
   pluginArtifact?: PluginArtifactExpectation
@@ -143,6 +148,28 @@ export interface McpServerEntryV2 {
   codemode: false
 }
 
+/**
+ * Add the active checkout to an Engram MCP URL without disturbing any
+ * deployment-specific query parameters already present on an explicit route.
+ * The gateway and Serena multiplex use this value only as routing context;
+ * tool arguments remain authoritative for zvec's own root selection.
+ */
+export function withWorkspaceContext(url: string, workspace?: string): string {
+  const rawWorkspace = workspace
+  if (!rawWorkspace || !rawWorkspace.trim()) return url
+
+  try {
+    const parsed = new URL(url)
+    parsed.searchParams.set(ENGRAM_WORKSPACE_QUERY_PARAMETER, rawWorkspace)
+    return parsed.toString()
+  } catch {
+    // Explicit MCP entries may be resolved by the host after plugin setup.
+    // Preserve an invalid/non-absolute URL rather than making setup fail for
+    // a route the plugin does not own.
+    return url
+  }
+}
+
 /** Native V2 server entry for `ctx.mcp.transform(editor => editor.set(...))`.
  *  The gateway is a plain-LAN endpoint with no OAuth issuer, so `oauth: false`
  *  keeps V2 from attempting OAuth discovery against it. A missing gateway URL
@@ -150,17 +177,17 @@ export interface McpServerEntryV2 {
  *  returned. */
 export function buildMcpServerConfigV2(
   identity: Pick<ResolvedIdentity, "project">,
-  options: { gatewayUrl: string },
+  options: { gatewayUrl: string; workspace?: string },
 ): McpServerEntryV2
 export function buildMcpServerConfigV2(
   identity: Pick<ResolvedIdentity, "project">,
-  options: Pick<EngramPluginOptions, "gatewayUrl"> = {},
+  options: Pick<EngramPluginOptions, "gatewayUrl"> & { workspace?: string } = {},
 ): McpServerEntryV2 | undefined {
   const gatewayUrl = options.gatewayUrl?.trim().replace(/\/$/, "")
   if (!gatewayUrl) return undefined
   return {
     type: "remote",
-    url: `${gatewayUrl}/mcp/${identity.project}`,
+    url: withWorkspaceContext(`${gatewayUrl}/mcp/${identity.project}`, options.workspace),
     oauth: false,
     disabled: false,
     codemode: false,

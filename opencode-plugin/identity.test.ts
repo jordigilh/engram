@@ -5,6 +5,7 @@ import {
   mergeMcpEditor,
   normalizeRepositoryRemote,
   resolveRepositoryOptions,
+  withWorkspaceContext,
 } from "./identity"
 
 describe("deriveIdentity", () => {
@@ -166,6 +167,29 @@ describe("buildMcpServerConfigV2", () => {
       { gatewayUrl: "http://localhost:9999/" },
     )
     expect(cfg.url).toBe("http://localhost:9999/mcp/myrepo")
+  })
+
+  test("carries the active workspace as an encoded query parameter", () => {
+    const cfg = buildMcpServerConfigV2(
+      { project: "myrepo" },
+      { gatewayUrl: "http://127.0.0.1:8896", workspace: "/worktrees/fix-123" },
+    )
+
+    expect(cfg.url).toBe("http://127.0.0.1:8896/mcp/myrepo?workspace=%2Fworktrees%2Ffix-123")
+  })
+
+  test("replaces only a stale workspace query on an explicit URL", () => {
+    expect(withWorkspaceContext(
+      "http://127.0.0.1:8896/mcp/myrepo?token=local&workspace=%2Fold",
+      "/worktrees/fix-123",
+    )).toBe("http://127.0.0.1:8896/mcp/myrepo?token=local&workspace=%2Fworktrees%2Ffix-123")
+  })
+
+  test("preserves leading and trailing whitespace in a valid workspace path", () => {
+    const workspace = " /worktrees/fix-123 "
+    const result = withWorkspaceContext("http://127.0.0.1:8896/mcp/myrepo", workspace)
+
+    expect(new URL(result).searchParams.get("workspace")).toBe(workspace)
   })
 })
 

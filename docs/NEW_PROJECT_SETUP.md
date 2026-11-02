@@ -622,8 +622,18 @@ edited at a time (step 8's plain shared daemon is simpler and sufficient).
             registered in ~/.serena/serena_config.yml, not repo paths -->
        <string>--project</string><string>my-repo-a</string>
        <string>--project</string><string>my-repo-b</string>
+       <!-- one --allowed-root <absolute canonical checkout> per root;
+            registered linked worktrees are accepted automatically -->
+       <string>--allowed-root</string><string>~/src/my-repo-a</string>
+       <string>--allowed-root</string><string>~/src/my-repo-b</string>
    </array>
    ```
+
+    `workspace` is added to the Engram MCP URL by the OpenCode plugin. The
+    multiplex binds it to the MCP session and activates the authorized absolute
+    checkout under its existing serialization lock. Keep the `--allowed-root`
+    values aligned with the paths visible to the OpenCode server; arbitrary
+    descendants and unrelated repositories are rejected.
 
     3. **Register each family mount through the OpenCode plugin**, using the
        project route and optional `branchRoutes` described in

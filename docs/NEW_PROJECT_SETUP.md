@@ -635,11 +635,29 @@ edited at a time (step 8's plain shared daemon is simpler and sufficient).
     values aligned with the paths visible to the OpenCode server; arbitrary
     descendants and unrelated repositories are rejected.
 
+    On macOS, render and fully reload the LaunchAgent after changing these
+    arguments. `launchctl kickstart -k` restarts the old job definition; it does
+    not reread `ProgramArguments`.
+
+    ```bash
+    plist="$HOME/Library/LaunchAgents/io.vectorize.serena-multiplex.<family>.plist"
+    sed "s|__HOME__|$HOME|g" \
+      "launchd/io.vectorize.serena-multiplex.<family>.plist" > "$plist"
+    launchctl bootout "gui/$(id -u)/io.vectorize.serena-multiplex.<family>" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" "$plist"
+    launchctl print "gui/$(id -u)/io.vectorize.serena-multiplex.<family>" \
+      | grep -- '--allowed-root'
+    ```
+
+    A missing `--allowed-root` is a startup error for the workspace-aware
+    multiplex; this prevents a stale service definition from serving a
+    canonical checkout as if it were the active worktree.
+
     3. **Register each family mount through the OpenCode plugin**, using the
-       project route and optional `branchRoutes` described in
-       [OpenCode Integration](OPENCODE.md). Do not create per-repo Cursor MCP
-       configuration files. `cocoindex-code`/`hindsight-docs`/
-       `hindsight-issues` remain owned by the unified gateway.
+      project route and optional `branchRoutes` described in
+      [OpenCode Integration](OPENCODE.md). Do not create per-repo Cursor MCP
+      configuration files. `cocoindex-code`/`hindsight-docs`/
+      `hindsight-issues` remain owned by the unified gateway.
 
 4. **Update your family's git-hook restart script** (step 14) to also
    `launchctl kickstart -k` the multiplex daemon's label alongside `serena`

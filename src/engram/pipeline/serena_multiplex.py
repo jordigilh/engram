@@ -321,6 +321,23 @@ def _authorize_workspace(
     return str(authorized)
 
 
+def _require_allowed_roots(allowed_roots: list[str] | None) -> list[str]:
+    """Fail closed when the deployed multiplex has no workspace allowlist.
+
+    The command-line daemon is the workspace-aware Serena deployment used by
+    OpenCode/OpenChamber. Starting it without roots makes every current
+    worktree unverifiable and makes an old/unscoped client look healthy while
+    serving the canonical checkout. Fixed-workspace clients should use a
+    direct stdio Serena backend instead.
+    """
+    if not allowed_roots:
+        raise ValueError(
+            "Serena multiplex requires at least one --allowed-root; "
+            "configure canonical checkout roots before starting it"
+        )
+    return allowed_roots
+
+
 async def handle_json_rpc_message(
     message: dict,
     project: str,
@@ -754,23 +771,28 @@ def main() -> None:
         "--allowed-root",
         dest="allowed_roots",
         action="append",
-        help="Repeatable exact checkout root; registered linked Git worktrees are accepted too.",
+        help="Required and repeatable exact checkout root; registered linked Git worktrees are accepted too.",
     )
     args = parser.parse_args()
 
     projects = args.projects or KUBERNAUT_FAMILY_PROJECTS
+    try:
+        allowed_roots = _require_allowed_roots(args.allowed_roots)
+    except ValueError as exc:
+        parser.error(str(exc))
     log.info(
-        "starting on %s:%d, upstream=%s, projects=%s",
+        "starting on %s:%d, upstream=%s, projects=%s, allowed_roots=%s",
         args.host,
         args.port,
         args.upstream_url,
         projects,
+        allowed_roots,
     )
     app = build_app(
         projects,
         args.upstream_url,
         args.upstream_host_header,
-        allowed_roots=args.allowed_roots,
+        allowed_roots=allowed_roots,
     )
 
     import uvicorn

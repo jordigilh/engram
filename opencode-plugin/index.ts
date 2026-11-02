@@ -22,6 +22,7 @@ import {
   deriveIdentity,
   mergeMcpEditor,
   resolveRepositoryOptions,
+  withWorkspaceContext,
   type EngramPluginOptions,
   type McpServerEntryV2,
   type ResolvedIdentity,
@@ -127,20 +128,36 @@ export function repositoryDirectoryBasename(directory: string): string {
 
 interface EngramState {
   identity: ResolvedIdentity
+  canonicalIdentity: ResolvedIdentity
   gatewayUrl?: string
   mcpV2?: McpServerEntryV2
 }
 
-async function resolveEngramState(directory: string, options: EngramPluginOptions): Promise<EngramState> {
-  const directoryBasename = repositoryDirectoryBasename(directory)
+async function resolveEngramState(
+  directory: string,
+  options: EngramPluginOptions,
+  canonicalDirectory = directory,
+): Promise<EngramState> {
+  const routeDirectory = path.resolve(canonicalDirectory || directory)
+  const directoryBasename = repositoryDirectoryBasename(routeDirectory)
   const gitWorktree = await isGitWorktree(directory)
   const branch = await detectBranch(directory)
-  const remotes = await detectRemotes(directory)
+  // A linked worktree's basename is an OpenCode task label, not the
+  // repository identity. Resolve mappings from the canonical checkout while
+  // retaining the active worktree's branch for release-route selection.
+  const remotes = await detectRemotes(routeDirectory)
   const identityOptions = resolveRepositoryOptions(directoryBasename, remotes, options)
 
   const identity = deriveIdentity({
     directoryBasename,
     branch,
+    options: identityOptions,
+    projectFromRepositoryMapping: !options.project && Boolean(identityOptions.project),
+  })
+  const activeDirectory = path.resolve(directory || ".")
+  const canonicalIdentity = deriveIdentity({
+    directoryBasename,
+    branch: activeDirectory === routeDirectory ? branch : await detectBranch(routeDirectory),
     options: identityOptions,
     projectFromRepositoryMapping: !options.project && Boolean(identityOptions.project),
   })
@@ -150,10 +167,11 @@ async function resolveEngramState(directory: string, options: EngramPluginOption
   // Git checkout keeps the zero-mapping convention; non-Git roots need an
   // explicit directory/project mapping or an explicit plugin identity.
   const mcpV2 = gitWorktree || hasConfiguredIdentity(directoryBasename, options)
-    ? buildMcpServerConfigV2(identity, options)
+    ? buildMcpServerConfigV2(identity, { ...options, workspace: path.resolve(directory) })
     : undefined
   return {
     identity,
+    canonicalIdentity,
     gatewayUrl: mcpV2?.url,
     mcpV2,
   }
@@ -260,12 +278,13 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
   logBuildLine()
   const options = await resolveEngramOptions(ctx.options)
   await validatePluginArtifactManifest(options.pluginArtifact)
-  const { identity, mcpV2, gatewayUrl: configuredGatewayUrl } = await resolveEngramState(directory, options)
+  const canonicalDirectory = path.resolve(ctx.location.project?.canonical || directory || ".")
+  const { identity, canonicalIdentity, mcpV2, gatewayUrl: configuredGatewayUrl } = await resolveEngramState(
+    directory,
+    options,
+    canonicalDirectory,
+  )
   let gatewayUrl = configuredGatewayUrl
-  const canonicalDirectory = ctx.location.project?.canonical || directory
-  const worktreeProjectIdentity = canonicalDirectory === directory
-    ? identity
-    : (await resolveEngramState(canonicalDirectory, options)).identity
   const dedupe = new NudgeDedupe()
   const probeCache = new ProbeCache()
   const pendingProbe = new Set<string>()
@@ -280,7 +299,15 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
   await ctx.mcp.transform((editor) => {
     const explicit = editor.get("engram") as { url?: unknown } | undefined
     if (!gatewayUrl && typeof explicit?.url === "string" && explicit.url.trim()) {
-      gatewayUrl = explicit.url
+      gatewayUrl = withWorkspaceContext(explicit.url, directory)
+      if (gatewayUrl !== explicit.url) {
+        editor.set("engram", { ...explicit, url: gatewayUrl })
+      }
+    } else if (typeof explicit?.url === "string" && explicit.url.trim()) {
+      const contextualUrl = withWorkspaceContext(explicit.url, directory)
+      if (contextualUrl !== explicit.url) {
+        editor.set("engram", { ...explicit, url: contextualUrl })
+      }
     }
     if (mcpV2) mergeMcpEditor(editor, mcpV2)
   })
@@ -372,13 +399,13 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
   // every sibling worktree receives an independent local zvec index. A gated
   // route also blocks prompt admission until the current checkout is ready.
   const worktreePolicy = options.worktreeIndex || {}
-  // A linked worktree can resolve to a release route while its canonical
-  // checkout remains on main. Enable the indexer when either route is listed;
-  // family/root identity still comes from the canonical checkout below.
+  // The MCP route identity comes from the canonical checkout plus the active
+  // branch, while zvec policy remains compatible with deployments that list
+  // either the active release route or the canonical route.
   const autoIndex = shouldAutoIndexWorktrees(identity.project, worktreePolicy)
-    || shouldAutoIndexWorktrees(worktreeProjectIdentity.project, worktreePolicy)
+    || shouldAutoIndexWorktrees(canonicalIdentity.project, worktreePolicy)
   const gateSessions = shouldGateSessions(identity.project, worktreePolicy)
-    || shouldGateSessions(worktreeProjectIdentity.project, worktreePolicy)
+    || shouldGateSessions(canonicalIdentity.project, worktreePolicy)
   worktreeIndexer = (autoIndex || gateSessions)
     ? createWorktreeIndexer({
         projectID: ctx.location.project.id,
@@ -386,7 +413,7 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
         listWorktrees: () => ctx.worktree.list({ projectID: ctx.location.project.id }),
         mcpUrl: worktreePolicy.mcpUrl,
         embedding: worktreePolicy.embedding || DEFAULT_ZVEC_EMBEDDING,
-        allowedRoots: allowedRootsForFamily(worktreePolicy, worktreeProjectIdentity.family),
+        allowedRoots: allowedRootsForFamily(worktreePolicy, canonicalIdentity.family),
         aggregateRoots: worktreePolicy.aggregateRoots,
       })
     : undefined

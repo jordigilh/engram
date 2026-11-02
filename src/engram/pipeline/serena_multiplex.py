@@ -56,11 +56,14 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import pathlib
 import secrets
 import sys
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+
+from engram.pipeline.zvec_policy import authorized_zvec_root
 
 logging.basicConfig(
     level=logging.INFO,
@@ -75,6 +78,7 @@ DEFAULT_UPSTREAM_URL = "http://127.0.0.1:8892/mcp"
 FORWARD_TIMEOUT_S = 60.0
 RETRY_DELAY_S = 0.5
 SESSION_IDLE_TIMEOUT_S = 30 * 60
+ENGRAM_WORKSPACE_QUERY_PARAMETER = "workspace"
 
 # Must match the `projects:` names registered in ~/.serena/serena_config.yml
 # for the kubernaut-family daemon, not repo paths -- activate_project takes a
@@ -173,6 +177,7 @@ class DownstreamSession:
     project: str
     upstream_session_id: str
     last_used: float
+    workspace: str | None = None
 
 
 class SessionProjectMismatch(Exception):
@@ -200,9 +205,14 @@ class DownstreamSessionRegistry:
         self._sessions: dict[str, DownstreamSession] = {}
         self._lock = asyncio.Lock()
 
-    async def create(self, project: str, upstream_session_id: str) -> tuple[str, DownstreamSession]:
+    async def create(
+        self,
+        project: str,
+        upstream_session_id: str,
+        workspace: str | None = None,
+    ) -> tuple[str, DownstreamSession]:
         session_id = secrets.token_urlsafe(24)
-        entry = DownstreamSession(project, upstream_session_id, self._clock())
+        entry = DownstreamSession(project, upstream_session_id, self._clock(), workspace)
         async with self._lock:
             self._sessions[session_id] = entry
         return session_id, entry
@@ -223,6 +233,12 @@ class DownstreamSessionRegistry:
         async with self._lock:
             if self._sessions.get(session_id) is entry:
                 entry.upstream_session_id = upstream_session_id
+                entry.last_used = self._clock()
+
+    async def bind_workspace(self, session_id: str, entry: DownstreamSession, workspace: str) -> None:
+        async with self._lock:
+            if self._sessions.get(session_id) is entry:
+                entry.workspace = workspace
                 entry.last_used = self._clock()
 
     async def remove(self, session_id: str, project: str) -> DownstreamSession | None:
@@ -279,6 +295,26 @@ def _intercept_response(message: dict, project: str) -> dict:
             "isError": False,
         },
     }
+
+
+def _authorize_workspace(
+    raw_workspace: str | None,
+    allowed_roots: frozenset[pathlib.Path],
+) -> str | None:
+    """Normalize and authorize a request's absolute workspace path.
+
+    Exact configured roots and their registered top-level Git worktrees are
+    accepted through the same fail-closed policy used by zvec. Nested paths,
+    unrelated repositories, and non-Git roots are not accepted implicitly.
+    """
+    if raw_workspace is None:
+        return None
+    if not raw_workspace.strip() or not pathlib.Path(raw_workspace).is_absolute():
+        raise ValueError("workspace must be an absolute authorized checkout path")
+    authorized = authorized_zvec_root(raw_workspace, allowed_roots)
+    if authorized is None:
+        raise ValueError("workspace is outside the configured Serena root allowlist")
+    return str(authorized)
 
 
 async def handle_json_rpc_message(
@@ -454,8 +490,21 @@ def _make_activate(
     return activate
 
 
-def build_app(projects: list[str], upstream_url: str, upstream_host_header: str | None = None):
-    """Build one POST-only, project-pinned route per configured project."""
+def build_app(
+    projects: list[str],
+    upstream_url: str,
+    upstream_host_header: str | None = None,
+    *,
+    allowed_roots: list[str | pathlib.Path] | None = None,
+):
+    """Build one POST-only, project-pinned route per configured project.
+
+    ``workspace`` is optional for compatibility with existing fixed-project
+    clients. When present, it is bound to the downstream MCP session and must
+    be an exact configured root or a registered linked Git worktree of one.
+    The authorized absolute path becomes Serena's activation target for every
+    scoped call in that session.
+    """
     from starlette.applications import Starlette
     from starlette.requests import Request
     from starlette.responses import Response
@@ -464,6 +513,10 @@ def build_app(projects: list[str], upstream_url: str, upstream_host_header: str 
     tracker = ActiveProjectTracker()
     sessions = DownstreamSessionRegistry()
     activate = _make_activate(upstream_url, upstream_host_header)
+    authorized_roots = frozenset(
+        pathlib.Path(root).expanduser().resolve()
+        for root in (allowed_roots or [])
+    )
 
     # Headers that are connection/host-specific and must not be blindly
     # relayed between the two hops of this proxy.
@@ -551,6 +604,12 @@ def build_app(projects: list[str], upstream_url: str, upstream_host_header: str 
             if request.method not in {"POST", "DELETE"}:
                 return Response(status_code=405)
 
+            raw_workspace = request.query_params.get(ENGRAM_WORKSPACE_QUERY_PARAMETER)
+            try:
+                requested_workspace = _authorize_workspace(raw_workspace, authorized_roots)
+            except ValueError as exc:
+                return Response(status_code=403, content=str(exc).encode())
+
             expired = await sessions.expire()
             for entry in expired:
                 await _close_upstream_session(entry.upstream_session_id)
@@ -577,7 +636,11 @@ def build_app(projects: list[str], upstream_url: str, upstream_host_header: str 
             if message.get("method") == "initialize":
                 try:
                     upstream_session_id, response = await _open_upstream_session()
-                    downstream_session_id, _ = await sessions.create(project, upstream_session_id)
+                    downstream_session_id, _ = await sessions.create(
+                        project,
+                        upstream_session_id,
+                        requested_workspace,
+                    )
                 except Exception as exc:
                     log.warning("could not initialize Serena session for %s: %s", project, exc)
                     return Response(
@@ -596,6 +659,12 @@ def build_app(projects: list[str], upstream_url: str, upstream_host_header: str 
                 return Response(status_code=404)
             if entry is None:
                 return Response(status_code=404, content=b"Unknown or expired mcp-session-id")
+
+            if requested_workspace is not None:
+                if entry.workspace is not None and entry.workspace != requested_workspace:
+                    return Response(status_code=409, content=b"MCP session is bound to another workspace")
+                if entry.workspace is None:
+                    await sessions.bind_workspace(downstream_session_id, entry, requested_workspace)
 
             async def forward_raw() -> Response:
                 headers = {
@@ -621,7 +690,12 @@ def build_app(projects: list[str], upstream_url: str, upstream_host_header: str 
                         media_type="text/event-stream",
                     )
                 if route == "scoped":
-                    response = await _forward_scoped(project, tracker, activate, forward_raw)
+                    response = await _forward_scoped(
+                        entry.workspace or project,
+                        tracker,
+                        activate,
+                        forward_raw,
+                    )
                 else:
                     response = await forward_raw()
                 if not _looks_like_upstream_session_loss(response.status_code, response.body):
@@ -630,7 +704,12 @@ def build_app(projects: list[str], upstream_url: str, upstream_host_header: str 
                 await refresh_session()
                 await tracker.invalidate()
                 if route == "scoped":
-                    return await _forward_scoped(project, tracker, activate, forward_raw)
+                    return await _forward_scoped(
+                        entry.workspace or project,
+                        tracker,
+                        activate,
+                        forward_raw,
+                    )
                 return await forward_raw()
 
             try:
@@ -669,6 +748,12 @@ def main() -> None:
         action="append",
         help="Repeatable. Defaults to the kubernaut-family project list.",
     )
+    parser.add_argument(
+        "--allowed-root",
+        dest="allowed_roots",
+        action="append",
+        help="Repeatable exact checkout root; registered linked Git worktrees are accepted too.",
+    )
     args = parser.parse_args()
 
     projects = args.projects or KUBERNAUT_FAMILY_PROJECTS
@@ -679,7 +764,12 @@ def main() -> None:
         args.upstream_url,
         projects,
     )
-    app = build_app(projects, args.upstream_url, args.upstream_host_header)
+    app = build_app(
+        projects,
+        args.upstream_url,
+        args.upstream_host_header,
+        allowed_roots=args.allowed_roots,
+    )
 
     import uvicorn
 

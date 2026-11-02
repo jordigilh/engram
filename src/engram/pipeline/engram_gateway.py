@@ -2094,6 +2094,13 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
     kind = settings.get("kind")
     if kind not in {"http", "shadow_http", "stdio"}:
         raise ValueError(f"Backend {instance!r}/{backend!r} kind must be 'http', 'shadow_http', or 'stdio'")
+    workspace_routing = settings.get("workspace_routing", backend == "serena")
+    if not isinstance(workspace_routing, bool):
+        raise ValueError(f"Backend {instance!r}/{backend!r} workspace_routing must be a boolean")
+    if backend == "serena" and workspace_routing and kind != "http":
+        raise ValueError(
+            f"Backend {instance!r}/{backend!r} workspace_routing=true requires an HTTP Serena multiplex endpoint"
+        )
     if backend == "hindsight" and kind != "http":
         raise ValueError("Backend 'hindsight' must use an HTTP Hindsight bank endpoint")
 
@@ -2145,6 +2152,8 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
             )
 
         spec = {"kind": "http", "url": endpoint}
+        if backend == "serena":
+            spec["workspace_routing"] = workspace_routing
         if backend == "hindsight":
             spec["allow_insecure_http"] = allow_insecure_http
         if backend == "hindsight":
@@ -2263,6 +2272,8 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
         raise ValueError(f"Backend {instance!r}/{backend!r} shared_key must be a non-empty string")
 
     spec = {"kind": "stdio", "command": command, "args": list(args), "env": dict(env) if env else None}
+    if backend == "serena":
+        spec["workspace_routing"] = workspace_routing
     if shared_key is not None:
         spec["shared_key"] = shared_key
     return spec
@@ -2351,6 +2362,16 @@ def build_backend_adapters(registry: dict[str, dict[str, dict]]) -> dict[str, di
     for project, specs in registry.items():
         adapters[project] = {}
         for backend_key, spec in specs.items():
+            workspace_routing = spec.get("workspace_routing", backend_key == "serena")
+            if not isinstance(workspace_routing, bool):
+                raise ValueError(
+                    f"Backend {project!r}/{backend_key!r} workspace_routing must be a boolean"
+                )
+            if backend_key == "serena" and workspace_routing and spec.get("kind") != "http":
+                raise ValueError(
+                    f"Backend {project!r}/{backend_key!r} workspace_routing=true requires an HTTP Serena "
+                    "multiplex endpoint"
+                )
             if spec["kind"] == "shadow_http":
                 shared_key = spec.get("shared_key")
                 source_roots = {

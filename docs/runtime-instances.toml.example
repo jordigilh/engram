@@ -39,6 +39,7 @@ timeout_seconds = 180
 [instances."my-project".backends.serena]
 kind = "http"
 url = "http://host.containers.internal:8893/mcp/my-project"
+workspace_routing = true
 
 # Optional HTTP headers for backends that require them. Keep actual secrets in
 # deployment-local configuration; do not commit populated credentials.

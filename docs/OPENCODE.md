@@ -141,6 +141,18 @@ serialization lock. Reusing a session with a different workspace returns
 `409`; an unallowlisted or non-existent workspace returns `403`. Clients that
 omit the parameter retain the existing fixed-project behavior.
 
+Workspace-aware Serena routes must use an HTTP `serena-multiplex` backend. A
+stdio Serena process started with `--project` is fixed to one checkout and must
+declare `workspace_routing = false`; use it only with clients that omit the
+workspace context. The gateway rejects a stdio Serena configuration that claims
+`workspace_routing = true` and still fails closed if an unsupported workspace
+request reaches a fixed stdio backend.
+
+The OpenCode plugin sends workspace context by default. Set
+`workspaceRouting: false` in the plugin options only when the selected gateway
+route is backed by a fixed-workspace stdio Serena process; that mode cannot
+follow linked worktrees.
+
 Serena deployment templates must pass one repeatable `--allowed-root` for each
 canonical checkout. Exact configured roots and registered linked Git worktrees
 are accepted; arbitrary descendants, unrelated repositories, and forged Git

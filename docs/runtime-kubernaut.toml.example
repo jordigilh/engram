@@ -21,6 +21,7 @@ headers = { Host = "localhost:8891" }
 [instances.kubernaut.backends.serena]
 kind = "http"
 url = "http://host.containers.internal:8893/mcp/kubernaut"
+workspace_routing = true
 
 [instances.kubernaut.backends.rca]
 kind = "http"
@@ -45,6 +46,7 @@ headers = { Host = "localhost:8891" }
 [instances."kubernaut-v1.5".backends.serena]
 kind = "http"
 url = "http://host.containers.internal:8893/mcp/kubernaut-v1.5"
+workspace_routing = true
 
 [instances."kubernaut-v1.5".backends.rca]
 kind = "http"

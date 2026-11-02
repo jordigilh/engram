@@ -170,6 +170,17 @@ describe("v2 setup", () => {
     })
   })
 
+  test("can omit workspace context for a fixed-workspace stdio backend", async () => {
+    const explicit = { type: "remote", url: "http://127.0.0.1:8896/mcp/myrepo", oauth: false, disabled: false }
+    const { ctx, editor } = fakeV2Ctx({ engram: explicit })
+    ctx.options = { workspaceRouting: false }
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+
+    await def.setup(ctx)
+
+    expect(editor.store.get("engram")).toEqual(explicit)
+  })
+
   test("keeps hooks active without inventing a route when gateway config is absent", async () => {
     const { ctx, editor, sessionHooks } = fakeV2Ctx()
     const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }

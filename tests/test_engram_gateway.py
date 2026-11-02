@@ -1256,8 +1256,14 @@ class TestBuildBackendAdapters:
 
     def test_stdio_spec_without_shared_key_becomes_its_own_adapter(self, engram_gateway):
         registry = {
-            "dcm-cli": {"serena": {"kind": "stdio", "command": "uvx", "args": ["a"], "env": None}},
-            "dcm-utilities": {"serena": {"kind": "stdio", "command": "uvx", "args": ["b"], "env": None}},
+            "dcm-cli": {"serena": {
+                "kind": "stdio", "command": "uvx", "args": ["a"], "env": None,
+                "workspace_routing": False,
+            }},
+            "dcm-utilities": {"serena": {
+                "kind": "stdio", "command": "uvx", "args": ["b"], "env": None,
+                "workspace_routing": False,
+            }},
         }
 
         adapters = engram_gateway.build_backend_adapters(registry)
@@ -1673,6 +1679,7 @@ class TestLoadInstanceRegistry:
         assert set(registry) == {"my-project"}
         assert set(registry["my-project"]) == {"docs", "issues", "hindsight", "code", "serena"}
         assert all(spec["kind"] == "http" for spec in registry["my-project"].values())
+        assert registry["my-project"]["serena"]["workspace_routing"] is True
         assert registry["my-project"]["code"]["timeout_seconds"] == 180
         assert registry["my-project"]["hindsight"]["url"].endswith("/mcp/shared-memory/")
         assert registry["my-project"]["hindsight"]["scope_tags"] == ["my-project"]
@@ -1687,8 +1694,38 @@ class TestLoadInstanceRegistry:
         assert set(registry["my-project"]) == {"docs", "issues", "hindsight", "code", "serena"}
         assert registry["my-project"]["code"]["kind"] == "stdio"
         assert registry["my-project"]["serena"]["args"][-1] == "/path/to/my-project"
+        assert registry["my-project"]["serena"]["workspace_routing"] is False
         assert registry["my-project"]["hindsight"]["url"].endswith("/mcp/shared-memory/")
         assert registry["my-project"]["hindsight"]["mental_model_ids"] == ["my-project-methodology"]
+
+    def test_rejects_workspace_routed_stdio_serena(self, engram_gateway, tmp_path):
+        config = tmp_path / "instances.toml"
+        config.write_text(
+            """
+[instances.demo.backends.serena]
+kind = "stdio"
+command = "/opt/serena"
+workspace_routing = true
+"""
+        )
+
+        with pytest.raises(ValueError, match="workspace_routing=true requires an HTTP Serena"):
+            engram_gateway.load_instance_registry(config)
+
+    def test_accepts_fixed_workspace_stdio_serena_when_explicitly_disabled(self, engram_gateway, tmp_path):
+        config = tmp_path / "instances.toml"
+        config.write_text(
+            """
+[instances.demo.backends.serena]
+kind = "stdio"
+command = "/opt/serena"
+workspace_routing = false
+"""
+        )
+
+        registry = engram_gateway.load_instance_registry(config)
+
+        assert registry["demo"]["serena"]["workspace_routing"] is False
 
     def test_loads_http_host_adapter_instances(self, engram_gateway, tmp_path):
         config = tmp_path / "instances.toml"

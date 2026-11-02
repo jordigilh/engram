@@ -155,6 +155,10 @@ export function validateEngramOptions(value: unknown, label: string): Partial<En
     }
     if (typeof value[key] === "string") validated[key] = value[key].trim()
   }
+  if (value.workspaceRouting !== undefined && typeof value.workspaceRouting !== "boolean") {
+    throw new EngramConfigValidationError(`${label}.workspaceRouting must be a boolean`)
+  }
+  if (typeof value.workspaceRouting === "boolean") validated.workspaceRouting = value.workspaceRouting
   if (value.branchRoutes !== undefined) {
     validated.branchRoutes = validateStringRecord(value.branchRoutes, `${label}.branchRoutes`)
   }

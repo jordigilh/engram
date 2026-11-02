@@ -161,13 +161,14 @@ async function resolveEngramState(
     options: identityOptions,
     projectFromRepositoryMapping: !options.project && Boolean(identityOptions.project),
   })
+  const workspace = options.workspaceRouting === false ? undefined : path.resolve(directory)
   // A global plugin is also initialized for OpenChamber's home/chat roots.
   // Those locations are not Engram projects, so deriving a route from an
   // arbitrary directory name would create a guaranteed gateway 404. A plain
   // Git checkout keeps the zero-mapping convention; non-Git roots need an
   // explicit directory/project mapping or an explicit plugin identity.
   const mcpV2 = gitWorktree || hasConfiguredIdentity(directoryBasename, options)
-    ? buildMcpServerConfigV2(identity, { ...options, workspace: path.resolve(directory) })
+    ? buildMcpServerConfigV2(identity, { ...options, workspace })
     : undefined
   return {
     identity,
@@ -297,14 +298,15 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
   // The direct config entry (mcp.servers.engram) is the route authority; the
   // generated entry is only a fallback and never overwrites an explicit one.
   await ctx.mcp.transform((editor) => {
+    const workspace = options.workspaceRouting === false ? undefined : directory
     const explicit = editor.get("engram") as { url?: unknown } | undefined
     if (!gatewayUrl && typeof explicit?.url === "string" && explicit.url.trim()) {
-      gatewayUrl = withWorkspaceContext(explicit.url, directory)
+      gatewayUrl = withWorkspaceContext(explicit.url, workspace)
       if (gatewayUrl !== explicit.url) {
         editor.set("engram", { ...explicit, url: gatewayUrl })
       }
     } else if (typeof explicit?.url === "string" && explicit.url.trim()) {
-      const contextualUrl = withWorkspaceContext(explicit.url, directory)
+      const contextualUrl = withWorkspaceContext(explicit.url, workspace)
       if (contextualUrl !== explicit.url) {
         editor.set("engram", { ...explicit, url: contextualUrl })
       }

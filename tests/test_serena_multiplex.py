@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+import urllib.parse
 
 import pytest
 
@@ -610,6 +611,15 @@ class TestParseSseJson:
 
 
 class TestWorkspaceAuthorization:
+    def test_process_startup_requires_workspace_allowlist(self, serena_multiplex):
+        with pytest.raises(ValueError, match="--allowed-root"):
+            serena_multiplex._require_allowed_roots([])
+
+    def test_process_startup_rejects_blank_workspace_roots(self, serena_multiplex):
+        for roots in ([""], ["   "], ["/canonical", " "]):
+            with pytest.raises(ValueError, match="blank"):
+                serena_multiplex._require_allowed_roots(roots)
+
     def test_accepts_an_exact_configured_root(self, serena_multiplex, tmp_path):
         root = tmp_path / "canonical"
         root.mkdir()
@@ -789,6 +799,124 @@ class TestBuildApp:
 
         assert mismatch.status_code == 409
         assert targets == [str(root.resolve())]
+
+    def test_find_symbol_returns_the_requested_worktree_definition_not_canonical(
+        self, serena_multiplex, tmp_path, monkeypatch
+    ):
+        """A worktree request must not silently use the canonical Serena root."""
+        import httpx
+        from starlette.testclient import TestClient
+
+        for variable in (
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        ):
+            monkeypatch.delenv(variable, raising=False)
+        canonical = tmp_path / "canonical"
+        worktree = tmp_path / "worktree"
+        canonical.mkdir()
+        subprocess.run(["git", "-C", str(canonical), "init", "--quiet"], check=True)
+        subprocess.run(
+            [
+                "git", "-C", str(canonical),
+                "-c", "user.name=Engram Test",
+                "-c", "user.email=engram-test@example.com",
+                "commit", "--quiet", "--allow-empty", "-m", "init",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(canonical), "worktree", "add", "--quiet", "--detach", str(worktree)],
+            check=True,
+        )
+
+        activated = []
+
+        async def fake_activate(target):
+            activated.append(target)
+
+        monkeypatch.setattr(
+            serena_multiplex,
+            "_make_activate",
+            lambda _url, _host=None: fake_activate,
+        )
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def request(self, method, url, content=None, headers=None):
+                message = json.loads(content or b"{}")
+                if method == "POST" and message.get("method") == "initialize":
+                    return httpx.Response(
+                        200,
+                        headers={"mcp-session-id": "upstream-1"},
+                        content=b'{"jsonrpc":"2.0","id":1,"result":{}}',
+                    )
+                if method == "POST" and message.get("method") == "notifications/initialized":
+                    return httpx.Response(202, content=b"")
+                if method == "POST" and message.get("method") == "tools/call":
+                    start_line = 666 if activated[-1] == str(worktree.resolve()) else 439
+                    result = {
+                        "jsonrpc": "2.0",
+                        "id": message.get("id"),
+                        "result": {
+                            "content": [{
+                                "type": "text",
+                                "text": json.dumps([{
+                                    "name_path": "HandleApprove",
+                                    "relative_path": "pkg/apifrontend/tools/crd_tools.go",
+                                    "body_location": {"start_line": start_line, "end_line": start_line + 54},
+                                }]),
+                            }],
+                            "isError": False,
+                        },
+                    }
+                    return httpx.Response(200, content=json.dumps(result).encode())
+                return httpx.Response(200, content=b"{}").raise_for_status()
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: FakeClient())
+        app = serena_multiplex.build_app(
+            ["kubernaut"],
+            "http://upstream/mcp",
+            allowed_roots=[canonical],
+        )
+        client = TestClient(app)
+        query = "?workspace=" + urllib.parse.quote(str(worktree), safe="")
+        initialized = client.post(
+            "/mcp/kubernaut" + query,
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
+        response = client.post(
+            "/mcp/kubernaut" + query,
+            headers={"mcp-session-id": initialized.headers["mcp-session-id"]},
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "find_symbol",
+                    "arguments": {
+                        "name_path_pattern": "HandleApprove",
+                        "relative_path": "pkg/apifrontend/tools/crd_tools.go",
+                        "depth": 0,
+                    },
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        symbols = json.loads(response.json()["result"]["content"][0]["text"])
+        assert symbols[0]["body_location"]["start_line"] == 666
+        assert symbols[0]["body_location"]["start_line"] != 439
+        assert activated == [str(worktree.resolve())]
 
     def test_unauthorized_workspace_is_rejected_before_upstream_session_creation(
         self, serena_multiplex, tmp_path, monkeypatch

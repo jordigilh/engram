@@ -972,6 +972,27 @@ class TestBuildApp:
 
         asyncio.run(run())
 
+    def test_workspace_binding_is_compare_and_set(self, serena_multiplex):
+        async def run():
+            registry = serena_multiplex.DownstreamSessionRegistry()
+            session_id, entry = await registry.create("kubernaut", "upstream-1")
+            ready = asyncio.Event()
+
+            async def bind(workspace):
+                await ready.wait()
+                return await registry.bind_workspace(session_id, entry, workspace)
+
+            first = asyncio.create_task(bind("/worktrees/first"))
+            second = asyncio.create_task(bind("/worktrees/second"))
+            ready.set()
+            results = await asyncio.gather(first, second)
+
+            assert sorted(results) == [False, True]
+            assert entry.workspace in {"/worktrees/first", "/worktrees/second"}
+            assert await registry.bind_workspace(session_id, entry, "/worktrees/other") is False
+
+        asyncio.run(run())
+
     def test_upstream_session_loss_reinitializes_once_and_retries(self, serena_multiplex, monkeypatch):
         import httpx
         from starlette.testclient import TestClient

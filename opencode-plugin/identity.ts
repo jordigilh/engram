@@ -33,6 +33,8 @@ export interface EngramRepositoryMappings {
 
 export interface EngramPluginOptions extends RepositoryIdentityOptions {
   gatewayUrl?: string
+  /** Set false only for fixed-workspace stdio Serena routes. */
+  workspaceRouting?: boolean
   repositories?: EngramRepositoryMappings
   /** Expected metadata for the immutable production plugin artifact. */
   pluginArtifact?: PluginArtifactExpectation
@@ -153,12 +155,12 @@ export interface McpServerEntryV2 {
  * tool arguments remain authoritative for zvec's own root selection.
  */
 export function withWorkspaceContext(url: string, workspace?: string): string {
-  const normalizedWorkspace = workspace?.trim()
-  if (!normalizedWorkspace) return url
+  const rawWorkspace = workspace
+  if (!rawWorkspace || !rawWorkspace.trim()) return url
 
   try {
     const parsed = new URL(url)
-    parsed.searchParams.set(ENGRAM_WORKSPACE_QUERY_PARAMETER, normalizedWorkspace)
+    parsed.searchParams.set(ENGRAM_WORKSPACE_QUERY_PARAMETER, rawWorkspace)
     return parsed.toString()
   } catch {
     // Explicit MCP entries may be resolved by the host after plugin setup.

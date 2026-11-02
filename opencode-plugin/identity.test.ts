@@ -184,6 +184,13 @@ describe("buildMcpServerConfigV2", () => {
       "/worktrees/fix-123",
     )).toBe("http://127.0.0.1:8896/mcp/myrepo?token=local&workspace=%2Fworktrees%2Ffix-123")
   })
+
+  test("preserves leading and trailing whitespace in a valid workspace path", () => {
+    const workspace = " /worktrees/fix-123 "
+    const result = withWorkspaceContext("http://127.0.0.1:8896/mcp/myrepo", workspace)
+
+    expect(new URL(result).searchParams.get("workspace")).toBe(workspace)
+  })
 })
 
 describe("mergeMcpEditor", () => {

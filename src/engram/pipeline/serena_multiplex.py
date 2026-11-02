@@ -235,11 +235,15 @@ class DownstreamSessionRegistry:
                 entry.upstream_session_id = upstream_session_id
                 entry.last_used = self._clock()
 
-    async def bind_workspace(self, session_id: str, entry: DownstreamSession, workspace: str) -> None:
+    async def bind_workspace(self, session_id: str, entry: DownstreamSession, workspace: str) -> bool:
         async with self._lock:
-            if self._sessions.get(session_id) is entry:
-                entry.workspace = workspace
-                entry.last_used = self._clock()
+            if self._sessions.get(session_id) is not entry:
+                return False
+            if entry.workspace is not None:
+                return entry.workspace == workspace
+            entry.workspace = workspace
+            entry.last_used = self._clock()
+            return True
 
     async def remove(self, session_id: str, project: str) -> DownstreamSession | None:
         async with self._lock:
@@ -661,10 +665,8 @@ def build_app(
                 return Response(status_code=404, content=b"Unknown or expired mcp-session-id")
 
             if requested_workspace is not None:
-                if entry.workspace is not None and entry.workspace != requested_workspace:
+                if not await sessions.bind_workspace(downstream_session_id, entry, requested_workspace):
                     return Response(status_code=409, content=b"MCP session is bound to another workspace")
-                if entry.workspace is None:
-                    await sessions.bind_workspace(downstream_session_id, entry, requested_workspace)
 
             async def forward_raw() -> Response:
                 headers = {

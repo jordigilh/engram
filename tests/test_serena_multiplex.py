@@ -27,6 +27,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
+
+import pytest
 
 
 class TestActiveProjectTracker:
@@ -605,6 +608,62 @@ class TestParseSseJson:
 
         assert result == {"jsonrpc": "2.0", "id": 1, "result": {}}
 
+
+class TestWorkspaceAuthorization:
+    def test_accepts_an_exact_configured_root(self, serena_multiplex, tmp_path):
+        root = tmp_path / "canonical"
+        root.mkdir()
+
+        assert serena_multiplex._authorize_workspace(
+            str(root), frozenset({root})
+        ) == str(root.resolve())
+
+    def test_accepts_a_registered_linked_worktree(self, serena_multiplex, tmp_path, monkeypatch):
+        for variable in (
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        ):
+            monkeypatch.delenv(variable, raising=False)
+        canonical = tmp_path / "canonical"
+        linked = tmp_path / "linked"
+        canonical.mkdir()
+        subprocess.run(["git", "-C", str(canonical), "init", "--quiet"], check=True)
+        subprocess.run(
+            [
+                "git", "-C", str(canonical),
+                "-c", "user.name=Engram Test",
+                "-c", "user.email=engram-test@example.com",
+                "commit", "--quiet", "--allow-empty", "-m", "init",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(canonical), "worktree", "add", "--quiet", "--detach", str(linked)],
+            check=True,
+        )
+
+        assert serena_multiplex._authorize_workspace(
+            str(linked), frozenset({canonical})
+        ) == str(linked.resolve())
+
+    def test_rejects_nested_and_unrelated_paths(self, serena_multiplex, tmp_path):
+        root = tmp_path / "canonical"
+        root.mkdir()
+        nested = root / "nested"
+        nested.mkdir()
+
+        with pytest.raises(ValueError, match="allowlist"):
+            serena_multiplex._authorize_workspace(str(nested), frozenset({root}))
+
+        with pytest.raises(ValueError, match="allowlist"):
+            serena_multiplex._authorize_workspace(
+                str(tmp_path / "unrelated"), frozenset({root})
+            )
+
     def test_parses_plain_json_body(self, serena_multiplex):
         body = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}).encode()
 
@@ -646,6 +705,124 @@ class TestBuildApp:
         response = client.get("/mcp/kubernaut")
 
         assert response.status_code == 405
+
+    def test_workspace_is_bound_to_a_session_and_activates_the_authorized_path(
+        self, serena_multiplex, tmp_path, monkeypatch
+    ):
+        import httpx
+        from starlette.testclient import TestClient
+
+        root = tmp_path / "canonical"
+        other = tmp_path / "other"
+        root.mkdir()
+        other.mkdir()
+        targets = []
+
+        async def fake_activate(target):
+            targets.append(target)
+
+        monkeypatch.setattr(
+            serena_multiplex,
+            "_make_activate",
+            lambda _url, _host=None: fake_activate,
+        )
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def request(self, method, url, content=None, headers=None):
+                if method == "POST" and b'"method": "initialize"' in (content or b""):
+                    return httpx.Response(
+                        200,
+                        headers={"mcp-session-id": "upstream-1"},
+                        content=b'{"jsonrpc":"2.0","id":1,"result":{}}',
+                    )
+                if method == "POST" and b"notifications/initialized" in (content or b""):
+                    return httpx.Response(202, content=b"")
+                return httpx.Response(
+                    200,
+                    content=b'{"jsonrpc":"2.0","id":2,"result":{"content":[],"isError":false}}',
+                )
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: FakeClient())
+        app = serena_multiplex.build_app(
+            ["kubernaut"],
+            "http://upstream/mcp",
+            allowed_roots=[root, other],
+        )
+        client = TestClient(app)
+        query = "?workspace=" + str(root).replace("/", "%2F")
+
+        initialized = client.post(
+            "/mcp/kubernaut" + query,
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
+        session_id = initialized.headers["mcp-session-id"]
+        response = client.post(
+            "/mcp/kubernaut" + query,
+            headers={"mcp-session-id": session_id},
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "find_symbol", "arguments": {}},
+            },
+        )
+
+        assert response.status_code == 200
+        assert targets == [str(root.resolve())]
+
+        mismatch = client.post(
+            "/mcp/kubernaut?workspace=" + str(other).replace("/", "%2F"),
+            headers={"mcp-session-id": session_id},
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "find_symbol", "arguments": {}},
+            },
+        )
+
+        assert mismatch.status_code == 409
+        assert targets == [str(root.resolve())]
+
+    def test_unauthorized_workspace_is_rejected_before_upstream_session_creation(
+        self, serena_multiplex, tmp_path, monkeypatch
+    ):
+        from starlette.testclient import TestClient
+
+        calls = []
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def request(self, *args, **kwargs):
+                calls.append(args)
+                raise AssertionError("upstream must not be contacted")
+
+        import httpx
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: FakeClient())
+        app = serena_multiplex.build_app(
+            ["kubernaut"],
+            "http://upstream/mcp",
+            allowed_roots=[tmp_path / "authorized"],
+        )
+        response = TestClient(app).post(
+            "/mcp/kubernaut?workspace=%2Foutside",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        )
+
+        assert response.status_code == 403
+        assert calls == []
 
     def test_initialize_maps_downstream_session_to_upstream_session(self, serena_multiplex, monkeypatch):
         import httpx

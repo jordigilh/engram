@@ -140,7 +140,7 @@ describe("v2 setup", () => {
     const cleanup = await def.setup(ctx)
     expect(editor.store.get("engram")).toEqual({
       type: "remote",
-      url: "http://127.0.0.1:8896/mcp/engram",
+      url: "http://127.0.0.1:8896/mcp/engram?workspace=%2Fworkspace%2Fengram",
       oauth: false,
       disabled: false,
       codemode: false,
@@ -164,7 +164,10 @@ describe("v2 setup", () => {
     const { ctx, editor } = fakeV2Ctx({ engram: explicit })
     const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
     await def.setup(ctx)
-    expect(editor.store.get("engram")).toEqual(explicit)
+    expect(editor.store.get("engram")).toEqual({
+      ...explicit,
+      url: "http://127.0.0.1:8896/mcp/dcm?workspace=%2Fworkspace%2Fengram",
+    })
   })
 
   test("keeps hooks active without inventing a route when gateway config is absent", async () => {

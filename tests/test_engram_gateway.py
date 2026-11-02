@@ -503,6 +503,36 @@ class TestAggregateToolsList:
 
 
 class TestHandleToolsCall:
+    def test_forwards_workspace_context_only_through_serena_adapter(self, engram_gateway):
+        class WorkspaceAwareAdapter(FakeAdapter):
+            def __init__(self):
+                super().__init__(call_results={"find_symbol": {"content": [], "isError": False}})
+                self.workspace = None
+
+            async def call_tool_with_workspace(self, name, arguments, workspace):
+                self.workspace = workspace
+                return await self.call_tool(name, arguments)
+
+        serena = WorkspaceAwareAdapter()
+        catalog = {"find_symbol": ("serena", "find_symbol")}
+        message = {
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "tools/call",
+            "params": {"name": "find_symbol", "arguments": {}},
+        }
+
+        asyncio.run(
+            engram_gateway.handle_tools_call(
+                message,
+                catalog,
+                {"serena": serena},
+                workspace="/worktrees/fix-123",
+            )
+        )
+
+        assert serena.workspace == "/worktrees/fix-123"
+
     def test_managed_zvec_search_waits_for_fresh_index(self, engram_gateway):
         primary_result = {"content": [{"type": "text", "text": "fresh"}], "isError": True}
         code = FakeAdapter(call_results={"zvec_grep_search": primary_result})
@@ -774,6 +804,52 @@ class TestHttpRelayAdapter:
 
         assert asyncio.run(adapter.list_tools()) == [{"name": "recall"}]
         assert initialize_count == 2
+
+    def test_workspace_context_is_carried_on_every_mcp_roundtrip(self, engram_gateway, monkeypatch):
+        import httpx
+
+        urls = []
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, url, json, headers):
+                urls.append(url)
+                if json["method"] == "initialize":
+                    return httpx.Response(
+                        200,
+                        headers={"mcp-session-id": "session-1"},
+                        content=b'{"jsonrpc":"2.0","id":1,"result":{}}',
+                        request=httpx.Request("POST", url),
+                    )
+                if json["method"] == "notifications/initialized":
+                    return httpx.Response(202, request=httpx.Request("POST", url))
+                return httpx.Response(
+                    200,
+                    content=b'{"jsonrpc":"2.0","id":2,"result":{"content":[],"isError":false}}',
+                    request=httpx.Request("POST", url),
+                )
+
+            async def delete(self, url, headers):
+                urls.append(url)
+                return httpx.Response(200, request=httpx.Request("DELETE", url))
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: FakeClient())
+        adapter = engram_gateway.HttpRelayAdapter("http://upstream/mcp?token=local")
+
+        result = asyncio.run(adapter.call_tool_with_workspace("find_symbol", {}, "/worktrees/fix-123"))
+
+        assert result["isError"] is False
+        assert urls == [
+            "http://upstream/mcp?token=local&workspace=%2Fworktrees%2Ffix-123",
+            "http://upstream/mcp?token=local&workspace=%2Fworktrees%2Ffix-123",
+            "http://upstream/mcp?token=local&workspace=%2Fworktrees%2Ffix-123",
+            "http://upstream/mcp?token=local&workspace=%2Fworktrees%2Ffix-123",
+        ]
 
 
 class TestRecallResponseNormalization:

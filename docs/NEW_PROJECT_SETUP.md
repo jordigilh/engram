@@ -639,15 +639,23 @@ edited at a time (step 8's plain shared daemon is simpler and sufficient).
     arguments. `launchctl kickstart -k` restarts the old job definition; it does
     not reread `ProgramArguments`.
 
-    ```bash
-    plist="$HOME/Library/LaunchAgents/io.vectorize.serena-multiplex.<family>.plist"
-    sed "s|__HOME__|$HOME|g" \
-      "launchd/io.vectorize.serena-multiplex.<family>.plist" > "$plist"
-    launchctl bootout "gui/$(id -u)/io.vectorize.serena-multiplex.<family>" 2>/dev/null || true
-    launchctl bootstrap "gui/$(id -u)" "$plist"
-    launchctl print "gui/$(id -u)/io.vectorize.serena-multiplex.<family>" \
-      | grep -- '--allowed-root'
-    ```
+     ```bash
+     set -eu
+     engram_checkout="/absolute/path/to/engram"
+     plist="$HOME/Library/LaunchAgents/io.vectorize.serena-multiplex.<family>.plist"
+     rendered="$(mktemp "$HOME/Library/LaunchAgents/.serena-multiplex.<family>.XXXXXX")"
+     trap 'rm -f "$rendered"' EXIT
+     sed "s|__HOME__|$HOME|g" \
+       "$engram_checkout/launchd/io.vectorize.serena-multiplex.<family>.plist" \
+       > "$rendered"
+     plutil -lint "$rendered" >/dev/null
+     chmod 0644 "$rendered"
+     mv "$rendered" "$plist"
+     launchctl bootout "gui/$(id -u)/io.vectorize.serena-multiplex.<family>" 2>/dev/null || true
+     launchctl bootstrap "gui/$(id -u)" "$plist"
+     launchctl print "gui/$(id -u)/io.vectorize.serena-multiplex.<family>" \
+       | sed -n '/arguments = {/,/}/p'
+     ```
 
     A missing `--allowed-root` is a startup error for the workspace-aware
     multiplex; this prevents a stale service definition from serving a

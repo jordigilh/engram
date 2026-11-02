@@ -615,6 +615,11 @@ class TestWorkspaceAuthorization:
         with pytest.raises(ValueError, match="--allowed-root"):
             serena_multiplex._require_allowed_roots([])
 
+    def test_process_startup_rejects_blank_workspace_roots(self, serena_multiplex):
+        for roots in ([""], ["   "], ["/canonical", " "]):
+            with pytest.raises(ValueError, match="blank"):
+                serena_multiplex._require_allowed_roots(roots)
+
     def test_accepts_an_exact_configured_root(self, serena_multiplex, tmp_path):
         root = tmp_path / "canonical"
         root.mkdir()

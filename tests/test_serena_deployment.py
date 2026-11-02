@@ -33,7 +33,7 @@ def _launchd_program_arguments(template: pathlib.Path) -> list[str]:
     macOS's plist tools accept the deployed/rendered form while Python's
     strict plist parser rejects this source template.
     """
-    text = template.read_text()
+    text = re.sub(r"<!--.*?-->", "", template.read_text(), flags=re.DOTALL)
     match = re.search(
         r"<key>ProgramArguments</key>\s*<array>(.*?)</array>",
         text,

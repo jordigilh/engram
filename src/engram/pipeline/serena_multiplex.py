@@ -335,6 +335,11 @@ def _require_allowed_roots(allowed_roots: list[str] | None) -> list[str]:
             "Serena multiplex requires at least one --allowed-root; "
             "configure canonical checkout roots before starting it"
         )
+    if any(not isinstance(root, str) or not root.strip() for root in allowed_roots):
+        raise ValueError(
+            "Serena multiplex rejects blank --allowed-root values; "
+            "configure canonical checkout roots before starting it"
+        )
     return allowed_roots
 
 

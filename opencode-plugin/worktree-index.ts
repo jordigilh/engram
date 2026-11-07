@@ -319,7 +319,6 @@ async function isProjectWorktree(directory: string, canonicalDirectory: string):
 export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
   const canonicalDirectory = path.resolve(options.canonicalDirectory)
   const configuredRoots = new Set<string>()
-  const authorizedRoots = new Map<string, string>()
   const aggregateRoots = new Set<string>()
   const rememberConfiguredRoot = (directory: string, aggregate = false): void => {
     if (!path.isAbsolute(directory)) return
@@ -338,8 +337,8 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
   }
 
   /** Replace dynamic authorization with the current active and listed roots. */
-  const setAuthorizedRoots = async (dynamicRoots: Set<string>): Promise<void> => {
-    authorizedRoots.clear()
+  const setAuthorizedRoots = async (dynamicRoots: Set<string>): Promise<Map<string, string>> => {
+    const authorizedRoots = new Map<string, string>()
     for (const normalized of configuredRoots) {
       authorizedRoots.set(normalized, await realpathOrResolved(normalized))
     }
@@ -348,6 +347,7 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
         authorizedRoots.set(normalized, await realpathOrResolved(normalized))
       }
     }
+    return authorizedRoots
   }
 
   const log = options.log || ((message: string) => console.error(`[engram-plugin] ${message}`))
@@ -380,7 +380,7 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
   const rebuildAfterRun = new Set<string>()
 
   /** Rebuild exact authorization from stable configuration and current context. */
-  async function refreshAuthorizedRoots(): Promise<void> {
+  async function refreshAuthorizedRoots(): Promise<Map<string, string>> {
     const dynamicRoots = new Set<string>()
     const activeDirectory = options.getActiveDirectory?.()
     if (activeDirectory && path.isAbsolute(activeDirectory)) {
@@ -410,11 +410,11 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
         rememberRoot(entry.directory, dynamicRoots)
       }
     }
-    await setAuthorizedRoots(dynamicRoots)
+    return setAuthorizedRoots(dynamicRoots)
   }
 
   async function authorizeRoot(directory: string): Promise<{ normalized: string; aggregate: boolean }> {
-    await refreshAuthorizedRoots()
+    const authorizedRoots = await refreshAuthorizedRoots()
     const requested = path.resolve(directory)
     const requestedReal = await realpathOrResolved(requested)
     for (const [configured, real] of authorizedRoots) {

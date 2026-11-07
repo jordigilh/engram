@@ -274,6 +274,7 @@ function readV2SessionID(event: unknown): string {
 // ---------------------------------------------------------------------------
 type PluginContext = Parameters<Parameters<typeof Plugin.define>[0]["setup"]>[0]
 
+/** Initialize Engram hooks and workspace-aware zvec readiness for this checkout. */
 async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | void> {
   const directory = ctx.location.directory || ""
   logBuildLine()
@@ -412,6 +413,7 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
     ? createWorktreeIndexer({
         projectID: ctx.location.project.id,
         canonicalDirectory,
+        getActiveDirectory: () => ctx.location.directory || undefined,
         listWorktrees: () => ctx.worktree.list({ projectID: ctx.location.project.id }),
         mcpUrl: worktreePolicy.mcpUrl,
         embedding: worktreePolicy.embedding || DEFAULT_ZVEC_EMBEDDING,

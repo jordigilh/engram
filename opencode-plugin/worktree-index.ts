@@ -37,6 +37,10 @@ export interface ZvecIndexProvenance extends ZvecGitRevision {
 export interface WorktreeIndexerOptions {
   projectID: string
   canonicalDirectory: string
+  /** Current OpenCode checkout, refreshed before each authorization check. */
+  getActiveDirectory?: () => string | undefined
+  /** Verify that the active checkout belongs to the canonical project. */
+  isProjectWorktree?: (directory: string) => Promise<boolean>
   listWorktrees: () => Promise<readonly WorktreeEntry[]>
   mcpUrl?: string
   mcpFetch?: FetchLike
@@ -279,6 +283,31 @@ async function realpathOrResolved(directory: string): Promise<string> {
   }
 }
 
+/** Resolve a path reported by Git relative to the inspected checkout. */
+async function gitPath(directory: string, args: string[]): Promise<string | undefined> {
+  const value = await readGitValue(directory, args)
+  if (!value) return undefined
+  return realpathOrResolved(path.isAbsolute(value) ? value : path.resolve(directory, value))
+}
+
+/** Verify an exact top-level checkout belongs to the canonical Git project. */
+async function isProjectWorktree(directory: string, canonicalDirectory: string): Promise<boolean> {
+  const requested = await realpathOrResolved(directory)
+  const canonical = await realpathOrResolved(canonicalDirectory)
+  if (requested === canonical) return true
+
+  const [requestedTop, canonicalTop, requestedCommon, canonicalCommon] = await Promise.all([
+    gitPath(directory, ["rev-parse", "--show-toplevel"]),
+    gitPath(canonicalDirectory, ["rev-parse", "--show-toplevel"]),
+    gitPath(directory, ["rev-parse", "--git-common-dir"]),
+    gitPath(canonicalDirectory, ["rev-parse", "--git-common-dir"]),
+  ])
+  return requestedTop === requested
+    && canonicalTop === canonical
+    && requestedCommon !== undefined
+    && requestedCommon === canonicalCommon
+}
+
 /**
  * Watches OpenCode's worktree inventory and serially maintains each configured
  * sibling worktree's local zvec index. The canonical checkout is deliberately
@@ -289,18 +318,38 @@ async function realpathOrResolved(directory: string): Promise<string> {
  */
 export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
   const canonicalDirectory = path.resolve(options.canonicalDirectory)
-  const authorizedRoots = new Map<string, string>()
+  const configuredRoots = new Set<string>()
   const aggregateRoots = new Set<string>()
-  const rememberRoot = (directory: string, aggregate = false): void => {
+  const rememberConfiguredRoot = (directory: string, aggregate = false): void => {
     if (!path.isAbsolute(directory)) return
     const normalized = path.resolve(directory)
-    authorizedRoots.set(normalized, normalized)
+    configuredRoots.add(normalized)
     if (aggregate) aggregateRoots.add(normalized)
   }
-  rememberRoot(canonicalDirectory)
-  for (const directory of options.allowedRoots || []) rememberRoot(directory)
-  for (const directory of options.aggregateRoots || []) rememberRoot(directory, true)
-  const rebuildAfterRun = new Set<string>()
+  rememberConfiguredRoot(canonicalDirectory)
+  for (const directory of options.allowedRoots || []) rememberConfiguredRoot(directory)
+  for (const directory of options.aggregateRoots || []) rememberConfiguredRoot(directory, true)
+  const isProjectWorktreeForActiveDirectory = options.isProjectWorktree
+    || ((directory: string) => isProjectWorktree(directory, canonicalDirectory))
+  const rememberRoot = (directory: string, roots: Set<string>): void => {
+    if (!path.isAbsolute(directory)) return
+    roots.add(path.resolve(directory))
+  }
+
+  /** Replace dynamic authorization with the current active and listed roots. */
+  const setAuthorizedRoots = async (dynamicRoots: Set<string>): Promise<Map<string, string>> => {
+    const authorizedRoots = new Map<string, string>()
+    for (const normalized of configuredRoots) {
+      authorizedRoots.set(normalized, await realpathOrResolved(normalized))
+    }
+    for (const normalized of dynamicRoots) {
+      if (!configuredRoots.has(normalized)) {
+        authorizedRoots.set(normalized, await realpathOrResolved(normalized))
+      }
+    }
+    return authorizedRoots
+  }
+
   const log = options.log || ((message: string) => console.error(`[engram-plugin] ${message}`))
   const hasManifest = options.hasManifest || hasZvecManifest
   const getRevision = options.getRevision || getZvecGitRevision
@@ -328,28 +377,44 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
   let refreshQueue: Promise<void> = Promise.resolve()
   let indexQueue: Promise<void> = Promise.resolve()
   const pendingPromises = new Map<string, Promise<void>>()
+  const rebuildAfterRun = new Set<string>()
 
-  async function refreshAuthorizedRoots(): Promise<void> {
-    let entries: readonly WorktreeEntry[]
+  /** Rebuild exact authorization from stable configuration and current context. */
+  async function refreshAuthorizedRoots(): Promise<Map<string, string>> {
+    const dynamicRoots = new Set<string>()
+    const activeDirectory = options.getActiveDirectory?.()
+    if (activeDirectory && path.isAbsolute(activeDirectory)) {
+      let belongsToProject = false
+      try {
+        belongsToProject = await isProjectWorktreeForActiveDirectory(activeDirectory)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        log(`could not validate active worktree ${activeDirectory}: ${message}`)
+      }
+      if (belongsToProject) {
+        rememberRoot(activeDirectory, dynamicRoots)
+      } else {
+        log(`active worktree ${activeDirectory} is not a checkout of ${canonicalDirectory}`)
+      }
+    }
+
+    let entries: readonly WorktreeEntry[] = []
     try {
       entries = await options.listWorktrees()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       log(`could not refresh authorized worktree roots: ${message}`)
-      return
     }
     for (const entry of entries) {
       if (entry && typeof entry.directory === "string" && path.isAbsolute(entry.directory)) {
-        rememberRoot(entry.directory)
+        rememberRoot(entry.directory, dynamicRoots)
       }
     }
-    for (const [normalized] of authorizedRoots) {
-      authorizedRoots.set(normalized, await realpathOrResolved(normalized))
-    }
+    return setAuthorizedRoots(dynamicRoots)
   }
 
   async function authorizeRoot(directory: string): Promise<{ normalized: string; aggregate: boolean }> {
-    await refreshAuthorizedRoots()
+    const authorizedRoots = await refreshAuthorizedRoots()
     const requested = path.resolve(directory)
     const requestedReal = await realpathOrResolved(requested)
     for (const [configured, real] of authorizedRoots) {

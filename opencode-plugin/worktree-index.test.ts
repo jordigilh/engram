@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { execFileSync } from "node:child_process"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
@@ -16,6 +17,24 @@ import {
   writeZvecProvenance,
 } from "./worktree-index"
 import { runZvecMcpIndex } from "./zvec-mcp"
+
+function runGit(directory: string, args: string[]): string {
+  return execFileSync("git", args, {
+    cwd: directory,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  })
+}
+
+async function initializeGitRepository(directory: string): Promise<void> {
+  await mkdir(directory, { recursive: true })
+  runGit(directory, ["init"])
+  runGit(directory, ["config", "user.email", "engram-tests@example.com"])
+  runGit(directory, ["config", "user.name", "Engram Tests"])
+  await writeFile(path.join(directory, "README.md"), "fixture\n")
+  runGit(directory, ["add", "README.md"])
+  runGit(directory, ["commit", "-m", "fixture"])
+}
 
 describe("worktree indexing policy", () => {
   test("requires explicit project configuration and supports global opt-in", () => {
@@ -166,6 +185,118 @@ describe("createWorktreeIndexer", () => {
     await indexer.ensureIndexed("/worktrees/current")
     expect(indexed).toBe(true)
     indexer.dispose()
+  })
+
+  test("authorizes the active checkout without a configured root", async () => {
+    let indexed = false
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
+      getActiveDirectory: () => "/worktrees/current",
+      isProjectWorktree: async () => true,
+      listWorktrees: async () => [],
+      hasManifest: async () => indexed,
+      getRevision: async () => ({ branch: "main", commit: "current", dirty: true }),
+      readProvenance: async (directory) => indexed
+        ? {
+            version: 2,
+            root: directory,
+            branch: "main",
+            commit: "current",
+            dirty: true,
+          }
+        : undefined,
+      writeProvenance: async () => {},
+      runIndex: async () => {
+        indexed = true
+      },
+      log: () => {},
+    })
+
+    await indexer.ensureIndexed("/worktrees/current")
+    expect(indexed).toBe(true)
+    indexer.dispose()
+  })
+
+  test("refreshes authorization when the active checkout changes", async () => {
+    let activeDirectory = "/worktrees/first"
+    let indexCalls = 0
+    const revision: ZvecGitRevision = { branch: "main", commit: "current", dirty: false }
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
+      getActiveDirectory: () => activeDirectory,
+      isProjectWorktree: async () => true,
+      listWorktrees: async () => [],
+      hasManifest: async () => true,
+      getRevision: async () => revision,
+      readProvenance: async (directory) => ({ version: 2, root: directory, ...revision }),
+      runIndex: async () => {
+        indexCalls += 1
+      },
+      log: () => {},
+    })
+
+    await indexer.ensureIndexed(activeDirectory)
+    activeDirectory = "/worktrees/second"
+    await indexer.ensureIndexed(activeDirectory)
+
+    expect(indexCalls).toBe(0)
+    await expect(indexer.ensureIndexed("/worktrees/first")).rejects.toThrow("not authorized")
+    indexer.dispose()
+  })
+
+  test("does not authorize an unrelated active checkout", async () => {
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
+      getActiveDirectory: () => "/worktrees/unrelated",
+      isProjectWorktree: async () => false,
+      listWorktrees: async () => [],
+      hasManifest: async () => true,
+      log: () => {},
+    })
+
+    await expect(indexer.ensureIndexed("/worktrees/unrelated")).rejects.toThrow("not authorized")
+    indexer.dispose()
+  })
+
+  test("validates active roots against the canonical Git project", async () => {
+    const fixture = await mkdtemp(path.join(tmpdir(), "engram-zvec-project-membership-"))
+    const canonical = path.join(fixture, "canonical")
+    const linked = path.join(fixture, "linked")
+    const unrelated = path.join(fixture, "unrelated")
+    const subdirectory = path.join(linked, "src")
+    try {
+      await initializeGitRepository(canonical)
+      runGit(canonical, ["worktree", "add", "-b", "linked", linked])
+      await initializeGitRepository(unrelated)
+      await mkdir(subdirectory)
+
+      let activeDirectory = linked
+      const revision: ZvecGitRevision = { branch: "linked", commit: "fixture", dirty: false }
+      const indexer = createWorktreeIndexer({
+        projectID: "project-service-api",
+        canonicalDirectory: canonical,
+        getActiveDirectory: () => activeDirectory,
+        listWorktrees: async () => [],
+        hasManifest: async () => true,
+        getRevision: async () => revision,
+        readProvenance: async (directory) => ({ version: 2, root: directory, ...revision }),
+        log: () => {},
+      })
+
+      await indexer.ensureIndexed(linked)
+
+      activeDirectory = subdirectory
+      await expect(indexer.ensureIndexed(subdirectory)).rejects.toThrow("not authorized")
+
+      activeDirectory = unrelated
+      await expect(indexer.ensureIndexed(unrelated)).rejects.toThrow("not authorized")
+      indexer.dispose()
+    } finally {
+      await rm(fixture, { recursive: true, force: true })
+    }
   })
 
   test("ensureIndexed propagates an indexing failure to the session gate", async () => {

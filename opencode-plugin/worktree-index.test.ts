@@ -174,6 +174,7 @@ describe("createWorktreeIndexer", () => {
       projectID: "project-service-api",
       canonicalDirectory: "/repos/service-api",
       getActiveDirectory: () => "/worktrees/current",
+      isProjectWorktree: async () => true,
       listWorktrees: async () => [],
       hasManifest: async () => indexed,
       getRevision: async () => ({ branch: "main", commit: "current", dirty: true }),
@@ -206,6 +207,7 @@ describe("createWorktreeIndexer", () => {
       projectID: "project-service-api",
       canonicalDirectory: "/repos/service-api",
       getActiveDirectory: () => activeDirectory,
+      isProjectWorktree: async () => true,
       listWorktrees: async () => [],
       hasManifest: async () => true,
       getRevision: async () => revision,
@@ -221,6 +223,22 @@ describe("createWorktreeIndexer", () => {
     await indexer.ensureIndexed(activeDirectory)
 
     expect(indexCalls).toBe(0)
+    await expect(indexer.ensureIndexed("/worktrees/first")).rejects.toThrow("not authorized")
+    indexer.dispose()
+  })
+
+  test("does not authorize an unrelated active checkout", async () => {
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
+      getActiveDirectory: () => "/worktrees/unrelated",
+      isProjectWorktree: async () => false,
+      listWorktrees: async () => [],
+      hasManifest: async () => true,
+      log: () => {},
+    })
+
+    await expect(indexer.ensureIndexed("/worktrees/unrelated")).rejects.toThrow("not authorized")
     indexer.dispose()
   })
 

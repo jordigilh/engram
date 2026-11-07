@@ -37,6 +37,8 @@ export interface ZvecIndexProvenance extends ZvecGitRevision {
 export interface WorktreeIndexerOptions {
   projectID: string
   canonicalDirectory: string
+  /** Current OpenCode checkout, refreshed before each authorization check. */
+  getActiveDirectory?: () => string | undefined
   listWorktrees: () => Promise<readonly WorktreeEntry[]>
   mcpUrl?: string
   mcpFetch?: FetchLike
@@ -330,13 +332,15 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
   const pendingPromises = new Map<string, Promise<void>>()
 
   async function refreshAuthorizedRoots(): Promise<void> {
-    let entries: readonly WorktreeEntry[]
+    const activeDirectory = options.getActiveDirectory?.()
+    if (activeDirectory) rememberRoot(activeDirectory)
+
+    let entries: readonly WorktreeEntry[] = []
     try {
       entries = await options.listWorktrees()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       log(`could not refresh authorized worktree roots: ${message}`)
-      return
     }
     for (const entry of entries) {
       if (entry && typeof entry.directory === "string" && path.isAbsolute(entry.directory)) {

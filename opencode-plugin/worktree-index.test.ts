@@ -168,6 +168,62 @@ describe("createWorktreeIndexer", () => {
     indexer.dispose()
   })
 
+  test("authorizes the active checkout without a configured root", async () => {
+    let indexed = false
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
+      getActiveDirectory: () => "/worktrees/current",
+      listWorktrees: async () => [],
+      hasManifest: async () => indexed,
+      getRevision: async () => ({ branch: "main", commit: "current", dirty: true }),
+      readProvenance: async (directory) => indexed
+        ? {
+            version: 2,
+            root: directory,
+            branch: "main",
+            commit: "current",
+            dirty: true,
+          }
+        : undefined,
+      writeProvenance: async () => {},
+      runIndex: async () => {
+        indexed = true
+      },
+      log: () => {},
+    })
+
+    await indexer.ensureIndexed("/worktrees/current")
+    expect(indexed).toBe(true)
+    indexer.dispose()
+  })
+
+  test("refreshes authorization when the active checkout changes", async () => {
+    let activeDirectory = "/worktrees/first"
+    let indexCalls = 0
+    const revision: ZvecGitRevision = { branch: "main", commit: "current", dirty: false }
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
+      getActiveDirectory: () => activeDirectory,
+      listWorktrees: async () => [],
+      hasManifest: async () => true,
+      getRevision: async () => revision,
+      readProvenance: async (directory) => ({ version: 2, root: directory, ...revision }),
+      runIndex: async () => {
+        indexCalls += 1
+      },
+      log: () => {},
+    })
+
+    await indexer.ensureIndexed(activeDirectory)
+    activeDirectory = "/worktrees/second"
+    await indexer.ensureIndexed(activeDirectory)
+
+    expect(indexCalls).toBe(0)
+    indexer.dispose()
+  })
+
   test("ensureIndexed propagates an indexing failure to the session gate", async () => {
     const indexer = createWorktreeIndexer({
       projectID: "project-service-api",

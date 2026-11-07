@@ -412,6 +412,7 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
     ? createWorktreeIndexer({
         projectID: ctx.location.project.id,
         canonicalDirectory,
+        getActiveDirectory: () => ctx.location.directory || undefined,
         listWorktrees: () => ctx.worktree.list({ projectID: ctx.location.project.id }),
         mcpUrl: worktreePolicy.mcpUrl,
         embedding: worktreePolicy.embedding || DEFAULT_ZVEC_EMBEDDING,

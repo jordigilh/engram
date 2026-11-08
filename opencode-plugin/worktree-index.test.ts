@@ -221,11 +221,15 @@ describe("createWorktreeIndexer", () => {
   test("refreshes authorization when the active checkout changes", async () => {
     let activeDirectory = "/worktrees/first"
     let indexCalls = 0
+    const sessionIDs: string[] = []
     const revision: ZvecGitRevision = { branch: "main", commit: "current", dirty: false }
     const indexer = createWorktreeIndexer({
       projectID: "project-service-api",
       canonicalDirectory: "/repos/service-api",
-      getActiveDirectory: () => activeDirectory,
+      getActiveDirectory: (sessionID) => {
+        sessionIDs.push(sessionID || "missing-session")
+        return activeDirectory
+      },
       isProjectWorktree: async () => true,
       listWorktrees: async () => [],
       hasManifest: async () => true,
@@ -237,11 +241,12 @@ describe("createWorktreeIndexer", () => {
       log: () => {},
     })
 
-    await indexer.ensureIndexed(activeDirectory)
+    await indexer.ensureIndexed(activeDirectory, "session-first")
     activeDirectory = "/worktrees/second"
-    await indexer.ensureIndexed(activeDirectory)
+    await indexer.ensureIndexed(activeDirectory, "session-second")
 
     expect(indexCalls).toBe(0)
+    expect(sessionIDs).toEqual(["session-first", "session-second"])
     await expect(indexer.ensureIndexed("/worktrees/first")).rejects.toThrow("not authorized")
     indexer.dispose()
   })
@@ -293,6 +298,44 @@ describe("createWorktreeIndexer", () => {
 
       activeDirectory = unrelated
       await expect(indexer.ensureIndexed(unrelated)).rejects.toThrow("not authorized")
+      indexer.dispose()
+    } finally {
+      await rm(fixture, { recursive: true, force: true })
+    }
+  })
+
+  test("authorizes a registered linked worktree of a configured family root", async () => {
+    const fixture = await mkdtemp(path.join(tmpdir(), "engram-zvec-configured-linked-worktree-"))
+    const configuredRoot = path.join(fixture, "kubernaut-console")
+    const linkedRoot = path.join(fixture, "opencode", "console-168-identity-session")
+    const forgedRoot = path.join(fixture, "opencode", "forged")
+    const revision: ZvecGitRevision = { branch: "feat/console-168-session-boundary", commit: "console-168", dirty: true }
+    try {
+      await initializeGitRepository(configuredRoot)
+      await mkdir(path.dirname(linkedRoot), { recursive: true })
+      runGit(configuredRoot, ["worktree", "add", "--detach", linkedRoot])
+      await mkdir(forgedRoot, { recursive: true })
+      await writeFile(path.join(forgedRoot, ".git"), `gitdir: ${path.join(configuredRoot, ".git")}\n`)
+
+      let indexCalls = 0
+      const indexer = createWorktreeIndexer({
+        projectID: "project-kubernaut",
+        canonicalDirectory: path.join(fixture, "kubernaut"),
+        allowedRoots: [configuredRoot],
+        listWorktrees: async () => [],
+        hasManifest: async () => true,
+        getRevision: async () => revision,
+        readProvenance: async (directory) => ({ version: 2, root: directory, ...revision }),
+        runIndex: async () => {
+          indexCalls += 1
+        },
+        log: () => {},
+      })
+
+      await indexer.ensureIndexed(linkedRoot, "session-console")
+      await expect(indexer.ensureIndexed(forgedRoot, "session-console")).rejects.toThrow("not authorized")
+
+      expect(indexCalls).toBe(0)
       indexer.dispose()
     } finally {
       await rm(fixture, { recursive: true, force: true })

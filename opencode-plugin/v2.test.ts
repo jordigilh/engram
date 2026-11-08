@@ -42,6 +42,7 @@ function fakeV2Ctx(mcpInitial: Record<string, unknown> = {}) {
       list: async () => ({ data: [{ name: "engram", status: "connected" }] }),
     },
     session: {
+      get: async () => ({ location: { directory: ctx.location.directory } }),
       hook: async (name: string, cb: (event: any) => void | Promise<void>) => {
         ;(sessionHooks[name] = sessionHooks[name] || []).push(cb)
         return { dispose: async () => {} }
@@ -370,6 +371,76 @@ describe("v2 setup", () => {
         input: { root: requestedRoot, query: "worktree" },
       })
       expect(await Bun.file(path.join(requestedRoot, ".zvec-grep", "manifest.json")).exists()).toBe(true)
+    } finally {
+      globalThis.fetch = previousFetch
+      if (typeof cleanup === "function") cleanup()
+      await rm(fixture, { recursive: true, force: true })
+    }
+  })
+
+  test("resolves the active zvec checkout from the executing session", async () => {
+    const fixture = await mkdtemp(path.join(tmpdir(), "engram-zvec-session-worktree-"))
+    const canonical = path.join(fixture, "kubernaut")
+    const sessionRoot = path.join(fixture, "opencode", "console-168-identity-session")
+    await initializeGitIdentity(canonical, "main")
+    await mkdir(path.dirname(sessionRoot), { recursive: true })
+    const worktree = Bun.spawn(
+      ["git", "-C", canonical, "worktree", "add", "--detach", sessionRoot],
+      { stdout: "ignore", stderr: "ignore" },
+    )
+    expect(await worktree.exited).toBe(0)
+
+    const { ctx, toolHooks } = fakeV2Ctx()
+    ctx.location = {
+      directory: canonical,
+      project: { id: "project-kubernaut", canonical },
+    }
+    ctx.options = {
+      project: "kubernaut",
+      gatewayUrl: "http://127.0.0.1:8896",
+      worktreeIndex: {
+        projects: ["kubernaut"],
+        mcpUrl: "http://zvec.test/mcp",
+      },
+    }
+    ctx.worktree = { list: async () => [] }
+    const sessionIDs: string[] = []
+    ctx.session.get = async ({ sessionID }: { sessionID: string }) => {
+      sessionIDs.push(sessionID)
+      return { location: { directory: sessionRoot } }
+    }
+
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    let cleanup: (() => void) | void = undefined
+    const previousFetch = globalThis.fetch
+    globalThis.fetch = (async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as {
+        method: string
+        params?: { arguments?: { root?: string } }
+      }
+      if (request.method === "initialize") {
+        return new Response('data: {"jsonrpc":"2.0","id":1,"result":{}}\n\n', {
+          headers: { "content-type": "text/event-stream", "mcp-session-id": "session-worktree" },
+        })
+      }
+      if (request.method === "notifications/initialized") return new Response(null, { status: 202 })
+      const root = request.params?.arguments?.root || sessionRoot
+      await mkdir(path.join(root, ".zvec-grep"), { recursive: true })
+      await writeFile(path.join(root, ".zvec-grep", "manifest.json"), "{}\n")
+      return new Response('data: {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"state":"succeeded"}}}\n\n', {
+        headers: { "content-type": "text/event-stream", "mcp-session-id": "session-worktree" },
+      })
+    }) as typeof fetch
+    try {
+      cleanup = await def.setup(ctx)
+      await toolHooks["execute.before"][0]({
+        tool: "engram_zvec_grep_search",
+        sessionID: "session-console-168",
+        input: { root: sessionRoot, query: "Console #168" },
+      })
+
+      expect(sessionIDs).toContain("session-console-168")
+      expect(await Bun.file(path.join(sessionRoot, ".zvec-grep", "manifest.json")).exists()).toBe(true)
     } finally {
       globalThis.fetch = previousFetch
       if (typeof cleanup === "function") cleanup()

@@ -296,6 +296,23 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
 
   logProjectLine(identity, directory)
 
+  // Plugin setup has one process-level location, but OpenCode sessions can be
+  // moved or created in different worktrees. Resolve the caller's location at
+  // authorization time instead of treating ctx.location.directory as global.
+  /** Resolve a session's absolute checkout or fail closed when it is unavailable. */
+  const getSessionDirectory = async (sessionID?: string): Promise<string | undefined> => {
+    if (!sessionID) return directory || undefined
+    try {
+      const session = await ctx.session.get({ sessionID })
+      const sessionDirectory = session.location?.directory
+      if (typeof sessionDirectory === "string" && sessionDirectory.trim()) return sessionDirectory
+      throw new Error("session has no usable directory")
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(`[engram-plugin] could not resolve session ${sessionID} directory: ${message}`, { cause: error })
+    }
+  }
+
   // The direct config entry (mcp.servers.engram) is the route authority; the
   // generated entry is only a fallback and never overwrites an explicit one.
   await ctx.mcp.transform((editor) => {
@@ -341,7 +358,7 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
       // aggregate worktree directories that are not returned by the
       // project-level worktree inventory. Keep unrelated hooks synchronous;
       // OpenCode treats an async return as a blocking hook.
-      return worktreeIndexer.ensureIndexed(requestedRoot)
+      return worktreeIndexer.ensureIndexed(requestedRoot, event.sessionID)
         .catch((error: unknown) => {
           const message = error instanceof Error ? error.message : String(error)
           throw new EngramZvecReadinessError(
@@ -413,7 +430,7 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
     ? createWorktreeIndexer({
         projectID: ctx.location.project.id,
         canonicalDirectory,
-        getActiveDirectory: () => ctx.location.directory || undefined,
+        getActiveDirectory: (sessionID) => getSessionDirectory(sessionID),
         listWorktrees: () => ctx.worktree.list({ projectID: ctx.location.project.id }),
         mcpUrl: worktreePolicy.mcpUrl,
         embedding: worktreePolicy.embedding || DEFAULT_ZVEC_EMBEDDING,
@@ -433,7 +450,11 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
 
       const readiness = ensureEngramSessionReady({
         listMcp: () => ctx.mcp.list(),
-        ensureIndex: () => sessionIndexer.ensureIndexed(directory),
+        ensureIndex: async () => {
+          const sessionDirectory = await getSessionDirectory(event.sessionID)
+          if (!sessionDirectory) throw new Error(`[engram-plugin] session ${event.sessionID} has no directory`)
+          return sessionIndexer.ensureIndexed(sessionDirectory, event.sessionID)
+        },
       }).finally(() => {
         pendingSessionReadiness.delete(event.sessionID)
       })

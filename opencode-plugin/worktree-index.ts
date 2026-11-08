@@ -12,6 +12,14 @@ export const DEFAULT_ZVEC_EMBEDDING = "local/potion-code-16m-v2"
 const ZVEC_PROVENANCE_FILE = "engram-git-provenance.json"
 const ZVEC_PROVENANCE_VERSION = 2
 const MAX_READINESS_ATTEMPTS = 3
+const GIT_REPOSITORY_ENVIRONMENT = [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_COMMON_DIR",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+] as const
 
 interface WorktreeEntry {
   directory: string
@@ -37,8 +45,8 @@ export interface ZvecIndexProvenance extends ZvecGitRevision {
 export interface WorktreeIndexerOptions {
   projectID: string
   canonicalDirectory: string
-  /** Current OpenCode checkout, refreshed before each authorization check. */
-  getActiveDirectory?: () => string | undefined
+  /** Current session checkout, refreshed before each authorization check. */
+  getActiveDirectory?: (sessionID?: string) => string | undefined | Promise<string | undefined>
   /** Verify that the active checkout belongs to the canonical project. */
   isProjectWorktree?: (directory: string) => Promise<boolean>
   listWorktrees: () => Promise<readonly WorktreeEntry[]>
@@ -82,7 +90,8 @@ export interface WorktreeIndexPolicy {
   /** Containerized zvec-grep MCP endpoint used for index lifecycle operations. */
   mcpUrl?: string
   embedding?: string
-  /** Exact absolute roots permitted in zvec workspace-read tool arguments.
+  /** Absolute roots permitted in zvec workspace-read tool arguments. Linked
+   * Git worktrees registered by one of these roots are accepted too.
    *
    * This is deployment-wide rather than current-project-only: a family route
    * can use Engram's shared code index to compare a sibling repository. The
@@ -162,22 +171,47 @@ export function hasZvecManifest(directory: string): Promise<boolean> {
     })
 }
 
-function readGitValue(directory: string, args: string[]): Promise<string | undefined> {
-  return new Promise((resolve) => {
+function safeGitEnvironment(): NodeJS.ProcessEnv {
+  const override = GIT_REPOSITORY_ENVIRONMENT.find((key) => process.env[key] !== undefined)
+  if (override) {
+    throw new ZvecReadinessError(
+      "ZVEC_ROOT_NOT_AUTHORIZED",
+      `Git environment override ${override} is set; refusing to inspect zvec workspace state`,
+    )
+  }
+  return { ...process.env }
+}
+
+/** Run Git without allowing inherited repository-selection state to influence authorization. */
+function readGitOutput(directory: string, args: string[]): Promise<string | undefined> {
+  return new Promise((resolve, reject) => {
+    let env: NodeJS.ProcessEnv
+    try {
+      env = safeGitEnvironment()
+    } catch (error) {
+      reject(error)
+      return
+    }
     execFile(
       "git",
       args,
-      { cwd: directory, timeout: 5000, encoding: "utf8" },
+      { cwd: directory, timeout: 5000, encoding: "utf8", env },
       (error, stdout) => {
         if (error) {
           resolve(undefined)
           return
         }
-        const value = String(stdout || "").trim()
-        resolve(value || undefined)
+        resolve(String(stdout || ""))
       },
     )
   })
+}
+
+/** Read one trimmed Git value after enforcing the repository environment boundary. */
+async function readGitValue(directory: string, args: string[]): Promise<string | undefined> {
+  const output = await readGitOutput(directory, args)
+  const value = String(output || "").trim()
+  return value || undefined
 }
 
 /** Read the Git identity that was visible when a worktree was indexed. */
@@ -191,25 +225,15 @@ export async function getZvecGitRevision(directory: string): Promise<ZvecGitRevi
   return { branch: branch && branch !== "HEAD" ? branch : null, commit, dirty }
 }
 
-function readGitDirty(directory: string): Promise<boolean | undefined> {
-  return new Promise((resolve) => {
-    execFile(
-      "git",
-      ["status", "--porcelain=v1", "--untracked-files=all"],
-      { cwd: directory, timeout: 5000, encoding: "utf8" },
-      (error, stdout) => {
-        if (error) {
-          resolve(undefined)
-          return
-        }
-        const dirtyPaths = String(stdout || "")
-          .split(/\r?\n/)
-          .map((line) => line.slice(3).trim().split(" -> ").pop() || "")
-          .filter((value) => value && value !== ".zvec-grep" && !value.startsWith(".zvec-grep/"))
-        resolve(dirtyPaths.length > 0)
-      },
-    )
-  })
+/** Read Git dirty state after enforcing the repository environment boundary. */
+async function readGitDirty(directory: string): Promise<boolean | undefined> {
+  const output = await readGitOutput(directory, ["status", "--porcelain=v1", "--untracked-files=all"])
+  if (output === undefined) return undefined
+  const dirtyPaths = output
+    .split(/\r?\n/)
+    .map((line) => line.slice(3).trim().split(" -> ").pop() || "")
+    .filter((value) => value && value !== ".zvec-grep" && !value.startsWith(".zvec-grep/"))
+  return dirtyPaths.length > 0
 }
 
 function provenancePath(directory: string): string {
@@ -274,6 +298,11 @@ function revisionsMatch(left: ZvecGitRevision, right: ZvecIndexProvenance): bool
   return left.branch === right.branch && left.commit === right.commit && left.dirty === right.dirty
 }
 
+/** Preserve explicit readiness failures instead of downgrading them to a rebuild attempt. */
+function rethrowReadinessError(error: unknown): void {
+  if (error instanceof ZvecReadinessError) throw error
+}
+
 async function realpathOrResolved(directory: string): Promise<string> {
   try {
     return await realpath(directory)
@@ -290,22 +319,45 @@ async function gitPath(directory: string, args: string[]): Promise<string | unde
   return realpathOrResolved(path.isAbsolute(value) ? value : path.resolve(directory, value))
 }
 
+/** Parse NUL-delimited porcelain worktree records without losing newline characters in paths. */
+async function registeredWorktreePaths(directory: string): Promise<string[]> {
+  const output = await readGitOutput(directory, ["worktree", "list", "--porcelain", "-z"])
+  if (!output) return []
+  return output.split("\0").flatMap((record) => {
+    if (!record.startsWith("worktree ")) return []
+    return [record.slice("worktree ".length)]
+  })
+}
+
+/** Verify an exact top-level checkout is a registered linked worktree of a root. */
+async function isRegisteredGitWorktreeOf(directory: string, allowedDirectory: string): Promise<boolean> {
+  const requested = await realpathOrResolved(directory)
+  const allowed = await realpathOrResolved(allowedDirectory)
+  if (requested === allowed) return true
+
+  const [requestedTop, allowedTop, requestedCommon, allowedCommon] = await Promise.all([
+    gitPath(directory, ["rev-parse", "--show-toplevel"]),
+    gitPath(allowedDirectory, ["rev-parse", "--show-toplevel"]),
+    gitPath(directory, ["rev-parse", "--git-common-dir"]),
+    gitPath(allowedDirectory, ["rev-parse", "--git-common-dir"]),
+  ])
+  if (
+    requestedTop !== requested ||
+    allowedTop !== allowed ||
+    requestedCommon === undefined ||
+    requestedCommon !== allowedCommon
+  ) return false
+
+  const worktrees = await registeredWorktreePaths(allowedDirectory)
+  for (const registered of worktrees) {
+    if (registered && await realpathOrResolved(registered) === requested) return true
+  }
+  return false
+}
+
 /** Verify an exact top-level checkout belongs to the canonical Git project. */
 async function isProjectWorktree(directory: string, canonicalDirectory: string): Promise<boolean> {
-  const requested = await realpathOrResolved(directory)
-  const canonical = await realpathOrResolved(canonicalDirectory)
-  if (requested === canonical) return true
-
-  const [requestedTop, canonicalTop, requestedCommon, canonicalCommon] = await Promise.all([
-    gitPath(directory, ["rev-parse", "--show-toplevel"]),
-    gitPath(canonicalDirectory, ["rev-parse", "--show-toplevel"]),
-    gitPath(directory, ["rev-parse", "--git-common-dir"]),
-    gitPath(canonicalDirectory, ["rev-parse", "--git-common-dir"]),
-  ])
-  return requestedTop === requested
-    && canonicalTop === canonical
-    && requestedCommon !== undefined
-    && requestedCommon === canonicalCommon
+  return isRegisteredGitWorktreeOf(directory, canonicalDirectory)
 }
 
 /**
@@ -380,9 +432,9 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
   const rebuildAfterRun = new Set<string>()
 
   /** Rebuild exact authorization from stable configuration and current context. */
-  async function refreshAuthorizedRoots(): Promise<Map<string, string>> {
+  async function refreshAuthorizedRoots(sessionID?: string): Promise<Map<string, string>> {
     const dynamicRoots = new Set<string>()
-    const activeDirectory = options.getActiveDirectory?.()
+    const activeDirectory = await options.getActiveDirectory?.(sessionID)
     if (activeDirectory && path.isAbsolute(activeDirectory)) {
       let belongsToProject = false
       try {
@@ -413,8 +465,9 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
     return setAuthorizedRoots(dynamicRoots)
   }
 
-  async function authorizeRoot(directory: string): Promise<{ normalized: string; aggregate: boolean }> {
-    const authorizedRoots = await refreshAuthorizedRoots()
+  /** Authorize one exact, inventoried, configured, or registered linked root. */
+  async function authorizeRoot(directory: string, sessionID?: string): Promise<{ normalized: string; aggregate: boolean }> {
+    const authorizedRoots = await refreshAuthorizedRoots(sessionID)
     const requested = path.resolve(directory)
     const requestedReal = await realpathOrResolved(requested)
     for (const [configured, real] of authorizedRoots) {
@@ -424,9 +477,18 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
         aggregate: aggregateRoots.has(configured),
       }
     }
+
+    const worktreeRoots = [...configuredRoots].filter((configured) => !aggregateRoots.has(configured))
+    const linkedMatches = await Promise.all(
+      worktreeRoots.map((configured) => isRegisteredGitWorktreeOf(requestedReal, configured).catch(() => false)),
+    )
+    if (linkedMatches.some(Boolean)) {
+      return { normalized: requestedReal, aggregate: false }
+    }
+
     throw new ZvecReadinessError(
       "ZVEC_ROOT_NOT_AUTHORIZED",
-      `zvec root is not authorized: ${requested}; configure worktreeIndex.allowedRoots, familyRoots, or aggregateRoots`,
+      `zvec root is not authorized: ${requested}; configure worktreeIndex.allowedRoots, familyRoots, or aggregateRoots, or use a registered linked Git worktree`,
     )
   }
 
@@ -442,6 +504,7 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
     try {
       bareRepository = await isBareRepository(directory)
     } catch (error) {
+      rethrowReadinessError(error)
       const message = error instanceof Error ? error.message : String(error)
       log(`could not determine whether ${directory} is a bare Git repository: ${message}`)
     }
@@ -460,6 +523,7 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
     try {
       revision = await getRevision(directory)
     } catch (error) {
+      rethrowReadinessError(error)
       const message = error instanceof Error ? error.message : String(error)
       log(`could not inspect Git revision for ${directory}: ${message}`)
     }
@@ -468,6 +532,7 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
       try {
         gitWorktree = await isGitWorktree(directory)
       } catch (error) {
+        rethrowReadinessError(error)
         const message = error instanceof Error ? error.message : String(error)
         log(`could not determine whether ${directory} is a Git worktree: ${message}`)
       }
@@ -588,8 +653,8 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
   }
 
   /** Ensure one checkout has a complete index before prompt admission. */
-  async function ensureIndexed(directory: string): Promise<void> {
-    const authorization = await authorizeRoot(directory)
+  async function ensureIndexed(directory: string, sessionID?: string): Promise<void> {
+    const authorization = await authorizeRoot(directory, sessionID)
     const normalized = authorization.normalized
     if (disposed) throw new ZvecReadinessError("ZVEC_READINESS_FAILED", "worktree indexer is disposed")
 

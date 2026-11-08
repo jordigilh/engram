@@ -310,27 +310,31 @@ roots, so separate OpenCode sessions do not contend on a host `zg` process.
 For configured routes, every zvec workspace-read tool also performs a
 synchronous readiness check for its requested absolute `root` immediately
 before the MCP call. The root must be the canonical checkout, a worktree
-returned by OpenCode's project inventory, or an exact path in
-`worktreeIndex.allowedRoots`/`familyRoots`. The native gateway applies the
-same boundary and also accepts registered linked Git worktrees of its
-configured `source_roots`/`allowed_roots`; it does not accept arbitrary
-descendants, forged Git metadata, or unrelated repositories. Non-Git aggregate
-roots must additionally be listed in `aggregateRoots`; arbitrary paths,
-symlink escapes, unallowlisted bare repositories, and unconfigured OpenChamber
-storage directories fail closed. The explicit index tool is not intercepted;
-routes without `worktreeIndex` configuration remain unchanged.
+returned by OpenCode's project inventory, an exact path in
+`worktreeIndex.allowedRoots`/`familyRoots`, or a registered top-level Git
+worktree of one of those configured roots. The active root is resolved from the
+executing session for every readiness check; no ephemeral OpenChamber path is
+written to configuration. The native gateway applies the same boundary and
+also accepts registered linked Git worktrees of its configured
+`source_roots`/`allowed_roots`; neither layer accepts arbitrary descendants,
+forged Git metadata, or unrelated repositories. Non-Git aggregate roots must
+additionally be listed in `aggregateRoots`; arbitrary paths, symlink escapes,
+unallowlisted bare repositories, and unconfigured OpenChamber storage
+directories fail closed. The explicit index tool is not intercepted; routes
+without `worktreeIndex` configuration remain unchanged.
 
 For a shared repository family, `worktreeIndex.familyRoots` is the default
 deployment policy: every route whose resolved `family` matches the key inherits
-the exact sibling checkout roots. `allowedRoots` remains available for global
-or one-off roots. The current checkout is authorized automatically, but family
-identity alone does not authorize a sibling root; list every family checkout
-that agents must compare (including any release mirrors). Use `aggregateRoots`
-only for explicitly managed non-Git aggregate indexes. This is separate from
-Serena's project mount: a route such as `/mcp/kubernaut-operator` remains
-pinned to `kubernaut-operator`, so cross-repository reads should use
-root-scoped Engram code search rather than attempting
-`activate_project("kubernaut")` on that mount.
+the configured sibling checkout roots and their registered linked worktrees.
+`allowedRoots` remains available for global or one-off roots. The active
+checkout is authorized dynamically from the session when it belongs to the
+current project; family roots also authorize their registered linked worktrees,
+so ephemeral OpenChamber paths do not need to be listed individually. Use
+`aggregateRoots` only for explicitly managed non-Git aggregate indexes. This is
+separate from Serena's project mount: a route such as
+`/mcp/kubernaut-operator` remains pinned to `kubernaut-operator`, so
+cross-repository reads should use root-scoped Engram code search rather than
+attempting `activate_project("kubernaut")` on that mount.
 
 `familyRoots` controls the OpenCode plugin's preflight gate. The gateway's
 independent backend root policy must also expose the same canonical roots when

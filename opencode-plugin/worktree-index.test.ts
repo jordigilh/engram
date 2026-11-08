@@ -103,6 +103,37 @@ describe("worktree indexing policy", () => {
     expect(typeof revision?.dirty).toBe("boolean")
   })
 
+  test("rejects Git environment overrides before reading checkout state", async () => {
+    const fixture = await mkdtemp(path.join(tmpdir(), "engram-zvec-git-environment-"))
+    const checkout = path.join(fixture, "checkout")
+    const keys = [
+      "GIT_DIR",
+      "GIT_WORK_TREE",
+      "GIT_INDEX_FILE",
+      "GIT_COMMON_DIR",
+      "GIT_OBJECT_DIRECTORY",
+      "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ] as const
+    const previous = new Map(keys.map((key) => [key, process.env[key]]))
+    try {
+      await initializeGitRepository(checkout)
+      for (const key of keys) {
+        process.env[key] = "/untrusted/git-override"
+        await expect(getZvecGitRevision(checkout)).rejects.toMatchObject({
+          code: "ZVEC_ROOT_NOT_AUTHORIZED",
+        })
+        delete process.env[key]
+      }
+    } finally {
+      for (const key of keys) {
+        const value = previous.get(key)
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+      await rm(fixture, { recursive: true, force: true })
+    }
+  })
+
   test("submits root-scoped indexing through the container MCP tool", async () => {
     const calls: Array<{ name: string; arguments: Record<string, unknown> }> = []
     await runZvecMcpIndex({
@@ -221,11 +252,15 @@ describe("createWorktreeIndexer", () => {
   test("refreshes authorization when the active checkout changes", async () => {
     let activeDirectory = "/worktrees/first"
     let indexCalls = 0
+    const sessionIDs: string[] = []
     const revision: ZvecGitRevision = { branch: "main", commit: "current", dirty: false }
     const indexer = createWorktreeIndexer({
       projectID: "project-service-api",
       canonicalDirectory: "/repos/service-api",
-      getActiveDirectory: () => activeDirectory,
+      getActiveDirectory: (sessionID) => {
+        sessionIDs.push(sessionID || "missing-session")
+        return activeDirectory
+      },
       isProjectWorktree: async () => true,
       listWorktrees: async () => [],
       hasManifest: async () => true,
@@ -237,11 +272,12 @@ describe("createWorktreeIndexer", () => {
       log: () => {},
     })
 
-    await indexer.ensureIndexed(activeDirectory)
+    await indexer.ensureIndexed(activeDirectory, "session-first")
     activeDirectory = "/worktrees/second"
-    await indexer.ensureIndexed(activeDirectory)
+    await indexer.ensureIndexed(activeDirectory, "session-second")
 
     expect(indexCalls).toBe(0)
+    expect(sessionIDs).toEqual(["session-first", "session-second"])
     await expect(indexer.ensureIndexed("/worktrees/first")).rejects.toThrow("not authorized")
     indexer.dispose()
   })
@@ -299,6 +335,47 @@ describe("createWorktreeIndexer", () => {
     }
   })
 
+  test("authorizes a registered linked worktree of a configured family root", async () => {
+    const fixture = await mkdtemp(path.join(tmpdir(), "engram-zvec-configured-linked-worktree-"))
+    const configuredRoot = path.join(fixture, "kubernaut-console")
+    const linkedRoot = path.join(fixture, "opencode", "console-168-identity-session")
+    const newlineRoot = path.join(fixture, "opencode", "console-168\nidentity-session")
+    const forgedRoot = path.join(fixture, "opencode", "forged")
+    const revision: ZvecGitRevision = { branch: "feat/console-168-session-boundary", commit: "console-168", dirty: true }
+    try {
+      await initializeGitRepository(configuredRoot)
+      await mkdir(path.dirname(linkedRoot), { recursive: true })
+      runGit(configuredRoot, ["worktree", "add", "--detach", linkedRoot])
+      runGit(configuredRoot, ["worktree", "add", "--detach", newlineRoot])
+      await mkdir(forgedRoot, { recursive: true })
+      await writeFile(path.join(forgedRoot, ".git"), `gitdir: ${path.join(configuredRoot, ".git")}\n`)
+
+      let indexCalls = 0
+      const indexer = createWorktreeIndexer({
+        projectID: "project-kubernaut",
+        canonicalDirectory: path.join(fixture, "kubernaut"),
+        allowedRoots: [configuredRoot],
+        listWorktrees: async () => [],
+        hasManifest: async () => true,
+        getRevision: async () => revision,
+        readProvenance: async (directory) => ({ version: 2, root: directory, ...revision }),
+        runIndex: async () => {
+          indexCalls += 1
+        },
+        log: () => {},
+      })
+
+      await indexer.ensureIndexed(linkedRoot, "session-console")
+      await indexer.ensureIndexed(newlineRoot, "session-console")
+      await expect(indexer.ensureIndexed(forgedRoot, "session-console")).rejects.toThrow("not authorized")
+
+      expect(indexCalls).toBe(0)
+      indexer.dispose()
+    } finally {
+      await rm(fixture, { recursive: true, force: true })
+    }
+  })
+
   test("ensureIndexed propagates an indexing failure to the session gate", async () => {
     const indexer = createWorktreeIndexer({
       projectID: "project-service-api",
@@ -314,6 +391,33 @@ describe("createWorktreeIndexer", () => {
 
     await expect(indexer.ensureIndexed("/worktrees/current")).rejects.toThrow("Jieba dictionary unavailable")
     indexer.dispose()
+  })
+
+  test("fails closed before indexing when Git environment state is overridden", async () => {
+    let indexCalls = 0
+    const previous = process.env.GIT_DIR
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
+      allowedRoots: ["/worktrees/current"],
+      listWorktrees: async () => [],
+      hasManifest: async () => false,
+      runIndex: async () => {
+        indexCalls += 1
+      },
+      log: () => {},
+    })
+    try {
+      process.env.GIT_DIR = "/untrusted/git-override"
+      await expect(indexer.ensureIndexed("/worktrees/current")).rejects.toMatchObject({
+        code: "ZVEC_ROOT_NOT_AUTHORIZED",
+      })
+      expect(indexCalls).toBe(0)
+    } finally {
+      if (previous === undefined) delete process.env.GIT_DIR
+      else process.env.GIT_DIR = previous
+      indexer.dispose()
+    }
   })
 
   test("does not rebuild a manifest for a non-Git aggregate root", async () => {

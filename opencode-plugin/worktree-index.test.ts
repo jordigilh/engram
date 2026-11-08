@@ -103,6 +103,33 @@ describe("worktree indexing policy", () => {
     expect(typeof revision?.dirty).toBe("boolean")
   })
 
+  test("ignores Git environment overrides when reading dirty state", async () => {
+    const fixture = await mkdtemp(path.join(tmpdir(), "engram-zvec-git-environment-"))
+    const checkout = path.join(fixture, "checkout")
+    const unrelated = path.join(fixture, "unrelated")
+    const keys = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"] as const
+    const previous = new Map(keys.map((key) => [key, process.env[key]]))
+    try {
+      await initializeGitRepository(checkout)
+      await initializeGitRepository(unrelated)
+      await writeFile(path.join(unrelated, "dirty.txt"), "dirty\n")
+      process.env.GIT_DIR = path.join(unrelated, ".git")
+      process.env.GIT_WORK_TREE = unrelated
+
+      const revision = await getZvecGitRevision(checkout)
+
+      expect(revision?.commit).toMatch(/^[0-9a-f]+$/)
+      expect(revision?.dirty).toBe(false)
+    } finally {
+      for (const key of keys) {
+        const value = previous.get(key)
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+      await rm(fixture, { recursive: true, force: true })
+    }
+  })
+
   test("submits root-scoped indexing through the container MCP tool", async () => {
     const calls: Array<{ name: string; arguments: Record<string, unknown> }> = []
     await runZvecMcpIndex({

@@ -204,10 +204,12 @@ export async function getZvecGitRevision(directory: string): Promise<ZvecGitRevi
 
 function readGitDirty(directory: string): Promise<boolean | undefined> {
   return new Promise((resolve) => {
+    const env = { ...process.env }
+    for (const key of GIT_REPOSITORY_ENVIRONMENT) delete env[key]
     execFile(
       "git",
       ["status", "--porcelain=v1", "--untracked-files=all"],
-      { cwd: directory, timeout: 5000, encoding: "utf8" },
+      { cwd: directory, timeout: 5000, encoding: "utf8", env },
       (error, stdout) => {
         if (error) {
           resolve(undefined)

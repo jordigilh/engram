@@ -321,6 +321,32 @@ describe("v2 setup", () => {
     if (typeof cleanup === "function") cleanup()
   })
 
+  test("fails prompt admission when the session directory cannot be resolved", async () => {
+    const { ctx, sessionHooks } = fakeV2Ctx()
+    ctx.location = {
+      directory: "/worktrees/fix-123",
+      project: { id: "project-service-api", canonical: "/repos/service-api" },
+    }
+    ctx.options = {
+      project: "service-api",
+      gatewayUrl: "http://127.0.0.1:8896",
+      worktreeIndex: { projects: ["service-api"], gateSessions: true },
+    }
+    ctx.worktree = { list: async () => [] }
+    ctx.session.get = async () => {
+      throw new Error("session store unavailable")
+    }
+
+    const def = pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }
+    const cleanup = await def.setup(ctx)
+    try {
+      await expect(sessionHooks["prompt"][0]({ sessionID: "session-unavailable" }))
+        .rejects.toThrow("could not resolve session session-unavailable directory")
+    } finally {
+      if (typeof cleanup === "function") cleanup()
+    }
+  })
+
   test("preflights the exact root supplied to a zvec workspace read", async () => {
     const fixture = await mkdtemp(path.join(tmpdir(), "engram-zvec-preflight-"))
     const requestedRoot = path.join(fixture, "openchamber-worktree-pool")

@@ -304,11 +304,11 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
     try {
       const session = await ctx.session.get({ sessionID })
       const sessionDirectory = session.location?.directory
-      return typeof sessionDirectory === "string" && sessionDirectory.trim()
-        ? sessionDirectory
-        : undefined
-    } catch {
-      return undefined
+      if (typeof sessionDirectory === "string" && sessionDirectory.trim()) return sessionDirectory
+      throw new Error("session has no usable directory")
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(`[engram-plugin] could not resolve session ${sessionID} directory: ${message}`, { cause: error })
     }
   }
 
@@ -449,10 +449,11 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
 
       const readiness = ensureEngramSessionReady({
         listMcp: () => ctx.mcp.list(),
-        ensureIndex: async () => sessionIndexer.ensureIndexed(
-          (await getSessionDirectory(event.sessionID)) || directory,
-          event.sessionID,
-        ),
+        ensureIndex: async () => {
+          const sessionDirectory = await getSessionDirectory(event.sessionID)
+          if (!sessionDirectory) throw new Error(`[engram-plugin] session ${event.sessionID} has no directory`)
+          return sessionIndexer.ensureIndexed(sessionDirectory, event.sessionID)
+        },
       }).finally(() => {
         pendingSessionReadiness.delete(event.sessionID)
       })

@@ -299,6 +299,7 @@ async function setupEngramPlugin(ctx: PluginContext): Promise<(() => void) | voi
   // Plugin setup has one process-level location, but OpenCode sessions can be
   // moved or created in different worktrees. Resolve the caller's location at
   // authorization time instead of treating ctx.location.directory as global.
+  /** Resolve a session's absolute checkout or fail closed when it is unavailable. */
   const getSessionDirectory = async (sessionID?: string): Promise<string | undefined> => {
     if (!sessionID) return directory || undefined
     try {

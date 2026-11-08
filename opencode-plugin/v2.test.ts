@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import pluginDefault, { appendV2Nudge } from "./index"
@@ -344,6 +344,69 @@ describe("v2 setup", () => {
         .rejects.toThrow("could not resolve session session-unavailable directory")
     } finally {
       if (typeof cleanup === "function") cleanup()
+    }
+  })
+
+  test("gated prompts index the executing session directory", async () => {
+    const fixture = await mkdtemp(path.join(tmpdir(), "engram-zvec-prompt-session-worktree-"))
+    const canonical = path.join(fixture, "kubernaut")
+    const sessionRoot = path.join(fixture, "opencode", "console-168-identity-session")
+    await initializeGitIdentity(canonical, "main")
+    await mkdir(path.dirname(sessionRoot), { recursive: true })
+    const worktree = Bun.spawn(
+      ["git", "-C", canonical, "worktree", "add", "--detach", sessionRoot],
+      { stdout: "ignore", stderr: "ignore" },
+    )
+    expect(await worktree.exited).toBe(0)
+
+    const { ctx, sessionHooks } = fakeV2Ctx()
+    ctx.location = {
+      directory: canonical,
+      project: { id: "project-kubernaut", canonical },
+    }
+    ctx.options = {
+      project: "kubernaut",
+      gatewayUrl: "http://127.0.0.1:8896",
+      worktreeIndex: {
+        projects: ["kubernaut"],
+        gateSessions: true,
+        mcpUrl: "http://zvec.test/mcp",
+      },
+    }
+    ctx.worktree = { list: async () => [] }
+    ctx.session.get = async () => ({ location: { directory: sessionRoot } })
+
+    const indexedRoots: string[] = []
+    const previousFetch = globalThis.fetch
+    globalThis.fetch = (async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as {
+        method: string
+        params?: { arguments?: { root?: string } }
+      }
+      if (request.method === "initialize") {
+        return new Response('data: {"jsonrpc":"2.0","id":1,"result":{}}\n\n', {
+          headers: { "content-type": "text/event-stream", "mcp-session-id": "prompt-session" },
+        })
+      }
+      if (request.method === "notifications/initialized") return new Response(null, { status: 202 })
+      const root = request.params?.arguments?.root
+      if (root) indexedRoots.push(root)
+      await mkdir(path.join(root || sessionRoot, ".zvec-grep"), { recursive: true })
+      await writeFile(path.join(root || sessionRoot, ".zvec-grep", "manifest.json"), "{}\n")
+      return new Response('data: {"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"state":"succeeded"}}}\n\n', {
+        headers: { "content-type": "text/event-stream", "mcp-session-id": "prompt-session" },
+      })
+    }) as typeof fetch
+
+    let cleanup: (() => void) | void = undefined
+    try {
+      cleanup = await (pluginDefault as unknown as { setup: (ctx: any) => Promise<(() => void) | void> }).setup(ctx)
+      await sessionHooks["prompt"][0]({ sessionID: "session-prompt" })
+      expect(indexedRoots).toEqual([await realpath(sessionRoot)])
+    } finally {
+      globalThis.fetch = previousFetch
+      if (typeof cleanup === "function") cleanup()
+      await rm(fixture, { recursive: true, force: true })
     }
   })
 

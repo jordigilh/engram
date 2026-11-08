@@ -103,23 +103,27 @@ describe("worktree indexing policy", () => {
     expect(typeof revision?.dirty).toBe("boolean")
   })
 
-  test("ignores Git environment overrides when reading dirty state", async () => {
+  test("rejects Git environment overrides before reading checkout state", async () => {
     const fixture = await mkdtemp(path.join(tmpdir(), "engram-zvec-git-environment-"))
     const checkout = path.join(fixture, "checkout")
-    const unrelated = path.join(fixture, "unrelated")
-    const keys = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"] as const
+    const keys = [
+      "GIT_DIR",
+      "GIT_WORK_TREE",
+      "GIT_INDEX_FILE",
+      "GIT_COMMON_DIR",
+      "GIT_OBJECT_DIRECTORY",
+      "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ] as const
     const previous = new Map(keys.map((key) => [key, process.env[key]]))
     try {
       await initializeGitRepository(checkout)
-      await initializeGitRepository(unrelated)
-      await writeFile(path.join(unrelated, "dirty.txt"), "dirty\n")
-      process.env.GIT_DIR = path.join(unrelated, ".git")
-      process.env.GIT_WORK_TREE = unrelated
-
-      const revision = await getZvecGitRevision(checkout)
-
-      expect(revision?.commit).toMatch(/^[0-9a-f]+$/)
-      expect(revision?.dirty).toBe(false)
+      for (const key of keys) {
+        process.env[key] = "/untrusted/git-override"
+        await expect(getZvecGitRevision(checkout)).rejects.toMatchObject({
+          code: "ZVEC_ROOT_NOT_AUTHORIZED",
+        })
+        delete process.env[key]
+      }
     } finally {
       for (const key of keys) {
         const value = previous.get(key)
@@ -335,12 +339,14 @@ describe("createWorktreeIndexer", () => {
     const fixture = await mkdtemp(path.join(tmpdir(), "engram-zvec-configured-linked-worktree-"))
     const configuredRoot = path.join(fixture, "kubernaut-console")
     const linkedRoot = path.join(fixture, "opencode", "console-168-identity-session")
+    const newlineRoot = path.join(fixture, "opencode", "console-168\nidentity-session")
     const forgedRoot = path.join(fixture, "opencode", "forged")
     const revision: ZvecGitRevision = { branch: "feat/console-168-session-boundary", commit: "console-168", dirty: true }
     try {
       await initializeGitRepository(configuredRoot)
       await mkdir(path.dirname(linkedRoot), { recursive: true })
       runGit(configuredRoot, ["worktree", "add", "--detach", linkedRoot])
+      runGit(configuredRoot, ["worktree", "add", "--detach", newlineRoot])
       await mkdir(forgedRoot, { recursive: true })
       await writeFile(path.join(forgedRoot, ".git"), `gitdir: ${path.join(configuredRoot, ".git")}\n`)
 
@@ -360,6 +366,7 @@ describe("createWorktreeIndexer", () => {
       })
 
       await indexer.ensureIndexed(linkedRoot, "session-console")
+      await indexer.ensureIndexed(newlineRoot, "session-console")
       await expect(indexer.ensureIndexed(forgedRoot, "session-console")).rejects.toThrow("not authorized")
 
       expect(indexCalls).toBe(0)
@@ -384,6 +391,33 @@ describe("createWorktreeIndexer", () => {
 
     await expect(indexer.ensureIndexed("/worktrees/current")).rejects.toThrow("Jieba dictionary unavailable")
     indexer.dispose()
+  })
+
+  test("fails closed before indexing when Git environment state is overridden", async () => {
+    let indexCalls = 0
+    const previous = process.env.GIT_DIR
+    const indexer = createWorktreeIndexer({
+      projectID: "project-service-api",
+      canonicalDirectory: "/repos/service-api",
+      allowedRoots: ["/worktrees/current"],
+      listWorktrees: async () => [],
+      hasManifest: async () => false,
+      runIndex: async () => {
+        indexCalls += 1
+      },
+      log: () => {},
+    })
+    try {
+      process.env.GIT_DIR = "/untrusted/git-override"
+      await expect(indexer.ensureIndexed("/worktrees/current")).rejects.toMatchObject({
+        code: "ZVEC_ROOT_NOT_AUTHORIZED",
+      })
+      expect(indexCalls).toBe(0)
+    } finally {
+      if (previous === undefined) delete process.env.GIT_DIR
+      else process.env.GIT_DIR = previous
+      indexer.dispose()
+    }
   })
 
   test("does not rebuild a manifest for a non-Git aggregate root", async () => {

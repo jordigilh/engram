@@ -171,10 +171,27 @@ export function hasZvecManifest(directory: string): Promise<boolean> {
     })
 }
 
-function readGitValue(directory: string, args: string[]): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    const env = { ...process.env }
-    for (const key of GIT_REPOSITORY_ENVIRONMENT) delete env[key]
+function safeGitEnvironment(): NodeJS.ProcessEnv {
+  const override = GIT_REPOSITORY_ENVIRONMENT.find((key) => process.env[key] !== undefined)
+  if (override) {
+    throw new ZvecReadinessError(
+      "ZVEC_ROOT_NOT_AUTHORIZED",
+      `Git environment override ${override} is set; refusing to inspect zvec workspace state`,
+    )
+  }
+  return { ...process.env }
+}
+
+/** Run Git without allowing inherited repository-selection state to influence authorization. */
+function readGitOutput(directory: string, args: string[]): Promise<string | undefined> {
+  return new Promise((resolve, reject) => {
+    let env: NodeJS.ProcessEnv
+    try {
+      env = safeGitEnvironment()
+    } catch (error) {
+      reject(error)
+      return
+    }
     execFile(
       "git",
       args,
@@ -184,11 +201,17 @@ function readGitValue(directory: string, args: string[]): Promise<string | undef
           resolve(undefined)
           return
         }
-        const value = String(stdout || "").trim()
-        resolve(value || undefined)
+        resolve(String(stdout || ""))
       },
     )
   })
+}
+
+/** Read one trimmed Git value after enforcing the repository environment boundary. */
+async function readGitValue(directory: string, args: string[]): Promise<string | undefined> {
+  const output = await readGitOutput(directory, args)
+  const value = String(output || "").trim()
+  return value || undefined
 }
 
 /** Read the Git identity that was visible when a worktree was indexed. */
@@ -202,27 +225,15 @@ export async function getZvecGitRevision(directory: string): Promise<ZvecGitRevi
   return { branch: branch && branch !== "HEAD" ? branch : null, commit, dirty }
 }
 
-function readGitDirty(directory: string): Promise<boolean | undefined> {
-  return new Promise((resolve) => {
-    const env = { ...process.env }
-    for (const key of GIT_REPOSITORY_ENVIRONMENT) delete env[key]
-    execFile(
-      "git",
-      ["status", "--porcelain=v1", "--untracked-files=all"],
-      { cwd: directory, timeout: 5000, encoding: "utf8", env },
-      (error, stdout) => {
-        if (error) {
-          resolve(undefined)
-          return
-        }
-        const dirtyPaths = String(stdout || "")
-          .split(/\r?\n/)
-          .map((line) => line.slice(3).trim().split(" -> ").pop() || "")
-          .filter((value) => value && value !== ".zvec-grep" && !value.startsWith(".zvec-grep/"))
-        resolve(dirtyPaths.length > 0)
-      },
-    )
-  })
+/** Read Git dirty state after enforcing the repository environment boundary. */
+async function readGitDirty(directory: string): Promise<boolean | undefined> {
+  const output = await readGitOutput(directory, ["status", "--porcelain=v1", "--untracked-files=all"])
+  if (output === undefined) return undefined
+  const dirtyPaths = output
+    .split(/\r?\n/)
+    .map((line) => line.slice(3).trim().split(" -> ").pop() || "")
+    .filter((value) => value && value !== ".zvec-grep" && !value.startsWith(".zvec-grep/"))
+  return dirtyPaths.length > 0
 }
 
 function provenancePath(directory: string): string {
@@ -287,6 +298,11 @@ function revisionsMatch(left: ZvecGitRevision, right: ZvecIndexProvenance): bool
   return left.branch === right.branch && left.commit === right.commit && left.dirty === right.dirty
 }
 
+/** Preserve explicit readiness failures instead of downgrading them to a rebuild attempt. */
+function rethrowReadinessError(error: unknown): void {
+  if (error instanceof ZvecReadinessError) throw error
+}
+
 async function realpathOrResolved(directory: string): Promise<string> {
   try {
     return await realpath(directory)
@@ -301,6 +317,16 @@ async function gitPath(directory: string, args: string[]): Promise<string | unde
   const value = await readGitValue(directory, args)
   if (!value) return undefined
   return realpathOrResolved(path.isAbsolute(value) ? value : path.resolve(directory, value))
+}
+
+/** Parse NUL-delimited porcelain worktree records without losing newline characters in paths. */
+async function registeredWorktreePaths(directory: string): Promise<string[]> {
+  const output = await readGitOutput(directory, ["worktree", "list", "--porcelain", "-z"])
+  if (!output) return []
+  return output.split("\0").flatMap((record) => {
+    if (!record.startsWith("worktree ")) return []
+    return [record.slice("worktree ".length)]
+  })
 }
 
 /** Verify an exact top-level checkout is a registered linked worktree of a root. */
@@ -322,11 +348,8 @@ async function isRegisteredGitWorktreeOf(directory: string, allowedDirectory: st
     requestedCommon !== allowedCommon
   ) return false
 
-  const worktrees = await readGitValue(allowedDirectory, ["worktree", "list", "--porcelain"])
-  if (!worktrees) return false
-  for (const line of worktrees.split(/\r?\n/)) {
-    if (!line.startsWith("worktree ")) continue
-    const registered = line.slice("worktree ".length).trim()
+  const worktrees = await registeredWorktreePaths(allowedDirectory)
+  for (const registered of worktrees) {
     if (registered && await realpathOrResolved(registered) === requested) return true
   }
   return false
@@ -442,6 +465,7 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
     return setAuthorizedRoots(dynamicRoots)
   }
 
+  /** Authorize one exact, inventoried, configured, or registered linked root. */
   async function authorizeRoot(directory: string, sessionID?: string): Promise<{ normalized: string; aggregate: boolean }> {
     const authorizedRoots = await refreshAuthorizedRoots(sessionID)
     const requested = path.resolve(directory)
@@ -480,6 +504,7 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
     try {
       bareRepository = await isBareRepository(directory)
     } catch (error) {
+      rethrowReadinessError(error)
       const message = error instanceof Error ? error.message : String(error)
       log(`could not determine whether ${directory} is a bare Git repository: ${message}`)
     }
@@ -498,6 +523,7 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
     try {
       revision = await getRevision(directory)
     } catch (error) {
+      rethrowReadinessError(error)
       const message = error instanceof Error ? error.message : String(error)
       log(`could not inspect Git revision for ${directory}: ${message}`)
     }
@@ -506,6 +532,7 @@ export function createWorktreeIndexer(options: WorktreeIndexerOptions) {
       try {
         gitWorktree = await isGitWorktree(directory)
       } catch (error) {
+        rethrowReadinessError(error)
         const message = error instanceof Error ? error.message : String(error)
         log(`could not determine whether ${directory} is a Git worktree: ${message}`)
       }

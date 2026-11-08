@@ -1,6 +1,6 @@
 {
   "name": "engram-opencode-plugin",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Engram plugin for OpenCode and OpenChamber: exposes the unified Engram gateway through a minimal project+family config surface.",
   "type": "module",
   "license": "MIT",

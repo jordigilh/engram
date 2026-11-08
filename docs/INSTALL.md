@@ -474,14 +474,14 @@ not point production OpenCode at the Engram checkout.
 Install the exact release after it has been published:
 
 ```bash
-scripts/install-opencode-plugin 0.1.1
+scripts/install-opencode-plugin 0.1.2
 ```
 
 The installer downloads the release tarball and its SHA-256 sidecar, verifies
 the checksum, and installs the artifact under:
 
 ```text
-~/.engram/opencode-plugins/engram-opencode-plugin-0.1.1
+~/.engram/opencode-plugins/engram-opencode-plugin-0.1.2
 ```
 
 Replace the placeholder path in

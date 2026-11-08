@@ -38,11 +38,11 @@ temporary override or an isolated test.
 {
   "plugins": [
     {
-      "package": "/path/to/.engram/opencode-plugins/engram-opencode-plugin-0.1.1",
+      "package": "/path/to/.engram/opencode-plugins/engram-opencode-plugin-0.1.2",
       "options": {
         "pluginArtifact": {
           "package": "engram-opencode-plugin",
-          "version": "0.1.1",
+          "version": "0.1.2",
           "source": "github-release"
         },
         "repositories": {
@@ -89,7 +89,7 @@ directory, or the route differs from the directory name:
 
 ```json
 {
-  "plugins": ["/path/to/.engram/opencode-plugins/engram-opencode-plugin-0.1.1"],
+  "plugins": ["/path/to/.engram/opencode-plugins/engram-opencode-plugin-0.1.2"],
   "mcp": {
     "servers": {
       "engram": {
@@ -181,7 +181,7 @@ long-lived OpenCode/OpenChamber process then fails closed instead of silently
 running developer code. Every startup reports a line like:
 
 ```text
-[engram-plugin] package=engram-opencode-plugin version=0.1.1 revision=<git-sha> source=github-release
+[engram-plugin] package=engram-opencode-plugin version=0.1.2 revision=<git-sha> source=github-release
 ```
 
 The revision is embedded by the artifact build. It identifies the source commit
@@ -194,8 +194,8 @@ checking that the tag matches `opencode-plugin/package.json`. It creates a
 GitHub Release containing the bundle and a SHA-256 sidecar:
 
 ```bash
-git tag opencode-plugin-v0.1.1 <release-commit>
-git push origin opencode-plugin-v0.1.1
+git tag opencode-plugin-v0.1.2 <release-commit>
+git push origin opencode-plugin-v0.1.2
 ```
 
 Protect the `opencode-plugin-v*` tag pattern with a GitHub repository ruleset:
@@ -205,7 +205,7 @@ an already-published release tag from moving to a different commit.
 Install and verify an artifact on the host with:
 
 ```bash
-scripts/install-opencode-plugin 0.1.1
+scripts/install-opencode-plugin 0.1.2
 ```
 
 The installer downloads the versioned GitHub Release asset, verifies its
@@ -392,7 +392,7 @@ workflow; no separate digest approval file is required in Engram.
 ```jsonc
 {
   "plugins": [{
-    "package": "/path/to/.engram/opencode-plugins/engram-opencode-plugin-0.1.1",
+    "package": "/path/to/.engram/opencode-plugins/engram-opencode-plugin-0.1.2",
     "options": {
       "worktreeIndex": {
         "projects": ["<project-route>"],
@@ -436,7 +436,7 @@ routes when one checkout switches between release lines:
 ```json
 {
   "plugins": [{
-      "package": "/path/to/.engram/opencode-plugins/engram-opencode-plugin-0.1.1",
+      "package": "/path/to/.engram/opencode-plugins/engram-opencode-plugin-0.1.2",
       "options": {
         "family": "<shared-family>",
         "branchRoutes": {

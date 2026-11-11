@@ -71,7 +71,32 @@ Semantic and graph artifacts must be published as one generation. A new
 Engram/zvec-owned generation sidecar should extend the existing workspace
 manifest rather than create an independent freshness authority. The proposed
 sidecar is `.zvec-grep/generation.json` (or an equivalent versioned extension
-of `manifest.json`) with at least:
+of `manifest.json`). The workspace indexing coordinator owns this publication
+path; the existing `codegraph-publication-v1.json` remains a subordinate graph
+publication whose digest and manifest key are recorded in the shared
+generation.
+
+The canonical `source_digest` is SHA-256 over the bytewise-sorted sequence of
+length-delimited records for every source file admitted by the index selection:
+
+```text
+uint64_be(utf8_byte_length(relative_posix_path)) || relative_posix_path ||
+uint64_be(byte_length(file_bytes)) || file_bytes
+```
+
+Paths are repository-relative POSIX paths; the digest uses the actual staged,
+unstaged, and untracked worktree bytes, omits deleted files and `.zvec-grep`
+outputs, and records the selection/ignore configuration in
+`source_selection_digest`. `generation_id` is the SHA-256 of the RFC 8785
+canonical JSON generation preimage containing the source digest, selection
+digest, index/graph artifact digests, workspace identity, model/schema
+versions, and feature configuration. `state` follows `building → ready` or
+`building → aborted`; a ready generation is immutable.
+
+Writers take an exclusive per-workspace lock before building. The lock records
+an owner token, PID/host, start time, and lease; only the owner can publish or
+abort it, and stale takeover requires a failed owner-liveness check. A reader
+never consumes a `building` generation. The record contains at least:
 
 ```json
 {
@@ -84,8 +109,11 @@ of `manifest.json`) with at least:
   "indexed_commit": "…",
   "includes_uncommitted": true,
   "source_digest": "sha256:…",
+  "source_selection_digest": "sha256:…",
+  "feature_config": {"semantic_features_version": 1},
   "index": {
     "path": "…",
+    "sha256": "sha256:…",
     "manifest_version": 1,
     "index_version": 2,
     "embedding_model": "…",
@@ -94,6 +122,7 @@ of `manifest.json`) with at least:
   "graph": {
     "path": "…",
     "sha256": "sha256:…",
+    "publication_sha256": "sha256:…",
     "schema": "zvec-grep.codegraph",
     "version": 2,
     "relation_generation": 4
@@ -103,12 +132,16 @@ of `manifest.json`) with at least:
 }
 ```
 
-Writers must create and validate temporary index/graph artifacts first, verify
-that both match the same source digest and worktree state, and write the
-generation manifest last as the atomic publication boundary. Readers reject a
-generation when `state` is not `ready`, either artifact fingerprint differs, or
-the current authorized workspace state no longer matches the manifest. This
-contract is required before graph signals can affect production ranking.
+The coordinator creates and validates temporary index/graph artifacts first,
+including the existing graph publication manifest, computes their digests,
+derives `generation_id`, fsyncs the artifacts, and atomically replaces the
+generation manifest last. Readers recompute the source and artifact digests and
+verify that the workspace identity, source selection, index manifest key,
+graph publication manifest key, model/schema versions, and feature config match
+the generation. A mismatch, missing lock owner, non-ready state, or changed
+authorized workspace causes rejection and baseline fallback. Legacy manifests
+without this binding cannot enable graph ranking. This contract is required
+before graph signals can affect production ranking.
 
 ## Current zvec-grep baseline
 
@@ -154,24 +187,53 @@ traces opt-in or bounded so normal MCP responses do not grow unnecessarily.
 Every experiment must have a feature flag and a stable run-manifest value. The
 baseline must remain reproducible without the feature.
 
-The proposed request-level feature configuration is versioned and explicit:
+The proposed optional top-level request field is `semantic_features`. Its
+absence preserves the current request and response behavior. Version 1 has
+these defaults and validation rules:
 
 ```json
 {
   "semantic_features_version": 1,
   "representation": "all",
-  "token_sketch": "off | trace | rerank",
-  "graph_rerank": "off | shadow | on",
-  "graph_expansion": "off | related",
-  "trace": "off | summary | full"
+  "token_sketch": "off",
+  "graph_rerank": "off",
+  "graph_expansion": "off",
+  "trace": "off"
 }
 ```
 
-The bounded trace should use a stable shape containing `generation_id`, the
-FTS/vector candidate ranks, normalized feature values, final contribution
-weights, graph seed IDs, eligible edge counts, and expansion provenance. Full
-trace output is for qeval and diagnostics; normal MCP responses use summary
-trace only.
+Defaults are `representation=all`, `token_sketch=off`, `graph_rerank=off`,
+`graph_expansion=off`, and `trace=off`. An existing `trace: true` request is
+translated to `trace=summary` by the compatibility adapter. Unknown feature
+versions or enum values fail with a structured invalid-parameter error; they do
+not silently downgrade. The allowed values are `representation ∈ {symbol,
+body, document, all}`, `token_sketch ∈ {off, trace, rerank}`,
+`graph_rerank ∈ {off, shadow, on}`, `graph_expansion ∈ {off, related}`, and
+`trace ∈ {off, summary, full}`. `summary` contains at most the returned
+primary hits and `full` contains at most 100 candidate rows, with no source
+body text.
+
+The versioned trace shape is:
+
+```json
+{
+  "schema_version": 1,
+  "generation_id": "…",
+  "candidates": [{
+    "entity_id": "…",
+    "fts_rank": 1,
+    "vector_rank": 4,
+    "features": {"name_overlap": 0.8, "token_sketch": 0.2, "graph": 0.0},
+    "contributions": {"base_hybrid": 0.8, "name_overlap": 0.08},
+    "final_score": 0.88
+  }],
+  "graph": {"seed_ids": [], "eligible_edges": 0, "excluded_edges": 0},
+  "expansion": {"enabled": false, "related_count": 0}
+}
+```
+
+Trace fields are bounded, deterministic, and diagnostic; they do not change
+the source-grounded result contract.
 
 ### E1. Explicit symbol, body, and document representations
 
@@ -322,11 +384,22 @@ Do not make raw global PageRank or total reference count a strong prior. Popular
 utilities and framework hubs are frequent false positives. Keep unresolved and
 ambiguous edges out of the first ranking arm.
 
-For the first production-eligible graph arm, an edge is eligible only when
-`resolved == true`, `target` is present, and `ambiguous_candidates` is empty.
-Edges whose `resolution` is `syntax` remain available for diagnostics but are
-excluded from ranking. This is a conservative graph-confidence policy, not a
-claim of compiler-level type resolution.
+Graph artifact `resolved` is a name/structure resolution flag, not a claim of
+compiler-level type resolution. Therefore E3 defines two measured graph arms:
+
+- **syntax-confidence arm:** an edge is eligible when `resolved == true`,
+  `target` is present, `ambiguous_candidates` is empty, and its producer marks
+  it `resolution=syntax` (or supplies no stronger resolution label). This arm
+  is explicitly labelled syntax/name-based, keeps the five-percent graph cap,
+  and is exploratory only;
+- **strong-confidence arm:** the same target and ambiguity checks apply, but
+  the edge must carry a versioned stronger producer label or an accepted
+  language-specific call-facts context. This arm is eligible for production
+  promotion after the qeval gate.
+
+Both arms record the resolution label and producer context in the trace. An
+empty strong-confidence edge set is a valid result that must be reported; it
+must not be silently filled with syntax edges or presented as type-resolved.
 
 #### Expected benefit
 
@@ -378,10 +451,35 @@ confidence = definite | possible
 
 Expansion must be bounded by candidate count, hop count, and score decay. It
 must not silently replace the primary ranked list. The initial E4 contract is
-to append a bounded `related` section whose items carry
-`expanded_from`, `edge`, `hops`, and `confidence`. Related items do not count
-toward the primary top-k ranking or semantic qeval cutoff. Promoting expanded
-items into the primary list requires a separate feature arm and API decision.
+to append an optional top-level `related` sibling to the existing primary
+`items`/`groupResults` response. With `graph_expansion=related`, it contains at
+most 20 items reached from at most the top five primary seeds, at no more than
+two hops. Each item has the normal source identity (`entity_id`, `path`, and
+`range`) plus this versioned provenance:
+
+```json
+{
+  "entity_id": "…",
+  "path": "src/example.ts",
+  "range": {"start_line": 10, "end_line": 20},
+  "expanded_from": "seed-entity-id",
+  "edge": "calls",
+  "hops": 1,
+  "confidence": "syntax",
+  "score_decay": 0.5,
+  "generation_id": "…"
+}
+```
+
+`confidence` is `definite` only for strong-confidence eligible edges and
+`syntax` for the syntax-confidence arm. Related items are deduplicated by
+`entity_id`; when multiple paths reach one entity, retain the highest
+confidence, then fewest hops, then the lexicographically smallest seed/edge
+path. Sort the final section by confidence, score decay, hops, and entity ID.
+Related items do not count toward the primary top-k ranking or normalized
+source-unit qeval cutoff, and are omitted entirely when expansion is off.
+Promoting expanded items into the primary list requires a separate feature arm
+and API decision.
 
 This is safer for zvec-grep than index-time embedding diffusion because live
 worktree queries can use the current graph artifact without permanently
@@ -417,13 +515,29 @@ path changes still update provenance and file metadata.
 Measure this independently from relevance. The goal is lower incremental index
 latency and fewer freshness waits, not a different ranking.
 
-The incremental benchmark must run at least ten warm repetitions for each
-scenario and record embedding calls, p50/p95 update latency, and freshness
-failures. Required scenarios are:
+Before acceptance, add and freeze
+`benchmarks/semantic_search/fixtures/incremental-embedding-reuse-v1/workload.json`.
+It must name a base fixture, exact repository-relative paths, byte ranges and
+replacement bytes for the one-symbol edit, the rename source/destination, the
+deleted file, and the expected unchanged projection IDs. Each scenario resets
+to the same base source digest before running.
+
+For each same-engine baseline/candidate pair, perform two unmeasured warm-up
+refreshes, then ten measured repetitions. The baseline disables reuse and the
+candidate enables it; both use the same model, cache, staged workspace, and
+generation publication path. Timing starts immediately before the refresh call
+and ends after the ready generation is durably published; process startup and
+model download are excluded. An embedding call is one projection supplied to
+the model's embed operation. Report embedding-call count, reuse percentage,
+freshness failures, and p50/p95 using the nearest-rank percentile over the ten
+measured repetitions.
+
+Required scenarios are:
 
 - no-op refresh: zero changed projections are re-embedded;
 - one-symbol edit in a multi-symbol file: at least 90% of unchanged projections
-  are reused and p95 latency is no worse than the baseline;
+  are reused and candidate p95 is at most `max(1.10 * baseline_p95,
+  baseline_p95 + 50ms)`;
 - file rename/move: content embeddings are reused while path and provenance
   fields are updated; and
 - deletion: removed projections are absent from both retrieval and graph
@@ -500,6 +614,14 @@ cross-engine aggregate is valid. Every `run-manifest.json` must record
 `engine`, `control_commit`, `candidate_commit`, `feature_config`,
 `index_version`, `graph_schema`, and `generation_id`.
 
+The current replay option that builds a graph only for a candidate is
+insufficient for a causal graph-ranking comparison. The graph arm must instead
+stage one source workspace, build one graph generation, and load that same
+graph digest/generation into both same-engine controls. The control disables
+only the candidate graph feature; the candidate enables it. A graph result is
+not acceptance evidence if the control and candidate graph generations differ
+or if the runner cannot prove that both consumed the same artifact.
+
 Hold constant for every relevance arm:
 
 - fixture revision and source digest;
@@ -515,21 +637,23 @@ replace the source-authored four-language quality gate.
 
 ### Metrics
 
-Report per language and query category:
+Report per language, implementation engine, and query category:
 
-- Recall@10;
-- nDCG@10;
-- MRR@10;
-- Precision@10;
+- normalized source-unit Recall@10;
+- normalized source-unit nDCG@10;
+- normalized source-unit MRR@10;
+- normalized source-unit Precision@10;
 - candidate-to-result rank movement;
 - index and incremental-update latency;
 - warm query latency, CPU, and RSS;
 - returned tokens and follow-up reads; and
 - graph expansion count and edge-confidence breakdown.
 
-The current synthetic runner uses raw result limit 10 and the scorer's cutoff
-10, so Recall@10 is the reproducible relevance gate for issue #189. Recall@50
-requires a separate deep-candidate runner and is intentionally out of scope.
+The current synthetic runner retrieves raw limit 10, then normalizes entity
+fragments to source units before scoring the first ten normalized source units.
+Thus the reproducible relevance gate for issue #189 is source-unit Recall@10,
+nDCG@10, MRR@10, and Precision@10. Recall@50 requires a separate deep-
+candidate runner and is intentionally out of scope.
 Success@5 remains a future task-level agent-workflow metric, not an acceptance
 criterion for this document.
 
@@ -539,13 +663,14 @@ diagnosis.
 
 ### Acceptance gate
 
-Apply the existing no-regression rule independently to Go, Python, Rust, and
-TypeScript:
+Apply the existing no-regression rule independently to every
+source-language × implementation-engine lane (Go, Python, Rust, and
+TypeScript × TypeScript `zg` and Rust `zg`):
 
 - at least one tracked relevance metric must improve;
 - the other tracked relevance metrics must not decline;
 - every query-level regression must be reviewed; and
-- a regression in any language blocks a universal-improvement claim.
+- a regression in any language/engine lane blocks a universal-improvement claim.
 
 For graph-aware arms, additionally require:
 

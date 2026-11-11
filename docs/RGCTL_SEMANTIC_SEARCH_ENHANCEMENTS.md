@@ -65,6 +65,51 @@ The enhancements must preserve these existing contracts:
 - **No remote data movement by default.** Local embedding and local graph modes
   remain the default evaluation path.
 
+## Shared generation and publication contract
+
+Semantic and graph artifacts must be published as one generation. A new
+Engram/zvec-owned generation sidecar should extend the existing workspace
+manifest rather than create an independent freshness authority. The proposed
+sidecar is `.zvec-grep/generation.json` (or an equivalent versioned extension
+of `manifest.json`) with at least:
+
+```json
+{
+  "schema_version": 1,
+  "generation_id": "…",
+  "repository": "…",
+  "worktree": "…",
+  "branch": "…",
+  "current_commit": "…",
+  "indexed_commit": "…",
+  "includes_uncommitted": true,
+  "source_digest": "sha256:…",
+  "index": {
+    "path": "…",
+    "manifest_version": 1,
+    "index_version": 2,
+    "embedding_model": "…",
+    "embedding_schema": "…"
+  },
+  "graph": {
+    "path": "…",
+    "sha256": "sha256:…",
+    "schema": "zvec-grep.codegraph",
+    "version": 2,
+    "relation_generation": 4
+  },
+  "state": "ready",
+  "published_at": "…"
+}
+```
+
+Writers must create and validate temporary index/graph artifacts first, verify
+that both match the same source digest and worktree state, and write the
+generation manifest last as the atomic publication boundary. Readers reject a
+generation when `state` is not `ready`, either artifact fingerprint differs, or
+the current authorized workspace state no longer matches the manifest. This
+contract is required before graph signals can affect production ranking.
+
 ## Current zvec-grep baseline
 
 The current search pipeline already provides several capabilities that overlap
@@ -108,6 +153,25 @@ traces opt-in or bounded so normal MCP responses do not grow unnecessarily.
 
 Every experiment must have a feature flag and a stable run-manifest value. The
 baseline must remain reproducible without the feature.
+
+The proposed request-level feature configuration is versioned and explicit:
+
+```json
+{
+  "semantic_features_version": 1,
+  "representation": "all",
+  "token_sketch": "off | trace | rerank",
+  "graph_rerank": "off | shadow | on",
+  "graph_expansion": "off | related",
+  "trace": "off | summary | full"
+}
+```
+
+The bounded trace should use a stable shape containing `generation_id`, the
+FTS/vector candidate ranks, normalized feature values, final contribution
+weights, graph seed IDs, eligible edge counts, and expansion provenance. Full
+trace output is for qeval and diagnostics; normal MCP responses use summary
+trace only.
 
 ### E1. Explicit symbol, body, and document representations
 
@@ -238,9 +302,31 @@ The graph signal should initially be personalized and query-seeded:
    callees; and
 4. apply a small capped boost or rank-fusion contribution.
 
+The first ablation must not add values with incompatible scales to the current
+RRF score. Normalize every signal to `[0, 1]` over the candidate pool and freeze
+the initial experimental weights in the run manifest:
+
+```text
+rerank_score = 0.80 * base_hybrid
+             + 0.10 * name_overlap
+             + 0.05 * token_sketch
+             + 0.05 * graph_signal
+```
+
+The graph contribution is therefore capped at five percent of the normalized
+score. Existing deterministic ID ordering remains the final tie-breaker. These
+weights are an evaluation arm, not a permanent default; later tuning must be a
+new recorded arm.
+
 Do not make raw global PageRank or total reference count a strong prior. Popular
 utilities and framework hubs are frequent false positives. Keep unresolved and
 ambiguous edges out of the first ranking arm.
+
+For the first production-eligible graph arm, an edge is eligible only when
+`resolved == true`, `target` is present, and `ambiguous_candidates` is empty.
+Edges whose `resolution` is `syntax` remain available for diagnostics but are
+excluded from ranking. This is a conservative graph-confidence policy, not a
+claim of compiler-level type resolution.
 
 #### Expected benefit
 
@@ -261,6 +347,11 @@ ambiguous edges out of the first ranking arm.
 The graph artifact and semantic index must share source, branch, model, and
 freshness fingerprints. Graph ranking remains an offline/shadow arm until the
 qeval gate passes.
+
+This is a follow-on to earlier zvec relationship-reranking and graph-assisted
+recall experiments. Those experiments include neutral and regressing arms in
+`benchmarks/semantic_search/PROPOSAL_QEVAL_REPORT.md`; their failure modes must
+be carried forward, and their weights must not be reused as validated defaults.
 
 ### E4. Bounded graph-neighborhood expansion
 
@@ -286,10 +377,11 @@ confidence = definite | possible
 ```
 
 Expansion must be bounded by candidate count, hop count, and score decay. It
-must not silently replace the primary ranked list. It can either:
-
-- append a small related-context section; or
-- compete in the main list with a strict boost cap.
+must not silently replace the primary ranked list. The initial E4 contract is
+to append a bounded `related` section whose items carry
+`expanded_from`, `edge`, `hops`, and `confidence`. Related items do not count
+toward the primary top-k ranking or semantic qeval cutoff. Promoting expanded
+items into the primary list requires a separate feature arm and API decision.
 
 This is safer for zvec-grep than index-time embedding diffusion because live
 worktree queries can use the current graph artifact without permanently
@@ -325,9 +417,25 @@ path changes still update provenance and file metadata.
 Measure this independently from relevance. The goal is lower incremental index
 latency and fewer freshness waits, not a different ranking.
 
+The incremental benchmark must run at least ten warm repetitions for each
+scenario and record embedding calls, p50/p95 update latency, and freshness
+failures. Required scenarios are:
+
+- no-op refresh: zero changed projections are re-embedded;
+- one-symbol edit in a multi-symbol file: at least 90% of unchanged projections
+  are reused and p95 latency is no worse than the baseline;
+- file rename/move: content embeddings are reused while path and provenance
+  fields are updated; and
+- deletion: removed projections are absent from both retrieval and graph
+  artifacts after publication.
+
 ### E6. Community-aware retrieval and diversity
 
 **Priority:** P1/P2
+
+E6 is explicitly outside the first-wave acceptance scope of issue #189. It is a
+follow-up experiment after E1–E5 establish stable entity and generation
+identities.
 
 #### rgctl idea
 
@@ -374,6 +482,24 @@ Use the existing four independent qeval lanes:
 6. E5 incremental reuse latency arm; and
 7. a combined arm containing only individually accepted changes.
 
+### Engine and control matrix
+
+The source-language lanes and implementation engines are separate dimensions:
+
+| Dimension | Required values |
+| --- | --- |
+| Source language | Go, Python, Rust, TypeScript |
+| Implementation engine | TypeScript `zg`, Rust `zg` |
+| Arm | Same-engine baseline and candidate |
+| Control | Same fixture, qrels, model, device, flags, and result limit |
+| Graph arm | Both baseline and candidate use the same graph generation; only the candidate ranking/expansion feature differs |
+
+E1, E2, and E5 target both engines. E3 and E4 may begin as Rust graph arms,
+but must be labelled exploratory until an equivalent TypeScript arm exists. No
+cross-engine aggregate is valid. Every `run-manifest.json` must record
+`engine`, `control_commit`, `candidate_commit`, `feature_config`,
+`index_version`, `graph_schema`, and `generation_id`.
+
 Hold constant for every relevance arm:
 
 - fixture revision and source digest;
@@ -391,15 +517,21 @@ replace the source-authored four-language quality gate.
 
 Report per language and query category:
 
-- Recall@50 before final reranking;
+- Recall@10;
 - nDCG@10;
 - MRR@10;
-- Precision@10 and Success@5;
+- Precision@10;
 - candidate-to-result rank movement;
 - index and incremental-update latency;
 - warm query latency, CPU, and RSS;
 - returned tokens and follow-up reads; and
 - graph expansion count and edge-confidence breakdown.
+
+The current synthetic runner uses raw result limit 10 and the scorer's cutoff
+10, so Recall@10 is the reproducible relevance gate for issue #189. Recall@50
+requires a separate deep-candidate runner and is intentionally out of scope.
+Success@5 remains a future task-level agent-workflow metric, not an acceptance
+criterion for this document.
 
 Do not compare raw model scores across arms that use different representation
 or embedding models. Preserve full ranked results and feature traces for
@@ -421,6 +553,10 @@ For graph-aware arms, additionally require:
 - no increase in unresolved-edge-driven results;
 - no hub-dominance regression on conceptual queries; and
 - explainable provenance for every graph-boosted or expanded result.
+
+The current scorer and runner are the authoritative implementation of the
+synthetic gate; do not report an unsupported cutoff or metric from the existing
+raw-limit-10 artifacts.
 
 ## Rollout sequence
 
@@ -453,18 +589,23 @@ For graph-aware arms, additionally require:
 ## References
 
 - rgctl upstream reference: `v0.4.27`, commit
-  `4d4d1b3f7345bb4d27b25f8d7168c6b541d96b7e`.
+  [`4d4d1b3f7345bb4d27b25f8d7168c6b541d96b7e`](https://github.com/rgctl/rgctl/tree/4d4d1b3f7345bb4d27b25f8d7168c6b541d96b7e).
 - rgctl semantic design:
-  `docs/design/semantic-search-design.md` in the upstream checkout.
-- zvec-grep hybrid pipeline:
-  `zvec-grep-fork/src/engine/pipeline/search/index.ts` and
-  `zvec-grep-fork/src/engine/pipeline/search/fusion.ts`.
-- zvec-grep embedding content projection:
-  `zvec-grep-fork/src/engine/extraction/vector-content.ts`.
-- zvec-grep codegraph relation and query implementation:
-  `zvec-grep-fork/rust/crates/zg-codegraph/src/graph_queries.rs`.
+  [`docs/design/semantic-search-design.md`](https://github.com/rgctl/rgctl/blob/4d4d1b3f7345bb4d27b25f8d7168c6b541d96b7e/docs/design/semantic-search-design.md).
+- zvec-grep hybrid pipeline at commit
+  [`338546953d16f3aa1aa1d73137af20315ba1ca2f`](https://github.com/zvec-ai/zvec-grep/tree/338546953d16f3aa1aa1d73137af20315ba1ca2f):
+  [`index.ts`](https://github.com/zvec-ai/zvec-grep/blob/338546953d16f3aa1aa1d73137af20315ba1ca2f/src/engine/pipeline/search/index.ts)
+  and
+  [`fusion.ts`](https://github.com/zvec-ai/zvec-grep/blob/338546953d16f3aa1aa1d73137af20315ba1ca2f/src/engine/pipeline/search/fusion.ts).
+- zvec-grep embedding content projection at the same pinned commit:
+  [`vector-content.ts`](https://github.com/zvec-ai/zvec-grep/blob/338546953d16f3aa1aa1d73137af20315ba1ca2f/src/engine/extraction/vector-content.ts).
+- zvec-grep codegraph relation and query implementation at the same pinned
+  commit:
+  [`graph_queries.rs`](https://github.com/zvec-ai/zvec-grep/blob/338546953d16f3aa1aa1d73137af20315ba1ca2f/rust/crates/zg-codegraph/src/graph_queries.rs).
 - Engram semantic-search evaluation protocol:
   `benchmarks/semantic_search/MULTILANGUAGE_PROTOCOL.md` and
   `benchmarks/semantic_search/QUALITY_EVALUATION.md`.
+- Prior zvec retrieval ablations:
+  `benchmarks/semantic_search/PROPOSAL_QEVAL_REPORT.md`.
 - Engram semantic-code-intelligence decision:
   `docs/SEMANTIC_CODE_INTELLIGENCE.md`.

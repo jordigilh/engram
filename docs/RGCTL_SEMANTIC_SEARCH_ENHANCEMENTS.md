@@ -4,8 +4,9 @@
 
 **Date:** 2026-11-11
 
-**Tracking:** This document is the design source for the linked GitHub issue
-created from branch `docs/rgctl-semantic-enhancements`.
+**Tracking:** [GitHub issue #189](https://github.com/jordigilh/engram/issues/189)
+is the implementation tracker for this proposal. The design was created on
+branch `docs/rgctl-semantic-enhancements`.
 
 **Scope:** Improve semantic code-search relevance and live-index efficiency in
 zvec-grep by incorporating useful ideas from rgctl. This is not a proposal to

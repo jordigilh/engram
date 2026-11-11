@@ -250,7 +250,7 @@ The versioned trace shape is:
       "source": "…",
       "target": "…",
       "resolution": "static",
-      "producer": "rust-callfacts",
+      "producer": "callfacts-rust",
       "producer_context_sha256": "sha256:…",
       "confidence": "definite"
     }]
@@ -735,6 +735,12 @@ lane (Go, Python, Rust, and TypeScript × TypeScript `zg` and Rust `zg`).
 MRR@10, or Precision@10 must improve; the other three must not decline; every
 query-level regression must be reviewed; and a regression in any lane blocks a
 universal-improvement claim.
+
+**Graph-safety gate for E3:** a fresh-index response must contain no stale graph
+evidence, no result driven by unresolved or ambiguous edges, no hub-dominance
+regression on conceptual queries, and explainable provenance for every graph
+boost. These checks apply to both syntax-confidence and strong-confidence arms;
+they are required before an E3 arm can leave shadow mode.
 
 **Related-retrieval gate for E4:** add a separate scorer with
 `related_recall@20`, defined as relevant normalized source units in

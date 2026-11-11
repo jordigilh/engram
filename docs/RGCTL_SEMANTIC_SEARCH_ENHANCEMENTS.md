@@ -93,6 +93,13 @@ digest, index/graph artifact digests, workspace identity, model/schema
 versions, and feature configuration. `state` follows `building → ready` or
 `building → aborted`; a ready generation is immutable.
 
+`graph_generation_id` is a separate content identity: the SHA-256 of the RFC
+8785 canonical graph preimage containing only the source/selection digests,
+graph artifact and publication digests, graph schema/version, relation
+generation, and language-analysis context digests. It deliberately excludes
+query-time semantic feature flags, so baseline and candidate ranking arms can
+share one graph generation while their overall `generation_id` values differ.
+
 Writers take an exclusive per-workspace lock before building. The lock records
 an owner token, PID/host, start time, and lease; only the owner can publish or
 abort it, and stale takeover requires a failed owner-liveness check. A reader
@@ -120,6 +127,7 @@ never consumes a `building` generation. The record contains at least:
     "embedding_schema": "…"
   },
   "graph": {
+    "graph_generation_id": "…",
     "path": "…",
     "sha256": "sha256:…",
     "publication_sha256": "sha256:…",
@@ -137,8 +145,8 @@ including the existing graph publication manifest, computes their digests,
 derives `generation_id`, fsyncs the artifacts, and atomically replaces the
 generation manifest last. Readers recompute the source and artifact digests and
 verify that the workspace identity, source selection, index manifest key,
-graph publication manifest key, model/schema versions, and feature config match
-the generation. A mismatch, missing lock owner, non-ready state, or changed
+graph publication manifest key, model/schema versions, feature config, and
+`graph_generation_id` match the generation. A mismatch, missing lock owner, non-ready state, or changed
 authorized workspace causes rejection and baseline fallback. Legacy manifests
 without this binding cannot enable graph ranking. This contract is required
 before graph signals can affect production ranking.
@@ -197,19 +205,21 @@ these defaults and validation rules:
   "representation": "all",
   "token_sketch": "off",
   "graph_rerank": "off",
+  "graph_edge_confidence": "strong",
   "graph_expansion": "off",
   "trace": "off"
 }
 ```
 
 Defaults are `representation=all`, `token_sketch=off`, `graph_rerank=off`,
-`graph_expansion=off`, and `trace=off`. An existing `trace: true` request is
+`graph_edge_confidence=strong`, `graph_expansion=off`, and `trace=off`. An existing `trace: true` request is
 translated to `trace=summary` by the compatibility adapter. Unknown feature
 versions or enum values fail with a structured invalid-parameter error; they do
 not silently downgrade. The allowed values are `representation ∈ {symbol,
 body, document, all}`, `token_sketch ∈ {off, trace, rerank}`,
-`graph_rerank ∈ {off, shadow, on}`, `graph_expansion ∈ {off, related}`, and
-`trace ∈ {off, summary, full}`. `summary` contains at most the returned
+`graph_rerank ∈ {off, shadow, on}`, `graph_edge_confidence ∈ {syntax, strong}`,
+`graph_expansion ∈ {off, related}`, and `trace ∈ {off, summary, full}`.
+`summary` contains at most the returned
 primary hits and `full` contains at most 100 candidate rows, with no source
 body text.
 
@@ -219,21 +229,49 @@ The versioned trace shape is:
 {
   "schema_version": 1,
   "generation_id": "…",
+  "artifacts": {
+    "index_sha256": "sha256:…",
+    "graph_generation_id": "…",
+    "graph_sha256": "sha256:…",
+    "graph_publication_sha256": "sha256:…",
+    "embedding_model": "…",
+    "embedding_schema": "…"
+  },
   "candidates": [{
     "entity_id": "…",
     "fts_rank": 1,
     "vector_rank": 4,
+    "representation": "symbol",
     "features": {"name_overlap": 0.8, "token_sketch": 0.2, "graph": 0.0},
     "contributions": {"base_hybrid": 0.8, "name_overlap": 0.08},
-    "final_score": 0.88
+    "final_score": 0.88,
+    "graph_evidence": [{
+      "edge": "calls",
+      "source": "…",
+      "target": "…",
+      "resolution": "static",
+      "producer": "rust-callfacts",
+      "producer_context_sha256": "sha256:…",
+      "confidence": "definite"
+    }]
   }],
-  "graph": {"seed_ids": [], "eligible_edges": 0, "excluded_edges": 0},
-  "expansion": {"enabled": false, "related_count": 0}
+  "graph": {
+    "seed_ids": [],
+    "eligible_edges": 0,
+    "excluded_edges": {"unresolved": 0, "ambiguous": 0, "stale": 0}
+  },
+  "expansion": {
+    "enabled": false,
+    "related_count": 0,
+    "items": []
+  }
 }
 ```
 
 Trace fields are bounded, deterministic, and diagnostic; they do not change
-the source-grounded result contract.
+the source-grounded result contract. Full traces cap candidates at 100,
+graph-evidence rows at 200, and expansion items at 20; counts remain available
+when detail rows are truncated.
 
 ### E1. Explicit symbol, body, and document representations
 
@@ -393,13 +431,31 @@ compiler-level type resolution. Therefore E3 defines two measured graph arms:
   is explicitly labelled syntax/name-based, keeps the five-percent graph cap,
   and is exploratory only;
 - **strong-confidence arm:** the same target and ambiguity checks apply, but
-  the edge must carry a versioned stronger producer label or an accepted
-  language-specific call-facts context. This arm is eligible for production
-  promotion after the qeval gate.
+  the edge must carry the following normative producer contract:
 
-Both arms record the resolution label and producer context in the trace. An
-empty strong-confidence edge set is a valid result that must be reported; it
-must not be silently filled with syntax edges or presented as type-resolved.
+  - `producer` is one of `callfacts-go`, `callfacts-rust`,
+    `callfacts-typescript`, `callfacts-python`, `graph-manifest`, or
+    `graph-structural`;
+  - a `calls` edge must have `resolution=static`, no possible targets, and the
+    matching language-specific graph context digest
+    (`go_callfacts_context_sha256`, `rust_callfacts_context_sha256`,
+    `typescript_callfacts_context_sha256`, or
+    `python_callfacts_context_sha256`) bound to the same source digest;
+  - a non-`calls` edge may use `resolution=manifest` or `resolution=structural`
+    only for the relation kinds emitted by the versioned graph schema; and
+  - every strong edge records `producer_context_sha256`, which must match the
+    graph artifact's corresponding context or manifest digest.
+
+  `resolution ∈ {possible, ambiguous, function-value, external, unresolved}`
+  is never strong and is excluded from ranking. This arm is eligible for
+  production promotion only after the qeval gate.
+
+Both arms record the resolution label, producer, and producer context in the
+trace. `definite` is emitted only by the strong contract and `syntax` only by
+the syntax-confidence contract; `possible` is never emitted because ambiguous
+edges are excluded. An empty strong-confidence edge set is a valid result that
+must be reported; it must not be silently filled with syntax edges or presented
+as type-resolved.
 
 #### Expected benefit
 
@@ -446,38 +502,44 @@ edges. Add expanded candidates with explicit provenance:
 expanded_from = <seed entity id>
 edge = calls | imports | ...
 hops = 1 | 2
-confidence = definite | possible
+confidence = definite | syntax
 ```
 
 Expansion must be bounded by candidate count, hop count, and score decay. It
 must not silently replace the primary ranked list. The initial E4 contract is
-to append an optional top-level `related` sibling to the existing primary
+to append an optional top-level `related` object to the existing primary
 `items`/`groupResults` response. With `graph_expansion=related`, it contains at
 most 20 items reached from at most the top five primary seeds, at no more than
-two hops. Each item has the normal source identity (`entity_id`, `path`, and
-`range`) plus this versioned provenance:
+two hops. The object is omitted when expansion is off and has this versioned
+envelope:
 
 ```json
 {
-  "entity_id": "…",
-  "path": "src/example.ts",
-  "range": {"start_line": 10, "end_line": 20},
-  "expanded_from": "seed-entity-id",
-  "edge": "calls",
-  "hops": 1,
-  "confidence": "syntax",
-  "score_decay": 0.5,
-  "generation_id": "…"
+  "schema_version": 1,
+  "graph_generation_id": "…",
+  "items": [{
+    "entity_id": "…",
+    "path": "src/example.ts",
+    "range": {"start_line": 10, "end_line": 20},
+    "expanded_from": "seed-entity-id",
+    "edge": "calls",
+    "hops": 1,
+    "confidence": "syntax",
+    "resolution": "syntax",
+    "producer": "syntax-tree",
+    "producer_context_sha256": "sha256:…",
+    "score_decay": 0.5
+  }]
 }
 ```
 
 `confidence` is `definite` only for strong-confidence eligible edges and
-`syntax` for the syntax-confidence arm. Related items are deduplicated by
-`entity_id`; when multiple paths reach one entity, retain the highest
-confidence, then fewest hops, then the lexicographically smallest seed/edge
-path. Sort the final section by confidence, score decay, hops, and entity ID.
-Related items do not count toward the primary top-k ranking or normalized
-source-unit qeval cutoff, and are omitted entirely when expansion is off.
+`syntax` for the syntax-confidence arm; ambiguous/possible edges are excluded
+rather than emitted. Related items are deduplicated by `entity_id`; when
+multiple paths reach one entity, retain the highest confidence, then fewest
+hops, then the lexicographically smallest seed/edge path. Sort `items` by
+confidence, score decay, hops, and entity ID. Related items do not count toward
+the primary top-k ranking or normalized source-unit qeval cutoff.
 Promoting expanded items into the primary list requires a separate feature arm
 and API decision.
 
@@ -519,13 +581,15 @@ Before acceptance, add and freeze
 `benchmarks/semantic_search/fixtures/incremental-embedding-reuse-v1/workload.json`.
 It must name a base fixture, exact repository-relative paths, byte ranges and
 replacement bytes for the one-symbol edit, the rename source/destination, the
-deleted file, and the expected unchanged projection IDs. Each scenario resets
-to the same base source digest before running.
+deleted file, and the expected unchanged projection IDs. Each measured
+repetition resets to the same base source digest before applying that
+repetition's edit, rename, or deletion.
 
 For each same-engine baseline/candidate pair, perform two unmeasured warm-up
 refreshes, then ten measured repetitions. The baseline disables reuse and the
 candidate enables it; both use the same model, cache, staged workspace, and
-generation publication path. Timing starts immediately before the refresh call
+generation publication path. Each repetition starts from the frozen base
+workspace rather than the previous repetition. Timing starts immediately before the refresh call
 and ends after the ready generation is durably published; process startup and
 model download are excluded. An embedding call is one projection supplied to
 the model's embed operation. Report embedding-call count, reuse percentage,
@@ -589,11 +653,11 @@ search additions:
 Use the existing four independent qeval lanes:
 
 1. current zvec-grep baseline;
-2. E1 symbol/body projection;
-3. E2 token sketch and identifier anchoring;
-4. E3 graph-aware late fusion;
-5. E4 bounded neighborhood expansion;
-6. E5 incremental reuse latency arm; and
+2. E1 symbol/body projection (**relevance gate**);
+3. E2 token sketch and identifier anchoring (**relevance gate**);
+4. E3 graph-aware late fusion (**relevance and graph-provenance gate**);
+5. E4 bounded neighborhood expansion (**related-retrieval gate**);
+6. E5 incremental reuse (**refresh-efficiency gate**); and
 7. a combined arm containing only individually accepted changes.
 
 ### Engine and control matrix
@@ -612,7 +676,8 @@ E1, E2, and E5 target both engines. E3 and E4 may begin as Rust graph arms,
 but must be labelled exploratory until an equivalent TypeScript arm exists. No
 cross-engine aggregate is valid. Every `run-manifest.json` must record
 `engine`, `control_commit`, `candidate_commit`, `feature_config`,
-`index_version`, `graph_schema`, and `generation_id`.
+`index_version`, `graph_schema`, `generation_id`, `graph_generation_id`,
+`graph_artifact_sha256`, and `graph_publication_sha256`.
 
 The current replay option that builds a graph only for a candidate is
 insufficient for a causal graph-ranking comparison. The graph arm must instead
@@ -661,27 +726,36 @@ Do not compare raw model scores across arms that use different representation
 or embedding models. Preserve full ranked results and feature traces for
 diagnosis.
 
-### Acceptance gate
+### Acceptance gates
 
-Apply the existing no-regression rule independently to every
-source-language × implementation-engine lane (Go, Python, Rust, and
-TypeScript × TypeScript `zg` and Rust `zg`):
+Apply each gate independently to every source-language × implementation-engine
+lane (Go, Python, Rust, and TypeScript × TypeScript `zg` and Rust `zg`).
 
-- at least one tracked relevance metric must improve;
-- the other tracked relevance metrics must not decline;
-- every query-level regression must be reviewed; and
-- a regression in any language/engine lane blocks a universal-improvement claim.
+**Relevance gate for E1–E3:** at least one of source-unit Recall@10, nDCG@10,
+MRR@10, or Precision@10 must improve; the other three must not decline; every
+query-level regression must be reviewed; and a regression in any lane blocks a
+universal-improvement claim.
 
-For graph-aware arms, additionally require:
+**Related-retrieval gate for E4:** add a separate scorer with
+`related_recall@20`, defined as relevant normalized source units in
+`related.items[:20]` that are absent from primary top-10, divided by relevant
+source units absent from primary top-10 (zero when the denominator is zero).
+E4 must improve `related_recall@20` in at least one measured query category,
+must not lower any primary source-unit metric, and must pass stale,
+unresolved/ambiguous-edge, hub-dominance, ordering, and provenance checks.
+Related items remain outside the primary scorer.
 
-- no stale graph evidence in a fresh-index response;
-- no increase in unresolved-edge-driven results;
-- no hub-dominance regression on conceptual queries; and
-- explainable provenance for every graph-boosted or expanded result.
+**Refresh-efficiency gate for E5:** E5 is not required to improve relevance.
+Its primary ranked source-unit IDs must exactly match the reuse-disabled
+baseline, every scenario must have zero freshness failures, no-op must make
+zero embedding calls, unchanged projections must meet the 90% reuse target,
+and the one-symbol p95 must satisfy the stated baseline tolerance.
 
-The current scorer and runner are the authoritative implementation of the
-synthetic gate; do not report an unsupported cutoff or metric from the existing
-raw-limit-10 artifacts.
+E3/E4 Rust-only arms remain exploratory and cannot be promoted to an accepted
+default until equivalent TypeScript arms pass the applicable gate. A combined
+arm may contain only accepted E1–E5 changes. The current scorer and runner are
+authoritative for the existing relevance gate; E4 requires the separate
+`related_recall@20` scorer before acceptance.
 
 ## Rollout sequence
 
@@ -717,6 +791,10 @@ raw-limit-10 artifacts.
   [`4d4d1b3f7345bb4d27b25f8d7168c6b541d96b7e`](https://github.com/rgctl/rgctl/tree/4d4d1b3f7345bb4d27b25f8d7168c6b541d96b7e).
 - rgctl semantic design:
   [`docs/design/semantic-search-design.md`](https://github.com/rgctl/rgctl/blob/4d4d1b3f7345bb4d27b25f8d7168c6b541d96b7e/docs/design/semantic-search-design.md).
+- rgctl semantic index schema and content-hash reuse at the same pinned commit:
+  [`semantic_search.rs`](https://github.com/rgctl/rgctl/blob/4d4d1b3f7345bb4d27b25f8d7168c6b541d96b7e/crates/rgctl-analysis/src/semantic_search.rs#L19-L96)
+  and late-fusion implementation
+  [`semantic_fusion.rs`](https://github.com/rgctl/rgctl/blob/4d4d1b3f7345bb4d27b25f8d7168c6b541d96b7e/crates/rgctl-analysis/src/semantic_fusion.rs#L213-L320).
 - zvec-grep hybrid pipeline at commit
   [`338546953d16f3aa1aa1d73137af20315ba1ca2f`](https://github.com/zvec-ai/zvec-grep/tree/338546953d16f3aa1aa1d73137af20315ba1ca2f):
   [`index.ts`](https://github.com/zvec-ai/zvec-grep/blob/338546953d16f3aa1aa1d73137af20315ba1ca2f/src/engine/pipeline/search/index.ts)

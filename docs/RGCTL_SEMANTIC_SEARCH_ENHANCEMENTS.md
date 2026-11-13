@@ -1,16 +1,15 @@
 # rgctl-Informed Semantic Search Enhancements for zvec-grep
 
-**Status:** Enhancement proposal
+**Status:** Final evaluation record — E0 accepted; E1–E5 not accepted
 
-**Date:** 2026-11-11
+**Date:** 2026-11-13
 
 **Tracking:** [GitHub issue #189](https://github.com/jordigilh/engram/issues/189)
 is the implementation tracker for this proposal. The design was created on
 branch `docs/rgctl-semantic-enhancements`.
 
-**Scope:** Improve semantic code-search relevance and live-index efficiency in
-zvec-grep by incorporating useful ideas from rgctl. This is not a proposal to
-replace zvec-grep with rgctl.
+**Scope:** Historical evaluation of rgctl-inspired ideas for zvec-grep. This is
+not a proposal to replace zvec-grep with rgctl.
 
 ## Executive summary
 
@@ -25,25 +24,28 @@ worktree profile:
 - a versioned `codegraph-v2` sidecar with graph queries for the supported
   languages.
 
-rgctl is valuable as a source of retrieval and ranking techniques rather than
-as a replacement backend. Its semantic subsystem combines function-level
-representations, identifier/body token sketches, late fusion, graph-aware
-signals, optional graph diffusion, neighborhood expansion, and incremental
-content-hash reuse.
+rgctl remains useful as a source of hypotheses, but the measured enhancements
+did not establish safe production defaults. The final decision is to include
+only E0: bounded retrieval diagnostics, provenance, reproducible traces, and
+feature-gate infrastructure that leave baseline ranking unchanged.
 
-The recommended direction is to preserve zvec-grep's current hybrid candidate
-generation and add bounded, measurable second-stage improvements:
+E1–E5 are historical experiments. Their implementations are not retained in
+the production candidate; their results and acceptance failures remain below
+for future reference. E6 remains deferred.
 
-1. explicit symbol/body representation profiles;
-2. compact identifier and body-token sketches;
-3. graph-aware late fusion with capped, high-confidence signals;
-4. bounded graph neighborhood expansion; and
-5. per-fragment embedding reuse for faster live refreshes.
+## Final decision
 
-Community-aware retrieval is a follow-up. Quantized Hamming search, a compiled
-vocabulary embedder, full CFG/PDG, clone detection, and security analysis are
-separate performance or analysis tracks and are not first-wave semantic-search
-changes.
+| Enhancement | Decision | Evidence |
+| --- | --- | --- |
+| E0 diagnostics and gates | **Accepted** | Exact zero ranking delta; reproducible traces, fingerprints, and feature controls. |
+| E1 representations | **Rejected and removed** | `all` was zero-delta; `symbol` and `body` were mixed by language/engine and had query-level regressions. |
+| E2 token sketches | **Rejected and removed** | Reproducible, but failed the universal relevance gate with regressions in Rust×Rust and TypeScript lanes. |
+| E3 graph reranking | **Rejected and removed** | All four TypeScript-engine language lanes failed; frozen-pool replay confirmed graph-specific regressions. |
+| E4 related expansion | **Rejected and removed** | Exploratory model lift used simulated context; production output was unavailable and `related_recall@20` was not measured. |
+| E5 embedding reuse | **Not accepted and removed** | No completed acceptance benchmark; ranking/freshness/performance gates remain unproven. |
+
+The existing zvec-grep hybrid retrieval, ordinary graph/index lifecycle, and
+baseline source-grounded response behavior are not part of these removals.
 
 ## Design constraints
 
@@ -177,17 +179,23 @@ primary opportunity addressed here.
 
 **Priority:** P0, prerequisite
 
+**Disposition:** Accepted and retained. E0 must not change baseline ranking or
+ordinary response content. Keep bounded traces, source/index/graph/model
+fingerprints, deterministic tie-breaking, and explicit feature validation.
+Experimental ranking and expansion implementations described in E1–E5 are not
+part of the accepted runtime.
+
 Before changing ranking, expose enough per-hit information to tell whether an
 enhancement helped:
 
 - candidate rank from FTS and vector routes;
 - normalized name/identifier overlap;
-- token-sketch overlap;
-- graph evidence and edge confidence;
-- entity/body/document representation used;
+- reserved token-sketch and graph diagnostic fields;
+- baseline `all` representation;
 - each reranker contribution and final score;
 - index, graph, model, and source-snapshot fingerprints; and
-- whether graph expansion added or only explained a result.
+- whether graph expansion added or only explained a result (E0 reports no
+  expansion).
 
 The existing search trace is the natural transport location. Keep detailed
 traces opt-in or bounded so normal MCP responses do not grow unnecessarily.
@@ -195,30 +203,23 @@ traces opt-in or bounded so normal MCP responses do not grow unnecessarily.
 Every experiment must have a feature flag and a stable run-manifest value. The
 baseline must remain reproducible without the feature.
 
-The proposed optional top-level request field is `semantic_features`. Its
-absence preserves the current request and response behavior. Version 1 has
-these defaults and validation rules:
+The accepted optional top-level request field is `semantic_features`. Its
+absence preserves the current request and response behavior. E0 exposes only
+versioned diagnostic tracing; experimental ranking and expansion controls are
+not part of the accepted API. Version 1 has these defaults and validation
+rules:
 
 ```json
 {
   "semantic_features_version": 1,
-  "representation": "all",
-  "token_sketch": "off",
-  "graph_rerank": "off",
-  "graph_edge_confidence": "strong",
-  "graph_expansion": "off",
   "trace": "off"
 }
 ```
 
-Defaults are `representation=all`, `token_sketch=off`, `graph_rerank=off`,
-`graph_edge_confidence=strong`, `graph_expansion=off`, and `trace=off`. An existing `trace: true` request is
-translated to `trace=summary` by the compatibility adapter. Unknown feature
-versions or enum values fail with a structured invalid-parameter error; they do
-not silently downgrade. The allowed values are `representation ∈ {symbol,
-body, document, all}`, `token_sketch ∈ {off, trace, rerank}`,
-`graph_rerank ∈ {off, shadow, on}`, `graph_edge_confidence ∈ {syntax, strong}`,
-`graph_expansion ∈ {off, related}`, and `trace ∈ {off, summary, full}`.
+The default is `trace=off`. An existing `trace: true` request is translated to
+`trace=summary` by the compatibility adapter. Unknown feature versions or enum
+values fail with a structured invalid-parameter error; they do not silently
+downgrade. The allowed values are `trace ∈ {off, summary, full}`.
 `summary` contains at most the returned
 primary hits and `full` contains at most 100 candidate rows, with no source
 body text.
@@ -241,7 +242,7 @@ The versioned trace shape is:
     "entity_id": "…",
     "fts_rank": 1,
     "vector_rank": 4,
-    "representation": "symbol",
+    "representation": "all",
     "features": {"name_overlap": 0.8, "token_sketch": 0.2, "graph": 0.0},
     "contributions": {"base_hybrid": 0.8, "name_overlap": 0.08},
     "final_score": 0.88,
@@ -276,6 +277,16 @@ when detail rows are truncated.
 ### E1. Explicit symbol, body, and document representations
 
 **Priority:** P0
+
+**Disposition:** Rejected and removed from the production candidate.
+
+The final `all`/control arm was exactly zero-delta across all eight
+source-language × engine lanes. Alternate representation results were mixed:
+`symbol` improved aggregate metrics for Python and Rust but regressed Go and
+TypeScript, while `body` improved selected lanes and regressed or stayed flat
+in others. Positive aggregate lanes still contained query-level regressions,
+so language-based defaults were not justified. The alternate projection,
+storage, routing, and index-version code is historical only.
 
 #### rgctl idea
 
@@ -329,6 +340,13 @@ the current fragment content.
 
 **Priority:** P0
 
+**Disposition:** Rejected and removed from the production candidate.
+
+The token-sketch arm was reproducible, but it failed the universal relevance
+gate: regressions remained in the Rust×Rust and TypeScript lanes. No default or
+language-specific promotion was justified. The token-sketch implementation and
+its rerank/anchor branches are retained only as historical benchmark evidence.
+
 #### rgctl idea
 
 rgctl computes a compact 256-bit token-bloom sketch from split identifier and
@@ -375,6 +393,25 @@ otherwise use a capped score contribution.
 ### E3. Graph-aware late fusion
 
 **Priority:** P0 after E0; first graph-ranking experiment
+
+**Disposition:** Rejected and removed from primary ranking.
+
+The TypeScript-engine raw-limit-10/source-unit deltas were:
+
+| Source language | ΔnDCG@10 | ΔMRR@10 | ΔRecall@10 | ΔPrecision@10 |
+| --- | ---: | ---: | ---: | ---: |
+| Go | +0.0232 | +0.0819 | -0.0104 | 0 |
+| Python | +0.0093 | -0.0104 | 0 | 0 |
+| Rust | -0.0347 | -0.0109 | -0.0208 | -0.0125 |
+| TypeScript | -0.0430 | -0.0233 | -0.1042 | -0.0375 |
+
+Replay/provenance checks passed: stale edges were zero, normalized topology
+matched replay, and recovered endpoints mapped to indexed entities. The later
+frozen-pool run found identical candidate-ID sets in 64/64 comparisons, so
+candidate-pool variation did not explain the regressions. Zero-graph replay
+showed graph-specific harm in Rust and TypeScript. Synthetic name-based graph
+truth and production graph binding remained unresolved. E3 is therefore not a
+production ranking feature.
 
 #### rgctl idea
 
@@ -486,6 +523,17 @@ be carried forward, and their weights must not be reused as validated defaults.
 
 **Priority:** P1
 
+**Disposition:** Rejected and removed as a production response feature.
+
+The exploratory two-model, eight-task A/B study improved the manually supplied
+related-context condition from 0.3125 to 0.9375 usefulness score, but that
+context was not fresh production E4 output and no separate related qrels were
+used. The fresh production study was blocked: the Rust graph contained 104,283
+edges, of which 93,441 were pending; the relationship probe returned zero
+additive related items. The reader consumed resolved edges only, while the
+TypeScript path returned an empty envelope. The model lift was not sufficient
+evidence to retain production E4 code.
+
 #### rgctl idea
 
 rgctl can expand a semantic result into a bounded call-graph neighborhood after
@@ -550,6 +598,15 @@ smearing embeddings across stale relationships.
 ### E5. Incremental content-hash embedding reuse
 
 **Priority:** P1
+
+**Disposition:** Not accepted and removed from the production candidate.
+
+E5 targets refresh latency and embedding-call reduction rather than relevance.
+The workload, TypeScript runner, Rust example, and acceptance reporter were
+prepared, but no completed acceptance result exists. Consequently the zero
+no-op-call, 90% unchanged-projection reuse, freshness, ranking-parity, and p95
+gates were not demonstrated. Preserve the workload contract and historical
+notes; do not ship the reuse implementation.
 
 #### rgctl idea
 
@@ -647,6 +704,10 @@ search additions:
 | OSV, dependency, and taint analysis | Separate security workloads; keep them out of the semantic ranker |
 
 ## Evaluation plan
+
+This section is retained as the historical acceptance protocol. It is no
+longer a rollout plan: E0 is the only accepted enhancement, and E1–E5 remain
+archived experiment arms.
 
 ### Paired feature arms
 
@@ -765,31 +826,20 @@ authoritative for the existing relevance gate; E4 requires the separate
 
 ## Rollout sequence
 
-### Phase 1: Instrumentation and entity projection
+### Accepted scope
 
-- Extend the bounded search trace with representation and score components.
-- Add E1 behind a feature flag.
-- Run the four-language baseline and E1 paired arms.
+- Retain E0 diagnostics, provenance, deterministic traces, and feature
+  validation with baseline ranking unchanged.
+- Keep all detailed traces bounded or explicitly requested.
+- Preserve the existing hybrid retrieval and worktree freshness contracts.
 
-### Phase 2: Identifier and graph ranking
+### Archived scope
 
-- Add E2 token sketches and query-class-aware anchoring.
-- Add E3 as an offline/shadow reranker over the existing candidate pool.
-- Compare per-query rank movement and relevance deltas.
-
-### Phase 3: Expansion and refresh efficiency
-
-- Add E4 bounded neighborhood expansion for selected query classes.
-- Add E5 content-hash embedding reuse.
-- Measure freshness latency and response-token changes separately from relevance.
-
-### Phase 4: Repository-scale retrieval
-
-- Evaluate E6 community-aware scope and diversity on larger repositories.
-- Test branch switches, linked worktrees, staged/unstaged/untracked changes,
-  deletions, renames, and stale artifact recovery.
-- Promote only feature combinations that pass both relevance and freshness
-  gates.
+- Do not ship E1, E2, E3, E4, or E5 implementations.
+- Preserve their reports, qeval artifacts, workload contracts, and failure
+  rationale as historical evidence.
+- Reopen an experiment only with a new isolated arm and a separately approved
+  acceptance plan; do not infer promotion from the historical results.
 
 ## References
 

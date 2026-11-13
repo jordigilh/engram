@@ -142,6 +142,12 @@ never consumes a `building` generation. The record contains at least:
 }
 ```
 
+The coordinator captures one source snapshot and computes `source_digest` from
+it before either artifact builder reads source. Both builders consume only that
+snapshot. Before publication, the coordinator recomputes the source digest from
+the authorized worktree and aborts the generation when it differs from the
+snapshot digest.
+
 The coordinator creates and validates temporary index/graph artifacts first,
 including the existing graph publication manifest, computes their digests,
 derives `generation_id`, fsyncs the artifacts, and atomically replaces the

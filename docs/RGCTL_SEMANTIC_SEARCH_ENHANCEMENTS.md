@@ -220,11 +220,17 @@ The default is `trace=off`. An existing `trace: true` request is translated to
 `trace=summary` by the compatibility adapter. Unknown feature versions or enum
 values fail with a structured invalid-parameter error; they do not silently
 downgrade. The allowed values are `trace ∈ {off, summary, full}`.
-`summary` contains at most the returned
-primary hits and `full` contains at most 100 candidate rows, with no source
-body text.
+`summary` contains at most the returned primary hits in the top-level semantic
+trace. When `trackEntityId` is set, the existing tracked result remains
+available even when it is outside the primary limit; it is not required to
+appear in the top-level summary candidate rows. Consumers that need diagnostics
+for that entity should use its per-hit trace when present or an explicit entity
+diagnosis. `full` contains at most 100 candidate rows, with no source body
+text.
 
-The versioned trace shape is:
+The following is an illustrative trace shape. For `fts_rank=1` and
+`vector_rank=4`, the baseline score is `1 / (60 + 1) + 1 / (60 + 4) ≈ 0.032`;
+the reserved token-sketch and graph terms do not contribute to the score:
 
 ```json
 {
@@ -243,18 +249,15 @@ The versioned trace shape is:
     "fts_rank": 1,
     "vector_rank": 4,
     "representation": "all",
-    "features": {"name_overlap": 0.8, "token_sketch": 0.2, "graph": 0.0},
-    "contributions": {"base_hybrid": 0.8, "name_overlap": 0.08},
-    "final_score": 0.88,
-    "graph_evidence": [{
-      "edge": "calls",
-      "source": "…",
-      "target": "…",
-      "resolution": "static",
-      "producer": "callfacts-rust",
-      "producer_context_sha256": "sha256:…",
-      "confidence": "definite"
-    }]
+    "features": {"name_overlap": 0.8, "token_sketch": 0.0, "graph": 0.0},
+    "contributions": {
+      "base_hybrid": 0.032,
+      "name_overlap": 0.0,
+      "token_sketch": 0.0,
+      "graph": 0.0
+    },
+    "final_score": 0.032,
+    "graph_evidence": []
   }],
   "graph": {
     "seed_ids": [],

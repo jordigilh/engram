@@ -1472,6 +1472,21 @@ class TestZvecShadowRelayAdapter:
 
         assert session_id, "daemon returned no mcp-session-id; handshake failed"
 
+        # 2025-06-18 lifecycle: the client must send notifications/initialized
+        # after a successful initialize; without it the daemon returns no
+        # tools and the coverage comparison below would vacuously pass.
+        initialized_request = urllib.request.Request(
+            base,
+            data=json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "mcp-session-id": session_id,
+            },
+        )
+        with urllib.request.urlopen(initialized_request, timeout=2):
+            pass
+
         list_request = urllib.request.Request(
             base,
             data=json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).encode(),

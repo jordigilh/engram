@@ -699,7 +699,13 @@ def pattern_search_code(
         raise ValueError(
             f'structural matching is not supported for language "{language}"'
         )
-    cp = CodePattern(pattern, canonical)
+    # Compile one CodePattern per DETECTED grammar, not one per canonical
+    # language: the {typescript, tsx} detection pair spans two distinct
+    # tree-sitter grammars, and the TypeScript grammar does not parse JSX,
+    # so .tsx files must be matched with the tsx grammar (CodeRabbit
+    # follow-up on 13e13e7; mirrors the deleted callgraph.py's
+    # _grammar_for_path per the pr200-alias-spike findings).
+    patterns: dict[str, "CodePattern"] = {}
     results: list[dict[str, Any]] = []
     for root_spec in _select_pattern_roots(repo=repo, branch=branch):
         repo_tag, root, included, excluded, root_language, _root_branch = _root_details(root_spec)
@@ -711,8 +717,15 @@ def pattern_search_code(
             if len(results) >= limit:
                 break
             detected = detect_code_language(filename=path.name)
-            if canonical not in _DETECTION_EQUIVALENTS.get(detected, frozenset({detected})):
+            equivalents = _DETECTION_EQUIVALENTS.get(detected, frozenset({detected}))
+            if canonical not in equivalents:
                 continue
+            # `detected` is guaranteed CodePattern-supported here: it is
+            # either the probed canonical itself or a member of the
+            # {typescript, tsx} pair, both accepted per the spike data.
+            cp = patterns.get(detected)
+            if cp is None:
+                cp = patterns[detected] = CodePattern(pattern, detected)
             file_match = cp.match_file(str(path))
             if file_match is None:
                 continue

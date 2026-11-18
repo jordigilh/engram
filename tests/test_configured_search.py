@@ -359,6 +359,7 @@ _MATRIX_FILE_CONTENTS = {
     "t.py": "x = 1\n",
     "t.ts": "const a = 1;\n",
     "t.tsx": "export const A = () => null;\n",
+    "tjsx.tsx": 'export const B = () => <div className="x">hi</div>;\n',
     "t.tf": 'resource "x" "y" {}\n',
     "t.md": "# hi\n",
 }
@@ -413,6 +414,29 @@ def test_pattern_language_matrix_typescript_and_tsx_detection_pair(monkeypatch, 
     }
     roots = [_matrix_root(tmp_path, "tsx-root", ["t.tsx"], "tsx")]
     assert _run_matrix_case(monkeypatch, tmp_path, roots) == {"tsx-root/t.tsx"}
+
+
+def test_pattern_language_matrix_typescript_uses_tsx_grammar_for_jsx(monkeypatch, tmp_path):
+    # CodeRabbit follow-up: .tsx files containing JSX must still match when
+    # the search language is `typescript`. The TypeScript grammar cannot
+    # parse JSX (tree-sitter error recovery drops the JSX nodes), so the
+    # .tsx fixture must be matched with the tsx grammar; before the fix the
+    # JSX file was silently dropped. The pattern below matches only when
+    # parsed with the tsx grammar (verified: typescript grammar -> no match).
+    roots = [_matrix_root(tmp_path, "ts-jsx-root", ["t.ts", "t.tsx", "tjsx.tsx"], "typescript")]
+    monkeypatch.setattr(search, "_PATTERN_SEARCH_ROOTS", roots)
+    monkeypatch.setattr(search, "_DEFAULT_BRANCH", None)
+    results = search.pattern_search_code(
+        '<div className="x">\\NAME</div>', "typescript", limit=50
+    )
+    assert {r["filepath"] for r in results} == {"ts-jsx-root/tjsx.tsx"}
+    # explicit tsx language matches the same fixture via its own grammar
+    roots = [_matrix_root(tmp_path, "tsx-jsx-root", ["tjsx.tsx"], "tsx")]
+    monkeypatch.setattr(search, "_PATTERN_SEARCH_ROOTS", roots)
+    results = search.pattern_search_code(
+        '<div className="x">\\NAME</div>', "tsx", limit=50
+    )
+    assert {r["filepath"] for r in results} == {"tsx-jsx-root/tjsx.tsx"}
 
 
 def test_pattern_language_matrix_markdown_tag_fails_safe_to_python(monkeypatch, tmp_path):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
+import inspect
 import sys
 import threading
 import time
@@ -290,10 +291,12 @@ def test_configure_project_no_longer_configures_name_based_call_graph(monkeypatc
             setattr(search, name, value)
 
 
-def test_retired_call_graph_tools_fail_with_zvec_pointer():
-    for suffix in ("call_graph_blast_radius", "call_graph_shortest_path", "call_graph_get_cluster"):
-        message = search.call_graph_deprecation_error(suffix)
-        assert message.startswith(f"Error: the {suffix} call-graph spike was retired")
-        assert "zvec_grep_callgraph_" in message
-        assert "issue #199" in message
-        assert "no name-based fallback" in message
+def test_retired_call_graph_tools_are_fully_removed():
+    # issue #199: the name-based spike and its deprecation shims are gone;
+    # graph queries route exclusively through the zvec-grep MCP tools.
+    assert not hasattr(search, "call_graph_deprecation_error")
+    assert not hasattr(search, "DEPRECATED_CALL_GRAPH_TOOLS")
+    source = inspect.getsource(search)
+    assert "call_graph_blast_radius" not in source
+    assert "call_graph_shortest_path" not in source
+    assert "call_graph_get_cluster" not in source

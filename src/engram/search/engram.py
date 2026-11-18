@@ -682,36 +682,13 @@ def _format_pattern_results(pattern: str, language: str, results: list[dict]) ->
 # ---------------------------------------------------------------------------
 # Call-graph tools: DEPRECATED, retired to the zvec-grep MCP daemon
 # ---------------------------------------------------------------------------
-#
 # The name-based call-graph spike (docs/CALL_GRAPH_CLUSTERING.md, issue #43)
 # was retired on 2026-11-18 (issue #199): Engram no longer resolves calls by
-# name. Structural graph queries are served exclusively by the zvec-grep MCP
-# daemon (compiler-attested call facts, certainty classes), which the Engram
-# gateway exposes as ``zvec_grep_callgraph_*`` / ``zvec_grep_codegraph_*``
-# tools over authorized workspace roots. The tool names below stay
-# registered only as deprecation shims so callers of the retired spike get a
-# pointer to the replacement instead of an opaque unknown-tool error; they
-# never build a graph and never return name-based results.
-
-DEPRECATED_CALL_GRAPH_TOOLS: dict[str, str] = {
-    "call_graph_blast_radius": "zvec_grep_callgraph_blast_radius",
-    "call_graph_shortest_path": "zvec_grep_callgraph_shortest_path",
-    "call_graph_get_cluster": "zvec_grep_callgraph_cluster",
-}
-
-
-def call_graph_deprecation_error(tool_suffix: str) -> str:
-    """Return the deprecation error text for a retired call-graph tool."""
-    replacement = DEPRECATED_CALL_GRAPH_TOOLS.get(tool_suffix, "the zvec_grep_callgraph_* tools")
-    return (
-        f"Error: the {tool_suffix} call-graph spike was retired (engram issue #199). "
-        "Engram no longer resolves calls by name. Use the zvec-grep graph tools exposed "
-        f"through the Engram gateway instead -- for example {replacement!r}, which takes an "
-        "absolute root under an authorized workspace and returns compiler-attested results "
-        "with certainty classes. Roots outside the authorized zvec workspaces fail "
-        "explicitly; there is no name-based fallback. See docs/CALL_GRAPH_CLUSTERING.md."
-    )
-
+# name, and the retired tool names were fully removed. Structural graph
+# queries are served exclusively by the zvec-grep MCP daemon
+# (compiler-attested call facts, certainty classes), which the Engram gateway
+# exposes as ``zvec_grep_callgraph_*`` / ``zvec_grep_codegraph_*`` tools over
+# authorized workspace roots.
 
 # ---------------------------------------------------------------------------
 # MCP server
@@ -820,57 +797,6 @@ def _run_mcp_server(
         except ValueError as exc:
             return f"Code pattern search error: {exc}"
         return _format_pattern_results(pattern, effective_language, results)
-
-    @mcp.tool(name=f"{tool_prefix}call_graph_blast_radius")
-    def engram_call_graph_blast_radius(
-        function: str,
-        depth: int = 2,
-        repo: str | None = None,
-        branch: str | None = None,
-        language: str | None = None,
-    ) -> str:
-        """DEPRECATED (retired 2026-11-18, engram issue #199): always fails.
-
-        This name-based call-graph spike was retired. Structural graph queries
-        are served exclusively by the zvec-grep MCP daemon through the Engram
-        gateway (``zvec_grep_callgraph_*`` / ``zvec_grep_codegraph_*``), which
-        resolve calls with compiler-attested facts and certainty classes. This
-        shim exists only to point callers at the replacement; it performs no
-        call-graph resolution.
-        """
-        log.warning("deprecated tool %s called (spike retired, issue #199)", "call_graph_blast_radius")
-        return call_graph_deprecation_error("call_graph_blast_radius")
-
-    @mcp.tool(name=f"{tool_prefix}call_graph_shortest_path")
-    def engram_call_graph_shortest_path(
-        source: str,
-        target: str,
-        repo: str | None = None,
-        branch: str | None = None,
-        language: str | None = None,
-    ) -> str:
-        """DEPRECATED (retired 2026-11-18, engram issue #199): always fails.
-
-        Same retirement as engram_call_graph_blast_radius; use
-        ``zvec_grep_callgraph_shortest_path`` through the Engram gateway.
-        """
-        log.warning("deprecated tool %s called (spike retired, issue #199)", "call_graph_shortest_path")
-        return call_graph_deprecation_error("call_graph_shortest_path")
-
-    @mcp.tool(name=f"{tool_prefix}call_graph_get_cluster")
-    def engram_call_graph_get_cluster(
-        function: str,
-        repo: str | None = None,
-        branch: str | None = None,
-        language: str | None = None,
-    ) -> str:
-        """DEPRECATED (retired 2026-11-18, engram issue #199): always fails.
-
-        Same retirement as engram_call_graph_blast_radius; use
-        ``zvec_grep_callgraph_cluster`` through the Engram gateway.
-        """
-        log.warning("deprecated tool %s called (spike retired, issue #199)", "call_graph_get_cluster")
-        return call_graph_deprecation_error("call_graph_get_cluster")
 
     if transport == "stdio":
         log.info("Starting engram-code MCP server (stdio)")

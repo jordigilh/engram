@@ -118,12 +118,15 @@ Engram already has three distinct code-intelligence layers:
 
 The Graphify-inspired changes are an Engram-local extension built on
 CocoIndex's `match_code()` primitive. They are not a separate Graphify service.
-The shared implementation lives in `src/engram/callgraph.py` and is exposed
-through:
 
-- `*_call_graph_blast_radius`
-- `*_call_graph_shortest_path`
-- `*_call_graph_get_cluster`
+> **RETIRED (2026-11-18, issue
+> [#199](https://github.com/jordigilh/engram/issues/199)).** The shared
+> implementation (`src/engram/callgraph.py`) and the `*_call_graph_*` MCP
+> tools described below were removed entirely; graph queries route to
+> `zvec_grep_callgraph_*` / `zvec_grep_codegraph_*` through the Engram
+> gateway (issue #199). Structural graph queries are served exclusively by
+> the zvec-grep MCP daemon over authorized workspace roots. The following
+> passages are retained as the historical record.
 
 The graph builder is deliberately fast and conservative. It uses tree-sitter
 extraction, name-based resolution, same-file preference, signature-compatible

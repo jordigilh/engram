@@ -2,9 +2,10 @@
 
 > **RETIRED (2026-11-18, issue [#199](https://github.com/jordigilh/engram/issues/199)).**
 > The name-based Engram call-graph spike described in this document is no
-> longer live. Its engine (`src/engram/callgraph.py`) and query layer were
-> removed; the `*_call_graph_*` MCP tool names remain only as deprecation
-> shims that fail with a pointer to the replacement. **zvec-grep is now the
+> longer live. Its engine (`src/engram/callgraph.py`), query layer, and the
+> `*_call_graph_*` MCP tool names were removed entirely; graph queries route
+> to `zvec_grep_callgraph_*` / `zvec_grep_codegraph_*` through the Engram
+> gateway (issue #199). **zvec-grep is now the
 > single graph authority**: structural graph queries are served exclusively
 > by the zvec-grep MCP daemon (`zvec_grep_callgraph_*` /
 > `zvec_grep_codegraph_*` tools through the Engram gateway), which resolves

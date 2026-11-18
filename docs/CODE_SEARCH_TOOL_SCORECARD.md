@@ -34,6 +34,9 @@ Required public artifacts:
   stated.
 - **Configuration**: embedding model and version (cross-model comparisons
   are invalid), raw candidate limit, feature flags, engine commit.
+- **Relevance threshold**: the minimum qrel grade that counts as relevant
+  for MRR@10, Recall@10, and Precision@10. Each report states the
+  threshold; the same ranking scores differently under different cutoffs.
 
 Required metrics, per language:
 
@@ -59,7 +62,10 @@ Required public artifacts:
 
 - **Oracle**: the language's own compiler toolchain, on pinned public
   repositories. Go: `golang.org/x/tools` RTA over the type-checked
-  program. TypeScript: the `tsc` checker. C#: Roslyn. Java: javac/OPAL.
+  program. RTA is an agreement baseline, not a proof of actual calls: it
+  can link a dynamic call site to every compatible address-taken
+  function, and it omits reflection edges. TypeScript: the `tsc`
+  checker. C#: Roslyn. Java: javac/OPAL.
   Python/Ruby/PHP have no compiler oracle (calls resolve at runtime);
   dynamic baselines (fixed entry points + coverage-guided corpora, per
   OPAL ISSTA'24) are the substitute and must be labeled as such.
@@ -73,8 +79,8 @@ Required metrics, per language and per repository:
 
 | Metric | Definition |
 | --- | --- |
-| Edge precision | share of asserted edges the compiler confirms |
-| Edge recall | share of compiler edges the tool asserts |
+| Edge precision | share of asserted edges the oracle's edge set includes |
+| Edge recall | share of oracle edges the tool asserts |
 | F1 | harmonic mean |
 | Direction flips | edges asserting caller/callee reversed |
 | Resolution split | asserted vs pending/unresolved counts |
@@ -87,8 +93,12 @@ Publication rules:
 - Precision is computed over *asserted* edges; if the tool exports
   lower-confidence edges, both the asserted-only and all-edges precision
   are reported, and consumers are told which to use.
-- Recall is a lower bound (correct edges on untested paths score false);
-  state it as such.
+- Recall is measured against the oracle edge set, not against all true
+  edges; it is not a bound on true recall, because the oracle can both
+  over- and under-approximate (RTA dispatch fan-out vs. omitted
+  reflection edges). Correct edges the oracle does not include count
+  against precision, not recall. State the oracle's coverage limits with
+  each recall value.
 - Determinism: two fresh extractions must produce identical edge sets, or
   the variance is reported.
 

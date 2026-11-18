@@ -36,7 +36,10 @@ Required public artifacts:
   are invalid), raw candidate limit, feature flags, engine commit.
 - **Relevance threshold**: the minimum qrel grade that counts as relevant
   for MRR@10, Recall@10, and Precision@10. Each report states the
-  threshold; the same ranking scores differently under different cutoffs.
+  threshold; the same ranking scores differently under different cutoffs,
+  so reports that compare tools must use the same threshold — disclosed
+  but differing thresholds do not make the scores comparable (same rule
+  as cross-model embedding comparisons).
 
 Required metrics, per language:
 

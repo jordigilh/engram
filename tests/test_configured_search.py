@@ -328,3 +328,21 @@ def test_pattern_search_language_default_follows_project_configuration(monkeypat
         lambda repo, branch: [("auto-root", "/tmp/auto-root", [], [], "auto", None)],
     )
     assert search_mod._pattern_search_language_default(None, None) == "python"
+
+
+def test_pattern_search_invalid_repo_without_language_returns_friendly_error():
+    # CodeRabbit follow-up: the language-default derivation selects roots and
+    # can raise ValueError for a malformed repo (unsafe-scope validation), so
+    # it must run inside the tool's try block to keep the friendly error.
+    import inspect
+
+    import engram.search.engram as search_mod
+
+    with pytest.raises(ValueError):
+        search_mod._pattern_search_language_default("../bad", None)
+
+    source = inspect.getsource(search_mod._run_mcp_server)
+    tool_body = source[source.index("def engram_code_pattern_search"):]
+    try_pos = tool_body.index("try:")
+    default_pos = tool_body.index("_pattern_search_language_default(repo, branch)")
+    assert try_pos < default_pos, "language default must be computed inside the try block"

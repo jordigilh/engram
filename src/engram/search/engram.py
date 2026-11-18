@@ -807,8 +807,8 @@ def _run_mcp_server(
         This is purely syntactic: it does NOT resolve types and can't find
         references/callers or diagnostics.
         """
-        effective_language = language or _pattern_search_language_default(repo, branch)
         try:
+            effective_language = language or _pattern_search_language_default(repo, branch)
             results = pattern_search_code(
                 pattern, effective_language, limit=min(limit, 20), repo=repo, branch=branch,
             )

@@ -31,7 +31,7 @@ jobs:
       - name: Install Podman and arm64 emulation
         run: |
           sudo apt-get update
-          sudo apt-get install -y podman qemu-user-static binfmt-support
+          sudo apt-get install -y podman qemu-user-binfmt binfmt-support
           podman --version
 
       - name: Register binfmt handlers

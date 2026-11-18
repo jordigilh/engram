@@ -426,6 +426,12 @@ class TestAggregateToolsList:
             "zvec_grep_callgraph_shortest_path",
             "zvec_grep_callgraph_cluster",
             "zvec_grep_callgraph_communities",
+            "zvec_grep_codegraph_affected",
+            "zvec_grep_codegraph_node",
+            "zvec_grep_codegraph_neighbors",
+            "zvec_grep_codegraph_relation_path",
+            "zvec_grep_codegraph_explain",
+            "zvec_grep_codegraph_capabilities",
         ]
         code = FakeAdapter(tools=[_tool(name) for name in graph_tools])
 
@@ -438,6 +444,47 @@ class TestAggregateToolsList:
             name: ("code", name) for name in graph_tools
         }
         assert errors == {}
+
+    def test_codegraph_tool_passes_through_authorized_root_with_freshness(
+        self, engram_gateway, tmp_path
+    ):
+        """A representative codegraph_* tool gets the same managed-read
+        treatment as the callgraph tools: freshness injection on an
+        authorized root, explicit rejection on an unauthorized one."""
+        async def scenario():
+            root = tmp_path / "authorized"
+            root.mkdir()
+            primary = FakeAdapter(
+                call_results={"zvec_grep_codegraph_node": {"isError": False}}
+            )
+            adapter = engram_gateway.ZvecShadowRelayAdapter(
+                primary,
+                FakeAdapter(),
+                log_path=tmp_path / "shadow.jsonl",
+                shadow_timeout_seconds=0.1,
+                allowed_roots=frozenset({root}),
+            )
+
+            passed = await adapter.call_tool(
+                "zvec_grep_codegraph_node", {"root": str(root), "node": "main"}
+            )
+
+            assert passed["isError"] is False
+            assert primary.call_log[0][1]["autoUpdate"] is True
+            assert primary.call_log[0][1]["freshness"] == "wait_for_fresh"
+
+            denied = await adapter.call_tool(
+                "zvec_grep_codegraph_node",
+                {"root": str(tmp_path / "not-authorized"), "node": "main"},
+            )
+
+            assert denied["isError"] is True
+            assert "issue #199" in denied["content"][0]["text"]
+            # The denied call never reached the daemon (the primary logged
+            # only the authorized one).
+            assert len(primary.call_log) == 1
+
+        asyncio.run(scenario())
 
     def test_methodology_backend_exposes_only_read_tools_without_admin_surface(self, engram_gateway):
         hindsight = FakeAdapter(tools=[
@@ -1356,6 +1403,149 @@ class TestZvecShadowRelayAdapter:
             assert primary.call_log == []
 
         asyncio.run(scenario())
+
+    def test_codegraph_capabilities_is_authorization_gated(self, engram_gateway, tmp_path):
+        async def scenario():
+            root = tmp_path / "authorized"
+            root.mkdir()
+            primary = FakeAdapter(
+                call_results={"zvec_grep_codegraph_capabilities": {"isError": False}}
+            )
+            adapter = engram_gateway.ZvecShadowRelayAdapter(
+                primary,
+                FakeAdapter(),
+                log_path=tmp_path / "shadow.jsonl",
+                shadow_timeout_seconds=0.1,
+                allowed_roots=frozenset({root}),
+            )
+
+            result = await adapter.call_tool(
+                "zvec_grep_codegraph_capabilities",
+                {"root": str(tmp_path / "not-authorized")},
+            )
+
+            assert result["isError"] is True
+            text = result["content"][0]["text"]
+            assert "'zvec_grep_codegraph_capabilities'" in text
+            assert str(tmp_path / "not-authorized") in text
+            assert "issue #199" in text
+            assert primary.call_log == []
+
+        asyncio.run(scenario())
+
+    def test_workspace_read_tools_cover_daemon_graph_surface(self, engram_gateway):
+        """Drift test: every daemon tool that requires a root must be present
+        in ZVEC_WORKSPACE_READ_TOOLS, so the authorization gate never silently
+        stops covering a newly added graph tool.
+
+        Opt-in against the live daemon at 127.0.0.1:7999 (skips when
+        unreachable). The MCP client performs the full handshake (initialize
+        -> notifications/initialized, carrying the returned mcp-session-id
+        header on subsequent requests) -- without it tools/list returns
+        nothing and the comparison would vacuously pass.
+        """
+        import urllib.request
+
+        base = "http://127.0.0.1:7999/mcp"
+        try:
+            init_request = urllib.request.Request(
+                base,
+                data=json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2025-06-18",
+                            "capabilities": {},
+                            "clientInfo": {"name": "engram-drift-test", "version": "0"},
+                        },
+                    }
+                ).encode(),
+                headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+            )
+            with urllib.request.urlopen(init_request, timeout=2) as response:
+                session_id = response.headers.get("mcp-session-id")
+                body = response.read().decode()
+        except OSError:
+            pytest.skip("zvec-grep daemon not reachable at 127.0.0.1:7999")
+
+        assert session_id, "daemon returned no mcp-session-id; handshake failed"
+
+        list_request = urllib.request.Request(
+            base,
+            data=json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                **({"mcp-session-id": session_id} if session_id else {}),
+            },
+        )
+        with urllib.request.urlopen(list_request, timeout=2) as response:
+            body = response.read().decode()
+
+        # The daemon may answer JSON or SSE-framed JSON; find the result payload.
+        payload = None
+        for line in body.splitlines():
+            if line.startswith("data:"):
+                line = line[len("data:"):].strip()
+            if not line.strip():
+                continue
+            try:
+                candidate = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict) and "result" in candidate:
+                payload = candidate
+        assert payload is not None, f"no tools/list result in daemon response: {body[:200]!r}"
+
+        tools = payload["result"].get("tools", [])
+        names = [tool.get("name") for tool in tools if tool.get("name")]
+        assert names, "daemon returned an empty tool list; comparison would be vacuous"
+
+        from engram.pipeline.engram_gateway import ZVEC_MANAGEMENT_TOOLS
+        from engram.pipeline.zvec_policy import ZVEC_WORKSPACE_READ_TOOLS
+
+        for name in names:
+            if name in ZVEC_MANAGEMENT_TOOLS:
+                continue
+            schema = tools[[n.get("name") for n in tools].index(name)].get(
+                "inputSchema"
+            ) or {}
+            properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+            if "root" in properties:
+                assert name in ZVEC_WORKSPACE_READ_TOOLS, (
+                    f"daemon tool {name!r} requires a root but is missing from "
+                    f"ZVEC_WORKSPACE_READ_TOOLS (authorization gate gap)"
+                )
+
+    def test_plugin_workspace_read_tools_match_python_frozenset(self):
+        """Parity check: the TypeScript copy of the tool-name array in
+        opencode-plugin/worktree-index.ts must equal the Python frozenset,
+        so the two gate implementations cannot drift apart silently."""
+        import re
+
+        plugin_path = (
+            pathlib.Path(__file__).resolve().parent.parent
+            / "opencode-plugin"
+            / "worktree-index.ts"
+        )
+        source = plugin_path.read_text()
+        match = re.search(
+            r"const ZVEC_WORKSPACE_READ_TOOLS = \[(.*?)\] as const",
+            source,
+            re.DOTALL,
+        )
+        assert match, "could not find ZVEC_WORKSPACE_READ_TOOLS array in worktree-index.ts"
+        ts_names = set(re.findall(r'"([^"]+)"', match.group(1)))
+
+        from engram.pipeline.zvec_policy import ZVEC_WORKSPACE_READ_TOOLS
+
+        assert ts_names == set(ZVEC_WORKSPACE_READ_TOOLS), (
+            f"TS/Python workspace-read tool sets diverged: "
+            f"TS-only={sorted(ts_names - set(ZVEC_WORKSPACE_READ_TOOLS))} "
+            f"Python-only={sorted(set(ZVEC_WORKSPACE_READ_TOOLS) - ts_names)}"
+        )
 
     def test_forwards_a_linked_worktree_of_a_configured_source_root(
         self, engram_gateway, tmp_path, monkeypatch

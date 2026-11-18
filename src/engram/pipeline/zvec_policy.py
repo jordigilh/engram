@@ -27,6 +27,7 @@ ZVEC_WORKSPACE_READ_TOOLS = frozenset(
         "zvec_grep_codegraph_neighbors",
         "zvec_grep_codegraph_relation_path",
         "zvec_grep_codegraph_explain",
+        "zvec_grep_codegraph_capabilities",
     }
 )
 

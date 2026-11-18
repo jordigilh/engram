@@ -420,11 +420,12 @@ class TestAggregateToolsList:
         assert catalog["docs_manual_mental_model"] == ("docs_manual", "manual_mental_model")
         assert errors == {}
 
-    def test_cocoindex_graph_tools_are_exposed_unprefixed(self, engram_gateway):
+    def test_zvec_graph_tools_are_exposed_unprefixed(self, engram_gateway):
         graph_tools = [
-            "cocoindex_call_graph_blast_radius",
-            "cocoindex_call_graph_shortest_path",
-            "cocoindex_call_graph_get_cluster",
+            "zvec_grep_callgraph_blast_radius",
+            "zvec_grep_callgraph_shortest_path",
+            "zvec_grep_callgraph_cluster",
+            "zvec_grep_callgraph_communities",
         ]
         code = FakeAdapter(tools=[_tool(name) for name in graph_tools])
 
@@ -1320,6 +1321,38 @@ class TestZvecShadowRelayAdapter:
             )
 
             assert result["isError"] is True
+            text = result["content"][0]["text"]
+            assert str(tmp_path / "unauthorized") in text
+            assert "authorized workspace" in text
+            assert "no name-based fallback" in text
+            assert "ZVEC_GREP_WORKSPACE_ROOTS" in text
+            assert primary.call_log == []
+
+        asyncio.run(scenario())
+
+    def test_unauthorized_graph_root_fails_explicitly_without_fallback(self, engram_gateway, tmp_path):
+        async def scenario():
+            root = tmp_path / "authorized"
+            root.mkdir()
+            primary = FakeAdapter(call_results={"zvec_grep_callgraph_blast_radius": {"isError": False}})
+            adapter = engram_gateway.ZvecShadowRelayAdapter(
+                primary,
+                FakeAdapter(),
+                log_path=tmp_path / "shadow.jsonl",
+                shadow_timeout_seconds=0.1,
+                allowed_roots=frozenset({root}),
+            )
+
+            result = await adapter.call_tool(
+                "zvec_grep_callgraph_blast_radius",
+                {"root": str(tmp_path / "not-authorized"), "function": "main"},
+            )
+
+            assert result["isError"] is True
+            text = result["content"][0]["text"]
+            assert "'zvec_grep_callgraph_blast_radius'" in text
+            assert str(tmp_path / "not-authorized") in text
+            assert "issue #199" in text
             assert primary.call_log == []
 
         asyncio.run(scenario())
@@ -1485,43 +1518,6 @@ class TestZvecShadowRelayAdapter:
         }]
         assert comparison["file_order_matches_reference"] is False
 
-    def test_graph_comparison_reports_cocoindex_reference_callers(self, engram_gateway):
-        primary = {
-            "structuredContent": {
-                "callers_by_depth": [["pkg/a.go::caller"], ["pkg/b.go::parent"]],
-                "unresolved_calls": 42,
-                "total_calls": 100,
-                "ambiguous_calls": 11,
-            }
-        }
-        shadow = {
-            "content": [{
-                "type": "text",
-                "text": (
-                    "Blast radius for kubernaut/pkg/a.go::target:\n"
-                    "  depth 1: kubernaut/pkg/a.go::caller\n"
-                    "  depth 2: kubernaut/pkg/c.go::parent\n"
-                    "\n(name-based resolution, no type info -- 35/90 calls in this repo could not be "
-                    "resolved to a known definition, and 9 matched 2+ candidates and were dropped)"
-                ),
-            }]
-        }
-
-        comparison = engram_gateway._compare_shadow_responses(
-            "zvec_grep_callgraph_blast_radius", primary, shadow, "kubernaut"
-        )
-
-        assert comparison["reference_engine"] == "cocoindex"
-        assert comparison["source_of_truth"] == "cocoindex"
-        assert comparison["cocoindex_only_by_depth"] == [[], ["pkg/c.go::parent"]]
-        assert comparison["zvec_only_by_depth"] == [[], ["pkg/b.go::parent"]]
-        assert comparison["callers_match_reference"] is False
-        assert comparison["zvec_minus_cocoindex_resolution_counts"] == {
-            "unresolved_calls": 7,
-            "total_calls": 10,
-            "ambiguous_calls": 2,
-        }
-
     def test_primary_returns_before_shadow_and_logs_same_root_ranked_comparison(
         self, engram_gateway, tmp_path
     ):
@@ -1580,25 +1576,6 @@ class TestZvecShadowRelayAdapter:
 
         asyncio.run(scenario())
 
-    def test_graph_tools_map_to_cocoindex_with_root_branch_and_repo_scope(self, engram_gateway, tmp_path):
-        root = tmp_path / "kubernaut-v1.5"
-        root.mkdir()
-        tool, arguments = engram_gateway._zvec_shadow_arguments(
-            "zvec_grep_callgraph_blast_radius",
-            {"root": str(root), "function": "Reconcile", "depth": 3},
-            repo="kubernaut",
-            root=root,
-            branch="fix/123-branch",
-        )
-
-        assert tool == "cocoindex_call_graph_blast_radius"
-        assert arguments == {
-            "function": "Reconcile",
-            "depth": 3,
-            "repo": "kubernaut",
-            "branch": "v1.5",
-        }
-
     def test_shadow_failure_is_logged_without_changing_primary_result(self, engram_gateway, tmp_path):
         async def scenario():
             root = tmp_path.resolve()
@@ -1618,31 +1595,6 @@ class TestZvecShadowRelayAdapter:
             entry = json.loads((tmp_path / "shadow.jsonl").read_text().strip())
             assert result is primary_result
             assert entry["shadow"]["error"] == "RuntimeError: CocoIndex unavailable"
-
-        asyncio.run(scenario())
-
-    def test_typescript_worktree_does_not_call_the_go_only_cocoindex_graph(self, engram_gateway, tmp_path):
-        async def scenario():
-            root = tmp_path.resolve()
-            primary_result = {"content": [{"type": "text", "text": "zvec graph"}], "isError": False}
-            shadow = FakeAdapter()
-            adapter = engram_gateway.ZvecShadowRelayAdapter(
-                FakeAdapter(call_results={"zvec_grep_callgraph_cluster": primary_result}),
-                shadow,
-                log_path=tmp_path / "shadow.jsonl",
-                shadow_timeout_seconds=0.1,
-                source_roots={"typescript-project": root},
-            )
-
-            result = await adapter.call_tool(
-                "zvec_grep_callgraph_cluster",
-                {"root": str(root), "function": "resolveTheme"},
-            )
-            await asyncio.gather(*tuple(adapter._shadow_tasks))
-            entry = json.loads((tmp_path / "shadow.jsonl").read_text().strip())
-            assert result is primary_result
-            assert shadow.call_log == []
-            assert entry["shadow"]["skipped"] == "cocoindex_callgraph_not_configured_for_source"
 
         asyncio.run(scenario())
 
@@ -1838,7 +1790,6 @@ shadow_timeout_seconds = 180
 shadow_log = "{tmp_path / 'shadow.jsonl'}"
 shared_key = "kubernaut-zvec-shadow"
 source_roots = {{ code = "{tmp_path}" }}
-callgraph_repos = ["code"]
 """
         )
 
@@ -1854,7 +1805,6 @@ callgraph_repos = ["code"]
             "shared_key": "kubernaut-zvec-shadow",
             "source_roots": {"code": str(tmp_path)},
             "allowed_roots": [str(tmp_path)],
-            "callgraph_repos": ["code"],
         }
 
     def test_loads_stdio_backend_with_environment_and_shared_key(self, engram_gateway, tmp_path):

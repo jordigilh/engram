@@ -1,5 +1,15 @@
 # Call-Graph Extraction + Clustering — Design Reference
 
+> **RETIRED (2026-11-18, issue [#199](https://github.com/jordigilh/engram/issues/199)).**
+> This design describes the retired name-based spike; the implementation
+> (`src/engram/callgraph.py`) was removed. **zvec-grep is the single graph
+> authority** — structural graph queries go through the zvec-grep MCP daemon
+> (`zvec_grep_callgraph_*` / `zvec_grep_codegraph_*` tools exposed by the
+> Engram gateway over authorized workspace roots), with compiler-attested
+> call facts and certainty classes. Unauthorized roots fail explicitly; there
+> is no name-based fallback. This document is retained as the historical
+> design record.
+
 This is the **"how it works" reference**: the extraction mechanism, call-resolution
 algorithm, multi-repo aggregation, clustering, and caching architecture, as a
 standalone read independent of how any of it was discovered.

@@ -1096,11 +1096,27 @@ class HttpRelayAdapter:
 
 ZVEC_SHADOWED_TOOLS = {
     "zvec_grep_search": "cocoindex_search",
-    "zvec_grep_callgraph_blast_radius": "cocoindex_call_graph_blast_radius",
-    "zvec_grep_callgraph_shortest_path": "cocoindex_call_graph_shortest_path",
-    "zvec_grep_callgraph_cluster": "cocoindex_call_graph_get_cluster",
 }
 MAX_PENDING_ZVEC_SHADOWS = 8
+
+
+def _zvec_unauthorized_root_error(raw_root: Any, tool: str) -> str:
+    """Explicit failure for a graph/code query outside authorized workspaces.
+
+    Issue #199: configured sources that are not zvec-grep-authorized
+    workspaces fail graph queries explicitly -- there is no name-based
+    fallback. The error names the requested root and how to authorize it.
+    """
+    root_text = raw_root if isinstance(raw_root, str) and raw_root.strip() else "<missing>"
+    return (
+        f"Error: {tool!r} requires an absolute root under a zvec-grep authorized workspace; "
+        f"requested root {root_text!r} is missing, does not exist, or is outside the configured "
+        "allowlist. zvec-grep is the single call-graph authority (engram issue #199): there is "
+        "no name-based fallback. To authorize this workspace, add "
+        "its top-level checkout (or a registered git worktree of it) to the gateway backend's "
+        "allowed_roots in ~/.engram/runtime/native-instances.toml and to the daemon's "
+        "ZVEC_GREP_WORKSPACE_ROOTS launchd configuration, then retry with that absolute root."
+    )
 
 
 def _git_workspace_metadata(root: pathlib.Path) -> dict[str, Any]:
@@ -1159,29 +1175,20 @@ def _zvec_shadow_arguments(
 ) -> tuple[str, dict] | None:
     shadow_tool = ZVEC_SHADOWED_TOOLS[tool]
     common = {"repo": repo, "branch": _cocoindex_branch(repo, root, branch)}
-    if tool == "zvec_grep_search":
-        query = arguments.get("query")
-        if not isinstance(query, str) or not query.strip():
-            for key in ("queries", "fts", "vector"):
-                value = arguments.get(key)
-                values = [value] if isinstance(value, str) else value if isinstance(value, list) else []
-                query = " ".join(item.strip() for item in values if isinstance(item, str) and item.strip())
-                if query:
-                    break
-        if not isinstance(query, str) or not query.strip():
-            return None
-        limit = arguments.get("limit", 10)
-        if isinstance(limit, bool) or not isinstance(limit, int):
-            limit = 10
-        return shadow_tool, {"query": query, "limit": min(max(limit, 1), 20), **common}
-
-    if tool == "zvec_grep_callgraph_blast_radius":
-        payload = {key: arguments[key] for key in ("function", "depth") if key in arguments}
-    elif tool == "zvec_grep_callgraph_shortest_path":
-        payload = {key: arguments[key] for key in ("source", "target") if key in arguments}
-    else:
-        payload = {"function": arguments.get("function")}
-    return shadow_tool, {**payload, **common}
+    query = arguments.get("query")
+    if not isinstance(query, str) or not query.strip():
+        for key in ("queries", "fts", "vector"):
+            value = arguments.get(key)
+            values = [value] if isinstance(value, str) else value if isinstance(value, list) else []
+            query = " ".join(item.strip() for item in values if isinstance(item, str) and item.strip())
+            if query:
+                break
+    if not isinstance(query, str) or not query.strip():
+        return None
+    limit = arguments.get("limit", 10)
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        limit = 10
+    return shadow_tool, {"query": query, "limit": min(max(limit, 1), 20), **common}
 
 
 def _tool_result_text(result: dict) -> str:
@@ -1255,84 +1262,6 @@ def _ranked_search_paths(result: dict, *, engine: str, repo: str) -> list[dict[s
     return paths
 
 
-def _graph_callers(result: dict, *, engine: str, repo: str) -> list[list[str]]:
-    if engine == "zvec-grep":
-        structured = result.get("structuredContent", result.get("structured_content"))
-        if isinstance(structured, dict) and isinstance(structured.get("callers_by_depth"), list):
-            return [
-                [_normalize_comparison_path(path, repo) for path in level if isinstance(path, str)]
-                for level in structured["callers_by_depth"]
-            ]
-    text = _tool_result_text(result)
-    depth_callers: dict[int, list[str]] = {}
-    for line in text.splitlines():
-        match = re.match(r"^\s*depth\s+(\d+):\s*(.*)$", line)
-        if match:
-            depth = int(match.group(1))
-            callers = [value.strip() for value in match.group(2).split(",") if value.strip()]
-            depth_callers[depth] = [_normalize_comparison_path(value, repo) for value in callers]
-    if not depth_callers:
-        return []
-    return [depth_callers[key] for key in range(1, max(depth_callers) + 1)]
-
-
-def _graph_path(result: dict, *, engine: str, repo: str) -> list[str] | None:
-    if engine == "zvec-grep":
-        structured = result.get("structuredContent", result.get("structured_content"))
-        if isinstance(structured, dict):
-            path = structured.get("path")
-            if path is None:
-                return None
-            if isinstance(path, list):
-                return [_normalize_comparison_path(item, repo) for item in path if isinstance(item, str)]
-    text = _tool_result_text(result)
-    if "No call path found" in text:
-        return None
-    for line in text.splitlines():
-        value = line.strip()
-        if line.startswith("  ") and " -> " in value:
-            return [_normalize_comparison_path(item, repo) for item in value.split(" -> ")]
-    return None
-
-
-def _graph_cluster_members(result: dict, *, engine: str, repo: str) -> list[str]:
-    if engine == "zvec-grep":
-        structured = result.get("structuredContent", result.get("structured_content"))
-        if isinstance(structured, dict) and isinstance(structured.get("members"), list):
-            return [
-                _normalize_comparison_path(member, repo)
-                for member in structured["members"]
-                if isinstance(member, str)
-            ]
-    members: list[str] = []
-    for line in _tool_result_text(result).splitlines():
-        if line.startswith("  ") and line.strip():
-            members.append(_normalize_comparison_path(line.strip(), repo))
-    return members
-
-
-def _graph_resolution_counts(result: dict, *, engine: str) -> dict[str, int] | None:
-    if engine == "zvec-grep":
-        structured = result.get("structuredContent", result.get("structured_content"))
-        if isinstance(structured, dict):
-            values = ("unresolved_calls", "total_calls", "ambiguous_calls")
-            if all(isinstance(structured.get(key), int) for key in values):
-                return {key: structured[key] for key in values}
-    match = re.search(
-        r"(?P<unresolved>[\d,]+)/(?P<total>[\d,]+) calls.*?and "
-        r"(?P<ambiguous>[\d,]+) matched 2\+ candidates",
-        _tool_result_text(result),
-        re.DOTALL,
-    )
-    if not match:
-        return None
-    return {
-        "unresolved_calls": int(match.group("unresolved").replace(",", "")),
-        "total_calls": int(match.group("total").replace(",", "")),
-        "ambiguous_calls": int(match.group("ambiguous").replace(",", "")),
-    }
-
-
 def _compare_shadow_responses(tool: str, primary: dict, shadow: dict, repo: str) -> dict[str, Any]:
     comparison: dict[str, Any] = {
         "reference_engine": "cocoindex",
@@ -1373,56 +1302,6 @@ def _compare_shadow_responses(tool: str, primary: dict, shadow: dict, repo: str)
         comparison["file_order_matches_reference"] = [item["path"] for item in reference] == [
             item["path"] for item in candidate
         ]
-    elif tool == "zvec_grep_callgraph_blast_radius":
-        reference = _graph_callers(shadow, engine="cocoindex", repo=repo)
-        candidate = _graph_callers(primary, engine="zvec-grep", repo=repo)
-        comparison.update({
-            "comparison_type": "callers_by_depth",
-            "cocoindex_callers_by_depth": reference,
-            "zvec_callers_by_depth": candidate,
-            "cocoindex_only_by_depth": [
-                [name for name in reference[level] if level >= len(candidate) or name not in candidate[level]]
-                for level in range(len(reference))
-            ],
-            "zvec_only_by_depth": [
-                [name for name in candidate[level] if level >= len(reference) or name not in reference[level]]
-                for level in range(len(candidate))
-            ],
-        })
-        comparison["callers_match_reference"] = reference == candidate
-        reference_counts = _graph_resolution_counts(shadow, engine="cocoindex")
-        candidate_counts = _graph_resolution_counts(primary, engine="zvec-grep")
-        if reference_counts is not None:
-            comparison["cocoindex_resolution_counts"] = reference_counts
-        if candidate_counts is not None:
-            comparison["zvec_resolution_counts"] = candidate_counts
-        if reference_counts is not None and candidate_counts is not None:
-            comparison["zvec_minus_cocoindex_resolution_counts"] = {
-                key: candidate_counts[key] - reference_counts[key]
-                for key in reference_counts
-            }
-    elif tool == "zvec_grep_callgraph_shortest_path":
-        reference = _graph_path(shadow, engine="cocoindex", repo=repo)
-        candidate = _graph_path(primary, engine="zvec-grep", repo=repo)
-        comparison.update({
-            "comparison_type": "shortest_call_path",
-            "cocoindex_path": reference,
-            "zvec_path": candidate,
-            "path_matches_reference": reference == candidate,
-        })
-    elif tool == "zvec_grep_callgraph_cluster":
-        reference = _graph_cluster_members(shadow, engine="cocoindex", repo=repo)
-        candidate = _graph_cluster_members(primary, engine="zvec-grep", repo=repo)
-        reference_set = set(reference)
-        candidate_set = set(candidate)
-        comparison.update({
-            "comparison_type": "callgraph_cluster_members",
-            "cocoindex_members": reference,
-            "zvec_members": candidate,
-            "cocoindex_only_members": sorted(reference_set - candidate_set),
-            "zvec_only_members": sorted(candidate_set - reference_set),
-            "members_match_reference": reference_set == candidate_set,
-        })
     else:
         comparison["comparison_type"] = "raw_result_only"
         comparison["status"] = "no_ranked-comparison-parser"
@@ -1446,7 +1325,6 @@ class ZvecShadowRelayAdapter:
         log_path: pathlib.Path,
         shadow_timeout_seconds: float,
         source_roots: dict[str, pathlib.Path] | None = None,
-        callgraph_repos: frozenset[str] | None = None,
         allowed_roots: frozenset[pathlib.Path] | None = None,
     ) -> None:
         self.primary = primary
@@ -1454,7 +1332,6 @@ class ZvecShadowRelayAdapter:
         self.log_path = log_path.expanduser()
         self.shadow_timeout_seconds = shadow_timeout_seconds
         self.source_roots = source_roots or {}
-        self.callgraph_repos = callgraph_repos or frozenset()
         self.allowed_roots = allowed_roots or frozenset()
         self._shadow_tasks: set[asyncio.Task[None]] = set()
         self._shadow_semaphore = asyncio.Semaphore(1)
@@ -1475,7 +1352,7 @@ class ZvecShadowRelayAdapter:
                 return {
                     "content": [{
                         "type": "text",
-                        "text": "zvec-grep root is missing or outside the configured workspace allowlist",
+                        "text": _zvec_unauthorized_root_error(forwarded_arguments.get("root"), name),
                     }],
                     "isError": True,
                 }
@@ -1544,8 +1421,6 @@ class ZvecShadowRelayAdapter:
             entry["shadow"].update({"skipped": "missing_or_unavailable_absolute_root"})
         elif indexed_repo is None:
             entry["shadow"].update({"skipped": "root_is_not_a_configured_cocoindex_source"})
-        elif name.startswith("zvec_grep_callgraph_") and indexed_repo not in self.callgraph_repos:
-            entry["shadow"].update({"skipped": "cocoindex_callgraph_not_configured_for_source"})
         else:
             call = _zvec_shadow_arguments(
                 name, arguments, repo=indexed_repo, root=root, branch=metadata.get("branch")
@@ -2230,11 +2105,6 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
                 raise ValueError(
                     f"Backend {instance!r}/{backend!r} requires allowed_roots or source_roots for zvec isolation"
                 )
-            callgraph_repos = settings.get("callgraph_repos", [])
-            if not isinstance(callgraph_repos, list) or any(
-                not isinstance(repo, str) or not repo.strip() for repo in callgraph_repos
-            ):
-                raise ValueError(f"Backend {instance!r}/{backend!r} callgraph_repos must be a string array")
             shared_key = settings.get("shared_key")
             if shared_key is not None and (not isinstance(shared_key, str) or not shared_key):
                 raise ValueError(f"Backend {instance!r}/{backend!r} shared_key must be a non-empty string")
@@ -2245,7 +2115,6 @@ def _parse_runtime_backend(instance: str, backend: str, settings: Any) -> dict:
                 "shadow_log": shadow_log,
                 "source_roots": dict(source_roots),
                 "allowed_roots": list(allowed_roots),
-                "callgraph_repos": list(callgraph_repos),
             })
             if shared_key is not None:
                 spec["shared_key"] = shared_key
@@ -2398,7 +2267,6 @@ def build_backend_adapters(registry: dict[str, dict[str, dict]]) -> dict[str, di
                     log_path=pathlib.Path(spec["shadow_log"]),
                     shadow_timeout_seconds=spec["shadow_timeout_seconds"],
                     source_roots=source_roots,
-                    callgraph_repos=frozenset(spec.get("callgraph_repos", [])),
                     allowed_roots=allowed_roots,
                 )
                 if shared_key is not None:

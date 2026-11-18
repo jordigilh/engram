@@ -25,7 +25,7 @@ from typing import Any
 # Keep direct source execution usable for this shared engine as well as the
 # installed, configuration-driven console script.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
-from engram import callgraph, chunking  # noqa: E402
+from engram import chunking  # noqa: E402
 from engram.project_config import (  # noqa: E402
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_PG_DSN,
@@ -51,6 +51,7 @@ SEARCH_PROJECT = "engram"
 EMBEDDING_MODEL = PROJECT_SETTINGS.text("embedding_model", DEFAULT_EMBEDDING_MODEL)
 assert EMBEDDING_MODEL is not None
 RRF_K = 60  # RRF constant — standard value from the original paper
+PATTERN_SEARCH_DEFAULT_LANGUAGE = "python"
 CODE_READ_SCHEMA_VERSION = "engram-code-read.v1"
 DEFAULT_CODE_READ_MAX_CHARS = 12000
 MAX_CODE_READ_CHARS = 20000
@@ -60,8 +61,6 @@ MAX_CODE_READ_LINES = 400
 # walks the exact same checkout the ingestion flow indexes.
 ENGRAM_REPO_DIR = PROJECT_SETTINGS.path("repo_dir", str(default_project_path("engram")))
 assert ENGRAM_REPO_DIR is not None
-CALL_GRAPH_ROOT = ENGRAM_REPO_DIR
-CALL_GRAPH_LANGUAGE = "python"
 _DEFAULT_BRANCH: str | None = None
 
 _EXCLUDED_PY_PATTERNS = [
@@ -75,7 +74,6 @@ _EXCLUDED_PY_PATTERNS = [
 _PATTERN_SEARCH_ROOTS = [
     ("engram", ENGRAM_REPO_DIR, ["**/*.py"], _EXCLUDED_PY_PATTERNS),
 ]
-_CALL_GRAPH_ROOTS: list[tuple] = list(_PATTERN_SEARCH_ROOTS)
 _SCOPE_ALIASES: dict[str, frozenset[str]] = {}
 _SCOPE_INDEX_TAGS: dict[str, frozenset[str]] = {}
 
@@ -95,9 +93,6 @@ def configure_project(
     code_table: str,
     embedding_model: str,
     pattern_roots: list[tuple],
-    call_graph_root: pathlib.Path | None = None,
-    call_graph_language: str = "python",
-    call_graph_roots: list[tuple] | None = None,
     default_branch: str | None = None,
     scope_aliases: dict[str, tuple[str, ...]] | None = None,
     scope_index_tags: dict[str, tuple[str, ...]] | None = None,
@@ -110,7 +105,7 @@ def configure_project(
     project.
     """
     global CODE_TABLE, EMBEDDING_MODEL, PG_URL, SEARCH_PROJECT
-    global CALL_GRAPH_ROOT, CALL_GRAPH_LANGUAGE, _PATTERN_SEARCH_ROOTS, _CALL_GRAPH_ROOTS
+    global _PATTERN_SEARCH_ROOTS
     global _DEFAULT_BRANCH, _SCOPE_ALIASES, _SCOPE_INDEX_TAGS, _model
     sql_identifier(code_table, "CocoIndex table name")
     CODE_TABLE = code_table
@@ -118,12 +113,6 @@ def configure_project(
     PG_URL = pg_url
     SEARCH_PROJECT = project
     _PATTERN_SEARCH_ROOTS = pattern_roots
-    CALL_GRAPH_ROOT = call_graph_root or (pattern_roots[0][1] if pattern_roots else ENGRAM_REPO_DIR)
-    CALL_GRAPH_LANGUAGE = call_graph_language
-    # ``[]`` is meaningful: a project may have code-search roots whose
-    # language is not supported by the call-graph extractor.  Only fall back
-    # to all pattern roots for callers that omit the argument entirely.
-    _CALL_GRAPH_ROOTS = list(pattern_roots) if call_graph_roots is None else list(call_graph_roots)
     _DEFAULT_BRANCH = default_branch
     _SCOPE_ALIASES = {
         str(tag): frozenset({str(tag), *aliases})
@@ -691,149 +680,37 @@ def _format_pattern_results(pattern: str, language: str, results: list[dict]) ->
 
 
 # ---------------------------------------------------------------------------
-# Call-graph queries (spike -- see docs/CALL_GRAPH_CLUSTERING.md, issue #43)
+# Call-graph tools: DEPRECATED, retired to the zvec-grep MCP daemon
 # ---------------------------------------------------------------------------
 #
-# Thin wrappers around callgraph.py's generic multi-org query/format layer
-# (Phase 0 of the rollout -- see docs/CALL_GRAPH_CLUSTERING.md): this module
-# only supplies *which* root/language to build from. No behavior change from
-# when this logic lived here directly.
+# The name-based call-graph spike (docs/CALL_GRAPH_CLUSTERING.md, issue #43)
+# was retired on 2026-11-18 (issue #199): Engram no longer resolves calls by
+# name. Structural graph queries are served exclusively by the zvec-grep MCP
+# daemon (compiler-attested call facts, certainty classes), which the Engram
+# gateway exposes as ``zvec_grep_callgraph_*`` / ``zvec_grep_codegraph_*``
+# tools over authorized workspace roots. The tool names below stay
+# registered only as deprecation shims so callers of the retired spike get a
+# pointer to the replacement instead of an opaque unknown-tool error; they
+# never build a graph and never return name-based results.
 
-def _build_graph_with_timing(
-    repo: str | None = None,
-    branch: str | None = None,
-    language: str | None = None,
-):
-    requested_language = language or CALL_GRAPH_LANGUAGE
-    roots = _select_roots(_CALL_GRAPH_ROOTS, repo=repo, branch=branch)
-    scope_error = None
-    if repo is not None and not roots:
-        scope_error = str(_scope_error(repo, branch, _CALL_GRAPH_ROOTS))
-    elif repo is not None and len(roots) > 1:
-        scope_error = str(_scope_error(repo, branch, _CALL_GRAPH_ROOTS, matching_roots=roots))
-        roots = []
-    if requested_language != "auto":
-        roots = [root for root in roots if _root_details(root)[4] in {"auto", requested_language}]
-
-    # The call-graph builder resolves one grammar per graph.  A configured
-    # project may legitimately mix Go, Rust, Python, and TypeScript roots, so
-    # build one graph per language and merge the independent results rather
-    # than silently dropping every non-Python root.
-    groups: dict[str, list[tuple]] = {}
-    for root in roots:
-        root_language = _root_details(root)[4]
-        graph_language = requested_language if requested_language != "auto" else root_language
-        if graph_language == "auto":
-            graph_language = "python"
-        groups.setdefault(graph_language, []).append(root)
-
-    if not groups:
-        fallback_language = requested_language if requested_language != "auto" else "python"
-        graph = callgraph.build_multi_repo_call_graph_with_stats(
-            [], language=fallback_language, logger=log,
-        )
-        if scope_error:
-            graph.graph["scope_error"] = scope_error
-        return graph
-
-    graphs = []
-    for graph_language, language_roots in groups.items():
-        normalized = [
-            (
-                _root_details(root)[0],
-                _root_details(root)[1],
-                _root_details(root)[2],
-                _root_details(root)[3],
-            )
-            for root in language_roots
-        ]
-        # Use the multi-repository wrapper even for one root so the source
-        # tag remains part of every qualified function name.  Without that
-        # prefix a single-root project and a release/repository-scoped query
-        # would disagree about the node's identity.
-        graphs.append(
-            callgraph.build_multi_repo_call_graph_with_stats(
-                normalized,
-                language=graph_language,
-                logger=log,
-            )
-        )
-
-    if len(graphs) == 1:
-        if scope_error:
-            graphs[0].graph["scope_error"] = scope_error
-        return graphs[0]
-    merged = callgraph.nx.DiGraph()
-    merged.graph["unresolved_calls"] = 0
-    merged.graph["total_calls"] = 0
-    merged.graph["ambiguous_calls"] = []
-    for graph in graphs:
-        merged.add_nodes_from(graph.nodes(data=True))
-        merged.add_edges_from(graph.edges(data=True))
-        merged.graph["unresolved_calls"] += graph.graph.get("unresolved_calls", 0)
-        merged.graph["total_calls"] += graph.graph.get("total_calls", 0)
-        merged.graph["ambiguous_calls"].extend(graph.graph.get("ambiguous_calls", []))
-    if scope_error:
-        merged.graph["scope_error"] = scope_error
-    return merged
+DEPRECATED_CALL_GRAPH_TOOLS: dict[str, str] = {
+    "call_graph_blast_radius": "zvec_grep_callgraph_blast_radius",
+    "call_graph_shortest_path": "zvec_grep_callgraph_shortest_path",
+    "call_graph_get_cluster": "zvec_grep_callgraph_cluster",
+}
 
 
-def call_graph_blast_radius(
-    function: str,
-    depth: int = 2,
-    repo: str | None = None,
-    branch: str | None = None,
-    language: str | None = None,
-) -> dict[str, Any]:
-    """Who (transitively) calls `function`, up to `depth` hops -- "what
-    breaks if I change this." See docs/CALL_GRAPH_CLUSTERING.md for the
-    accuracy ceiling (name-based resolution, no type info)."""
-    graph = _build_graph_with_timing(repo=repo, branch=branch, language=language)
-    return callgraph.query_blast_radius(graph, function, depth=depth)
-
-
-def call_graph_shortest_path(
-    source: str,
-    target: str,
-    repo: str | None = None,
-    branch: str | None = None,
-    language: str | None = None,
-) -> dict[str, Any]:
-    """Does `source` ever reach `target` through a chain of calls, and how."""
-    graph = _build_graph_with_timing(repo=repo, branch=branch, language=language)
-    return callgraph.query_shortest_path(graph, source, target)
-
-
-def call_graph_get_cluster(
-    function: str,
-    repo: str | None = None,
-    branch: str | None = None,
-    language: str | None = None,
-) -> dict[str, Any]:
-    """Which Leiden community `function` belongs to, and its other members.
-
-    Clustering quality depends entirely on the underlying graph's structure:
-    a small, centralized codebase may legitimately produce one dominant
-    cluster or many singletons -- that reflects the codebase, not a broken
-    clustering step (see docs/CALL_GRAPH_CLUSTERING.md)."""
-    graph = _build_graph_with_timing(repo=repo, branch=branch, language=language)
-    return callgraph.query_get_cluster(graph, function)
-
-
-def _format_blast_radius_result(result: dict) -> str:
-    return callgraph.format_blast_radius_result(result)
-
-
-def _format_shortest_path_result(result: dict) -> str:
-    return callgraph.format_shortest_path_result(result)
-
-
-def _format_cluster_result(result: dict) -> str:
-    return callgraph.format_cluster_result(result)
-
-
-def _format_lookup_error(result: dict) -> str:
-    return callgraph.format_lookup_error(result)
+def call_graph_deprecation_error(tool_suffix: str) -> str:
+    """Return the deprecation error text for a retired call-graph tool."""
+    replacement = DEPRECATED_CALL_GRAPH_TOOLS.get(tool_suffix, "the zvec_grep_callgraph_* tools")
+    return (
+        f"Error: the {tool_suffix} call-graph spike was retired (engram issue #199). "
+        "Engram no longer resolves calls by name. Use the zvec-grep graph tools exposed "
+        f"through the Engram gateway instead -- for example {replacement!r}, which takes an "
+        "absolute root under an authorized workspace and returns compiler-attested results "
+        "with certainty classes. Roots outside the authorized zvec workspaces fail "
+        "explicitly; there is no name-based fallback. See docs/CALL_GRAPH_CLUSTERING.md."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -935,7 +812,7 @@ def _run_mcp_server(
         This is purely syntactic: it does NOT resolve types and can't find
         references/callers or diagnostics.
         """
-        effective_language = language or (CALL_GRAPH_LANGUAGE if CALL_GRAPH_LANGUAGE != "auto" else "python")
+        effective_language = language or PATTERN_SEARCH_DEFAULT_LANGUAGE
         try:
             results = pattern_search_code(
                 pattern, effective_language, limit=min(limit, 20), repo=repo, branch=branch,
@@ -952,22 +829,17 @@ def _run_mcp_server(
         branch: str | None = None,
         language: str | None = None,
     ) -> str:
-        """What (transitively) calls `function` in configured project sources,
-        up to `depth` hops -- "what breaks if I change this."
+        """DEPRECATED (retired 2026-11-18, engram issue #199): always fails.
 
-        `function` may be a bare name if unambiguous, or a qualified name
-        including the configured source tag.
-
-        SPIKE, engram-only (docs/CALL_GRAPH_CLUSTERING.md, issue #43): call
-        resolution is purely name-based (no type info), so common method
-        names shared across unrelated functions can produce false-positive
-        edges, and dynamic dispatch/external calls can't be seen at all.
-        Rebuilds the call graph fresh on every call (no persisted index).
+        This name-based call-graph spike was retired. Structural graph queries
+        are served exclusively by the zvec-grep MCP daemon through the Engram
+        gateway (``zvec_grep_callgraph_*`` / ``zvec_grep_codegraph_*``), which
+        resolve calls with compiler-attested facts and certainty classes. This
+        shim exists only to point callers at the replacement; it performs no
+        call-graph resolution.
         """
-        result = call_graph_blast_radius(
-            function, depth=depth, repo=repo, branch=branch, language=language,
-        )
-        return _format_blast_radius_result(result)
+        log.warning("deprecated tool %s called (spike retired, issue #199)", "call_graph_blast_radius")
+        return call_graph_deprecation_error("call_graph_blast_radius")
 
     @mcp.tool(name=f"{tool_prefix}call_graph_shortest_path")
     def engram_call_graph_shortest_path(
@@ -977,16 +849,13 @@ def _run_mcp_server(
         branch: str | None = None,
         language: str | None = None,
     ) -> str:
-        """Does `source` ever reach `target` through a chain of calls in the
-        configured project sources, and how.
+        """DEPRECATED (retired 2026-11-18, engram issue #199): always fails.
 
-        Same name-based-resolution caveat as engram_call_graph_blast_radius
-        applies (see its docstring) -- this is a SPIKE, engram-only.
+        Same retirement as engram_call_graph_blast_radius; use
+        ``zvec_grep_callgraph_shortest_path`` through the Engram gateway.
         """
-        result = call_graph_shortest_path(
-            source, target, repo=repo, branch=branch, language=language,
-        )
-        return _format_shortest_path_result(result)
+        log.warning("deprecated tool %s called (spike retired, issue #199)", "call_graph_shortest_path")
+        return call_graph_deprecation_error("call_graph_shortest_path")
 
     @mcp.tool(name=f"{tool_prefix}call_graph_get_cluster")
     def engram_call_graph_get_cluster(
@@ -995,19 +864,13 @@ def _run_mcp_server(
         branch: str | None = None,
         language: str | None = None,
     ) -> str:
-        """Which cluster of related functions (via Leiden community detection
-        over the call graph) `function` belongs to in configured project
-        sources, and its other members.
+        """DEPRECATED (retired 2026-11-18, engram issue #199): always fails.
 
-        Same name-based-resolution caveat as engram_call_graph_blast_radius
-        applies (see its docstring) -- this is a SPIKE, engram-only. A small,
-        centralized codebase may legitimately produce one dominant cluster or
-        many singletons; that reflects the codebase, not a broken tool.
+        Same retirement as engram_call_graph_blast_radius; use
+        ``zvec_grep_callgraph_cluster`` through the Engram gateway.
         """
-        result = call_graph_get_cluster(
-            function, repo=repo, branch=branch, language=language,
-        )
-        return _format_cluster_result(result)
+        log.warning("deprecated tool %s called (spike retired, issue #199)", "call_graph_get_cluster")
+        return call_graph_deprecation_error("call_graph_get_cluster")
 
     if transport == "stdio":
         log.info("Starting engram-code MCP server (stdio)")
@@ -1043,38 +906,6 @@ def _run_cli_pattern_query(
     print(_format_pattern_results(pattern, language, results))
 
 
-def _run_cli_blast_radius(
-    function: str,
-    depth: int,
-    repo: str | None = None,
-    branch: str | None = None,
-    language: str | None = None,
-) -> None:
-    result = call_graph_blast_radius(function, depth=depth, repo=repo, branch=branch, language=language)
-    print(_format_blast_radius_result(result))
-
-
-def _run_cli_shortest_path(
-    source: str,
-    target: str,
-    repo: str | None = None,
-    branch: str | None = None,
-    language: str | None = None,
-) -> None:
-    result = call_graph_shortest_path(source, target, repo=repo, branch=branch, language=language)
-    print(_format_shortest_path_result(result))
-
-
-def _run_cli_cluster(
-    function: str,
-    repo: str | None = None,
-    branch: str | None = None,
-    language: str | None = None,
-) -> None:
-    result = call_graph_get_cluster(function, repo=repo, branch=branch, language=language)
-    print(_format_cluster_result(result))
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Engram code search — MCP server + CLI"
@@ -1087,23 +918,12 @@ def main():
                         help="Search mode (default: hybrid)")
     parser.add_argument("--repo", help="Scope results to one configured source tag")
     parser.add_argument("--branch", help="Scope results to main or a configured release/branch tag")
-    parser.add_argument("--blast-radius", help="Call-graph spike: who (transitively) calls this function")
-    parser.add_argument("--depth", type=int, default=2, help="Depth for --blast-radius (default: 2)")
-    parser.add_argument("--shortest-path", nargs=2, metavar=("SOURCE", "TARGET"),
-                        help="Call-graph spike: shortest call chain SOURCE -> TARGET")
-    parser.add_argument("--cluster", help="Call-graph spike: which Leiden cluster this function belongs to")
     parser.add_argument("--port", "-p", type=int, default=8890, help="MCP server port (default: 8890)")
     parser.add_argument("--host", default="127.0.0.1", help="MCP server bind address")
     args = parser.parse_args()
 
     if args.pattern:
         _run_cli_pattern_query(args.pattern, args.language, limit=args.limit, repo=args.repo, branch=args.branch)
-    elif args.blast_radius:
-        _run_cli_blast_radius(args.blast_radius, depth=args.depth, repo=args.repo, branch=args.branch, language=args.language)
-    elif args.shortest_path:
-        _run_cli_shortest_path(*args.shortest_path, repo=args.repo, branch=args.branch, language=args.language)
-    elif args.cluster:
-        _run_cli_cluster(args.cluster, repo=args.repo, branch=args.branch, language=args.language)
     elif args.query:
         _run_cli_query(args.query, limit=args.limit, mode=args.mode, repo=args.repo, branch=args.branch)
     else:

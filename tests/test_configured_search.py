@@ -260,34 +260,7 @@ def test_configure_passes_source_scope_aliases_to_the_search_engine(monkeypatch,
     assert captured["scope_index_tags"]["example-repo"] == ("example-repo",)
 
 
-def test_call_graph_merges_explicitly_configured_languages(monkeypatch, tmp_path):
-    python_root = tmp_path / "python"
-    go_root = tmp_path / "go"
-    python_root.mkdir()
-    go_root.mkdir()
-    (python_root / "mod.py").write_text(
-        "def helper():\n    return 1\n\ndef caller():\n    return helper()\n"
-    )
-    (go_root / "mod.go").write_text(
-        "package main\n\nfunc helper() int { return 1 }\n\nfunc caller() int { return helper() }\n"
-    )
-    roots = [
-        ("python-repo", python_root, ["**/*.py"], [], "python", None),
-        ("go-repo", go_root, ["**/*.go"], [], "go", None),
-    ]
-    monkeypatch.setattr(search, "_CALL_GRAPH_ROOTS", roots)
-    monkeypatch.setattr(search, "CALL_GRAPH_LANGUAGE", "auto")
-    monkeypatch.setattr(search, "_DEFAULT_BRANCH", None)
-
-    graph = search._build_graph_with_timing()
-
-    assert "python-repo/mod.py::caller" in graph
-    assert "go-repo/mod.go::caller" in graph
-    assert graph.has_edge("python-repo/mod.py::caller", "python-repo/mod.py::helper")
-    assert graph.has_edge("go-repo/mod.go::caller", "go-repo/mod.go::helper")
-
-
-def test_configure_project_can_disable_call_graph_for_auto_only_roots(monkeypatch, tmp_path):
+def test_configure_project_no_longer_configures_name_based_call_graph(monkeypatch, tmp_path):
     auto_root = tmp_path / "docs"
     auto_root.mkdir()
 
@@ -296,10 +269,7 @@ def test_configure_project_can_disable_call_graph_for_auto_only_roots(monkeypatc
         "EMBEDDING_MODEL",
         "PG_URL",
         "SEARCH_PROJECT",
-        "CALL_GRAPH_ROOT",
-        "CALL_GRAPH_LANGUAGE",
         "_PATTERN_SEARCH_ROOTS",
-        "_CALL_GRAPH_ROOTS",
         "_DEFAULT_BRANCH",
         "_model",
     )
@@ -311,33 +281,19 @@ def test_configure_project_can_disable_call_graph_for_auto_only_roots(monkeypatc
             code_table="docs_code_embeddings",
             embedding_model="test-model",
             pattern_roots=[("docs", auto_root, ["**/*.yaml"], [], "auto", None)],
-            call_graph_roots=[],
         )
 
-        assert search._CALL_GRAPH_ROOTS == []
+        assert not hasattr(search, "_CALL_GRAPH_ROOTS")
+        assert not hasattr(search, "CALL_GRAPH_ROOT")
     finally:
         for name, value in previous.items():
             setattr(search, name, value)
 
 
-def test_call_graph_branch_scope_excludes_other_release_lines(monkeypatch, tmp_path):
-    main_root = tmp_path / "main"
-    release_root = tmp_path / "release"
-    main_root.mkdir()
-    release_root.mkdir()
-    (main_root / "mod.go").write_text(
-        "package main\n\nfunc helper() int { return 1 }\n\nfunc mainOnly() int { return helper() }\n"
-    )
-    (release_root / "mod.go").write_text(
-        "package main\n\nfunc helper() int { return 1 }\n\nfunc releaseOnly() int { return helper() }\n"
-    )
-    monkeypatch.setattr(search, "_CALL_GRAPH_ROOTS", [
-        ("repo", main_root, ["**/*.go"], [], "go", None),
-        ("repo@release-v1.5", release_root, ["**/*.go"], [], "go", "v1.5"),
-    ])
-    monkeypatch.setattr(search, "CALL_GRAPH_LANGUAGE", "go")
-    monkeypatch.setattr(search, "_DEFAULT_BRANCH", None)
-
-    result = search.call_graph_blast_radius("repo@release-v1.5/mod.go::helper", branch="v1.5")
-
-    assert result["callers_by_depth"] == [["repo@release-v1.5/mod.go::releaseOnly"]]
+def test_retired_call_graph_tools_fail_with_zvec_pointer():
+    for suffix in ("call_graph_blast_radius", "call_graph_shortest_path", "call_graph_get_cluster"):
+        message = search.call_graph_deprecation_error(suffix)
+        assert message.startswith(f"Error: the {suffix} call-graph spike was retired")
+        assert "zvec_grep_callgraph_" in message
+        assert "issue #199" in message
+        assert "no name-based fallback" in message

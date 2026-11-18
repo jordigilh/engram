@@ -41,24 +41,14 @@ def configure(config: ProjectAdapterConfig) -> None:
         effective_source_tag(source): source_index_tags(source)
         for source in config.code_sources
     }
-    # Structural pattern search can infer a grammar per file for ``auto``
-    # sources.  Call-graph resolution, however, intentionally builds one
-    # grammar-specific graph at a time; do not feed YAML/shell/mixed roots
-    # through an arbitrary Python fallback.  Explicitly language-tagged roots
-    # participate in call-graph queries, while ``auto`` remains available to
-    # the by-example search path.
-    call_graph_roots = [root for root in roots if root[4] in {"python", "go", "rust", "typescript"}]
-    languages = [root[4] for root in call_graph_roots]
-    call_graph_language = languages[0] if languages and len(set(languages)) == 1 else "auto"
+    # Call-graph queries were retired to the zvec-grep MCP daemon (issue
+    # #199); this launcher no longer configures name-based graph roots.
     engine.configure_project(
         project=config.project,
         pg_url=config.pg_dsn,
         code_table=config.code_table,
         embedding_model=config.embedding_model,
         pattern_roots=roots,
-        call_graph_root=roots[0][1],
-        call_graph_language=call_graph_language,
-        call_graph_roots=call_graph_roots,
         default_branch=config.default_branch,
         scope_aliases=scope_aliases,
         scope_index_tags=scope_index_tags,
@@ -76,10 +66,6 @@ def main() -> None:
     parser.add_argument("--branch")
     parser.add_argument("--limit", "-n", type=int, default=10)
     parser.add_argument("--mode", "-m", default="hybrid", choices=["hybrid", "dense", "bm25"])
-    parser.add_argument("--blast-radius")
-    parser.add_argument("--depth", type=int, default=2)
-    parser.add_argument("--shortest-path", nargs=2, metavar=("SOURCE", "TARGET"))
-    parser.add_argument("--cluster")
     parser.add_argument("--port", "-p", type=int, default=8890)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument(
@@ -100,16 +86,6 @@ def main() -> None:
     language = args.language or default_language
     if args.pattern:
         engine._run_cli_pattern_query(args.pattern, language, limit=limit, repo=args.repo, branch=args.branch)
-    elif args.blast_radius:
-        engine._run_cli_blast_radius(
-            args.blast_radius, depth=args.depth, repo=args.repo, branch=args.branch, language=language,
-        )
-    elif args.shortest_path:
-        engine._run_cli_shortest_path(
-            *args.shortest_path, repo=args.repo, branch=args.branch, language=language,
-        )
-    elif args.cluster:
-        engine._run_cli_cluster(args.cluster, repo=args.repo, branch=args.branch, language=language)
     elif args.query:
         engine._run_cli_query(args.query, limit=limit, mode=args.mode, repo=args.repo, branch=args.branch)
     else:

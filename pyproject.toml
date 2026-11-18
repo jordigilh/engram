@@ -33,13 +33,9 @@ dependencies = [
     # and pagerank (networkx, already declared below). Pinned to the
     # version in the live venv.
     "scikit-learn==1.9.1",
-    # Call-graph extraction spike (docs/CALL_GRAPH_CLUSTERING.md, issue #43):
-    # networkx holds the directed call graph and answers blast-radius/
-    # shortest-path queries; igraph+leidenalg (not the heavier graspologic
-    # stack) do Leiden community detection. ~5-6MB combined footprint.
+    # engram.synthesis (deterministic TextRank key sentences): pagerank over
+    # the sentence-similarity graph.
     "networkx==3.7",
-    "python-igraph==1.0.0",
-    "leidenalg==0.12.0",
     # engram_gateway.py's per-call token estimation (2026-08-30): was already
     # present as a transitive dep of one of the above; pinned explicitly now
     # that engram_gateway.py imports it directly, rather than relying on an

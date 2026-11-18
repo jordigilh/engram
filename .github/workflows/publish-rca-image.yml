@@ -39,12 +39,12 @@ jobs:
       - name: Install Podman and arm64 emulation
         run: |
           sudo apt-get update
-          sudo apt-get install -y podman qemu-user-static binfmt-support
+          sudo apt-get install -y podman qemu-user-binfmt binfmt-support
           podman --version
 
       - name: Register binfmt handlers
         run: |
-          # qemu-user-static registers the handler on GitHub's Ubuntu runners;
+          # qemu-user-binfmt registers the handler on GitHub's Ubuntu runners;
           # update-binfmts may report it as enabled in the kernel but absent
           # from its package database, which is not an error for Podman.
           sudo systemctl restart systemd-binfmt 2>/dev/null || true

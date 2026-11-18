@@ -79,10 +79,15 @@ def main() -> None:
     config = load_adapter_config(args.project, args.config)
     configure(config)
     limit = min(max(args.limit, 1), 20)
-    default_language = next(
-        (source.language for source in config.code_sources if source.language != "auto"),
-        "python",
-    )
+    # Fix 8 (issue #199 follow-up): route the CLI's default through the same
+    # derivation as the MCP surface so a mixed project yields the same default
+    # (python) on both. The helper can raise ValueError for a malformed repo
+    # (the crash edd4924 fixed for the MCP path) -- keep the CLI's error
+    # style, not an unhandled traceback.
+    try:
+        default_language = engine._pattern_search_language_default(args.repo, args.branch)
+    except ValueError as exc:
+        raise SystemExit(f"error: {exc}") from exc
     language = args.language or default_language
     if args.pattern:
         engine._run_cli_pattern_query(args.pattern, language, limit=limit, repo=args.repo, branch=args.branch)

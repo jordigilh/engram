@@ -607,6 +607,62 @@ def _format_results(
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Pattern-search language canonicalization (issue #199 follow-up, Fix 7)
+# ---------------------------------------------------------------------------
+# Configured/explicit language tags ("shell", "golang", "ts", ...) must be
+# normalized to the canonical detect_code_language/CodePattern vocabulary
+# before any string comparison: cocoindex's Rust core already resolves
+# aliases at match time, so the defects were purely the equality checks at
+# the root-tag and detection filters. Map + accepted set live-probed against
+# cocoindex 1.0.25 (the repo venv's actual version) -- see the
+# pr200-alias-spike preflight for the full vocabulary.
+_PATTERN_LANGUAGE_ALIASES: dict[str, str] = {
+    "shell": "bash", "sh": "bash", "zsh": "bash",
+    "golang": "go",
+    "py": "python", "rb": "ruby", "rs": "rust",
+    "ts": "typescript", "js": "javascript", "kt": "kotlin",
+    "yml": "yaml", "cs": "csharp", "c#": "csharp", "c++": "cpp", "cxx": "cpp",
+    "tf": "hcl", "terraform": "hcl",
+}
+# .ts detects as "typescript" but .tsx as "tsx" (two distinct tree-sitter
+# grammars, both supported), so the detection-site comparison must accept
+# the pair in both directions. Detection-site only: the root-tag filter
+# compares canonical tags, where the pair should NOT collapse.
+_DETECTION_EQUIVALENTS: dict[str, frozenset[str]] = {
+    "typescript": frozenset({"typescript", "tsx"}),
+    "tsx": frozenset({"typescript", "tsx"}),
+}
+# Note (documented, deliberately not aliased): .h files detect as "cpp", so
+# a "c"-tagged root skips .h files. Pre-existing, arguably correct, out of
+# scope for this fix.
+_PATTERN_LANGUAGE_PROBE_CACHE: dict[str, bool] = {}
+_PATTERN_PROBE_PLACEHOLDER = r"\NAME"  # FIXED pattern -- never the user's
+
+
+def _canonical_pattern_language(language: str) -> str | None:
+    """Normalize a language tag to the canonical CodePattern/detection name.
+
+    Lowercases, applies the alias map, then probes CodePattern construction
+    with a FIXED placeholder pattern (never the user's pattern, so a user
+    syntax error can't be conflated with a language rejection). Returns the
+    canonical name, or None if CodePattern rejects the language (callers
+    fail safe: the default derivation falls back to python, unsupported
+    root tags are skipped). Results are cached per canonical name.
+    """
+    lang = language.strip().lower()
+    canonical = _PATTERN_LANGUAGE_ALIASES.get(lang, lang)
+    if canonical not in _PATTERN_LANGUAGE_PROBE_CACHE:
+        from cocoindex.ops.code import CodePattern
+
+        try:
+            CodePattern(_PATTERN_PROBE_PLACEHOLDER, canonical)
+            _PATTERN_LANGUAGE_PROBE_CACHE[canonical] = True
+        except ValueError:
+            _PATTERN_LANGUAGE_PROBE_CACHE[canonical] = False
+    return canonical if _PATTERN_LANGUAGE_PROBE_CACHE[canonical] else None
+
+
 def pattern_search_code(
     pattern: str,
     language: str,
@@ -636,18 +692,26 @@ def pattern_search_code(
         if len(selected_roots) > 1:
             raise _scope_error(repo, branch, _PATTERN_SEARCH_ROOTS, matching_roots=selected_roots)
 
-    cp = CodePattern(pattern, language)
+    canonical = _canonical_pattern_language(language)
+    if canonical is None:
+        # Explicit unsupported languages raise loudly (issue #199 follow-up
+        # decision): only the DEFAULT derivation fails safe to python.
+        raise ValueError(
+            f'structural matching is not supported for language "{language}"'
+        )
+    cp = CodePattern(pattern, canonical)
     results: list[dict[str, Any]] = []
     for root_spec in _select_pattern_roots(repo=repo, branch=branch):
         repo_tag, root, included, excluded, root_language, _root_branch = _root_details(root_spec)
-        if root_language not in {"auto", language}:
+        if root_language != "auto" and _canonical_pattern_language(root_language) != canonical:
             continue
         if len(results) >= limit:
             break
         for path in chunking.find_code_files(root, included, excluded):
             if len(results) >= limit:
                 break
-            if detect_code_language(filename=path.name) != language:
+            detected = detect_code_language(filename=path.name)
+            if canonical not in _DETECTION_EQUIVALENTS.get(detected, frozenset({detected})):
                 continue
             file_match = cp.match_file(str(path))
             if file_match is None:
@@ -696,13 +760,17 @@ def _pattern_search_language_default(repo: str | None, branch: str | None) -> st
     Follows the pre-consolidation behavior of deriving the default from the
     configured project language (previously the call-graph language, removed
     with the name-based spike in issue #199): when the selected roots share
-    one concrete language, use it; otherwise fall back to Python.
+    one concrete language, use it; otherwise fall back to Python. Root tags
+    are canonicalized first (a "shell" root and a "bash" root are one
+    language, not a mix), and tags CodePattern rejects (including "auto"
+    and unknown languages) never contribute -- only the default derivation
+    fails safe; explicit unsupported languages raise.
     """
     languages = {
-        _root_details(root)[4]
+        canonical
         for root in _select_pattern_roots(repo=repo, branch=branch)
+        if (canonical := _canonical_pattern_language(_root_details(root)[4])) is not None
     }
-    languages.discard("auto")
     if len(languages) == 1:
         return languages.pop()
     return PATTERN_SEARCH_DEFAULT_LANGUAGE

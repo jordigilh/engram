@@ -346,3 +346,199 @@ def test_pattern_search_invalid_repo_without_language_returns_friendly_error():
     try_pos = tool_body.index("try:")
     default_pos = tool_body.index("_pattern_search_language_default(repo, branch)")
     assert try_pos < default_pos, "language default must be computed inside the try block"
+
+
+# ---------------------------------------------------------------------------
+# Fix 7 + Fix 8 (issue #199 follow-up): language canonicalization and the
+# unified CLI/MCP default. Matrix from the pr200-alias-spike preflight.
+# ---------------------------------------------------------------------------
+
+_MATRIX_FILE_CONTENTS = {
+    "t.sh": "#!/bin/bash\necho hi\n",
+    "t.go": "package main\n",
+    "t.py": "x = 1\n",
+    "t.ts": "const a = 1;\n",
+    "t.tsx": "export const A = () => null;\n",
+    "t.tf": 'resource "x" "y" {}\n',
+    "t.md": "# hi\n",
+}
+
+
+def _matrix_root(tmp_path, name, files, language):
+    root = tmp_path / name
+    root.mkdir()
+    for filename in files:
+        (root / filename).write_text(_MATRIX_FILE_CONTENTS[filename])
+    return (name, root, ["**/*"], [], language, None)
+
+
+def _run_matrix_case(monkeypatch, tmp_path, roots, language=None):
+    """Run a real pattern_search_code over the given roots. ``language=None``
+    emulates the MCP wrapper: derive the default first, then search."""
+    monkeypatch.setattr(search, "_PATTERN_SEARCH_ROOTS", roots)
+    monkeypatch.setattr(search, "_DEFAULT_BRANCH", None)
+    effective = (
+        language
+        if language is not None
+        else search._pattern_search_language_default(None, None)
+    )
+    results = search.pattern_search_code("\\NAME", effective, limit=50)
+    return {r["filepath"] for r in results}
+
+
+def test_pattern_language_matrix_shell_tag_default_and_explicit(monkeypatch, tmp_path):
+    # cases 1-3: shell/sh tags (default and explicit) match a real .sh file
+    for tag in ("shell", "sh"):
+        roots = [_matrix_root(tmp_path, f"{tag}-default", ["t.sh"], tag)]
+        assert _run_matrix_case(monkeypatch, tmp_path, roots) == {f"{tag}-default/t.sh"}
+        assert _run_matrix_case(monkeypatch, tmp_path, roots, language=tag) == {
+            f"{tag}-default/t.sh"
+        }
+
+
+def test_pattern_language_matrix_golang_tag_alias(monkeypatch, tmp_path):
+    # case 4: explicit golang -> go
+    roots = [_matrix_root(tmp_path, "golang-root", ["t.go"], "golang")]
+    assert _run_matrix_case(monkeypatch, tmp_path, roots, language="golang") == {
+        "golang-root/t.go"
+    }
+
+
+def test_pattern_language_matrix_typescript_and_tsx_detection_pair(monkeypatch, tmp_path):
+    # cases 5-7: .ts and .tsx under a typescript tag; .tsx under a tsx tag
+    roots = [_matrix_root(tmp_path, "ts-root", ["t.ts", "t.tsx"], "typescript")]
+    assert _run_matrix_case(monkeypatch, tmp_path, roots) == {
+        "ts-root/t.ts",
+        "ts-root/t.tsx",
+    }
+    roots = [_matrix_root(tmp_path, "tsx-root", ["t.tsx"], "tsx")]
+    assert _run_matrix_case(monkeypatch, tmp_path, roots) == {"tsx-root/t.tsx"}
+
+
+def test_pattern_language_matrix_markdown_tag_fails_safe_to_python(monkeypatch, tmp_path):
+    # case 8: a markdown-tagged root yields the python default (fail-safe);
+    # the root itself is then skipped by the root-tag filter (its canonical
+    # language is None, never equal to python), so nothing matches -- in
+    # particular t.md can never match.
+    roots = [_matrix_root(tmp_path, "md-root", ["t.md", "t.py"], "markdown")]
+    assert search._pattern_search_language_default(None, None) == "python"
+    assert _run_matrix_case(monkeypatch, tmp_path, roots) == set()
+
+
+def test_pattern_language_matrix_explicit_unsupported_language_raises(monkeypatch, tmp_path):
+    # case 9: explicit markdown raises loudly (only the default fails safe)
+    roots = [_matrix_root(tmp_path, "md-root", ["t.md"], "markdown")]
+    monkeypatch.setattr(search, "_PATTERN_SEARCH_ROOTS", roots)
+    monkeypatch.setattr(search, "_DEFAULT_BRANCH", None)
+    with pytest.raises(ValueError, match="not supported for language"):
+        search.pattern_search_code("\\NAME", "markdown")
+
+
+def test_pattern_language_matrix_mixed_project_defaults_to_python(monkeypatch, tmp_path):
+    # case 10: mixed go+python -> python (retained), only the .py file matches
+    roots = [
+        _matrix_root(tmp_path, "go-root", ["t.go"], "go"),
+        _matrix_root(tmp_path, "py-root", ["t.py"], "python"),
+    ]
+    assert search._pattern_search_language_default(None, None) == "python"
+    assert _run_matrix_case(monkeypatch, tmp_path, roots) == {"py-root/t.py"}
+
+
+def test_pattern_language_matrix_explicit_language_skips_other_tagged_root(monkeypatch, tmp_path):
+    # case 11 (negative control): go-tagged root skipped under python
+    roots = [_matrix_root(tmp_path, "go-root", ["t.go"], "go")]
+    assert _run_matrix_case(monkeypatch, tmp_path, roots, language="python") == set()
+
+
+def test_pattern_language_matrix_detection_filter_excludes_other_language_files(monkeypatch, tmp_path):
+    # case 12: python root with .py and .sh files -> only .py matches
+    roots = [_matrix_root(tmp_path, "py-root", ["t.py", "t.sh"], "python")]
+    assert _run_matrix_case(monkeypatch, tmp_path, roots) == {"py-root/t.py"}
+
+
+def test_pattern_language_matrix_auto_tag_passes_through(monkeypatch, tmp_path):
+    # case 13: auto root + explicit python matches
+    roots = [_matrix_root(tmp_path, "auto-root", ["t.py"], "auto")]
+    assert _run_matrix_case(monkeypatch, tmp_path, roots, language="python") == {
+        "auto-root/t.py"
+    }
+
+
+def test_pattern_language_matrix_terraform_two_hop_alias(monkeypatch, tmp_path):
+    # case 14: terraform tag -> hcl canonical; .tf detects as hcl
+    roots = [_matrix_root(tmp_path, "tf-root", ["t.tf"], "terraform")]
+    assert _run_matrix_case(monkeypatch, tmp_path, roots) == {"tf-root/t.tf"}
+
+
+def test_pattern_language_alias_targets_are_codepattern_accepted():
+    """Pin the alias map against cocoindex's live accepted set: every alias
+    RHS and detection-equivalent key must still construct a CodePattern.
+    Catches cocoindex upgrades silently shrinking the vocabulary (which
+    would otherwise degrade to the python default via the probe cache)."""
+    from cocoindex.ops.code import CodePattern
+
+    for canonical in {*search._PATTERN_LANGUAGE_ALIASES.values(), *search._DETECTION_EQUIVALENTS}:
+        CodePattern(search._PATTERN_PROBE_PLACEHOLDER, canonical)  # must not raise
+
+
+def test_pattern_language_aliases_map_is_complete_and_directional():
+    # every alias key is lowercase and distinct from its canonical value;
+    # every canonical value is itself in the detection vocabulary space
+    # (no alias maps to another alias).
+    for alias, canonical in search._PATTERN_LANGUAGE_ALIASES.items():
+        assert alias == alias.lower()
+        assert alias != canonical
+        assert canonical not in search._PATTERN_LANGUAGE_ALIASES
+
+
+def test_cli_pattern_default_routes_through_unified_derivation(monkeypatch):
+    # Fix 8: the CLI's --pattern default comes from the same helper as the
+    # MCP surface; a mixed go+python project yields python on both.
+    captured = {}
+    monkeypatch.setattr(
+        configured,
+        "load_adapter_config",
+        lambda project, config: SimpleNamespace(project="mixed"),
+    )
+    monkeypatch.setattr(configured, "configure", lambda config: None)
+    monkeypatch.setattr(
+        search,
+        "_select_pattern_roots",
+        lambda repo, branch: [
+            ("go-root", "/tmp/go-root", [], [], "go", None),
+            ("py-root", "/tmp/py-root", [], [], "python", None),
+        ],
+    )
+
+    def fake_cli(pattern, language, **kwargs):
+        captured.update(pattern=pattern, language=language)
+
+    monkeypatch.setattr(configured.engine, "_run_cli_pattern_query", fake_cli)
+    monkeypatch.setattr(
+        sys, "argv", ["configured", "--project", "mixed", "--pattern", "\\NAME"]
+    )
+    configured.main()
+    assert captured == {"pattern": "\\NAME", "language": "python"}
+
+
+def test_cli_malformed_repo_language_default_yields_cli_error_not_traceback(monkeypatch):
+    # Fix 8 guard: the unified helper can raise ValueError for a malformed
+    # repo (the crash edd4924 fixed for MCP); the CLI must keep its error
+    # style instead of an unhandled traceback.
+    monkeypatch.setattr(
+        configured,
+        "load_adapter_config",
+        lambda project, config: SimpleNamespace(project="broken"),
+    )
+    monkeypatch.setattr(configured, "configure", lambda config: None)
+
+    def boom(repo, branch):
+        raise ValueError("unsafe scope")
+
+    monkeypatch.setattr(configured.engine, "_pattern_search_language_default", boom)
+    monkeypatch.setattr(
+        sys, "argv", ["configured", "--project", "broken", "--pattern", "\\NAME"]
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        configured.main()
+    assert "unsafe scope" in str(excinfo.value)

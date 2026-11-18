@@ -300,3 +300,31 @@ def test_retired_call_graph_tools_are_fully_removed():
     assert "call_graph_blast_radius" not in source
     assert "call_graph_shortest_path" not in source
     assert "call_graph_get_cluster" not in source
+
+
+def test_pattern_search_language_default_follows_project_configuration(monkeypatch):
+    # issue #199 follow-up (CodeRabbit): a Go-only project's pattern search
+    # without an explicit language must default to Go, not Python.
+    import engram.search.engram as search_mod
+
+    monkeypatch.setattr(
+        search_mod, "_select_pattern_roots",
+        lambda repo, branch: [("go-root", "/tmp/go-root", [], [], "go", None)],
+    )
+    assert search_mod._pattern_search_language_default("go-root", None) == "go"
+    assert search_mod._pattern_search_language_default(None, None) == "go"
+
+    # mixed or auto-only roots fall back to the historical Python default
+    monkeypatch.setattr(
+        search_mod, "_select_pattern_roots",
+        lambda repo, branch: [
+            ("go-root", "/tmp/go-root", [], [], "go", None),
+            ("py-root", "/tmp/py-root", [], [], "python", None),
+        ],
+    )
+    assert search_mod._pattern_search_language_default(None, None) == "python"
+    monkeypatch.setattr(
+        search_mod, "_select_pattern_roots",
+        lambda repo, branch: [("auto-root", "/tmp/auto-root", [], [], "auto", None)],
+    )
+    assert search_mod._pattern_search_language_default(None, None) == "python"

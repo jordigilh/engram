@@ -690,6 +690,24 @@ def _format_pattern_results(pattern: str, language: str, results: list[dict]) ->
 # exposes as ``zvec_grep_callgraph_*`` / ``zvec_grep_codegraph_*`` tools over
 # authorized workspace roots.
 
+def _pattern_search_language_default(repo: str | None, branch: str | None) -> str:
+    """Derive the pattern-search language default from project configuration.
+
+    Follows the pre-consolidation behavior of deriving the default from the
+    configured project language (previously the call-graph language, removed
+    with the name-based spike in issue #199): when the selected roots share
+    one concrete language, use it; otherwise fall back to Python.
+    """
+    languages = {
+        _root_details(root)[4]
+        for root in _select_pattern_roots(repo=repo, branch=branch)
+    }
+    languages.discard("auto")
+    if len(languages) == 1:
+        return languages.pop()
+    return PATTERN_SEARCH_DEFAULT_LANGUAGE
+
+
 # ---------------------------------------------------------------------------
 # MCP server
 # ---------------------------------------------------------------------------
@@ -789,7 +807,7 @@ def _run_mcp_server(
         This is purely syntactic: it does NOT resolve types and can't find
         references/callers or diagnostics.
         """
-        effective_language = language or PATTERN_SEARCH_DEFAULT_LANGUAGE
+        effective_language = language or _pattern_search_language_default(repo, branch)
         try:
             results = pattern_search_code(
                 pattern, effective_language, limit=min(limit, 20), repo=repo, branch=branch,

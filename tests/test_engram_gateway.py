@@ -420,11 +420,18 @@ class TestAggregateToolsList:
         assert catalog["docs_manual_mental_model"] == ("docs_manual", "manual_mental_model")
         assert errors == {}
 
-    def test_cocoindex_graph_tools_are_exposed_unprefixed(self, engram_gateway):
+    def test_zvec_graph_tools_are_exposed_unprefixed(self, engram_gateway):
         graph_tools = [
-            "cocoindex_call_graph_blast_radius",
-            "cocoindex_call_graph_shortest_path",
-            "cocoindex_call_graph_get_cluster",
+            "zvec_grep_callgraph_blast_radius",
+            "zvec_grep_callgraph_shortest_path",
+            "zvec_grep_callgraph_cluster",
+            "zvec_grep_callgraph_communities",
+            "zvec_grep_codegraph_affected",
+            "zvec_grep_codegraph_node",
+            "zvec_grep_codegraph_neighbors",
+            "zvec_grep_codegraph_relation_path",
+            "zvec_grep_codegraph_explain",
+            "zvec_grep_codegraph_capabilities",
         ]
         code = FakeAdapter(tools=[_tool(name) for name in graph_tools])
 
@@ -437,6 +444,47 @@ class TestAggregateToolsList:
             name: ("code", name) for name in graph_tools
         }
         assert errors == {}
+
+    def test_codegraph_tool_passes_through_authorized_root_with_freshness(
+        self, engram_gateway, tmp_path
+    ):
+        """A representative codegraph_* tool gets the same managed-read
+        treatment as the callgraph tools: freshness injection on an
+        authorized root, explicit rejection on an unauthorized one."""
+        async def scenario():
+            root = tmp_path / "authorized"
+            root.mkdir()
+            primary = FakeAdapter(
+                call_results={"zvec_grep_codegraph_node": {"isError": False}}
+            )
+            adapter = engram_gateway.ZvecShadowRelayAdapter(
+                primary,
+                FakeAdapter(),
+                log_path=tmp_path / "shadow.jsonl",
+                shadow_timeout_seconds=0.1,
+                allowed_roots=frozenset({root}),
+            )
+
+            passed = await adapter.call_tool(
+                "zvec_grep_codegraph_node", {"root": str(root), "node": "main"}
+            )
+
+            assert passed["isError"] is False
+            assert primary.call_log[0][1]["autoUpdate"] is True
+            assert primary.call_log[0][1]["freshness"] == "wait_for_fresh"
+
+            denied = await adapter.call_tool(
+                "zvec_grep_codegraph_node",
+                {"root": str(tmp_path / "not-authorized"), "node": "main"},
+            )
+
+            assert denied["isError"] is True
+            assert "issue #199" in denied["content"][0]["text"]
+            # The denied call never reached the daemon (the primary logged
+            # only the authorized one).
+            assert len(primary.call_log) == 1
+
+        asyncio.run(scenario())
 
     def test_methodology_backend_exposes_only_read_tools_without_admin_surface(self, engram_gateway):
         hindsight = FakeAdapter(tools=[
@@ -1320,9 +1368,199 @@ class TestZvecShadowRelayAdapter:
             )
 
             assert result["isError"] is True
+            text = result["content"][0]["text"]
+            assert str(tmp_path / "unauthorized") in text
+            assert "authorized workspace" in text
+            assert "no name-based fallback" in text
+            assert "ZVEC_GREP_WORKSPACE_ROOTS" in text
             assert primary.call_log == []
 
         asyncio.run(scenario())
+
+    def test_unauthorized_graph_root_fails_explicitly_without_fallback(self, engram_gateway, tmp_path):
+        async def scenario():
+            root = tmp_path / "authorized"
+            root.mkdir()
+            primary = FakeAdapter(call_results={"zvec_grep_callgraph_blast_radius": {"isError": False}})
+            adapter = engram_gateway.ZvecShadowRelayAdapter(
+                primary,
+                FakeAdapter(),
+                log_path=tmp_path / "shadow.jsonl",
+                shadow_timeout_seconds=0.1,
+                allowed_roots=frozenset({root}),
+            )
+
+            result = await adapter.call_tool(
+                "zvec_grep_callgraph_blast_radius",
+                {"root": str(tmp_path / "not-authorized"), "function": "main"},
+            )
+
+            assert result["isError"] is True
+            text = result["content"][0]["text"]
+            assert "'zvec_grep_callgraph_blast_radius'" in text
+            assert str(tmp_path / "not-authorized") in text
+            assert "issue #199" in text
+            assert primary.call_log == []
+
+        asyncio.run(scenario())
+
+    def test_codegraph_capabilities_is_authorization_gated(self, engram_gateway, tmp_path):
+        async def scenario():
+            root = tmp_path / "authorized"
+            root.mkdir()
+            primary = FakeAdapter(
+                call_results={"zvec_grep_codegraph_capabilities": {"isError": False}}
+            )
+            adapter = engram_gateway.ZvecShadowRelayAdapter(
+                primary,
+                FakeAdapter(),
+                log_path=tmp_path / "shadow.jsonl",
+                shadow_timeout_seconds=0.1,
+                allowed_roots=frozenset({root}),
+            )
+
+            result = await adapter.call_tool(
+                "zvec_grep_codegraph_capabilities",
+                {"root": str(tmp_path / "not-authorized")},
+            )
+
+            assert result["isError"] is True
+            text = result["content"][0]["text"]
+            assert "'zvec_grep_codegraph_capabilities'" in text
+            assert str(tmp_path / "not-authorized") in text
+            assert "issue #199" in text
+            assert primary.call_log == []
+
+        asyncio.run(scenario())
+
+    def test_workspace_read_tools_cover_daemon_graph_surface(self, engram_gateway):
+        """Drift test: every daemon tool that requires a root must be present
+        in ZVEC_WORKSPACE_READ_TOOLS, so the authorization gate never silently
+        stops covering a newly added graph tool.
+
+        Opt-in against the live daemon at 127.0.0.1:7999 (skips when
+        unreachable). The MCP client performs the full handshake (initialize
+        -> notifications/initialized, carrying the returned mcp-session-id
+        header on subsequent requests) -- without it tools/list returns
+        nothing and the comparison would vacuously pass.
+        """
+        import urllib.request
+
+        base = "http://127.0.0.1:7999/mcp"
+        try:
+            init_request = urllib.request.Request(
+                base,
+                data=json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2025-06-18",
+                            "capabilities": {},
+                            "clientInfo": {"name": "engram-drift-test", "version": "0"},
+                        },
+                    }
+                ).encode(),
+                headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+            )
+            with urllib.request.urlopen(init_request, timeout=2) as response:
+                session_id = response.headers.get("mcp-session-id")
+                body = response.read().decode()
+        except OSError:
+            pytest.skip("zvec-grep daemon not reachable at 127.0.0.1:7999")
+
+        assert session_id, "daemon returned no mcp-session-id; handshake failed"
+
+        # 2025-06-18 lifecycle: the client must send notifications/initialized
+        # after a successful initialize; without it the daemon returns no
+        # tools and the coverage comparison below would vacuously pass.
+        initialized_request = urllib.request.Request(
+            base,
+            data=json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "mcp-session-id": session_id,
+            },
+        )
+        with urllib.request.urlopen(initialized_request, timeout=2):
+            pass
+
+        list_request = urllib.request.Request(
+            base,
+            data=json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                **({"mcp-session-id": session_id} if session_id else {}),
+            },
+        )
+        with urllib.request.urlopen(list_request, timeout=2) as response:
+            body = response.read().decode()
+
+        # The daemon may answer JSON or SSE-framed JSON; find the result payload.
+        payload = None
+        for line in body.splitlines():
+            if line.startswith("data:"):
+                line = line[len("data:"):].strip()
+            if not line.strip():
+                continue
+            try:
+                candidate = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict) and "result" in candidate:
+                payload = candidate
+        assert payload is not None, f"no tools/list result in daemon response: {body[:200]!r}"
+
+        tools = payload["result"].get("tools", [])
+        names = [tool.get("name") for tool in tools if tool.get("name")]
+        assert names, "daemon returned an empty tool list; comparison would be vacuous"
+
+        from engram.pipeline.engram_gateway import ZVEC_MANAGEMENT_TOOLS
+        from engram.pipeline.zvec_policy import ZVEC_WORKSPACE_READ_TOOLS
+
+        for name in names:
+            if name in ZVEC_MANAGEMENT_TOOLS:
+                continue
+            schema = tools[[n.get("name") for n in tools].index(name)].get(
+                "inputSchema"
+            ) or {}
+            properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+            if "root" in properties:
+                assert name in ZVEC_WORKSPACE_READ_TOOLS, (
+                    f"daemon tool {name!r} requires a root but is missing from "
+                    f"ZVEC_WORKSPACE_READ_TOOLS (authorization gate gap)"
+                )
+
+    def test_plugin_workspace_read_tools_match_python_frozenset(self):
+        """Parity check: the TypeScript copy of the tool-name array in
+        opencode-plugin/worktree-index.ts must equal the Python frozenset,
+        so the two gate implementations cannot drift apart silently."""
+        import re
+
+        plugin_path = (
+            pathlib.Path(__file__).resolve().parent.parent
+            / "opencode-plugin"
+            / "worktree-index.ts"
+        )
+        source = plugin_path.read_text()
+        match = re.search(
+            r"const ZVEC_WORKSPACE_READ_TOOLS = \[(.*?)\] as const",
+            source,
+            re.DOTALL,
+        )
+        assert match, "could not find ZVEC_WORKSPACE_READ_TOOLS array in worktree-index.ts"
+        ts_names = set(re.findall(r'"([^"]+)"', match.group(1)))
+
+        from engram.pipeline.zvec_policy import ZVEC_WORKSPACE_READ_TOOLS
+
+        assert ts_names == set(ZVEC_WORKSPACE_READ_TOOLS), (
+            f"TS/Python workspace-read tool sets diverged: "
+            f"TS-only={sorted(ts_names - set(ZVEC_WORKSPACE_READ_TOOLS))} "
+            f"Python-only={sorted(set(ZVEC_WORKSPACE_READ_TOOLS) - ts_names)}"
+        )
 
     def test_forwards_a_linked_worktree_of_a_configured_source_root(
         self, engram_gateway, tmp_path, monkeypatch
@@ -1485,43 +1723,6 @@ class TestZvecShadowRelayAdapter:
         }]
         assert comparison["file_order_matches_reference"] is False
 
-    def test_graph_comparison_reports_cocoindex_reference_callers(self, engram_gateway):
-        primary = {
-            "structuredContent": {
-                "callers_by_depth": [["pkg/a.go::caller"], ["pkg/b.go::parent"]],
-                "unresolved_calls": 42,
-                "total_calls": 100,
-                "ambiguous_calls": 11,
-            }
-        }
-        shadow = {
-            "content": [{
-                "type": "text",
-                "text": (
-                    "Blast radius for kubernaut/pkg/a.go::target:\n"
-                    "  depth 1: kubernaut/pkg/a.go::caller\n"
-                    "  depth 2: kubernaut/pkg/c.go::parent\n"
-                    "\n(name-based resolution, no type info -- 35/90 calls in this repo could not be "
-                    "resolved to a known definition, and 9 matched 2+ candidates and were dropped)"
-                ),
-            }]
-        }
-
-        comparison = engram_gateway._compare_shadow_responses(
-            "zvec_grep_callgraph_blast_radius", primary, shadow, "kubernaut"
-        )
-
-        assert comparison["reference_engine"] == "cocoindex"
-        assert comparison["source_of_truth"] == "cocoindex"
-        assert comparison["cocoindex_only_by_depth"] == [[], ["pkg/c.go::parent"]]
-        assert comparison["zvec_only_by_depth"] == [[], ["pkg/b.go::parent"]]
-        assert comparison["callers_match_reference"] is False
-        assert comparison["zvec_minus_cocoindex_resolution_counts"] == {
-            "unresolved_calls": 7,
-            "total_calls": 10,
-            "ambiguous_calls": 2,
-        }
-
     def test_primary_returns_before_shadow_and_logs_same_root_ranked_comparison(
         self, engram_gateway, tmp_path
     ):
@@ -1580,25 +1781,6 @@ class TestZvecShadowRelayAdapter:
 
         asyncio.run(scenario())
 
-    def test_graph_tools_map_to_cocoindex_with_root_branch_and_repo_scope(self, engram_gateway, tmp_path):
-        root = tmp_path / "kubernaut-v1.5"
-        root.mkdir()
-        tool, arguments = engram_gateway._zvec_shadow_arguments(
-            "zvec_grep_callgraph_blast_radius",
-            {"root": str(root), "function": "Reconcile", "depth": 3},
-            repo="kubernaut",
-            root=root,
-            branch="fix/123-branch",
-        )
-
-        assert tool == "cocoindex_call_graph_blast_radius"
-        assert arguments == {
-            "function": "Reconcile",
-            "depth": 3,
-            "repo": "kubernaut",
-            "branch": "v1.5",
-        }
-
     def test_shadow_failure_is_logged_without_changing_primary_result(self, engram_gateway, tmp_path):
         async def scenario():
             root = tmp_path.resolve()
@@ -1618,31 +1800,6 @@ class TestZvecShadowRelayAdapter:
             entry = json.loads((tmp_path / "shadow.jsonl").read_text().strip())
             assert result is primary_result
             assert entry["shadow"]["error"] == "RuntimeError: CocoIndex unavailable"
-
-        asyncio.run(scenario())
-
-    def test_typescript_worktree_does_not_call_the_go_only_cocoindex_graph(self, engram_gateway, tmp_path):
-        async def scenario():
-            root = tmp_path.resolve()
-            primary_result = {"content": [{"type": "text", "text": "zvec graph"}], "isError": False}
-            shadow = FakeAdapter()
-            adapter = engram_gateway.ZvecShadowRelayAdapter(
-                FakeAdapter(call_results={"zvec_grep_callgraph_cluster": primary_result}),
-                shadow,
-                log_path=tmp_path / "shadow.jsonl",
-                shadow_timeout_seconds=0.1,
-                source_roots={"typescript-project": root},
-            )
-
-            result = await adapter.call_tool(
-                "zvec_grep_callgraph_cluster",
-                {"root": str(root), "function": "resolveTheme"},
-            )
-            await asyncio.gather(*tuple(adapter._shadow_tasks))
-            entry = json.loads((tmp_path / "shadow.jsonl").read_text().strip())
-            assert result is primary_result
-            assert shadow.call_log == []
-            assert entry["shadow"]["skipped"] == "cocoindex_callgraph_not_configured_for_source"
 
         asyncio.run(scenario())
 
@@ -1838,7 +1995,6 @@ shadow_timeout_seconds = 180
 shadow_log = "{tmp_path / 'shadow.jsonl'}"
 shared_key = "kubernaut-zvec-shadow"
 source_roots = {{ code = "{tmp_path}" }}
-callgraph_repos = ["code"]
 """
         )
 
@@ -1854,7 +2010,6 @@ callgraph_repos = ["code"]
             "shared_key": "kubernaut-zvec-shadow",
             "source_roots": {"code": str(tmp_path)},
             "allowed_roots": [str(tmp_path)],
-            "callgraph_repos": ["code"],
         }
 
     def test_loads_stdio_backend_with_environment_and_shared_key(self, engram_gateway, tmp_path):

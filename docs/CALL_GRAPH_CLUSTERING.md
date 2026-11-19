@@ -1,5 +1,20 @@
 # Call-Graph Extraction + Clustering
 
+> **RETIRED (2026-11-18, issue [#199](https://github.com/jordigilh/engram/issues/199)).**
+> The name-based Engram call-graph spike described in this document is no
+> longer live. Its engine (`src/engram/callgraph.py`), query layer, and the
+> `*_call_graph_*` MCP tool names were removed entirely; graph queries route
+> to `zvec_grep_callgraph_*` / `zvec_grep_codegraph_*` through the Engram
+> gateway (issue #199). **zvec-grep is now the
+> single graph authority**: structural graph queries are served exclusively
+> by the zvec-grep MCP daemon (`zvec_grep_callgraph_*` /
+> `zvec_grep_codegraph_*` tools through the Engram gateway), which resolves
+> calls with compiler-attested facts and certainty classes (definite /
+> possible / unresolved) instead of this spike's name-based resolution. Roots
+> outside the authorized zvec workspaces fail explicitly; there is no
+> name-based fallback. This document is retained as the historical record of
+> the spike and its measurements.
+
 Status: **spike landed on `engram` (2026-08-24), rollout complete: koku, rhdh-plugins, praxis, dcm, and kubernaut all done** -- extraction, clustering, and 3 MCP tools implemented and verified against real, live checkouts, cross-checked against Serena/gopls ground truth. Kubernaut additionally required a Postgres-backed cache (fingerprint-invalidated, no TTL) to stay interactive -- see Phase 5. See [issue #43](https://github.com/jordigilh/engram/issues/43) for the actionable summary and acceptance criteria; this document holds the detailed **chronological findings** (bugs found, precision measurements, per-org rollout numbers) so `docs/findings/2026-08.md` doesn't have to carry it in full. See "Spike results" below for what was actually measured on `engram`; "Multi-org rollout" below that for koku/rhdh-plugins/praxis/dcm/kubernaut; the sections after that are the original preflight, unchanged.
 
 **Looking for how the mechanism actually works, independent of how it was discovered?** See [`docs/CALL_GRAPH_DESIGN.md`](CALL_GRAPH_DESIGN.md) instead -- a standalone design reference (extraction patterns, call-resolution algorithm, multi-repo aggregation, caching architecture) without the chronological narrative. For setup/operations, see [`docs/COCOINDEX.md`'s Call-Graph Queries section](COCOINDEX.md#graphify-inspired-call-graph-queries).

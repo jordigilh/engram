@@ -25,7 +25,7 @@ from typing import Any
 # Keep direct source execution usable for this shared engine as well as the
 # installed, configuration-driven console script.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent.parent))
-from engram import callgraph, chunking  # noqa: E402
+from engram import chunking  # noqa: E402
 from engram.project_config import (  # noqa: E402
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_PG_DSN,
@@ -51,6 +51,7 @@ SEARCH_PROJECT = "engram"
 EMBEDDING_MODEL = PROJECT_SETTINGS.text("embedding_model", DEFAULT_EMBEDDING_MODEL)
 assert EMBEDDING_MODEL is not None
 RRF_K = 60  # RRF constant — standard value from the original paper
+PATTERN_SEARCH_DEFAULT_LANGUAGE = "python"
 CODE_READ_SCHEMA_VERSION = "engram-code-read.v1"
 DEFAULT_CODE_READ_MAX_CHARS = 12000
 MAX_CODE_READ_CHARS = 20000
@@ -60,8 +61,6 @@ MAX_CODE_READ_LINES = 400
 # walks the exact same checkout the ingestion flow indexes.
 ENGRAM_REPO_DIR = PROJECT_SETTINGS.path("repo_dir", str(default_project_path("engram")))
 assert ENGRAM_REPO_DIR is not None
-CALL_GRAPH_ROOT = ENGRAM_REPO_DIR
-CALL_GRAPH_LANGUAGE = "python"
 _DEFAULT_BRANCH: str | None = None
 
 _EXCLUDED_PY_PATTERNS = [
@@ -75,7 +74,6 @@ _EXCLUDED_PY_PATTERNS = [
 _PATTERN_SEARCH_ROOTS = [
     ("engram", ENGRAM_REPO_DIR, ["**/*.py"], _EXCLUDED_PY_PATTERNS),
 ]
-_CALL_GRAPH_ROOTS: list[tuple] = list(_PATTERN_SEARCH_ROOTS)
 _SCOPE_ALIASES: dict[str, frozenset[str]] = {}
 _SCOPE_INDEX_TAGS: dict[str, frozenset[str]] = {}
 
@@ -95,9 +93,6 @@ def configure_project(
     code_table: str,
     embedding_model: str,
     pattern_roots: list[tuple],
-    call_graph_root: pathlib.Path | None = None,
-    call_graph_language: str = "python",
-    call_graph_roots: list[tuple] | None = None,
     default_branch: str | None = None,
     scope_aliases: dict[str, tuple[str, ...]] | None = None,
     scope_index_tags: dict[str, tuple[str, ...]] | None = None,
@@ -110,7 +105,7 @@ def configure_project(
     project.
     """
     global CODE_TABLE, EMBEDDING_MODEL, PG_URL, SEARCH_PROJECT
-    global CALL_GRAPH_ROOT, CALL_GRAPH_LANGUAGE, _PATTERN_SEARCH_ROOTS, _CALL_GRAPH_ROOTS
+    global _PATTERN_SEARCH_ROOTS
     global _DEFAULT_BRANCH, _SCOPE_ALIASES, _SCOPE_INDEX_TAGS, _model
     sql_identifier(code_table, "CocoIndex table name")
     CODE_TABLE = code_table
@@ -118,12 +113,6 @@ def configure_project(
     PG_URL = pg_url
     SEARCH_PROJECT = project
     _PATTERN_SEARCH_ROOTS = pattern_roots
-    CALL_GRAPH_ROOT = call_graph_root or (pattern_roots[0][1] if pattern_roots else ENGRAM_REPO_DIR)
-    CALL_GRAPH_LANGUAGE = call_graph_language
-    # ``[]`` is meaningful: a project may have code-search roots whose
-    # language is not supported by the call-graph extractor.  Only fall back
-    # to all pattern roots for callers that omit the argument entirely.
-    _CALL_GRAPH_ROOTS = list(pattern_roots) if call_graph_roots is None else list(call_graph_roots)
     _DEFAULT_BRANCH = default_branch
     _SCOPE_ALIASES = {
         str(tag): frozenset({str(tag), *aliases})
@@ -618,6 +607,62 @@ def _format_results(
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Pattern-search language canonicalization (issue #199 follow-up, Fix 7)
+# ---------------------------------------------------------------------------
+# Configured/explicit language tags ("shell", "golang", "ts", ...) must be
+# normalized to the canonical detect_code_language/CodePattern vocabulary
+# before any string comparison: cocoindex's Rust core already resolves
+# aliases at match time, so the defects were purely the equality checks at
+# the root-tag and detection filters. Map + accepted set live-probed against
+# cocoindex 1.0.25 (the repo venv's actual version) -- see the
+# pr200-alias-spike preflight for the full vocabulary.
+_PATTERN_LANGUAGE_ALIASES: dict[str, str] = {
+    "shell": "bash", "sh": "bash", "zsh": "bash",
+    "golang": "go",
+    "py": "python", "rb": "ruby", "rs": "rust",
+    "ts": "typescript", "js": "javascript", "kt": "kotlin",
+    "yml": "yaml", "cs": "csharp", "c#": "csharp", "c++": "cpp", "cxx": "cpp",
+    "tf": "hcl", "terraform": "hcl",
+}
+# .ts detects as "typescript" but .tsx as "tsx" (two distinct tree-sitter
+# grammars, both supported), so the detection-site comparison must accept
+# the pair in both directions. Detection-site only: the root-tag filter
+# compares canonical tags, where the pair should NOT collapse.
+_DETECTION_EQUIVALENTS: dict[str, frozenset[str]] = {
+    "typescript": frozenset({"typescript", "tsx"}),
+    "tsx": frozenset({"typescript", "tsx"}),
+}
+# Note (documented, deliberately not aliased): .h files detect as "cpp", so
+# a "c"-tagged root skips .h files. Pre-existing, arguably correct, out of
+# scope for this fix.
+_PATTERN_LANGUAGE_PROBE_CACHE: dict[str, bool] = {}
+_PATTERN_PROBE_PLACEHOLDER = r"\NAME"  # FIXED pattern -- never the user's
+
+
+def _canonical_pattern_language(language: str) -> str | None:
+    """Normalize a language tag to the canonical CodePattern/detection name.
+
+    Lowercases, applies the alias map, then probes CodePattern construction
+    with a FIXED placeholder pattern (never the user's pattern, so a user
+    syntax error can't be conflated with a language rejection). Returns the
+    canonical name, or None if CodePattern rejects the language (callers
+    fail safe: the default derivation falls back to python, unsupported
+    root tags are skipped). Results are cached per canonical name.
+    """
+    lang = language.strip().lower()
+    canonical = _PATTERN_LANGUAGE_ALIASES.get(lang, lang)
+    if canonical not in _PATTERN_LANGUAGE_PROBE_CACHE:
+        from cocoindex.ops.code import CodePattern
+
+        try:
+            CodePattern(_PATTERN_PROBE_PLACEHOLDER, canonical)
+            _PATTERN_LANGUAGE_PROBE_CACHE[canonical] = True
+        except ValueError:
+            _PATTERN_LANGUAGE_PROBE_CACHE[canonical] = False
+    return canonical if _PATTERN_LANGUAGE_PROBE_CACHE[canonical] else None
+
+
 def pattern_search_code(
     pattern: str,
     language: str,
@@ -647,19 +692,40 @@ def pattern_search_code(
         if len(selected_roots) > 1:
             raise _scope_error(repo, branch, _PATTERN_SEARCH_ROOTS, matching_roots=selected_roots)
 
-    cp = CodePattern(pattern, language)
+    canonical = _canonical_pattern_language(language)
+    if canonical is None:
+        # Explicit unsupported languages raise loudly (issue #199 follow-up
+        # decision): only the DEFAULT derivation fails safe to python.
+        raise ValueError(
+            f'structural matching is not supported for language "{language}"'
+        )
+    # Compile one CodePattern per DETECTED grammar, not one per canonical
+    # language: the {typescript, tsx} detection pair spans two distinct
+    # tree-sitter grammars, and the TypeScript grammar does not parse JSX,
+    # so .tsx files must be matched with the tsx grammar (CodeRabbit
+    # follow-up on 13e13e7; mirrors the deleted callgraph.py's
+    # _grammar_for_path per the pr200-alias-spike findings).
+    patterns: dict[str, "CodePattern"] = {}
     results: list[dict[str, Any]] = []
     for root_spec in _select_pattern_roots(repo=repo, branch=branch):
         repo_tag, root, included, excluded, root_language, _root_branch = _root_details(root_spec)
-        if root_language not in {"auto", language}:
+        if root_language != "auto" and _canonical_pattern_language(root_language) != canonical:
             continue
         if len(results) >= limit:
             break
         for path in chunking.find_code_files(root, included, excluded):
             if len(results) >= limit:
                 break
-            if detect_code_language(filename=path.name) != language:
+            detected = detect_code_language(filename=path.name)
+            equivalents = _DETECTION_EQUIVALENTS.get(detected, frozenset({detected}))
+            if canonical not in equivalents:
                 continue
+            # `detected` is guaranteed CodePattern-supported here: it is
+            # either the probed canonical itself or a member of the
+            # {typescript, tsx} pair, both accepted per the spike data.
+            cp = patterns.get(detected)
+            if cp is None:
+                cp = patterns[detected] = CodePattern(pattern, detected)
             file_match = cp.match_file(str(path))
             if file_match is None:
                 continue
@@ -691,149 +757,36 @@ def _format_pattern_results(pattern: str, language: str, results: list[dict]) ->
 
 
 # ---------------------------------------------------------------------------
-# Call-graph queries (spike -- see docs/CALL_GRAPH_CLUSTERING.md, issue #43)
+# Call-graph tools: DEPRECATED, retired to the zvec-grep MCP daemon
 # ---------------------------------------------------------------------------
-#
-# Thin wrappers around callgraph.py's generic multi-org query/format layer
-# (Phase 0 of the rollout -- see docs/CALL_GRAPH_CLUSTERING.md): this module
-# only supplies *which* root/language to build from. No behavior change from
-# when this logic lived here directly.
+# The name-based call-graph spike (docs/CALL_GRAPH_CLUSTERING.md, issue #43)
+# was retired on 2026-11-18 (issue #199): Engram no longer resolves calls by
+# name, and the retired tool names were fully removed. Structural graph
+# queries are served exclusively by the zvec-grep MCP daemon
+# (compiler-attested call facts, certainty classes), which the Engram gateway
+# exposes as ``zvec_grep_callgraph_*`` / ``zvec_grep_codegraph_*`` tools over
+# authorized workspace roots.
 
-def _build_graph_with_timing(
-    repo: str | None = None,
-    branch: str | None = None,
-    language: str | None = None,
-):
-    requested_language = language or CALL_GRAPH_LANGUAGE
-    roots = _select_roots(_CALL_GRAPH_ROOTS, repo=repo, branch=branch)
-    scope_error = None
-    if repo is not None and not roots:
-        scope_error = str(_scope_error(repo, branch, _CALL_GRAPH_ROOTS))
-    elif repo is not None and len(roots) > 1:
-        scope_error = str(_scope_error(repo, branch, _CALL_GRAPH_ROOTS, matching_roots=roots))
-        roots = []
-    if requested_language != "auto":
-        roots = [root for root in roots if _root_details(root)[4] in {"auto", requested_language}]
+def _pattern_search_language_default(repo: str | None, branch: str | None) -> str:
+    """Derive the pattern-search language default from project configuration.
 
-    # The call-graph builder resolves one grammar per graph.  A configured
-    # project may legitimately mix Go, Rust, Python, and TypeScript roots, so
-    # build one graph per language and merge the independent results rather
-    # than silently dropping every non-Python root.
-    groups: dict[str, list[tuple]] = {}
-    for root in roots:
-        root_language = _root_details(root)[4]
-        graph_language = requested_language if requested_language != "auto" else root_language
-        if graph_language == "auto":
-            graph_language = "python"
-        groups.setdefault(graph_language, []).append(root)
-
-    if not groups:
-        fallback_language = requested_language if requested_language != "auto" else "python"
-        graph = callgraph.build_multi_repo_call_graph_with_stats(
-            [], language=fallback_language, logger=log,
-        )
-        if scope_error:
-            graph.graph["scope_error"] = scope_error
-        return graph
-
-    graphs = []
-    for graph_language, language_roots in groups.items():
-        normalized = [
-            (
-                _root_details(root)[0],
-                _root_details(root)[1],
-                _root_details(root)[2],
-                _root_details(root)[3],
-            )
-            for root in language_roots
-        ]
-        # Use the multi-repository wrapper even for one root so the source
-        # tag remains part of every qualified function name.  Without that
-        # prefix a single-root project and a release/repository-scoped query
-        # would disagree about the node's identity.
-        graphs.append(
-            callgraph.build_multi_repo_call_graph_with_stats(
-                normalized,
-                language=graph_language,
-                logger=log,
-            )
-        )
-
-    if len(graphs) == 1:
-        if scope_error:
-            graphs[0].graph["scope_error"] = scope_error
-        return graphs[0]
-    merged = callgraph.nx.DiGraph()
-    merged.graph["unresolved_calls"] = 0
-    merged.graph["total_calls"] = 0
-    merged.graph["ambiguous_calls"] = []
-    for graph in graphs:
-        merged.add_nodes_from(graph.nodes(data=True))
-        merged.add_edges_from(graph.edges(data=True))
-        merged.graph["unresolved_calls"] += graph.graph.get("unresolved_calls", 0)
-        merged.graph["total_calls"] += graph.graph.get("total_calls", 0)
-        merged.graph["ambiguous_calls"].extend(graph.graph.get("ambiguous_calls", []))
-    if scope_error:
-        merged.graph["scope_error"] = scope_error
-    return merged
-
-
-def call_graph_blast_radius(
-    function: str,
-    depth: int = 2,
-    repo: str | None = None,
-    branch: str | None = None,
-    language: str | None = None,
-) -> dict[str, Any]:
-    """Who (transitively) calls `function`, up to `depth` hops -- "what
-    breaks if I change this." See docs/CALL_GRAPH_CLUSTERING.md for the
-    accuracy ceiling (name-based resolution, no type info)."""
-    graph = _build_graph_with_timing(repo=repo, branch=branch, language=language)
-    return callgraph.query_blast_radius(graph, function, depth=depth)
-
-
-def call_graph_shortest_path(
-    source: str,
-    target: str,
-    repo: str | None = None,
-    branch: str | None = None,
-    language: str | None = None,
-) -> dict[str, Any]:
-    """Does `source` ever reach `target` through a chain of calls, and how."""
-    graph = _build_graph_with_timing(repo=repo, branch=branch, language=language)
-    return callgraph.query_shortest_path(graph, source, target)
-
-
-def call_graph_get_cluster(
-    function: str,
-    repo: str | None = None,
-    branch: str | None = None,
-    language: str | None = None,
-) -> dict[str, Any]:
-    """Which Leiden community `function` belongs to, and its other members.
-
-    Clustering quality depends entirely on the underlying graph's structure:
-    a small, centralized codebase may legitimately produce one dominant
-    cluster or many singletons -- that reflects the codebase, not a broken
-    clustering step (see docs/CALL_GRAPH_CLUSTERING.md)."""
-    graph = _build_graph_with_timing(repo=repo, branch=branch, language=language)
-    return callgraph.query_get_cluster(graph, function)
-
-
-def _format_blast_radius_result(result: dict) -> str:
-    return callgraph.format_blast_radius_result(result)
-
-
-def _format_shortest_path_result(result: dict) -> str:
-    return callgraph.format_shortest_path_result(result)
-
-
-def _format_cluster_result(result: dict) -> str:
-    return callgraph.format_cluster_result(result)
-
-
-def _format_lookup_error(result: dict) -> str:
-    return callgraph.format_lookup_error(result)
+    Follows the pre-consolidation behavior of deriving the default from the
+    configured project language (previously the call-graph language, removed
+    with the name-based spike in issue #199): when the selected roots share
+    one concrete language, use it; otherwise fall back to Python. Root tags
+    are canonicalized first (a "shell" root and a "bash" root are one
+    language, not a mix), and tags CodePattern rejects (including "auto"
+    and unknown languages) never contribute -- only the default derivation
+    fails safe; explicit unsupported languages raise.
+    """
+    languages = {
+        canonical
+        for root in _select_pattern_roots(repo=repo, branch=branch)
+        if (canonical := _canonical_pattern_language(_root_details(root)[4])) is not None
+    }
+    if len(languages) == 1:
+        return languages.pop()
+    return PATTERN_SEARCH_DEFAULT_LANGUAGE
 
 
 # ---------------------------------------------------------------------------
@@ -935,79 +888,14 @@ def _run_mcp_server(
         This is purely syntactic: it does NOT resolve types and can't find
         references/callers or diagnostics.
         """
-        effective_language = language or (CALL_GRAPH_LANGUAGE if CALL_GRAPH_LANGUAGE != "auto" else "python")
         try:
+            effective_language = language or _pattern_search_language_default(repo, branch)
             results = pattern_search_code(
                 pattern, effective_language, limit=min(limit, 20), repo=repo, branch=branch,
             )
         except ValueError as exc:
             return f"Code pattern search error: {exc}"
         return _format_pattern_results(pattern, effective_language, results)
-
-    @mcp.tool(name=f"{tool_prefix}call_graph_blast_radius")
-    def engram_call_graph_blast_radius(
-        function: str,
-        depth: int = 2,
-        repo: str | None = None,
-        branch: str | None = None,
-        language: str | None = None,
-    ) -> str:
-        """What (transitively) calls `function` in configured project sources,
-        up to `depth` hops -- "what breaks if I change this."
-
-        `function` may be a bare name if unambiguous, or a qualified name
-        including the configured source tag.
-
-        SPIKE, engram-only (docs/CALL_GRAPH_CLUSTERING.md, issue #43): call
-        resolution is purely name-based (no type info), so common method
-        names shared across unrelated functions can produce false-positive
-        edges, and dynamic dispatch/external calls can't be seen at all.
-        Rebuilds the call graph fresh on every call (no persisted index).
-        """
-        result = call_graph_blast_radius(
-            function, depth=depth, repo=repo, branch=branch, language=language,
-        )
-        return _format_blast_radius_result(result)
-
-    @mcp.tool(name=f"{tool_prefix}call_graph_shortest_path")
-    def engram_call_graph_shortest_path(
-        source: str,
-        target: str,
-        repo: str | None = None,
-        branch: str | None = None,
-        language: str | None = None,
-    ) -> str:
-        """Does `source` ever reach `target` through a chain of calls in the
-        configured project sources, and how.
-
-        Same name-based-resolution caveat as engram_call_graph_blast_radius
-        applies (see its docstring) -- this is a SPIKE, engram-only.
-        """
-        result = call_graph_shortest_path(
-            source, target, repo=repo, branch=branch, language=language,
-        )
-        return _format_shortest_path_result(result)
-
-    @mcp.tool(name=f"{tool_prefix}call_graph_get_cluster")
-    def engram_call_graph_get_cluster(
-        function: str,
-        repo: str | None = None,
-        branch: str | None = None,
-        language: str | None = None,
-    ) -> str:
-        """Which cluster of related functions (via Leiden community detection
-        over the call graph) `function` belongs to in configured project
-        sources, and its other members.
-
-        Same name-based-resolution caveat as engram_call_graph_blast_radius
-        applies (see its docstring) -- this is a SPIKE, engram-only. A small,
-        centralized codebase may legitimately produce one dominant cluster or
-        many singletons; that reflects the codebase, not a broken tool.
-        """
-        result = call_graph_get_cluster(
-            function, repo=repo, branch=branch, language=language,
-        )
-        return _format_cluster_result(result)
 
     if transport == "stdio":
         log.info("Starting engram-code MCP server (stdio)")
@@ -1043,38 +931,6 @@ def _run_cli_pattern_query(
     print(_format_pattern_results(pattern, language, results))
 
 
-def _run_cli_blast_radius(
-    function: str,
-    depth: int,
-    repo: str | None = None,
-    branch: str | None = None,
-    language: str | None = None,
-) -> None:
-    result = call_graph_blast_radius(function, depth=depth, repo=repo, branch=branch, language=language)
-    print(_format_blast_radius_result(result))
-
-
-def _run_cli_shortest_path(
-    source: str,
-    target: str,
-    repo: str | None = None,
-    branch: str | None = None,
-    language: str | None = None,
-) -> None:
-    result = call_graph_shortest_path(source, target, repo=repo, branch=branch, language=language)
-    print(_format_shortest_path_result(result))
-
-
-def _run_cli_cluster(
-    function: str,
-    repo: str | None = None,
-    branch: str | None = None,
-    language: str | None = None,
-) -> None:
-    result = call_graph_get_cluster(function, repo=repo, branch=branch, language=language)
-    print(_format_cluster_result(result))
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Engram code search — MCP server + CLI"
@@ -1087,23 +943,12 @@ def main():
                         help="Search mode (default: hybrid)")
     parser.add_argument("--repo", help="Scope results to one configured source tag")
     parser.add_argument("--branch", help="Scope results to main or a configured release/branch tag")
-    parser.add_argument("--blast-radius", help="Call-graph spike: who (transitively) calls this function")
-    parser.add_argument("--depth", type=int, default=2, help="Depth for --blast-radius (default: 2)")
-    parser.add_argument("--shortest-path", nargs=2, metavar=("SOURCE", "TARGET"),
-                        help="Call-graph spike: shortest call chain SOURCE -> TARGET")
-    parser.add_argument("--cluster", help="Call-graph spike: which Leiden cluster this function belongs to")
     parser.add_argument("--port", "-p", type=int, default=8890, help="MCP server port (default: 8890)")
     parser.add_argument("--host", default="127.0.0.1", help="MCP server bind address")
     args = parser.parse_args()
 
     if args.pattern:
         _run_cli_pattern_query(args.pattern, args.language, limit=args.limit, repo=args.repo, branch=args.branch)
-    elif args.blast_radius:
-        _run_cli_blast_radius(args.blast_radius, depth=args.depth, repo=args.repo, branch=args.branch, language=args.language)
-    elif args.shortest_path:
-        _run_cli_shortest_path(*args.shortest_path, repo=args.repo, branch=args.branch, language=args.language)
-    elif args.cluster:
-        _run_cli_cluster(args.cluster, repo=args.repo, branch=args.branch, language=args.language)
     elif args.query:
         _run_cli_query(args.query, limit=args.limit, mode=args.mode, repo=args.repo, branch=args.branch)
     else:

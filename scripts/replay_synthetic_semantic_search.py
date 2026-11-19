@@ -320,7 +320,6 @@ def _run_cocoindex(
         code_table=table,
         embedding_model=search.EMBEDDING_MODEL,
         pattern_roots=[],
-        call_graph_roots=[],
     )
 
     rows = []

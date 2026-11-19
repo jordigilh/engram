@@ -113,7 +113,6 @@ search.configure_project(
     code_table=table or "code_embeddings",
     embedding_model=os.environ.get("COCOINDEX_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
     pattern_roots=[],
-    call_graph_roots=[],
 )
 for case in suite["queries"]:
     if case["status"] != "active":

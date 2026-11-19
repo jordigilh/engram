@@ -254,6 +254,15 @@ the full schema under CocoIndex's control.
 
 ## Graphify-Inspired Call-Graph Queries
 
+> **RETIRED (2026-11-18, issue
+> [#199](https://github.com/jordigilh/engram/issues/199)).** The name-based
+> call-graph tools and Postgres cache described in this section are no longer
+> live; the engine and the tool names were removed entirely; graph queries
+> route to `zvec_grep_callgraph_*` / `zvec_grep_codegraph_*` through the
+> Engram gateway (issue #199). Structural graph queries are served
+> exclusively by the zvec-grep MCP daemon over authorized workspace roots.
+> This section is retained as the historical record.
+
 The external semantic-code-intelligence pilot decision and the boundary between
 this implementation, Serena, `open-codebase-index`, Codanna, and SCIP are
 documented in

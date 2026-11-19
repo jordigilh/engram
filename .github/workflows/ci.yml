@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# Read-only token: every job here only checks out the repository, installs
+# dependencies, and runs tests. Nothing pushes commits, images, or releases.
+permissions:
+  contents: read
+
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
@@ -85,8 +90,9 @@ jobs:
         # The integration tier currently has no tests: the callgraph cache
         # test was removed with the issue #199 consolidation and the pgvector
         # test with ac619a3. Keep the tier for future integration tests, but
-        # skip cleanly when the directory has no test files (the glob check
-        # keeps a path typo failing loudly rather than silently passing).
+        # skip cleanly when the directory is absent or has no test files: both
+        # cases take the visible else branch below (echo + exit 0), so a
+        # deleted or typo'd path shows up as a clean skip, not a failure.
         run: |
           if [ -d tests/integration ] && [ -n "$(find tests/integration -name 'test_*.py' -type f)" ]; then
             pytest tests/integration/ -m integration -q

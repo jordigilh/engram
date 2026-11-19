@@ -15,6 +15,10 @@ on:
       - "opencode-plugin/worktree-index.ts"
       - ".github/workflows/native-git-spike.yml"
 
+# Read-only token: these lanes only build and test the native spike crate.
+permissions:
+  contents: read
+
 jobs:
   host-artifacts:
     name: Host artifact (${{ matrix.os }})

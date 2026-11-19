@@ -88,7 +88,7 @@ jobs:
         # skip cleanly when the directory has no test files (the glob check
         # keeps a path typo failing loudly rather than silently passing).
         run: |
-          if compgen -G "tests/integration/test_*.py" > /dev/null; then
+          if [ -n "$(find tests/integration -name 'test_*.py' -type f 2>/dev/null)" ]; then
             pytest tests/integration/ -m integration -q
           else
             echo "No integration tests present; tier retained for future use."

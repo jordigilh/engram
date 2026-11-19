@@ -24,8 +24,10 @@ jobs:
       matrix:
         # These are the native Bun/Node-API publishing lanes. ARM64 Linux and
         # Windows are checked below because public hosted ARM runners are not
-        # available consistently across GitHub plans.
-        os: [macos-14, macos-13, ubuntu-latest, windows-latest]
+        # available consistently across GitHub plans. macOS lanes were dropped:
+        # Engram runs as a container (Linux) and macOS hosted runners are not
+        # part of the supported deployment surface.
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable

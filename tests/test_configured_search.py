@@ -445,6 +445,7 @@ def test_pattern_language_matrix_markdown_tag_fails_safe_to_python(monkeypatch, 
     # language is None, never equal to python), so nothing matches -- in
     # particular t.md can never match.
     roots = [_matrix_root(tmp_path, "md-root", ["t.md", "t.py"], "markdown")]
+    monkeypatch.setattr(search, "_PATTERN_SEARCH_ROOTS", roots)
     assert search._pattern_search_language_default(None, None) == "python"
     assert _run_matrix_case(monkeypatch, tmp_path, roots) == set()
 
@@ -464,6 +465,7 @@ def test_pattern_language_matrix_mixed_project_defaults_to_python(monkeypatch, t
         _matrix_root(tmp_path, "go-root", ["t.go"], "go"),
         _matrix_root(tmp_path, "py-root", ["t.py"], "python"),
     ]
+    monkeypatch.setattr(search, "_PATTERN_SEARCH_ROOTS", roots)
     assert search._pattern_search_language_default(None, None) == "python"
     assert _run_matrix_case(monkeypatch, tmp_path, roots) == {"py-root/t.py"}
 
@@ -492,6 +494,14 @@ def test_pattern_language_matrix_terraform_two_hop_alias(monkeypatch, tmp_path):
     # case 14: terraform tag -> hcl canonical; .tf detects as hcl
     roots = [_matrix_root(tmp_path, "tf-root", ["t.tf"], "terraform")]
     assert _run_matrix_case(monkeypatch, tmp_path, roots) == {"tf-root/t.tf"}
+
+
+def test_pattern_language_rejected_strings_stay_rejected():
+    # Pin the REJECTED side of the accepted set: if a cocoindex upgrade adds
+    # support for one of these, the explicit-raise decision (and the case-9
+    # matrix expectation) flips semantics -- this pin fails first.
+    for rejected in ("markdown", "dockerfile", "perl"):
+        assert search._canonical_pattern_language(rejected) is None
 
 
 def test_pattern_language_alias_targets_are_codepattern_accepted():

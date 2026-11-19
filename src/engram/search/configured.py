@@ -81,14 +81,16 @@ def main() -> None:
     limit = min(max(args.limit, 1), 20)
     # Fix 8 (issue #199 follow-up): route the CLI's default through the same
     # derivation as the MCP surface so a mixed project yields the same default
-    # (python) on both. The helper can raise ValueError for a malformed repo
-    # (the crash edd4924 fixed for the MCP path) -- keep the CLI's error
-    # style, not an unhandled traceback.
-    try:
-        default_language = engine._pattern_search_language_default(args.repo, args.branch)
-    except ValueError as exc:
-        raise SystemExit(f"error: {exc}") from exc
-    language = args.language or default_language
+    # (python) on both. Compute it only when pattern mode needs it (the
+    # derivation selects roots and can fail on a malformed --repo; query-only
+    # and MCP-server invocations should not carry that surface). The guard
+    # converts ValueError to the CLI error style, not an unhandled traceback.
+    language = args.language
+    if args.pattern and not language:
+        try:
+            language = engine._pattern_search_language_default(args.repo, args.branch)
+        except ValueError as exc:
+            raise SystemExit(f"error: {exc}") from exc
     if args.pattern:
         engine._run_cli_pattern_query(args.pattern, language, limit=limit, repo=args.repo, branch=args.branch)
     elif args.query:

@@ -1,0 +1,1681 @@
+{
+  "schema_version": 1,
+  "suite_id": "synthetic-java-workflow-discovery",
+  "fixture_id": "java-workflow-discovery-v1",
+  "judgment_status": "draft",
+  "candidate_pool_complete": true,
+  "source_truth": true,
+  "source": {
+    "repository": "synthetic/java-workflow-discovery",
+    "revision": "fixture-v1",
+    "root": ".",
+    "include": [
+      "**/*.java"
+    ],
+    "exclude": [
+      "_tools/**"
+    ],
+    "files": 9,
+    "bytes": 13149,
+    "snapshot_sha256": "77ac5f8c10eeebeb3097158a166eeb729ddee0d6e5d8e880b59c151363f52c38"
+  },
+  "unit_count": 40,
+  "queries": [
+    {
+      "id": "record-discovered-membership",
+      "query": "Where are workflow IDs returned by workflow discovery recorded for later validation?",
+      "category": "exact implementation / data flow",
+      "judgments": [
+        {
+          "unit_id": "catalog/Workflow.java::Workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.constructor",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.listWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.listActions",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.getWorkflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::Normalize",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::Normalize.labelValue",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters.fromSignal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters.applyLabelFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::Normalize",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::Normalize.term",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState",
+          "grade": 2,
+          "rationale": "Defines the shared state object that holds the discovered IDs."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.add",
+          "grade": 3,
+          "rationale": "Inserts each non-blank workflow ID into the shared insertion-ordered set."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.contains",
+          "grade": 1,
+          "rationale": "Reads membership for validation; it does not record returned IDs."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.stateFromContext",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.MAX_PARAMETERS",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.validateParameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.run",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/MetricNames.java::MetricNames",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/MetricNames.java::MetricNames.isValid",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy.selectWithRetry",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy.selfCorrectSelection",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::ValidationException",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.constructor",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.setWorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.isAllowed",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.validate",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.DiscoveryResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.WorkflowResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.listWorkflows",
+          "grade": 2,
+          "rationale": "Obtains the catalog listing and hands its mapped IDs to recordDiscoveredWorkflows."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.recordDiscoveredWorkflows",
+          "grade": 3,
+          "rationale": "Calls WorkflowState.add with every identifier returned by the catalog listing, persisting the discovery result for selection."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.isWorkflowInDiscoveryResult",
+          "grade": 0,
+          "rationale": "Checks a recommendation result, not the shared discovery state populated by the listing path."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.authorizeSelectionDriver",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.handleSelectWorkflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        }
+      ]
+    },
+    {
+      "id": "reject-undiscovered-workflow",
+      "query": "How is a catalog-valid workflow rejected when it was not returned by discovery?",
+      "category": "policy check / semantic behavior",
+      "judgments": [
+        {
+          "unit_id": "catalog/Workflow.java::Workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.constructor",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.listWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.listActions",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.getWorkflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::Normalize",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::Normalize.labelValue",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters.fromSignal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters.applyLabelFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::Normalize",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::Normalize.term",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.add",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.contains",
+          "grade": 2,
+          "rationale": "Implements the discovery-state membership predicate used by the validator."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.stateFromContext",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.MAX_PARAMETERS",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.validateParameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.run",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/MetricNames.java::MetricNames",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/MetricNames.java::MetricNames.isValid",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy.selectWithRetry",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy.selfCorrectSelection",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::ValidationException",
+          "grade": 1,
+          "rationale": "Carries the rejection signal but does not perform the membership check."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.constructor",
+          "grade": 0,
+          "rationale": "Only copies the catalog allowlist; no discovery membership is consulted at construction."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.setWorkflowState",
+          "grade": 1,
+          "rationale": "Attaches discovery state to the validator; the rejection itself happens in isAllowed and validate."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.isAllowed",
+          "grade": 3,
+          "rationale": "Combines catalog allowlist membership with WorkflowState.contains, so a catalog ID missing from discovery fails the combined predicate."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.validate",
+          "grade": 3,
+          "rationale": "Turns a failed isAllowed result into a thrown ValidationException."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.DiscoveryResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.WorkflowResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.listWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.recordDiscoveredWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.isWorkflowInDiscoveryResult",
+          "grade": 1,
+          "rationale": "Checks membership in the recommendation batch, a complementary guard rather than the shared-state validator path."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.authorizeSelectionDriver",
+          "grade": 3,
+          "rationale": "Rejects a workflow ID that is absent from the current DiscoveryResult before the catalog lookup."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.handleSelectWorkflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        }
+      ]
+    },
+    {
+      "id": "forward-labels-to-discovery",
+      "query": "How are signal labels converted into discovery filters before available actions are listed?",
+      "category": "data flow / semantic behavior",
+      "judgments": [
+        {
+          "unit_id": "catalog/Workflow.java::Workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.constructor",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.listWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.listActions",
+          "grade": 0,
+          "rationale": "Near-miss wrapper: forwards an already-built filter map to listWorkflows and never converts signal labels."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.getWorkflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::Normalize",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::Normalize.labelValue",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters",
+          "grade": 2,
+          "rationale": "Defines the component/environment/severity filter shape produced by fromSignal."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters.fromSignal",
+          "grade": 3,
+          "rationale": "Reads the component, environment, and severity labels and normalizes each into a DiscoveryFilters value."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters.applyLabelFilters",
+          "grade": 3,
+          "rationale": "Applies only the populated filter fields to candidate workflow labels before workflows are returned."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::Normalize",
+          "grade": 0,
+          "rationale": "Namespace for the term helper; no conversion or filtering behavior."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::Normalize.term",
+          "grade": 1,
+          "rationale": "Normalizes one raw label value; it does not assemble or apply the filter set."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.add",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.contains",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.stateFromContext",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.MAX_PARAMETERS",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.validateParameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.run",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/MetricNames.java::MetricNames",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/MetricNames.java::MetricNames.isValid",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy.selectWithRetry",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy.selfCorrectSelection",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::ValidationException",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.constructor",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.setWorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.isAllowed",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.validate",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.DiscoveryResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.WorkflowResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.listWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.recordDiscoveredWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.isWorkflowInDiscoveryResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.authorizeSelectionDriver",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.handleSelectWorkflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        }
+      ]
+    },
+    {
+      "id": "preserve-membership-on-retry",
+      "query": "How does discovered workflow membership survive self-correction retries?",
+      "category": "multi-hop state / retry flow",
+      "judgments": [
+        {
+          "unit_id": "catalog/Workflow.java::Workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.constructor",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.listWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.listActions",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.getWorkflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::Normalize",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::Normalize.labelValue",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters.fromSignal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters.applyLabelFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::Normalize",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::Normalize.term",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.add",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.contains",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.stateFromContext",
+          "grade": 2,
+          "rationale": "Recovers the existing WorkflowState from context so retries reuse the original membership set."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.MAX_PARAMETERS",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.validateParameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.run",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/MetricNames.java::MetricNames",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/MetricNames.java::MetricNames.isValid",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy",
+          "grade": 0,
+          "rationale": "Holds the retry entry points but no state of its own."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy.selectWithRetry",
+          "grade": 3,
+          "rationale": "Validates the first candidate and, on rejection, retries the corrected ID with the same validator instance and attached state."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy.selfCorrectSelection",
+          "grade": 3,
+          "rationale": "Revalidates the corrected candidate without clearing or replacing the discovery state."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::ValidationException",
+          "grade": 1,
+          "rationale": "Signals the failed first attempt that triggers correction."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.constructor",
+          "grade": 0,
+          "rationale": "Copies the catalog allowlist only; discovery state is attached later."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.setWorkflowState",
+          "grade": 3,
+          "rationale": "Attaches the shared discovery state once; both attempts consult that same state."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.isAllowed",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.validate",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.DiscoveryResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.WorkflowResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.listWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.recordDiscoveredWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.isWorkflowInDiscoveryResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.authorizeSelectionDriver",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.handleSelectWorkflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        }
+      ]
+    },
+    {
+      "id": "interactive-selection-guard",
+      "query": "Where does interactive selection reject a workflow absent from the current discovery result?",
+      "category": "exact implementation / interactive guard",
+      "judgments": [
+        {
+          "unit_id": "catalog/Workflow.java::Workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.constructor",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.listWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.listActions",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.getWorkflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::Normalize",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::Normalize.labelValue",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters.fromSignal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters.applyLabelFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::Normalize",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::Normalize.term",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.add",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.contains",
+          "grade": 1,
+          "rationale": "Checks the shared state set, not the current interactive DiscoveryResult."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.stateFromContext",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.MAX_PARAMETERS",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.validateParameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.run",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/MetricNames.java::MetricNames",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/MetricNames.java::MetricNames.isValid",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy.selectWithRetry",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy.selfCorrectSelection",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::ValidationException",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.constructor",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.setWorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.isAllowed",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.validate",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows",
+          "grade": 0,
+          "rationale": "Facade container; the rejection behavior lives in its methods."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.DiscoveryResult",
+          "grade": 2,
+          "rationale": "Defines the recommended and alternatives fields consumed by the guard."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.WorkflowResult",
+          "grade": 1,
+          "rationale": "Carries the accepted selection; it does not perform rejection."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.listWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.recordDiscoveredWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.isWorkflowInDiscoveryResult",
+          "grade": 3,
+          "rationale": "Implements the recommended-or-alternative membership test used by the guard."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.authorizeSelectionDriver",
+          "grade": 3,
+          "rationale": "Throws when the requested ID is not the recommended ID or one of the alternatives."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.handleSelectWorkflow",
+          "grade": 2,
+          "rationale": "Calls authorizeSelectionDriver before resolving the catalog identity."
+        }
+      ]
+    },
+    {
+      "id": "validate-workflow-parameters",
+      "query": "Where are remediation workflow parameters validated before execution?",
+      "category": "exact implementation / validation",
+      "judgments": [
+        {
+          "unit_id": "catalog/Workflow.java::Workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.constructor",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.listWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.listActions",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.getWorkflow",
+          "grade": 1,
+          "rationale": "Resolves workflow identity and exposes its parameter names; it does not validate supplied values."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::Normalize",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::Normalize.labelValue",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters.fromSignal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters.applyLabelFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::Normalize",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::Normalize.term",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.add",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.contains",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.stateFromContext",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner",
+          "grade": 1,
+          "rationale": "Container for the execution path; the parameter checks are in validateParameters and run."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.MAX_PARAMETERS",
+          "grade": 0,
+          "rationale": "Defines the size limit used by validation but performs no validation itself."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.validateParameters",
+          "grade": 3,
+          "rationale": "Rejects missing required names, unknown supplied names, and oversized parameter maps before execution."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.run",
+          "grade": 2,
+          "rationale": "Calls validateParameters with the workflow's required keys before copying accepted values."
+        },
+        {
+          "unit_id": "metrics/MetricNames.java::MetricNames",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/MetricNames.java::MetricNames.isValid",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy.selectWithRetry",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy.selfCorrectSelection",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::ValidationException",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.constructor",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.setWorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.isAllowed",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.validate",
+          "grade": 1,
+          "rationale": "Validates selection membership only; workflow parameters are checked separately in execution."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.DiscoveryResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.WorkflowResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.listWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.recordDiscoveredWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.isWorkflowInDiscoveryResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.authorizeSelectionDriver",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.handleSelectWorkflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        }
+      ]
+    },
+    {
+      "id": "empty-discovery-fails-closed",
+      "query": "What happens when discovery returns no workflow IDs and a selection is still attempted?",
+      "category": "behavior / failure mode",
+      "judgments": [
+        {
+          "unit_id": "catalog/Workflow.java::Workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.constructor",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.listWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.listActions",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.getWorkflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::Normalize",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::Normalize.labelValue",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters.fromSignal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters.applyLabelFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::Normalize",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::Normalize.term",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.add",
+          "grade": 1,
+          "rationale": "Adds nothing when given an empty ID list, preserving the empty state."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.contains",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.stateFromContext",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.MAX_PARAMETERS",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.validateParameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.run",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/MetricNames.java::MetricNames",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/MetricNames.java::MetricNames.isValid",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy.selectWithRetry",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy.selfCorrectSelection",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::ValidationException",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.constructor",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.setWorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.isAllowed",
+          "grade": 3,
+          "rationale": "With an empty current WorkflowState, contains returns false and a catalog ID fails the combined predicate."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.validate",
+          "grade": 3,
+          "rationale": "Converts that failed predicate into a rejected selection."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows",
+          "grade": 0,
+          "rationale": "Facade container; fail-closed behavior is distributed across its guard methods."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.DiscoveryResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.WorkflowResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.listWorkflows",
+          "grade": 1,
+          "rationale": "Propagates the empty catalog listing into the recording path."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.recordDiscoveredWorkflows",
+          "grade": 1,
+          "rationale": "Records zero IDs for an empty listing, which is what leaves the state empty."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.isWorkflowInDiscoveryResult",
+          "grade": 3,
+          "rationale": "Returns false for every ID when the recommendation set is empty."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.authorizeSelectionDriver",
+          "grade": 3,
+          "rationale": "An empty DiscoveryResult matches neither recommended nor alternatives, so the guard throws."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.handleSelectWorkflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        }
+      ]
+    },
+    {
+      "id": "copy-selected-workflow-details",
+      "query": "How does selection assemble the final result from the chosen workflow and the discovery result?",
+      "category": "multi-symbol data flow",
+      "judgments": [
+        {
+          "unit_id": "catalog/Workflow.java::Workflow",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.constructor",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.listWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.listActions",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::WorkflowCatalog.getWorkflow",
+          "grade": 2,
+          "rationale": "Supplies the resolved workflow identity whose ID is copied into the final result."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::Normalize",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "catalog/WorkflowCatalog.java::Normalize.labelValue",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters.fromSignal",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::DiscoveryFilters.applyLabelFilters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::Normalize",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/DiscoveryFilters.java::Normalize.term",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.add",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.contains",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.stateFromContext",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.MAX_PARAMETERS",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.validateParameters",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.run",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/MetricNames.java::MetricNames",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "metrics/MetricNames.java::MetricNames.isValid",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy.selectWithRetry",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/RetryPolicy.java::RetryPolicy.selfCorrectSelection",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::ValidationException",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.constructor",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.setWorkflowState",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.isAllowed",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.validate",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows",
+          "grade": 0,
+          "rationale": "Facade container; assembly happens in handleSelectWorkflow."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.DiscoveryResult",
+          "grade": 1,
+          "rationale": "Supplies the recommendation source marker but does not perform assembly."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.WorkflowResult",
+          "grade": 2,
+          "rationale": "Defines the assembled result shape carrying the workflow ID and selected parameter map."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.listWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.recordDiscoveredWorkflows",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.isWorkflowInDiscoveryResult",
+          "grade": 0,
+          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.authorizeSelectionDriver",
+          "grade": 1,
+          "rationale": "Gates the selection before assembly; it contributes no result fields."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.handleSelectWorkflow",
+          "grade": 3,
+          "rationale": "Authorizes the choice, resolves the workflow through the catalog, derives the recommended/alternative source marker from the DiscoveryResult, and builds the WorkflowResult."
+        }
+      ]
+    }
+  ]
+}

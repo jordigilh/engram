@@ -46,19 +46,9 @@
       "category": "policy check / semantic behavior",
       "judgments": [
         {
-          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.isAllowed",
-          "grade": 3,
-          "rationale": "Combines catalog allowlist membership with WorkflowState.contains, so a catalog ID missing from discovery fails the combined predicate."
-        },
-        {
-          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.validate",
-          "grade": 3,
-          "rationale": "Turns a failed isAllowed result into a thrown ValidationException."
-        },
-        {
-          "unit_id": "tools/Workflows.java::Workflows.authorizeSelectionDriver",
-          "grade": 3,
-          "rationale": "Rejects a workflow ID that is absent from the current DiscoveryResult before the catalog lookup."
+          "unit_id": "discovery/WorkflowState.java::WorkflowState",
+          "grade": 2,
+          "rationale": "Declares the shared discovery state whose membership predicate the rejection consults."
         },
         {
           "unit_id": "discovery/WorkflowState.java::WorkflowState.contains",
@@ -71,19 +61,39 @@
           "rationale": "Carries the rejection signal but does not perform the membership check."
         },
         {
-          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.setWorkflowState",
-          "grade": 1,
-          "rationale": "Attaches discovery state to the validator; the rejection itself happens in isAllowed and validate."
-        },
-        {
           "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.constructor",
           "grade": 0,
           "rationale": "Only copies the catalog allowlist; no discovery membership is consulted at construction."
         },
         {
-          "unit_id": "tools/Workflows.java::Workflows.isWorkflowInDiscoveryResult",
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.isAllowed",
+          "grade": 3,
+          "rationale": "Combines catalog allowlist membership with WorkflowState.contains, so a catalog ID missing from discovery fails the combined predicate."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.setWorkflowState",
           "grade": 1,
-          "rationale": "Checks membership in the recommendation batch, a complementary guard rather than the shared-state validator path."
+          "rationale": "Attaches discovery state to the validator; the rejection itself happens in isAllowed and validate."
+        },
+        {
+          "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.validate",
+          "grade": 3,
+          "rationale": "Turns a failed isAllowed result into a thrown ValidationException."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.authorizeSelectionDriver",
+          "grade": 3,
+          "rationale": "Rejects a workflow ID that is absent from the current DiscoveryResult before the catalog lookup."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.handleSelectWorkflow",
+          "grade": 2,
+          "rationale": "Calls the discovery guard before resolving the catalog identity, so it is the rejecting entry point."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.isWorkflowInDiscoveryResult",
+          "grade": 3,
+          "rationale": "Implements the recommended-or-alternative membership test that the driver guard consults before catalog lookup."
         }
       ]
     },
@@ -146,8 +156,8 @@
         },
         {
           "unit_id": "discovery/WorkflowState.java::WorkflowState.stateFromContext",
-          "grade": 2,
-          "rationale": "Recovers the existing WorkflowState from context so retries reuse the original membership set."
+          "grade": 1,
+          "rationale": "Recovers a state from context, but no retry path in this fixture calls it; near-miss only."
         },
         {
           "unit_id": "selection/RetryPolicy.java::RetryPolicy",
@@ -225,8 +235,8 @@
         },
         {
           "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.MAX_PARAMETERS",
-          "grade": 0,
-          "rationale": "Defines the size limit used by validation but performs no validation itself."
+          "grade": 2,
+          "rationale": "Enforces the upper bound on accepted execution parameters checked by validateParameters."
         },
         {
           "unit_id": "execution/WorkflowRunner.java::WorkflowRunner",
@@ -251,6 +261,11 @@
       "category": "behavior / failure mode",
       "judgments": [
         {
+          "unit_id": "discovery/WorkflowState.java::WorkflowState.add",
+          "grade": 1,
+          "rationale": "Adds nothing when given an empty ID list, preserving the empty state."
+        },
+        {
           "unit_id": "selection/WorkflowValidator.java::WorkflowValidator.isAllowed",
           "grade": 3,
           "rationale": "With an empty current WorkflowState, contains returns false and a catalog ID fails the combined predicate."
@@ -261,9 +276,19 @@
           "rationale": "Converts that failed predicate into a rejected selection."
         },
         {
+          "unit_id": "tools/Workflows.java::Workflows",
+          "grade": 0,
+          "rationale": "Facade container; fail-closed behavior is distributed across its guard methods."
+        },
+        {
           "unit_id": "tools/Workflows.java::Workflows.authorizeSelectionDriver",
           "grade": 3,
           "rationale": "An empty DiscoveryResult matches neither recommended nor alternatives, so the guard throws."
+        },
+        {
+          "unit_id": "tools/Workflows.java::Workflows.handleSelectWorkflow",
+          "grade": 2,
+          "rationale": "Calls the discovery guard before resolving the catalog identity when the result is empty."
         },
         {
           "unit_id": "tools/Workflows.java::Workflows.isWorkflowInDiscoveryResult",
@@ -271,24 +296,14 @@
           "rationale": "Returns false for every ID when the recommendation set is empty."
         },
         {
-          "unit_id": "tools/Workflows.java::Workflows.recordDiscoveredWorkflows",
-          "grade": 1,
-          "rationale": "Records zero IDs for an empty listing, which is what leaves the state empty."
-        },
-        {
-          "unit_id": "discovery/WorkflowState.java::WorkflowState.add",
-          "grade": 1,
-          "rationale": "Adds nothing when given an empty ID list, preserving the empty state."
-        },
-        {
           "unit_id": "tools/Workflows.java::Workflows.listWorkflows",
           "grade": 1,
           "rationale": "Propagates the empty catalog listing into the recording path."
         },
         {
-          "unit_id": "tools/Workflows.java::Workflows",
-          "grade": 0,
-          "rationale": "Facade container; fail-closed behavior is distributed across its guard methods."
+          "unit_id": "tools/Workflows.java::Workflows.recordDiscoveredWorkflows",
+          "grade": 1,
+          "rationale": "Records zero IDs for an empty listing, which is what leaves the state empty."
         }
       ]
     },

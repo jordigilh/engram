@@ -2,7 +2,7 @@
   "schema_version": 1,
   "suite_id": "synthetic-java-workflow-discovery",
   "fixture_id": "java-workflow-discovery-v1",
-  "judgment_status": "draft",
+  "judgment_status": "adjudicated",
   "candidate_pool_complete": true,
   "source_truth": true,
   "source": {
@@ -300,8 +300,8 @@
         },
         {
           "unit_id": "discovery/WorkflowState.java::WorkflowState",
-          "grade": 0,
-          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+          "grade": 2,
+          "rationale": "Declares the shared discovery state whose membership predicate the rejection consults."
         },
         {
           "unit_id": "discovery/WorkflowState.java::WorkflowState.add",
@@ -420,8 +420,8 @@
         },
         {
           "unit_id": "tools/Workflows.java::Workflows.isWorkflowInDiscoveryResult",
-          "grade": 1,
-          "rationale": "Checks membership in the recommendation batch, a complementary guard rather than the shared-state validator path."
+          "grade": 3,
+          "rationale": "Implements the recommended-or-alternative membership test that the driver guard consults before catalog lookup."
         },
         {
           "unit_id": "tools/Workflows.java::Workflows.authorizeSelectionDriver",
@@ -430,8 +430,8 @@
         },
         {
           "unit_id": "tools/Workflows.java::Workflows.handleSelectWorkflow",
-          "grade": 0,
-          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+          "grade": 2,
+          "rationale": "Calls the discovery guard before resolving the catalog identity, so it is the rejecting entry point."
         }
       ]
     },
@@ -729,8 +729,8 @@
         },
         {
           "unit_id": "discovery/WorkflowState.java::WorkflowState.stateFromContext",
-          "grade": 2,
-          "rationale": "Recovers the existing WorkflowState from context so retries reuse the original membership set."
+          "grade": 1,
+          "rationale": "Recovers a state from context, but no retry path in this fixture calls it; near-miss only."
         },
         {
           "unit_id": "execution/WorkflowRunner.java::WorkflowRunner",
@@ -1153,8 +1153,8 @@
         },
         {
           "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.MAX_PARAMETERS",
-          "grade": 0,
-          "rationale": "Defines the size limit used by validation but performs no validation itself."
+          "grade": 2,
+          "rationale": "Enforces the upper bound on accepted execution parameters checked by validateParameters."
         },
         {
           "unit_id": "execution/WorkflowRunner.java::WorkflowRunner.validateParameters",
@@ -1465,8 +1465,8 @@
         },
         {
           "unit_id": "tools/Workflows.java::Workflows.handleSelectWorkflow",
-          "grade": 0,
-          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+          "grade": 2,
+          "rationale": "Calls the discovery guard before resolving the catalog identity when the result is empty."
         }
       ]
     },

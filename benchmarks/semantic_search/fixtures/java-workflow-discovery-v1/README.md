@@ -8,8 +8,32 @@ lanes so retrieval results are comparable across languages.
 - 9 production `.java` files, 13,149 bytes total (1.0-2.3 kB each)
 - 40 manifest units (10 classes, 4 records, 23 methods, 2 constructors,
   1 static field)
-- 8 queries, 2-4 graded answer units each, plus co-located near-miss decoys
-- 8 queries x 40 units of judgments in `qrels.json` (`judgment_status: "draft"`)
+- 8 queries, at least 2 graded answer units each, plus co-located near-miss decoys
+- 8 queries x 40 units of judgments in `qrels.json` (`judgment_status: "adjudicated"`)
+
+## Adjudication
+
+The draft labels were audited blind: an independent pass received the 9 source
+files and the 8 query texts with `qrels.json` and `truth.json` withheld, graded
+every unit from source, and only then compared. Threshold (grade >= 2)
+agreement was 88.4%; exact-grade agreement 72.8%, quadratic weighted kappa
+0.648. Six disagreements were reconciled in the draft:
+
+- `reject-undiscovered-workflow`: `isWorkflowInDiscoveryResult` 1 -> 3 and
+  `handleSelectWorkflow` 0 -> 2 (both rejection lanes are now credited, matching
+  the corrected Rust/TypeScript fixtures); the `WorkflowState` class 0 -> 2
+  because its contract states the never-discovered policy.
+- `empty-discovery-fails-closed`: `handleSelectWorkflow` 0 -> 2 for the same
+  reason.
+- `preserve-membership-on-retry`: `stateFromContext` 2 -> 1; no retry path in
+  this fixture calls it.
+- `validate-workflow-parameters`: `MAX_PARAMETERS` 0 -> 2; `validateParameters`
+  enforces that bound before execution.
+
+The audit's blanket proposal to promote every container class and record to
+grade 2 was not applied; only units whose own contract states the queried
+behavior are credited. Source files and the snapshot digest are unchanged by
+adjudication.
 
 Only the Java standard library is used. No framework, build tool, or external
 dependency is required.

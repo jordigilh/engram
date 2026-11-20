@@ -390,18 +390,18 @@
         },
         {
           "unit_id": "src/tools/workflows.rs::is_workflow_in_discovery_result",
-          "grade": 0,
-          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+          "grade": 3,
+          "rationale": "Checks the recommended ID and the alternatives list."
         },
         {
           "unit_id": "src/tools/workflows.rs::authorize_selection_driver",
-          "grade": 0,
-          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+          "grade": 3,
+          "rationale": "Rejects IDs absent from the current result before the catalog lookup."
         },
         {
           "unit_id": "src/tools/workflows.rs::handle_select_workflow",
-          "grade": 0,
-          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+          "grade": 2,
+          "rationale": "Calls the discovery guard before resolving the catalog item."
         },
         {
           "unit_id": "src/tools/workflows.rs::apply_selected_workflow",
@@ -1113,8 +1113,8 @@
         },
         {
           "unit_id": "src/discovery/catalog.rs::WorkflowCatalog.get_workflow",
-          "grade": 2,
-          "rationale": "Resolves the workflow whose parameter requirements are used."
+          "grade": 1,
+          "rationale": "Resolves workflow identity; parameter requirements are supplied independently."
         },
         {
           "unit_id": "src/discovery/filters.rs::Signal",
@@ -1163,8 +1163,8 @@
         },
         {
           "unit_id": "src/selection/validator.rs::WorkflowValidator.validate",
-          "grade": 2,
-          "rationale": "Validates the selected workflow before execution."
+          "grade": 1,
+          "rationale": "Checks selection membership only; workflow parameters are validated separately."
         },
         {
           "unit_id": "src/selection/retry.rs::select_with_retry",
@@ -1400,18 +1400,18 @@
         },
         {
           "unit_id": "src/tools/workflows.rs::is_workflow_in_discovery_result",
-          "grade": 0,
-          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+          "grade": 3,
+          "rationale": "Checks the recommended ID and the alternatives list."
         },
         {
           "unit_id": "src/tools/workflows.rs::authorize_selection_driver",
-          "grade": 0,
-          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+          "grade": 3,
+          "rationale": "Rejects IDs absent from the current result before the catalog lookup."
         },
         {
           "unit_id": "src/tools/workflows.rs::handle_select_workflow",
-          "grade": 0,
-          "rationale": "Source-authored fixture negative: this unit is not an answer site for the query."
+          "grade": 2,
+          "rationale": "Calls the discovery guard before resolving the catalog item."
         },
         {
           "unit_id": "src/tools/workflows.rs::apply_selected_workflow",
@@ -1437,7 +1437,7 @@
     },
     {
       "id": "copy-selected-workflow-details",
-      "query": "How are selected workflow details copied into the final investigation result?",
+      "query": "How does selection assemble the final investigation result from the chosen workflow and the discovery result?",
       "category": "multi-symbol data flow",
       "judgments": [
         {
@@ -1518,7 +1518,7 @@
         {
           "unit_id": "src/discovery/catalog.rs::WorkflowCatalog.get_workflow",
           "grade": 2,
-          "rationale": "Supplies the resolved workflow details."
+          "rationale": "Supplies the resolved workflow identity."
         },
         {
           "unit_id": "src/discovery/filters.rs::Signal",
@@ -1618,12 +1618,12 @@
         {
           "unit_id": "src/tools/workflows.rs::apply_selected_workflow",
           "grade": 3,
-          "rationale": "Copies resolved workflow identity and discovered parameters into the result."
+          "rationale": "Builds the result from the resolved workflow identity and the parameter marker returned by lookup_discovered_parameters."
         },
         {
           "unit_id": "src/tools/workflows.rs::lookup_discovered_parameters",
           "grade": 2,
-          "rationale": "Selects the parameters associated with the recommendation or alternative."
+          "rationale": "Synthesizes a source marker (recommended or alternative) rather than selecting parameter values."
         },
         {
           "unit_id": "src/execution/runner.rs::validate_workflow_parameters",

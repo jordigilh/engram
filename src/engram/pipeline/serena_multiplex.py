@@ -88,7 +88,7 @@ log = logging.getLogger("serena-multiplex")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8893
 DEFAULT_UPSTREAM_URL = "http://127.0.0.1:8892/mcp"
-FORWARD_TIMEOUT_S = 60.0
+FORWARD_TIMEOUT_S = 180.0
 RETRY_DELAY_S = 0.5
 SESSION_IDLE_TIMEOUT_S = 30 * 60
 ENGRAM_WORKSPACE_QUERY_PARAMETER = "workspace"
@@ -601,6 +601,10 @@ def build_app(
     workspace_serena_command: list[str] | None = None,
     workspace_serena_idle_ttl_s: float = 1800.0,
     workspace_serena_port_base: int = 19000,
+    workspace_serena_max_processes: int | None = 3,
+    workspace_serena_liveness_timeout_s: float = 15.0,
+    workspace_serena_liveness_cache_s: float = 30.0,
+    lsp_ready_timeout_s: float = 120.0,
     allow_shared_invalidation: bool = False,
     lsp_readiness_symbol: str | None = None,
     lsp_readiness_file: str | None = None,
@@ -645,6 +649,9 @@ def build_app(
             workspace_serena_command,
             port_base=workspace_serena_port_base,
             idle_ttl_s=workspace_serena_idle_ttl_s,
+            max_processes=workspace_serena_max_processes,
+            liveness_timeout_s=workspace_serena_liveness_timeout_s,
+            liveness_cache_s=workspace_serena_liveness_cache_s,
         )
         if workspace_serena_command
         else None
@@ -680,22 +687,40 @@ def build_app(
             url = workspace_upstreams.get(key, upstream_url)
 
         async def readiness_probe(_workspace: str) -> None:
+            probe_url = (
+                await _url_for_workspace(_workspace) if allow_spawn else url
+            )
             if lsp_readiness_symbol:
                 await _control_call(
-                    url,
+                    probe_url,
                     upstream_host_header,
                     "find_symbol",
                     {"name_path_pattern": lsp_readiness_symbol, "depth": 0},
                 )
             elif lsp_readiness_file:
                 await _control_call(
-                    url,
+                    probe_url,
                     upstream_host_header,
                     "get_symbols_overview",
                     {"relative_path": lsp_readiness_file},
                 )
             else:  # pragma: no cover - build_app rejects this configuration
                 raise RuntimeError("no revision-correlated readiness probe configured")
+
+        prepare_workspace = None
+        if supervisor is not None and allow_spawn:
+            async def prepare_workspace(_workspace: str) -> None:
+                await supervisor.recycle(_workspace)
+                await _url_for_workspace(_workspace)
+
+            async def noop(_workspace: str) -> None:
+                return None
+
+            activate_cb = noop
+            restart_cb = noop
+        else:
+            activate_cb = _make_activate(url, upstream_host_header)
+            restart_cb = _make_restart_lsp(url, upstream_host_header)
 
         barrier_path = None
         state_path = None
@@ -717,22 +742,26 @@ def build_app(
             )
         runtime = await registry.get_or_create(
             workspace,
-            _make_activate(url, upstream_host_header),
-            _make_restart_lsp(url, upstream_host_header),
+            activate_cb,
+            restart_cb,
             settle_s=workspace_settle_s,
             barrier_path=barrier_path,
             state_path=state_path,
             backend_url=url,
             readiness_probe=readiness_probe,
+            prepare_workspace=prepare_workspace,
+            readiness_timeout_s=lsp_ready_timeout_s,
         )
         if allow_spawn:
             await runtime.configure(
-                _make_activate(url, upstream_host_header),
-                _make_restart_lsp(url, upstream_host_header),
+                activate_cb,
+                restart_cb,
                 settle_s=workspace_settle_s,
                 barrier_path=barrier_path,
                 backend_url=url,
                 readiness_probe=readiness_probe,
+                prepare_workspace=prepare_workspace,
+                readiness_timeout_s=lsp_ready_timeout_s,
             )
         return runtime
 
@@ -1257,6 +1286,30 @@ def main() -> None:
         help="First port considered when spawning per-workspace Serena processes.",
     )
     parser.add_argument(
+        "--workspace-serena-max-processes",
+        type=int,
+        default=3,
+        help="Maximum concurrent per-workspace Serena processes (LRU eviction).",
+    )
+    parser.add_argument(
+        "--workspace-serena-liveness-timeout-s",
+        type=float,
+        default=15.0,
+        help="MCP initialize timeout for an existing per-workspace process.",
+    )
+    parser.add_argument(
+        "--workspace-serena-liveness-cache-s",
+        type=float,
+        default=30.0,
+        help="Seconds between per-workspace liveness probes.",
+    )
+    parser.add_argument(
+        "--lsp-ready-timeout-s",
+        type=float,
+        default=120.0,
+        help="Deadline for the post-restart revision readiness probe.",
+    )
+    parser.add_argument(
         "--allow-shared-invalidation",
         action="store_true",
         help="Migration-only: allow invalidation without per-workspace endpoints.",
@@ -1351,6 +1404,10 @@ def main() -> None:
         workspace_serena_command=workspace_serena_command,
         workspace_serena_idle_ttl_s=args.workspace_serena_idle_ttl_s,
         workspace_serena_port_base=args.workspace_serena_port_base,
+        workspace_serena_max_processes=args.workspace_serena_max_processes,
+        workspace_serena_liveness_timeout_s=args.workspace_serena_liveness_timeout_s,
+        workspace_serena_liveness_cache_s=args.workspace_serena_liveness_cache_s,
+        lsp_ready_timeout_s=args.lsp_ready_timeout_s,
         allow_shared_invalidation=args.allow_shared_invalidation,
         lsp_readiness_symbol=args.lsp_readiness_symbol,
         lsp_readiness_file=args.lsp_readiness_file,

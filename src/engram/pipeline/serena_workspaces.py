@@ -248,10 +248,12 @@ class WorkspaceRuntime:
         backend_url: str | None = None,
         readiness_probe: Callable[[str], Awaitable[None]] | None = None,
         readiness_timeout_s: float = 30.0,
+        prepare_workspace: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self.workspace = workspace
         self.activate = activate
         self.restart_lsp = restart_lsp
+        self.prepare_workspace = prepare_workspace
         self.readiness_probe = readiness_probe
         self.readiness_timeout_s = readiness_timeout_s
         self.probe = probe
@@ -386,6 +388,8 @@ class WorkspaceRuntime:
         barrier_path: str | None = None,
         backend_url: str | None = None,
         readiness_probe: Callable[[str], Awaitable[None]] | None = None,
+        prepare_workspace: Callable[[str], Awaitable[None]] | None = None,
+        readiness_timeout_s: float | None = None,
     ) -> None:
         """Bind the current backend (per-workspace endpoint) to this runtime."""
         async with self._state_lock:
@@ -396,8 +400,12 @@ class WorkspaceRuntime:
                 self.backend_url = backend_url
             self.activate = activate
             self.restart_lsp = restart_lsp
+            if prepare_workspace is not None:
+                self.prepare_workspace = prepare_workspace
             if readiness_probe is not None:
                 self.readiness_probe = readiness_probe
+            if readiness_timeout_s is not None:
+                self.readiness_timeout_s = readiness_timeout_s
             if settle_s is not None:
                 self.settle_s = settle_s
         self.barrier = WorkspaceBarrier(barrier_path, self.workspace)
@@ -445,6 +453,9 @@ class WorkspaceRuntime:
             )
 
         async def _activate_and_restart() -> None:
+            if self.prepare_workspace is not None:
+                await self.prepare_workspace(self.workspace)
+                return
             await self.activate(self.workspace)
             await self.restart_lsp(self.workspace)
             if self.settle_s:

@@ -13,6 +13,25 @@ repository; this is the ordered procedure and the pass/fail checks.
   and the multiplex user.
 - You have at least two family worktrees (A = mutating, B = observer).
 
+## 1.1 Canary note (2026-11-21)
+
+A two-worktree canary on the kubernaut family showed that a **cold**
+per-workspace Serena process does not answer the first `find_symbol` within
+180 s (gopls still indexing), and one process held ~340 MB RSS before its gopls
+child. Typed `workspace_flushing` responses behaved correctly, but the
+process-per-workspace cold start is not interactive for dynamic review
+worktrees.
+
+Before enabling the supervisor broadly, choose one:
+
+- keep the warm shared daemon and enable `restart_language_server` in
+  `included_optional_tools` (process stays warm; restart is per active LSP);
+- pre-warm and pin per-workspace processes for the small canonical repo set,
+  with a low max-process cap; or
+- accept first-use latency and keep the typed retry loop for worktrees.
+
+The epoch fence and typed contracts are independent of this topology choice.
+
 ## 2. Deploy the multiplex (shadow)
 
 Start the new multiplex with per-workspace endpoints and a readiness probe:

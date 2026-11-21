@@ -94,6 +94,55 @@ def test_concurrent_ensure_uses_distinct_ports(tmp_path):
     asyncio.run(run())
 
 
+def test_max_processes_evicts_lru(tmp_path):
+    ws_a = tmp_path / "a"
+    ws_b = tmp_path / "b"
+    ws_a.mkdir()
+    ws_b.mkdir()
+    supervisor = WorkspaceProcessSupervisor(
+        [sys.executable, "-c", FAKE_SERVER, "{port}"],
+        port_base=_free_port(),
+        port_span=5,
+        ready_timeout_s=5,
+        max_processes=1,
+    )
+
+    async def run():
+        try:
+            await supervisor.ensure(str(ws_a))
+            await supervisor.ensure(str(ws_b))
+            assert await supervisor.endpoint(str(ws_a)) is None
+            assert await supervisor.endpoint(str(ws_b)) is not None
+            recycled = await supervisor.drain_recycled()
+            assert str(ws_a.resolve()) in recycled
+        finally:
+            await supervisor.stop()
+
+    asyncio.run(run())
+
+
+def test_recycle_stops_and_respawns(tmp_path):
+    supervisor = WorkspaceProcessSupervisor(
+        [sys.executable, "-c", FAKE_SERVER, "{port}"],
+        port_base=_free_port(),
+        port_span=5,
+        ready_timeout_s=5,
+    )
+
+    async def run():
+        try:
+            first = await supervisor.ensure(str(tmp_path))
+            assert await supervisor.recycle(str(tmp_path)) is True
+            assert await supervisor.endpoint(str(tmp_path)) is None
+            second = await supervisor.ensure(str(tmp_path))
+            assert second.startswith("http://127.0.0.1:")
+            assert first is not None
+        finally:
+            await supervisor.stop()
+
+    asyncio.run(run())
+
+
 def test_idle_eviction_stops_process(tmp_path):
     now = [100.0]
     supervisor = WorkspaceProcessSupervisor(

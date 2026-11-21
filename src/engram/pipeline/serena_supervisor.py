@@ -32,6 +32,7 @@ class _Process:
     port: int
     last_used: float
     last_probe: float
+    started_at: float
 
 
 class WorkspaceProcessSupervisor:
@@ -45,6 +46,7 @@ class WorkspaceProcessSupervisor:
         ready_timeout_s: float = 30.0,
         liveness_timeout_s: float = 3.0,
         liveness_cache_s: float = 10.0,
+        max_processes: int | None = None,
         clock=time.monotonic,
     ) -> None:
         if not command:
@@ -56,6 +58,7 @@ class WorkspaceProcessSupervisor:
         self.ready_timeout_s = ready_timeout_s
         self.liveness_timeout_s = liveness_timeout_s
         self.liveness_cache_s = liveness_cache_s
+        self.max_processes = max_processes
         self._clock = clock
         self._procs: dict[str, _Process] = {}
         self._locks: dict[str, asyncio.Lock] = {}
@@ -171,7 +174,8 @@ class WorkspaceProcessSupervisor:
                 entry = self._procs.get(key)
             if entry is not None and entry.process.returncode is None:
                 now = self._clock()
-                if now - entry.last_probe >= self.liveness_cache_s:
+                cold = now - entry.started_at < self.ready_timeout_s
+                if not cold and now - entry.last_probe >= self.liveness_cache_s:
                     alive = await asyncio.to_thread(
                         self._mcp_alive, entry.port, self.liveness_timeout_s
                     )
@@ -186,6 +190,21 @@ class WorkspaceProcessSupervisor:
                 if entry is not None:
                     entry.last_used = now
                     return entry.url
+
+            async with self._lock:
+                victim = None
+                if (
+                    self.max_processes is not None
+                    and len(self._procs) >= self.max_processes
+                ):
+                    victim_key, victim = min(
+                        self._procs.items(), key=lambda item: item[1].last_used
+                    )
+                    self._procs.pop(victim_key, None)
+            if victim is not None:
+                await self._stop_entry(victim)
+                self._recycled.append(victim_key)
+                log.info("evicted LRU Serena for %s", victim_key)
 
             async with self._lock:
                 port = await self._next_port()
@@ -218,6 +237,7 @@ class WorkspaceProcessSupervisor:
                     port=port,
                     last_used=self._clock(),
                     last_probe=self._clock(),
+                    started_at=self._clock(),
                 )
             log.info("started Serena for %s on %d", key, port)
             return url
@@ -227,6 +247,19 @@ class WorkspaceProcessSupervisor:
             recycled = list(self._recycled)
             self._recycled.clear()
             return recycled
+
+    async def recycle(self, workspace: str) -> bool:
+        """Stop one workspace's process so the next ensure starts a fresh one."""
+        key = self._key(workspace)
+        lock = self._locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            async with self._lock:
+                entry = self._procs.pop(key, None)
+            if entry is None:
+                return False
+            await self._stop_entry(entry)
+            self._recycled.append(key)
+            return True
 
     async def endpoint(self, workspace: str) -> str | None:
         entry = self._procs.get(self._key(workspace))

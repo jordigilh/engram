@@ -73,7 +73,7 @@ the label-conversion query.
 - Revision: `fixture-v1`
 - Language level: Java 21 (`javac --release 21`); authoring toolchain:
   OpenJDK 27.0.1 (`javac 27.0.1.0.3`).
-- Adjudication: Engram commit `43af82c` (blind audit; see above).
+- Adjudication: Engram commit `ca6231c` (blind audit; see above).
 - Source snapshot: see `source.snapshot_sha256` in `manifest.json` and
   `qrels.json`.
 

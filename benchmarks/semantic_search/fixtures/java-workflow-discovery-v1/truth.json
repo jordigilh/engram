@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite_id": "synthetic-java-workflow-discovery",
-  "description": "Java-specific source and relevance judgments for the independent cross-language workflow-discovery lane. Source-grounded draft pending human adjudication.",
+  "description": "Java-specific source and relevance judgments for the independent cross-language workflow-discovery lane. Adjudicated after a blind audit (see README); source-grounded, never inferred from a search backend.",
   "queries": [
     {
       "id": "record-discovered-membership",

@@ -71,20 +71,37 @@ the label-conversion query.
   commit, or third-party code is involved.
 - Repository: `synthetic/java-workflow-discovery`
 - Revision: `fixture-v1`
-- Language level: Java 21 (`javac --release 21`); toolchain used to author and
-  generate: OpenJDK 27.0.1 (`javac 27.0.1.0.3`).
-- Manifest generator: `benchmarks/quality-lanes/fixtures/_tools/java-manifest/ManifestGen.java`
-  (`javax.tools` + `com.sun.source.util.JavacTask`/`TreePathScanner`, stdlib only).
-- Qrels builder: `benchmarks/quality-lanes/fixtures/_tools/java-manifest/build_draft_qrels.py`.
+- Language level: Java 21 (`javac --release 21`); authoring toolchain:
+  OpenJDK 27.0.1 (`javac 27.0.1.0.3`).
+- Adjudication: Engram commit `43af82c` (blind audit; see above).
+- Source snapshot: see `source.snapshot_sha256` in `manifest.json` and
+  `qrels.json`.
 
-## Manifest
+## Vendored copy and regeneration
+
+This directory is a vendored copy of the fixture's source of truth in the
+Engram repository:
+
+```
+jordigilh/engram
+  benchmarks/semantic_search/fixtures/java-workflow-discovery-v1/        (fixture)
+  benchmarks/semantic_search/fixtures/_tools/java-manifest/ManifestGen.java
+  benchmarks/semantic_search/fixtures/_tools/java-manifest/build_draft_qrels.py
+  scripts/verify_java_workflow_fixture.py
+```
+
+The generator and verifier are committed there, not in this lane. Run the
+commands below from an Engram checkout. This lane only consumes the vendored
+`manifest.json`, `truth.json` and `qrels.json`.
+
+### Manifest
 
 `manifest.json` is generated, never hand-written:
 
 ```sh
-# from the repository root
+# from the Engram repository root
 javac -d /tmp/java-manifest \
-  benchmarks/quality-lanes/fixtures/_tools/java-manifest/ManifestGen.java
+  benchmarks/semantic_search/fixtures/_tools/java-manifest/ManifestGen.java
 java -cp /tmp/java-manifest ManifestGen \
   benchmarks/semantic_search/fixtures/java-workflow-discovery-v1
 ```
@@ -110,9 +127,7 @@ Unit fields: `unit_id`, `path`, `symbol`, `kind`
 Record components and non-static instance fields are not units; only static
 fields of interest are.
 
-## Snapshot recipe (`source.snapshot_sha256`)
-
-This lane uses the recipe required for the Java fixture:
+### Snapshot recipe (`source.snapshot_sha256`)
 
 1. Select files by `source.include` (`**/*.java`) minus `source.exclude`
    (`_tools/**`), then sort paths lexicographically.
@@ -125,38 +140,30 @@ This lane uses the recipe required for the Java fixture:
 that selection. The same recipe is implemented in `ManifestGen.java`,
 `build_draft_qrels.py`, and `scripts/verify_java_workflow_fixture.py`.
 
-## Truth and draft qrels
+### Truth and qrels
 
 `truth.json` is authored from the fixture source, not inferred from any search
 backend. `qrels.json` expands it to a judgment for every manifest unit in every
-query (8 x 40 = 320 rows, grade 0 by default):
+query (8 x 40 = 320 rows, grade 0 by default). The builder writes a **draft**;
+do not overwrite the adjudicated judgments with a regenerated draft unless the
+reconciliation is repeated.
 
 ```sh
-python3 benchmarks/quality-lanes/fixtures/_tools/java-manifest/build_draft_qrels.py \
+# from the Engram repository root
+python3 benchmarks/semantic_search/fixtures/_tools/java-manifest/build_draft_qrels.py \
   --fixture benchmarks/semantic_search/fixtures/java-workflow-discovery-v1 \
   --output benchmarks/semantic_search/fixtures/java-workflow-discovery-v1/qrels.json
 ```
 
-## Status: DRAFT, not runnable as a lane
+## Status: adjudicated and registered
 
-`qrels.json` declares `"judgment_status": "draft"` because these source-grounded
-labels have **not** been adjudicated by a human reviewer. The scorer
-(`scripts/evaluate_semantic_search.py`) refuses any qrels whose status is not
-`adjudicated`, so this lane cannot be run or scored until the status flips and
-the candidate pool is reviewed. Do not wire it into CI in draft form.
-
-After review, the minimal flip is the single-line change in `qrels.json`:
-
-```diff
-- "judgment_status": "draft",
-+ "judgment_status": "adjudicated",
-```
-
-For a full auditable decision log, use `scripts/finalize_semantic_qrels.py`
-with an overlay covering all 320 query/unit pairs instead of editing the line
-by hand.
+`qrels.json` declares `"judgment_status": "adjudicated"` after the blind audit
+and reconciliation described above. The fixture is registered as the fifth
+language in the fork's `retrieval-quality-multilanguage` lane.
 
 ## Verification
+
+From the Engram repository root:
 
 ```sh
 python3 scripts/verify_java_workflow_fixture.py
@@ -165,5 +172,6 @@ python3 scripts/verify_java_workflow_fixture.py
 The verifier compiles the fixture, checks file/size/count bounds, resolves every
 span against its anchor, recomputes the snapshot, confirms truth and qrels agree
 grade-for-grade with full per-query coverage, checks query answer/decoy shape,
-confirms the deliberate decoys, asserts the draft status, and reports whether
-`git status --porcelain` attributes only the new paths to this work.
+confirms the deliberate decoys, asserts the adjudicated status, and reports
+whether `git status --porcelain` attributes only the fixture and tooling paths
+to this work.

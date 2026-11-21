@@ -28,9 +28,13 @@ Start the new multiplex with per-workspace endpoints and a readiness probe:
 ```
 
 `warn` logs `would_reject_unbound` for unbound clients and forwards them
-legacy-style. Bound calls already use the epoch fence.
+legacy-style. Bound calls already use the epoch fence, so `warn` is **client
+migration insurance, not a freshness requirement**.
 
-Run for the observation window (default 7 days). Gate: no new
+Shadow is optional. Skip it (or use a short canary) when you have verified that
+every Serena mount sends `?workspace=` and handles the typed errors. Going
+straight to `enforce` only risks breaking unbound legacy clients; it does not
+weaken the fence for bound workspaces. If you do run shadow, gate on zero new
 `would_reject_unbound` entries in the client inventory.
 
 ## 3. Relink hooks

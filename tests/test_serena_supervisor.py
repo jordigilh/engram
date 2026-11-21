@@ -1,0 +1,117 @@
+"""Supervisor coverage for per-workspace Serena processes (issue #204)."""
+from __future__ import annotations
+
+import asyncio
+import socket
+import sys
+
+from engram.pipeline.serena_supervisor import WorkspaceProcessSupervisor
+
+FAKE_SERVER = (
+    "import http.server,sys;"
+    "http.server.HTTPServer(('127.0.0.1', int(sys.argv[1])), "
+    "http.server.SimpleHTTPRequestHandler).serve_forever()"
+)
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def test_spawns_one_process_and_reuses_it(tmp_path):
+    base = _free_port()
+    supervisor = WorkspaceProcessSupervisor(
+        [sys.executable, "-c", FAKE_SERVER, "{port}"],
+        port_base=base,
+        port_span=5,
+        ready_timeout_s=5,
+    )
+
+    async def run():
+        try:
+            first = await supervisor.ensure(str(tmp_path))
+            second = await supervisor.ensure(str(tmp_path))
+            assert first == second
+            assert first.startswith(f"http://127.0.0.1:{base}/mcp")
+            assert await supervisor.endpoint(str(tmp_path)) == first
+        finally:
+            await supervisor.stop()
+
+    asyncio.run(run())
+
+
+HANG_SERVER = (
+    "import socket,sys,time;"
+    "s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1);"
+    "s.bind(('127.0.0.1', int(sys.argv[1]))); s.listen(1);"
+    "c,_=s.accept(); time.sleep(30)"
+)
+
+
+def test_hung_listener_is_not_ready(tmp_path):
+    import pytest
+
+    supervisor = WorkspaceProcessSupervisor(
+        [sys.executable, "-c", HANG_SERVER, "{port}"],
+        port_base=_free_port(),
+        port_span=5,
+        ready_timeout_s=0.4,
+    )
+
+    async def run():
+        try:
+            with pytest.raises(RuntimeError, match="did not listen"):
+                await supervisor.ensure(str(tmp_path))
+        finally:
+            await supervisor.stop()
+
+    asyncio.run(run())
+
+
+def test_concurrent_ensure_uses_distinct_ports(tmp_path):
+    ws_a = tmp_path / "a"
+    ws_b = tmp_path / "b"
+    ws_a.mkdir()
+    ws_b.mkdir()
+    supervisor = WorkspaceProcessSupervisor(
+        [sys.executable, "-c", FAKE_SERVER, "{port}"],
+        port_base=_free_port(),
+        port_span=5,
+        ready_timeout_s=5,
+    )
+
+    async def run():
+        try:
+            url_a, url_b = await asyncio.gather(
+                supervisor.ensure(str(ws_a)), supervisor.ensure(str(ws_b))
+            )
+            assert url_a != url_b
+        finally:
+            await supervisor.stop()
+
+    asyncio.run(run())
+
+
+def test_idle_eviction_stops_process(tmp_path):
+    now = [100.0]
+    supervisor = WorkspaceProcessSupervisor(
+        [sys.executable, "-c", FAKE_SERVER, "{port}"],
+        port_base=_free_port(),
+        port_span=5,
+        idle_ttl_s=10,
+        ready_timeout_s=5,
+        clock=lambda: now[0],
+    )
+
+    async def run():
+        try:
+            await supervisor.ensure(str(tmp_path))
+            now[0] = 200.0
+            await supervisor.evict_idle()
+            assert await supervisor.endpoint(str(tmp_path)) is None
+        finally:
+            await supervisor.stop()
+
+    asyncio.run(run())

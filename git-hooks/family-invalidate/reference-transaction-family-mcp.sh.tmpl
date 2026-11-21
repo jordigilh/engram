@@ -1,0 +1,15 @@
+#!/bin/sh
+# Emit begin/ref_committed/aborted invalidation phases for ref updates.
+# `preparing` is fail-closed: a non-zero exit aborts the git transaction when
+# the barrier broker cannot be acquired. Other phases always exit 0.
+HOOKS_SRC_DIR=$(dirname "$0")
+[ -L "$0" ] && HOOKS_SRC_DIR=$(dirname "$(readlink "$0")")
+SCRIPT="$HOOKS_SRC_DIR/_invalidate-{{FAMILY_NAME}}-workspaces.sh"
+[ -f "$SCRIPT" ] || exit 0
+
+case "$1" in
+    preparing) "$SCRIPT" begin 2>/dev/null || exit 1 ;;
+    committed) "$SCRIPT" ref_committed 2>/dev/null || true ;;
+    aborted) "$SCRIPT" aborted 2>/dev/null || true ;;
+esac
+exit 0

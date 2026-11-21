@@ -54,6 +54,7 @@ could reuse this same module.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import pathlib
@@ -63,6 +64,18 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from engram.pipeline.serena_supervisor import WorkspaceProcessSupervisor
+from engram.pipeline.serena_workspaces import (
+    WorkspaceAuthTimeout,
+    WorkspaceBusy,
+    WorkspaceRegistry,
+    header_for_busy,
+    is_control_tool,
+    is_read_only_tool,
+    read_spool_events,
+    status_for_busy,
+    typed_error_payload,
+)
 from engram.pipeline.zvec_policy import authorized_zvec_root
 
 logging.basicConfig(
@@ -106,11 +119,11 @@ def is_project_agnostic_tool(name: str) -> bool:
 
 
 def route_tool_call(tool_name: str) -> str:
-    """Classify a tools/call target: "intercept" (activate_project itself --
+    """Classify a tools/call target: "intercept" (internal control tools --
     redundant/dangerous to forward, this mount's project is already fixed),
     "agnostic" (safe to forward untouched, no activation needed), or
     "scoped" (default -- must pin this mount's project before forwarding)."""
-    if tool_name == "activate_project":
+    if is_control_tool(tool_name):
         return "intercept"
     if is_project_agnostic_tool(tool_name):
         return "agnostic"
@@ -178,6 +191,7 @@ class DownstreamSession:
     upstream_session_id: str
     last_used: float
     workspace: str | None = None
+    upstream_url: str | None = None
 
 
 class SessionProjectMismatch(Exception):
@@ -210,9 +224,12 @@ class DownstreamSessionRegistry:
         project: str,
         upstream_session_id: str,
         workspace: str | None = None,
+        upstream_url: str | None = None,
     ) -> tuple[str, DownstreamSession]:
         session_id = secrets.token_urlsafe(24)
-        entry = DownstreamSession(project, upstream_session_id, self._clock(), workspace)
+        entry = DownstreamSession(
+            project, upstream_session_id, self._clock(), workspace, upstream_url
+        )
         async with self._lock:
             self._sessions[session_id] = entry
         return session_id, entry
@@ -316,9 +333,31 @@ def _authorize_workspace(
     if not raw_workspace.strip() or not pathlib.Path(raw_workspace).is_absolute():
         raise ValueError("workspace must be an absolute authorized checkout path")
     authorized = authorized_zvec_root(raw_workspace, allowed_roots)
-    if authorized is None:
-        raise ValueError("workspace is outside the configured Serena root allowlist")
-    return str(authorized)
+    if authorized is not None:
+        return str(authorized)
+
+    # Distinguish "authorization denied" from "the check itself timed out":
+    # the latter must be a retryable typed error, not a misleading 403.
+    import subprocess
+
+    try:
+        for args in (
+            ["rev-parse", "--show-toplevel"],
+            ["worktree", "list", "--porcelain"],
+        ):
+            subprocess.run(
+                ["git", "-C", raw_workspace, *args],
+                capture_output=True,
+                check=False,
+                timeout=2,
+            )
+    except subprocess.TimeoutExpired as exc:
+        raise WorkspaceAuthTimeout(
+            "workspace authorization check timed out"
+        ) from exc
+    except OSError:
+        pass
+    raise ValueError("workspace is outside the configured Serena root allowlist")
 
 
 def _require_allowed_roots(allowed_roots: list[str] | None) -> list[str]:
@@ -462,58 +501,89 @@ def _make_activate(
     clients are avoided here."""
 
     async def activate(project: str) -> None:
-        import httpx
-
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-        }
-        if upstream_host_header:
-            headers["Host"] = upstream_host_header
-        async with httpx.AsyncClient(timeout=FORWARD_TIMEOUT_S) as client:
-            init_resp = await client.post(
-                upstream_url,
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {},
-                        "clientInfo": {"name": "serena-multiplex-activate", "version": "0.0.1"},
-                    },
-                },
-                headers=headers,
-            )
-            init_resp.raise_for_status()
-            session_id = init_resp.headers.get("mcp-session-id")
-            session_headers = {**headers, "mcp-session-id": session_id} if session_id else headers
-
-            await client.post(
-                upstream_url,
-                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
-                headers=session_headers,
-            )
-
-            call_resp = await client.post(
-                upstream_url,
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 2,
-                    "method": "tools/call",
-                    "params": {"name": "activate_project", "arguments": {"project": project}},
-                },
-                headers=session_headers,
-            )
-            call_resp.raise_for_status()
-            result = _parse_sse_json(call_resp.content)
-            if result.get("result", {}).get("isError"):
-                raise RuntimeError(f"activate_project({project!r}) failed: {result}")
-
-            if session_id:
-                await client.delete(upstream_url, headers=session_headers)
+        await _control_call(
+            upstream_url,
+            upstream_host_header,
+            "activate_project",
+            {"project": project},
+        )
 
     return activate
+
+
+async def _control_call(
+    upstream_url: str,
+    upstream_host_header: str | None,
+    tool_name: str,
+    arguments: dict,
+) -> None:
+    """Run one one-shot control tool call through a short POST-only session."""
+    import httpx
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if upstream_host_header:
+        headers["Host"] = upstream_host_header
+    async with httpx.AsyncClient(timeout=FORWARD_TIMEOUT_S) as client:
+        init_resp = await client.post(
+            upstream_url,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "serena-multiplex-control", "version": "0.0.1"},
+                },
+            },
+            headers=headers,
+        )
+        init_resp.raise_for_status()
+        session_id = init_resp.headers.get("mcp-session-id")
+        session_headers = {**headers, "mcp-session-id": session_id} if session_id else headers
+
+        await client.post(
+            upstream_url,
+            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            headers=session_headers,
+        )
+
+        call_resp = await client.post(
+            upstream_url,
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": tool_name, "arguments": arguments},
+            },
+            headers=session_headers,
+        )
+        call_resp.raise_for_status()
+        result = _parse_sse_json(call_resp.content)
+        if result.get("result", {}).get("isError"):
+            raise RuntimeError(f"{tool_name} failed: {result}")
+
+        if session_id:
+            await client.delete(upstream_url, headers=session_headers)
+
+
+def _make_restart_lsp(
+    upstream_url: str, upstream_host_header: str | None = None
+) -> Callable[[str], Awaitable[None]]:
+    """Restart the workspace's language servers (not the Serena process)."""
+
+    async def restart(_workspace: str) -> None:
+        await _control_call(
+            upstream_url,
+            upstream_host_header,
+            "restart_language_server",
+            {},
+        )
+
+    return restart
 
 
 def build_app(
@@ -522,6 +592,18 @@ def build_app(
     upstream_host_header: str | None = None,
     *,
     allowed_roots: list[str | pathlib.Path] | None = None,
+    invalidation_token: str | None = None,
+    invalidation_spool_dir: str | None = None,
+    require_workspace: str = "off",
+    workspace_settle_s: float = 0.0,
+    workspace_upstreams: dict[str, str] | None = None,
+    workspace_barrier_dir: str | None = None,
+    workspace_serena_command: list[str] | None = None,
+    workspace_serena_idle_ttl_s: float = 1800.0,
+    workspace_serena_port_base: int = 19000,
+    allow_shared_invalidation: bool = False,
+    lsp_readiness_symbol: str | None = None,
+    lsp_readiness_file: str | None = None,
 ):
     """Build one POST-only, project-pinned route per configured project.
 
@@ -530,6 +612,11 @@ def build_app(
     be an exact configured root or a registered linked Git worktree of one.
     The authorized absolute path becomes Serena's activation target for every
     scoped call in that session.
+
+    When invalidation is enabled (a token or spool directory is configured),
+    scoped calls run under per-workspace epoch fencing and return typed
+    ``workspace_flushing``/``outcome_unknown`` responses instead of opaque
+    timeouts.
     """
     from starlette.applications import Starlette
     from starlette.requests import Request
@@ -539,21 +626,151 @@ def build_app(
     tracker = ActiveProjectTracker()
     sessions = DownstreamSessionRegistry()
     activate = _make_activate(upstream_url, upstream_host_header)
+    registry = WorkspaceRegistry()
+    invalidation_enabled = bool(invalidation_token or invalidation_spool_dir)
+    if require_workspace not in {"off", "warn", "enforce"}:
+        raise ValueError("require_workspace must be off, warn, or enforce")
+    workspace_upstreams = {
+        WorkspaceRegistry.canonicalize(workspace): url
+        for workspace, url in (workspace_upstreams or {}).items()
+    }
+    if len(set(workspace_upstreams.values())) != len(workspace_upstreams):
+        raise ValueError("each workspace must map to a distinct Serena endpoint")
+    if workspace_barrier_dir is None and invalidation_spool_dir:
+        workspace_barrier_dir = str(
+            pathlib.Path(invalidation_spool_dir).expanduser() / ".barrier"
+        )
+    supervisor = (
+        WorkspaceProcessSupervisor(
+            workspace_serena_command,
+            port_base=workspace_serena_port_base,
+            idle_ttl_s=workspace_serena_idle_ttl_s,
+        )
+        if workspace_serena_command
+        else None
+    )
+    if invalidation_enabled and not invalidation_token:
+        raise ValueError("invalidation requires a token")
+    if invalidation_enabled and not (lsp_readiness_symbol or lsp_readiness_file):
+        raise ValueError(
+            "invalidation requires a revision-correlated readiness probe "
+            "(--lsp-readiness-symbol or --lsp-readiness-file)"
+        )
+    if (
+        invalidation_enabled
+        and supervisor is None
+        and not workspace_upstreams
+        and not allow_shared_invalidation
+    ):
+        raise ValueError(
+            "invalidation requires per-workspace endpoints "
+            "(--workspace-upstream or --workspace-serena-command); pass "
+            "allow_shared_invalidation only for migration"
+        )
     authorized_roots = frozenset(
         pathlib.Path(root).expanduser().resolve()
         for root in (allowed_roots or [])
     )
+
+    async def _runtime_for(workspace: str, *, allow_spawn: bool = True):
+        key = WorkspaceRegistry.canonicalize(workspace)
+        if allow_spawn:
+            url = await _url_for_workspace(key)
+        else:
+            url = workspace_upstreams.get(key, upstream_url)
+
+        async def readiness_probe(_workspace: str) -> None:
+            if lsp_readiness_symbol:
+                await _control_call(
+                    url,
+                    upstream_host_header,
+                    "find_symbol",
+                    {"name_path_pattern": lsp_readiness_symbol, "depth": 0},
+                )
+            elif lsp_readiness_file:
+                await _control_call(
+                    url,
+                    upstream_host_header,
+                    "get_symbols_overview",
+                    {"relative_path": lsp_readiness_file},
+                )
+            else:  # pragma: no cover - build_app rejects this configuration
+                raise RuntimeError("no revision-correlated readiness probe configured")
+
+        barrier_path = None
+        state_path = None
+        if workspace_barrier_dir:
+            import hashlib
+
+            digest = hashlib.sha256(key.encode()).hexdigest()[:16]
+            barrier_path = str(
+                pathlib.Path(workspace_barrier_dir).expanduser() / f"{digest}.lock"
+            )
+        if invalidation_spool_dir:
+            import hashlib
+
+            digest = hashlib.sha256(key.encode()).hexdigest()[:16]
+            state_path = str(
+                pathlib.Path(invalidation_spool_dir).expanduser()
+                / ".state"
+                / f"{digest}.state.json"
+            )
+        runtime = await registry.get_or_create(
+            workspace,
+            _make_activate(url, upstream_host_header),
+            _make_restart_lsp(url, upstream_host_header),
+            settle_s=workspace_settle_s,
+            barrier_path=barrier_path,
+            state_path=state_path,
+            backend_url=url,
+            readiness_probe=readiness_probe,
+        )
+        if allow_spawn:
+            await runtime.configure(
+                _make_activate(url, upstream_host_header),
+                _make_restart_lsp(url, upstream_host_header),
+                settle_s=workspace_settle_s,
+                barrier_path=barrier_path,
+                backend_url=url,
+                readiness_probe=readiness_probe,
+            )
+        return runtime
+
+    def _busy_response(busy: WorkspaceBusy, message: dict | None) -> Response:
+        message_id = (message or {}).get("id")
+        if message is None or "id" not in (message or {}):
+            return Response(
+                content=b"",
+                status_code=status_for_busy(busy),
+                headers=header_for_busy(busy),
+            )
+        payload = typed_error_payload(
+            message_id,
+            busy.kind,
+            busy.workspace,
+            epoch=busy.epoch,
+            retry_after_ms=busy.retry_after_ms,
+            retryable=busy.retryable,
+        )
+        return Response(
+            content=json.dumps(payload).encode(),
+            status_code=status_for_busy(busy),
+            headers=header_for_busy(busy),
+            media_type="application/json",
+        )
 
     # Headers that are connection/host-specific and must not be blindly
     # relayed between the two hops of this proxy.
     _DROP_REQUEST_HEADERS = {"host", "content-length", "connection"}
     _DROP_RESPONSE_HEADERS = {"content-length", "connection", "transfer-encoding"}
 
-    async def _upstream_request(method: str, body: bytes, headers: dict[str, str]) -> Response:
+    async def _upstream_request(
+        url: str, method: str, body: bytes, headers: dict[str, str]
+    ) -> Response:
         import httpx
 
         async with httpx.AsyncClient(timeout=FORWARD_TIMEOUT_S) as client:
-            upstream_resp = await client.request(method, upstream_url, content=body, headers=headers)
+            upstream_resp = await client.request(method, url, content=body, headers=headers)
         resp_headers = {
             k: v
             for k, v in upstream_resp.headers.items()
@@ -561,12 +778,33 @@ def build_app(
         }
         return Response(content=upstream_resp.content, status_code=upstream_resp.status_code, headers=resp_headers)
 
+    async def _url_for_workspace(workspace: str | None) -> str:
+        if workspace is None:
+            return upstream_url
+        key = WorkspaceRegistry.canonicalize(workspace)
+        if key in workspace_upstreams:
+            return workspace_upstreams[key]
+        if supervisor is not None:
+            try:
+                url = await supervisor.ensure(key)
+            except RuntimeError as exc:
+                log.warning("could not start Serena for %s: %s", key, exc)
+                raise WorkspaceBusy(
+                    "workspace_flushing", key, retry_after_ms=1000
+                ) from exc
+            for recycled in await supervisor.drain_recycled():
+                runtime = await registry.get(recycled)
+                if runtime is not None:
+                    await runtime.runtime_lost()
+            return url
+        return upstream_url
+
     def _upstream_headers(headers: dict[str, str]) -> dict[str, str]:
         if upstream_host_header:
             headers = {**headers, "Host": upstream_host_header}
         return headers
 
-    async def _open_upstream_session() -> tuple[str, Response]:
+    async def _open_upstream_session(url: str) -> tuple[str, Response]:
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
@@ -583,7 +821,9 @@ def build_app(
                 },
             }
         ).encode()
-        init_response = await _upstream_request("POST", init_body, _upstream_headers(headers))
+        init_response = await _upstream_request(
+            url, "POST", init_body, _upstream_headers(headers)
+        )
         if init_response.status_code >= 400:
             raise RuntimeError(f"Serena initialize failed with HTTP {init_response.status_code}")
         upstream_session_id = next(
@@ -600,15 +840,16 @@ def build_app(
         session_headers = {**headers, "mcp-session-id": upstream_session_id}
         initialized_body = b'{"jsonrpc":"2.0","method":"notifications/initialized"}'
         initialized_response = await _upstream_request(
-            "POST", initialized_body, _upstream_headers(session_headers)
+            url, "POST", initialized_body, _upstream_headers(session_headers)
         )
         if initialized_response.status_code >= 400:
             raise RuntimeError(f"Serena initialized notification failed with HTTP {initialized_response.status_code}")
         return upstream_session_id, init_response
 
-    async def _close_upstream_session(upstream_session_id: str) -> None:
+    async def _close_upstream_session(url: str, upstream_session_id: str) -> None:
         try:
             await _upstream_request(
+                url,
                 "DELETE",
                 b"",
                 _upstream_headers({"mcp-session-id": upstream_session_id}),
@@ -632,13 +873,36 @@ def build_app(
 
             raw_workspace = request.query_params.get(ENGRAM_WORKSPACE_QUERY_PARAMETER)
             try:
-                requested_workspace = _authorize_workspace(raw_workspace, authorized_roots)
+                requested_workspace = await asyncio.to_thread(
+                    _authorize_workspace, raw_workspace, authorized_roots
+                )
+            except WorkspaceAuthTimeout:
+                return Response(
+                    content=json.dumps(
+                        {
+                            "detail": "workspace authorization check timed out; retry"
+                        }
+                    ).encode(),
+                    status_code=503,
+                    headers={
+                        "X-Engram-Error": "workspace_auth_timeout",
+                        "Retry-After": "1",
+                    },
+                    media_type="application/json",
+                )
             except ValueError as exc:
                 return Response(status_code=403, content=str(exc).encode())
 
             expired = await sessions.expire()
             for entry in expired:
-                await _close_upstream_session(entry.upstream_session_id)
+                await _close_upstream_session(
+                    entry.upstream_url or upstream_url, entry.upstream_session_id
+                )
+            if supervisor is not None:
+                for evicted in await supervisor.evict_idle():
+                    runtime = await registry.get(evicted)
+                    if runtime is not None:
+                        await runtime.runtime_lost()
 
             downstream_session_id = request.headers.get("mcp-session-id")
             if request.method == "DELETE":
@@ -650,7 +914,9 @@ def build_app(
                     return Response(status_code=404)
                 if entry is None:
                     return Response(status_code=404)
-                await _close_upstream_session(entry.upstream_session_id)
+                await _close_upstream_session(
+                    entry.upstream_url or upstream_url, entry.upstream_session_id
+                )
                 return Response(status_code=200)
 
             body = await request.body()
@@ -660,13 +926,25 @@ def build_app(
                 return Response(status_code=400, content=b"Invalid JSON")
 
             if message.get("method") == "initialize":
+                if (
+                    invalidation_enabled
+                    and require_workspace == "enforce"
+                    and requested_workspace is None
+                ):
+                    return _busy_response(
+                        WorkspaceBusy("workspace_unbound", None), message
+                    )
+                session_url = await _url_for_workspace(requested_workspace)
                 try:
-                    upstream_session_id, response = await _open_upstream_session()
+                    upstream_session_id, response = await _open_upstream_session(session_url)
                     downstream_session_id, _ = await sessions.create(
                         project,
                         upstream_session_id,
                         requested_workspace,
+                        upstream_url=session_url,
                     )
+                except WorkspaceBusy as busy:
+                    return _busy_response(busy, message)
                 except Exception as exc:
                     log.warning("could not initialize Serena session for %s: %s", project, exc)
                     return Response(
@@ -697,10 +975,14 @@ def build_app(
                     if k.lower() not in _DROP_REQUEST_HEADERS and k.lower() != "mcp-session-id"
                 }
                 headers["mcp-session-id"] = entry.upstream_session_id
-                return await _upstream_request("POST", body, _upstream_headers(headers))
+                url = await _url_for_workspace(entry.workspace)
+                return await _upstream_request(
+                    url, "POST", body, _upstream_headers(headers)
+                )
 
             async def refresh_session() -> None:
-                upstream_session_id, _ = await _open_upstream_session()
+                session_url = await _url_for_workspace(entry.workspace)
+                upstream_session_id, _ = await _open_upstream_session(session_url)
                 await sessions.replace_upstream(downstream_session_id, entry, upstream_session_id)
 
             async def forward_with_recovery() -> Response:
@@ -713,6 +995,41 @@ def build_app(
                         content=f"event: message\ndata: {json.dumps(result)}\n\n",
                         media_type="text/event-stream",
                     )
+
+                if invalidation_enabled:
+                    effective_workspace = entry.workspace or requested_workspace
+                    if effective_workspace is None and require_workspace == "enforce":
+                        return _busy_response(
+                            WorkspaceBusy("workspace_unbound", None), message
+                        )
+                    if route == "agnostic":
+                        return _busy_response(
+                            WorkspaceBusy("workspace_unbound", effective_workspace),
+                            message,
+                        )
+                    if effective_workspace is not None:
+                        runtime = await _runtime_for(effective_workspace)
+                        if invalidation_spool_dir:
+                            for event, path in read_spool_events(
+                                invalidation_spool_dir, runtime.workspace
+                            ):
+                                await runtime.apply_event(event)
+                                path.unlink(missing_ok=True)
+
+                        async def forward_once() -> Response:
+                            response = await forward_raw()
+                            if is_read_only_tool(tool_name) and _looks_like_upstream_session_loss(
+                                response.status_code, response.body
+                            ):
+                                await refresh_session()
+                                response = await forward_raw()
+                            return response
+
+                        try:
+                            return await runtime.serve(tool_name, forward_once)
+                        except WorkspaceBusy as busy:
+                            return _busy_response(busy, message)
+
                 if route == "scoped":
                     response = await _forward_scoped(
                         entry.workspace or project,
@@ -753,13 +1070,123 @@ def build_app(
 
         return endpoint
 
-    routes = [Route(f"/mcp/{project}", _make_endpoint(project), methods=["GET", "POST", "DELETE"]) for project in projects]
+    async def invalidate_endpoint(request: Request) -> Response:
+        if request.method != "POST":
+            return Response(status_code=405)
+        if invalidation_token:
+            provided = request.headers.get("X-Engram-Invalidation-Token") or ""
+            if not secrets.compare_digest(provided, invalidation_token):
+                return Response(status_code=403, content=b"Invalid invalidation token")
+        try:
+            message = json.loads(await request.body())
+        except (ValueError, UnicodeDecodeError):
+            return Response(status_code=400, content=b"Invalid JSON")
+        try:
+            workspace = await asyncio.to_thread(
+                _authorize_workspace, message.get("workspace"), authorized_roots
+            )
+        except WorkspaceAuthTimeout:
+            return _busy_response(
+                WorkspaceBusy(
+                    "workspace_auth_timeout",
+                    message.get("workspace"),
+                    retry_after_ms=1000,
+                ),
+                message,
+            )
+        except ValueError as exc:
+            return Response(status_code=403, content=str(exc).encode())
+        if workspace is None:
+            return Response(status_code=400, content=b"workspace is required")
+        runtime = await _runtime_for(workspace, allow_spawn=False)
+        result = await runtime.apply_event(message)
+        return Response(
+            content=json.dumps(
+                {
+                    "workspace": runtime.workspace,
+                    "epoch": runtime.state.epoch,
+                    "state": runtime.state.state,
+                    "applied": result.get("applied"),
+                    "reason": result.get("reason"),
+                }
+            ).encode(),
+            status_code=200,
+            media_type="application/json",
+        )
+
+    async def recover_endpoint(request: Request) -> Response:
+        if request.method != "POST":
+            return Response(status_code=405)
+        if invalidation_token:
+            provided = request.headers.get("X-Engram-Invalidation-Token") or ""
+            if not secrets.compare_digest(provided, invalidation_token):
+                return Response(status_code=403, content=b"Invalid invalidation token")
+        try:
+            message = json.loads(await request.body())
+        except (ValueError, UnicodeDecodeError):
+            return Response(status_code=400, content=b"Invalid JSON")
+        if not message.get("reason"):
+            return Response(status_code=400, content=b"reason is required")
+        try:
+            workspace = await asyncio.to_thread(
+                _authorize_workspace, message.get("workspace"), authorized_roots
+            )
+        except WorkspaceAuthTimeout:
+            return _busy_response(
+                WorkspaceBusy(
+                    "workspace_auth_timeout",
+                    message.get("workspace"),
+                    retry_after_ms=1000,
+                ),
+                message,
+            )
+        except ValueError as exc:
+            return Response(status_code=403, content=str(exc).encode())
+        if workspace is None:
+            return Response(status_code=400, content=b"workspace is required")
+        runtime = await _runtime_for(workspace, allow_spawn=False)
+        try:
+            cleared = await runtime.recover(
+                message.get("transaction_id"),
+                force=bool(message.get("force")),
+            )
+        except WorkspaceBusy as busy:
+            return _busy_response(busy, message)
+        log.info(
+            "serena recovery workspace=%s transactions=%s force=%s reason=%s",
+            runtime.workspace,
+            cleared,
+            bool(message.get("force")),
+            message.get("reason"),
+        )
+        return Response(
+            content=json.dumps(
+                {"workspace": runtime.workspace, "cleared": cleared}
+            ).encode(),
+            status_code=200,
+            media_type="application/json",
+        )
+
+    routes = [
+        Route(f"/mcp/{project}", _make_endpoint(project), methods=["GET", "POST", "DELETE"])
+        for project in projects
+    ]
+    if invalidation_enabled:
+        routes.append(
+            Route("/admin/invalidate", invalidate_endpoint, methods=["POST"])
+        )
+        routes.append(Route("/admin/recover", recover_endpoint, methods=["POST"]))
     return Starlette(routes=routes)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default=DEFAULT_HOST)
+    parser.add_argument(
+        "--allow-non-loopback",
+        action="store_true",
+        help="Explicitly allow binding the unauthenticated /mcp routes off loopback.",
+    )
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--upstream-url", default=DEFAULT_UPSTREAM_URL)
     parser.add_argument(
@@ -778,26 +1205,155 @@ def main() -> None:
         action="append",
         help="Required and repeatable exact checkout root; registered linked Git worktrees are accepted too.",
     )
+    parser.add_argument(
+        "--invalidation-token-file",
+        help="File containing the shared token required on /admin/invalidate.",
+    )
+    parser.add_argument(
+        "--invalidation-spool-dir",
+        help="Durable directory of git-hook invalidation events to drain.",
+    )
+    parser.add_argument(
+        "--require-workspace",
+        choices=["off", "warn", "enforce"],
+        default=None,
+        help="Binding policy. Defaults to enforce when invalidation is enabled, off otherwise.",
+    )
+    parser.add_argument(
+        "--workspace-settle-s",
+        type=float,
+        default=0.0,
+        help="Stability window required before a restarted workspace is ready.",
+    )
+    parser.add_argument(
+        "--workspace-upstream",
+        action="append",
+        dest="workspace_upstreams",
+        help="Repeatable <workspace-path>=<serena-endpoint-url> mapping; each "
+        "workspace must use a distinct endpoint.",
+    )
+    parser.add_argument(
+        "--workspace-barrier-dir",
+        help="Directory of per-workspace barrier lock files shared with the "
+        "git hooks.",
+    )
+    parser.add_argument(
+        "--workspace-serena-command",
+        help="Command template to spawn one Serena per workspace; use "
+        "{workspace} and {port} placeholders. Example: "
+        "'serena start-mcp-server --transport streamable-http --port {port} "
+        "--project {workspace}'.",
+    )
+    parser.add_argument(
+        "--workspace-serena-idle-ttl-s",
+        type=float,
+        default=1800.0,
+        help="Idle seconds before a per-workspace Serena process is evicted.",
+    )
+    parser.add_argument(
+        "--workspace-serena-port-base",
+        type=int,
+        default=19000,
+        help="First port considered when spawning per-workspace Serena processes.",
+    )
+    parser.add_argument(
+        "--allow-shared-invalidation",
+        action="store_true",
+        help="Migration-only: allow invalidation without per-workspace endpoints.",
+    )
+    parser.add_argument(
+        "--lsp-readiness-symbol",
+        help="Symbol lookup used to prove a restarted workspace is serving the current revision.",
+    )
+    parser.add_argument(
+        "--lsp-readiness-file",
+        help="Project-relative file used for a symbols-overview readiness probe.",
+    )
     args = parser.parse_args()
+
+    if not args.allow_non_loopback and args.host not in {
+        "127.0.0.1",
+        "localhost",
+        "::1",
+    }:
+        parser.error(
+            "--host must be loopback; pass --allow-non-loopback to override"
+        )
 
     projects = args.projects or KUBERNAUT_FAMILY_PROJECTS
     try:
         allowed_roots = _require_allowed_roots(args.allowed_roots)
     except ValueError as exc:
         parser.error(str(exc))
+
+    invalidation_token = None
+    if args.invalidation_token_file:
+        try:
+            invalidation_token = pathlib.Path(
+                args.invalidation_token_file
+            ).expanduser().read_text().strip()
+        except OSError as exc:
+            parser.error(f"cannot read --invalidation-token-file: {exc}")
+        if not invalidation_token:
+            parser.error("--invalidation-token-file is empty")
+
+    invalidation_enabled = bool(invalidation_token or args.invalidation_spool_dir)
+    if args.invalidation_spool_dir and not invalidation_token:
+        parser.error("--invalidation-spool-dir requires --invalidation-token-file")
+    if invalidation_enabled and not (
+        args.lsp_readiness_symbol or args.lsp_readiness_file
+    ):
+        parser.error(
+            "invalidation requires --lsp-readiness-symbol or "
+            "--lsp-readiness-file"
+        )
+    require_workspace = args.require_workspace or (
+        "enforce" if invalidation_enabled else "off"
+    )
+
+    workspace_upstreams: dict[str, str] = {}
+    for item in args.workspace_upstreams or []:
+        workspace, separator, url = item.partition("=")
+        if not separator or not workspace or not url:
+            parser.error("--workspace-upstream must be <path>=<url>")
+        workspace_upstreams[workspace] = url
+
+    workspace_serena_command = None
+    if args.workspace_serena_command:
+        import shlex
+
+        workspace_serena_command = shlex.split(args.workspace_serena_command)
+        if not any("{port}" in arg for arg in workspace_serena_command):
+            parser.error("--workspace-serena-command must contain {port}")
+
     log.info(
-        "starting on %s:%d, upstream=%s, projects=%s, allowed_roots=%s",
+        "starting on %s:%d, upstream=%s, projects=%s, allowed_roots=%s, "
+        "invalidation=%s, require_workspace=%s",
         args.host,
         args.port,
         args.upstream_url,
         projects,
         allowed_roots,
+        invalidation_enabled,
+        require_workspace,
     )
     app = build_app(
         projects,
         args.upstream_url,
         args.upstream_host_header,
         allowed_roots=allowed_roots,
+        invalidation_token=invalidation_token,
+        invalidation_spool_dir=args.invalidation_spool_dir,
+        require_workspace=require_workspace,
+        workspace_settle_s=args.workspace_settle_s,
+        workspace_upstreams=workspace_upstreams,
+        workspace_barrier_dir=args.workspace_barrier_dir,
+        workspace_serena_command=workspace_serena_command,
+        workspace_serena_idle_ttl_s=args.workspace_serena_idle_ttl_s,
+        workspace_serena_port_base=args.workspace_serena_port_base,
+        allow_shared_invalidation=args.allow_shared_invalidation,
+        lsp_readiness_symbol=args.lsp_readiness_symbol,
+        lsp_readiness_file=args.lsp_readiness_file,
     )
 
     import uvicorn

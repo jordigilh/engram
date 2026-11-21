@@ -29,7 +29,7 @@ from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "benchmarks" / "semantic_search" / "fixtures" / "java-workflow-discovery-v1"
-TOOL_DIR = ROOT / "benchmarks" / "quality-lanes" / "fixtures" / "_tools" / "java-manifest"
+TOOL_DIR = ROOT / "benchmarks" / "semantic_search" / "fixtures" / "_tools" / "java-manifest"
 VERIFIER = ROOT / "scripts" / "verify_java_workflow_fixture.py"
 
 MIN_FILE_BYTES = 1_000

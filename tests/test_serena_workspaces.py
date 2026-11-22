@@ -402,6 +402,20 @@ class TestAdminEndpoint:
 
 
 class TestSerenaSessionCompatibility:
+    def test_409_session_conflict_is_treated_as_session_loss(self):
+        assert (
+            serena_multiplex._looks_like_upstream_session_loss(
+                409, b'{"error":"session conflict"}'
+            )
+            is True
+        )
+        assert (
+            serena_multiplex._looks_like_upstream_session_loss(
+                409, b'{"error":"project mismatch"}'
+            )
+            is False
+        )
+
     def test_parses_internal_session_id_from_initial_instructions(self):
         body = (
             b'event: message\ndata: {"jsonrpc":"2.0","id":2,"result":'

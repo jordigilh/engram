@@ -40,6 +40,13 @@ Before enabling the supervisor broadly, choose one:
   with a low max-process cap; or
 - accept first-use latency and keep the typed retry loop for worktrees.
 
+A second canary with a warm shared Serena main, `restart_language_server`
+enabled via a temporary `SERENA_HOME`, measured: first A query 131 s, B got a
+typed 503 then 245 s, steady B ~59 s, A after invalidation 170 s; one shared
+Serena held ~377 MB. Typed responses were correct, but the shared process
+cannot serve two workspaces concurrently without multi-minute activation, so
+AC1 is not met by this topology under concurrent use.
+
 The epoch fence and typed contracts are independent of this topology choice.
 
 ## 2. Deploy the multiplex (shadow)

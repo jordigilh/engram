@@ -501,9 +501,17 @@ def _looks_like_upstream_session_loss(status_code: int, body: bytes) -> bool:
     if status_code == 404:
         return True
     text = body.decode("utf-8", errors="replace").lower()
-    return status_code == 400 and any(
+    if status_code not in {400, 409}:
+        return False
+    return any(
         marker in text
-        for marker in ("missing session id", "session not found", "invalid session")
+        for marker in (
+            "missing session id",
+            "session not found",
+            "invalid session",
+            "session conflict",
+            "conflicting session",
+        )
     )
 
 
@@ -1158,12 +1166,20 @@ def build_app(
 
                         async def forward_once() -> Response:
                             response = await forward_raw()
-                            if is_read_only_tool(tool_name) and _looks_like_upstream_session_loss(
+                            if not _looks_like_upstream_session_loss(
                                 response.status_code, response.body
                             ):
-                                await refresh_session()
-                                response = await forward_raw()
-                            return response
+                                return response
+                            if not is_read_only_tool(tool_name):
+                                # The write may already have applied under the
+                                # lost session; never replay it silently.
+                                raise WorkspaceBusy(
+                                    "outcome_unknown",
+                                    effective_workspace,
+                                    retryable=False,
+                                )
+                            await refresh_session()
+                            return await forward_raw()
 
                         try:
                             return await runtime.serve(tool_name, forward_once)

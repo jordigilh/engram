@@ -113,8 +113,9 @@ was blind-audited before adjudication (see its README).
   manifest unit. Those hits still consume top-10 slots.
 - **Sense:** indexes classes, methods and functions; 0 unmatched hits on all
   five lanes.
-- **zvec-grep:** indexes manifest units, including containers; its Java lane
-  carries the documented container/Javadoc effect (issue #58).
+- **zvec-grep:** indexes manifest units, including containers. Its Java lane
+  was measured at 0.3250 nDCG under the then-default model and fusion; see
+  `JAVA_GAP_ROOT_CAUSE_2026-11-22.md` for the corrected analysis.
 
 ## Sense mode ablation
 
@@ -133,8 +134,11 @@ hybrid), typescript .4976, java .4135.
   MRR is much higher (.781 vs .348).
 - rgctl's low recall is partly structural (function-only index), not purely a
   ranking result.
-- zvec-grep's Java weakness is a source-documentation effect, not an engine
-  defect (issue #58); its container units are reachable, unlike rgctl's.
+- zvec-grep's Java weakness is an engine-configuration effect (embedding
+  model plus fusion weighting), not a source-documentation or fixture effect.
+  **Corrected 2026-11-22**: see `JAVA_GAP_ROOT_CAUSE_2026-11-22.md`; the
+  original "source-documentation" reading of issue #58 is withdrawn, and the
+  fix landed in `zvec-grep#67`.
 - The three tools use different embedding models. Treat these as per-tool
   evidence on one corpus, not a controlled model comparison.
 

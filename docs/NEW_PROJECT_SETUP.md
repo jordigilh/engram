@@ -462,9 +462,10 @@ gateway normalizes the `code` and `zg` zvec backend keys to one agent-visible
 set; do not hand-tune per-repo subsets.
 
 - **zvec-grep (search and graph):** `zvec_grep_search`, `zvec_grep_rg`,
-  `zvec_grep_callgraph_*`, `zvec_grep_codegraph_*`.
-- **Pattern search:** `zvec_grep_rg`. It replaces Serena's
-  `search_for_pattern`; Serena is no longer the pattern-search backend.
+  `search_for_pattern`, `zvec_grep_callgraph_*`, `zvec_grep_codegraph_*`.
+- **Pattern search:** `search_for_pattern` is the public, Serena-compatible
+  tool backed by zvec-grep's managed ripgrep. `zvec_grep_rg` remains available
+  for raw `rg` commands. Serena is not the pattern-search backend.
 - **Serena (exact symbols, diagnostics, edits):** `find_symbol`,
   `get_symbols_overview`, `find_declaration`, `find_referencing_symbols`,
   `find_implementations`, `get_diagnostics_for_file`, `replace_content`,

@@ -441,6 +441,80 @@ class TestAggregateToolsList:
         assert catalog["docs_manual_mental_model"] == ("docs_manual", "manual_mental_model")
         assert errors == {}
 
+    def test_search_for_pattern_alias_is_injected_for_zvec(self, engram_gateway):
+        zg = FakeAdapter(
+            tools=[_tool("zvec_grep_search"), _tool("zvec_grep_rg")]
+        )
+
+        tool_defs, catalog, errors = asyncio.run(
+            engram_gateway.aggregate_tools_list({"zg": zg})
+        )
+
+        names = {tool["name"] for tool in tool_defs}
+        assert "search_for_pattern" in names
+        assert catalog["search_for_pattern"] == ("zg", "zvec_grep_rg")
+        assert errors == {}
+
+    def test_zvec_rg_arguments_translate_serena_shape(self, engram_gateway):
+        args = engram_gateway._zvec_rg_arguments(
+            {
+                "substring_pattern": "WorkflowName",
+                "context_lines_before": 2,
+                "context_lines_after": 3,
+                "paths_include_glob": "**/*.go",
+                "paths_exclude_glob": "vendor/**",
+                "relative_path": "pkg",
+                "skip_ignored_files": False,
+                "multiline": True,
+            },
+            "/workspace",
+        )
+
+        assert args["root"] == "/workspace"
+        command = args["command"]
+        assert command.startswith("rg ")
+        assert "-U" in command
+        assert "-B 2" in command
+        assert "-A 3" in command
+        assert "**/*.go" in command
+        assert "!vendor/**" in command
+        assert "pkg/**" in command
+        assert "--no-ignore" in command
+        assert "WorkflowName" in command
+
+    def test_search_for_pattern_alias_dispatches_to_zvec_rg(self, engram_gateway):
+        adapter = FakeAdapter(
+            call_results={
+                "zvec_grep_rg": {
+                    "content": [{"type": "text", "text": "hit"}],
+                    "isError": False,
+                }
+            }
+        )
+        message = {
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {
+                "name": "search_for_pattern",
+                "arguments": {"substring_pattern": "Syncer"},
+            },
+        }
+
+        response = asyncio.run(
+            engram_gateway.handle_tools_call(
+                message,
+                {"search_for_pattern": ("zg", "zvec_grep_rg")},
+                {"zg": adapter},
+                workspace="/workspace",
+            )
+        )
+
+        assert response["result"]["isError"] is False
+        assert adapter.call_log[0][0] == "zvec_grep_rg"
+        assert adapter.call_log[0][1]["root"] == "/workspace"
+        assert "Syncer" in adapter.call_log[0][1]["command"]
+
     def test_zvec_graph_tools_are_exposed_unprefixed(self, engram_gateway):
         graph_tools = [
             "zvec_grep_callgraph_blast_radius",
@@ -1363,6 +1437,14 @@ class TestBuildBackendAdapters:
 
 
 class TestZvecShadowRelayAdapter:
+    def test_managed_rg_does_not_get_freshness(self, engram_gateway):
+        arguments = engram_gateway._managed_zvec_arguments(
+            "zvec_grep_rg", {"root": "/workspace", "command": "rg foo ."}
+        )
+
+        assert "autoUpdate" not in arguments
+        assert "freshness" not in arguments
+
     def test_managed_graph_reads_wait_for_fresh_index_too(self, engram_gateway):
         arguments = engram_gateway._managed_zvec_arguments(
             "zvec_grep_callgraph_blast_radius", {"root": "/workspace", "function": "main"}
@@ -1870,7 +1952,9 @@ class TestLoadInstanceRegistry:
 
         assert set(registry) == {"my-project"}
         assert set(registry["my-project"]) == {"docs", "issues", "hindsight", "code", "serena"}
-        assert registry["my-project"]["code"]["kind"] == "stdio"
+        assert registry["my-project"]["code"]["kind"] == "http"
+        assert registry["my-project"]["code"]["url"].endswith(":7999/mcp")
+        assert registry["my-project"]["code"]["timeout_seconds"] == 300
         assert registry["my-project"]["serena"]["args"][-1] == "/path/to/my-project"
         assert registry["my-project"]["serena"]["workspace_routing"] is False
         assert registry["my-project"]["hindsight"]["url"].endswith("/mcp/shared-memory/")

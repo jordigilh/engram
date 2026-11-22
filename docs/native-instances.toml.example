@@ -21,11 +21,22 @@ scope_tags = ["my-project"]
 mental_model_ids = ["my-project-methodology"]
 
 [instances."my-project".backends.code]
-kind = "stdio"
-command = "/path/to/engram-search-my-project"
-args = []
-env = { COCOINDEX_PG_URL = "postgresql://user:password@127.0.0.1:5432/database" }
-shared_key = "my-project-code"
+kind = "http"
+# zvec-grep is the code backend: semantic search, call graph, code graph, and
+# the managed rg engine behind the public `search_for_pattern` tool.
+url = "http://127.0.0.1:7999/mcp"
+headers = { Host = "localhost:7999" }
+timeout_seconds = 300
+
+# Alternative: a code backend that runs as a separate process on the host.
+# Use this only when an HTTP zvec-grep endpoint is not available.
+#
+# [instances."my-project".backends.code]
+# kind = "stdio"
+# command = "/path/to/engram-search-my-project"
+# args = []
+# env = { COCOINDEX_PG_URL = "postgresql://user:password@127.0.0.1:5432/database" }
+# shared_key = "my-project-code"
 
 [instances."my-project".backends.serena]
 kind = "stdio"

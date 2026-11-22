@@ -71,6 +71,7 @@ import logging
 import math
 import pathlib
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -763,6 +764,104 @@ SERENA_PATTERN_SEARCH_GUIDANCE = (
     "If the answer limit is exceeded, Engram returns the available matches grouped by file and line."
 )
 
+# Public compatibility name. Backed by zvec-grep's managed ripgrep, not Serena.
+SEARCH_FOR_PATTERN_TOOL = {
+    "name": "search_for_pattern",
+    "description": (
+        "Search project files with a regular expression across the workspace. "
+        "Backed by zvec-grep's managed ripgrep (no LSP process). Accepts the "
+        "same arguments as the historical Serena tool; returns file-grouped "
+        "matches with line numbers. " + SERENA_PATTERN_SEARCH_GUIDANCE
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "substring_pattern": {
+                "type": "string",
+                "description": "Regular expression to search for.",
+            },
+            "context_lines_before": {"type": "integer", "default": 0},
+            "context_lines_after": {"type": "integer", "default": 0},
+            "paths_include_glob": {"type": "string", "default": ""},
+            "paths_exclude_glob": {"type": "string", "default": ""},
+            "relative_path": {"type": "string", "default": ""},
+            "restrict_search_to_code_files": {
+                "type": "boolean",
+                "default": False,
+            },
+            "skip_ignored_files": {"type": "boolean", "default": True},
+            "multiline": {"type": "boolean", "default": True},
+            "max_answer_chars": {"type": "integer", "default": -1},
+        },
+        "required": ["substring_pattern"],
+    },
+    "annotations": {
+        "title": "Search with managed ripgrep",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+}
+
+_CODE_FILE_GLOBS = (
+    "*.go",
+    "*.py",
+    "*.ts",
+    "*.tsx",
+    "*.js",
+    "*.jsx",
+    "*.rs",
+    "*.java",
+    "*.kt",
+    "*.c",
+    "*.cc",
+    "*.cpp",
+    "*.h",
+    "*.hpp",
+    "*.rb",
+    "*.php",
+)
+
+
+def _zvec_rg_arguments(arguments: dict, workspace: str | None) -> dict:
+    """Translate Serena-shaped search_for_pattern args to managed rg."""
+    if not workspace:
+        raise ValueError(
+            "search_for_pattern requires the request workspace (absolute root)"
+        )
+    pattern = arguments.get("substring_pattern")
+    if not isinstance(pattern, str) or not pattern:
+        raise ValueError("substring_pattern is required")
+
+    parts = ["rg"]
+    if arguments.get("multiline", True):
+        parts.append("-U")
+    before = int(arguments.get("context_lines_before") or 0)
+    after = int(arguments.get("context_lines_after") or 0)
+    if before:
+        parts += ["-B", str(before)]
+    if after:
+        parts += ["-A", str(after)]
+    if not arguments.get("skip_ignored_files", True):
+        parts.append("--no-ignore")
+
+    include = (arguments.get("paths_include_glob") or "").strip()
+    exclude = (arguments.get("paths_exclude_glob") or "").strip()
+    if include:
+        parts += ["-g", include]
+    if exclude:
+        parts += ["-g", f"!{exclude}"]
+    relative = (arguments.get("relative_path") or "").strip()
+    if relative:
+        parts += ["-g", relative, "-g", f"{relative}/**"]
+    if arguments.get("restrict_search_to_code_files"):
+        for glob in _CODE_FILE_GLOBS:
+            parts += ["-g", glob]
+
+    parts += ["-e", pattern, "."]
+    return {"root": workspace, "command": shlex.join(parts)}
+
 # Backends with no entry here (code/cocoindex, and any future family) pass
 # through unfiltered -- their catalogs are already small (2 tools today).
 RELEVANT_TOOLS_BY_BACKEND: dict[str, frozenset[str]] = {
@@ -823,6 +922,24 @@ async def _fetch_backend_tools(backend_key: str, adapter: BackendAdapter) -> tup
         return backend_key, exc
 
 
+def _truncate_pattern_result(result: dict, max_chars: int) -> dict:
+    if max_chars <= 0:
+        return result
+    content = result.get("content")
+    if not isinstance(content, list):
+        return result
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if isinstance(text, str) and len(text) > max_chars:
+            item["text"] = (
+                text[:max_chars]
+                + f"\n... truncated at max_answer_chars={max_chars}"
+            )
+    return result
+
+
 async def aggregate_tools_list(
     backends: dict[str, BackendAdapter],
 ) -> tuple[list[dict], dict[str, tuple[str, str]], dict[str, str]]:
@@ -843,6 +960,15 @@ async def aggregate_tools_list(
         per_backend_tools[backend_key] = filter_relevant_tools(backend_key, outcome)
 
     catalog, tool_defs = build_catalog(per_backend_tools)
+    if "search_for_pattern" not in catalog:
+        for key in ("zg", "code"):
+            if any(
+                tool.get("name") == "zvec_grep_rg"
+                for tool in per_backend_tools.get(key, [])
+            ):
+                tool_defs.append(dict(SEARCH_FOR_PATTERN_TOOL))
+                catalog["search_for_pattern"] = (key, "zvec_grep_rg")
+                break
     return tool_defs, catalog, errors
 
 
@@ -900,6 +1026,32 @@ async def handle_tools_call(
     adapter = backends.get(backend_key)
     if adapter is None:
         return _jsonrpc_error_result(message_id, f"Backend {backend_key!r} for tool {tool_name!r} is not wired up")
+
+    if tool_name == "search_for_pattern" and raw_name == "zvec_grep_rg":
+        try:
+            forwarded_arguments = _zvec_rg_arguments(arguments, workspace)
+            result = await adapter.call_tool(raw_name, forwarded_arguments)
+        except Exception as exc:  # noqa: BLE001 - clean tool error
+            detail = _format_exception(exc)
+            log.warning("search_for_pattern failed: %s", detail)
+            _log_gateway_call(
+                project=project, backend=backend_key, tool=tool_name,
+                is_error=True, result_chars=0, est_tokens=0,
+            )
+            return _jsonrpc_error_result(
+                message_id, f"search_for_pattern failed: {detail}"
+            )
+        result = _truncate_pattern_result(
+            result, int(arguments.get("max_answer_chars") or -1)
+        )
+        result_text = _extract_result_text(result)
+        _log_gateway_call(
+            project=project, backend=backend_key, tool=tool_name,
+            is_error=bool(result.get("isError")),
+            result_chars=len(result_text),
+            est_tokens=_estimate_tokens(result_text),
+        )
+        return _jsonrpc_success_result(message_id, result)
 
     try:
         forwarded_arguments = _managed_zvec_arguments(raw_name, arguments)

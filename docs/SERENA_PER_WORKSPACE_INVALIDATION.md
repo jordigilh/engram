@@ -207,8 +207,25 @@ kills the process group and respawns. A successful TCP connect is not liveness.
 The same bounded request applies after `restart_language_server`, so a hung LSP
 session is recycled like a stale one.
 
-## 4. Acceptance criteria mapping
+### 3.7 Serena version compatibility (validated against 2.1.0)
 
+- `mcp-session-id` header flow is unchanged; the downstream-session model
+  survives.
+- `activate_project` exists only in multi-project mode. A shared daemon must
+  **not** launch with `--project`; per-workspace processes may, and then do not
+  need activation.
+- Serena 2.1.0 requires an internal `session` argument on `activate_project`
+  (renamed from `session_id`). The multiplex obtains it by calling
+  `initial_instructions` once per upstream session and parsing
+  `Your Serena session id is '<id>'`, then sends
+  `{"project": ..., "session": <id>}`.
+- **Target pin:** an unreleased main / 2.2.0 build, not 2.1.0. The
+  SIGTERM symbol-cache preservation and stdin-failure hang fixes are not in
+  2.1.0.
+- **License boundary:** Serena remains Apache-2.0. Engram talks to it only over
+  MCP/HTTP as a separate process; it must never import Serena in-process.
+
+## 4. Acceptance criteria mapping
 | Criterion | Mechanism |
 |---|---|
 | Commit in one worktree does not interrupt others | One process/endpoint per workspace; invalidation touches only its runtime (3.1, 3.3) |

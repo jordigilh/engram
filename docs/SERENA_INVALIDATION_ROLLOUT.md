@@ -6,6 +6,12 @@ repository; this is the ordered procedure and the pass/fail checks.
 
 ## 1. Preconditions
 
+- Target a Serena main / 2.2.0 build, not 2.1.0: the SIGTERM symbol-cache
+  preservation and stdin-failure hang fixes are unreleased. The shared-daemon
+  launch must **not** pass `--project` (2.1.0 hides `activate_project` in
+  single-project mode); per-workspace launches may pass it.
+- Engram talks to Serena only over MCP/HTTP as a separate process. Never import
+  Serena in-process (Apache-2.0 process boundary).
 - The deployed Serena build exposes `restart_language_server` in the context
   used by the multiplex. Startup fails closed if it does not.
 - A dedicated invalidation token file exists with `0600` permissions.

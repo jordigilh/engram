@@ -58,6 +58,7 @@ import asyncio
 import json
 import logging
 import pathlib
+import re
 import secrets
 import sys
 import time
@@ -192,6 +193,7 @@ class DownstreamSession:
     last_used: float
     workspace: str | None = None
     upstream_url: str | None = None
+    serena_session_id: str | None = None
 
 
 class SessionProjectMismatch(Exception):
@@ -225,10 +227,16 @@ class DownstreamSessionRegistry:
         upstream_session_id: str,
         workspace: str | None = None,
         upstream_url: str | None = None,
+        serena_session_id: str | None = None,
     ) -> tuple[str, DownstreamSession]:
         session_id = secrets.token_urlsafe(24)
         entry = DownstreamSession(
-            project, upstream_session_id, self._clock(), workspace, upstream_url
+            project,
+            upstream_session_id,
+            self._clock(),
+            workspace,
+            upstream_url,
+            serena_session_id,
         )
         async with self._lock:
             self._sessions[session_id] = entry
@@ -246,10 +254,17 @@ class DownstreamSessionRegistry:
             entry.last_used = self._clock()
             return entry
 
-    async def replace_upstream(self, session_id: str, entry: DownstreamSession, upstream_session_id: str) -> None:
+    async def replace_upstream(
+        self,
+        session_id: str,
+        entry: DownstreamSession,
+        upstream_session_id: str,
+        serena_session_id: str | None = None,
+    ) -> None:
         async with self._lock:
             if self._sessions.get(session_id) is entry:
                 entry.upstream_session_id = upstream_session_id
+                entry.serena_session_id = serena_session_id
                 entry.last_used = self._clock()
 
     async def bind_workspace(self, session_id: str, entry: DownstreamSession, workspace: str) -> bool:
@@ -420,6 +435,44 @@ def _parse_sse_json(body: bytes) -> dict:
     return json.loads(text)
 
 
+_SERENA_SESSION_RE = re.compile(
+    r"Your Serena session id is [`'\"]([0-9A-Za-z._-]+)[`'\"]"
+)
+
+
+def _parse_serena_session_id(body: bytes) -> str | None:
+    """Extract Serena's internal session id from initial_instructions.
+
+    Serena 2.1.0 requires this id in ``activate_project``; older builds may
+    not report one, in which case activation proceeds without it.
+    """
+    text = body.decode("utf-8", errors="replace")
+    for line in text.splitlines():
+        if line.startswith("data:"):
+            text = line[len("data:") :]
+            break
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        result = payload.get("result")
+        content = result.get("content") if isinstance(result, dict) else None
+        if isinstance(content, list):
+            text = " ".join(
+                item.get("text", "") for item in content if isinstance(item, dict)
+            )
+    match = _SERENA_SESSION_RE.search(text)
+    return match.group(1) if match else None
+
+
+def _activate_arguments(project: str, serena_session_id: str | None) -> dict:
+    args = {"project": project}
+    if serena_session_id:
+        args["session"] = serena_session_id
+    return args
+
+
 def _looks_like_no_active_project_error(body: bytes) -> bool:
     """True if `body` is an MCP tool-call error response whose text reports
     Serena has no active project for this session -- the signature of a
@@ -506,6 +559,7 @@ def _make_activate(
             upstream_host_header,
             "activate_project",
             {"project": project},
+            include_serena_session=True,
         )
 
     return activate
@@ -516,6 +570,8 @@ async def _control_call(
     upstream_host_header: str | None,
     tool_name: str,
     arguments: dict,
+    *,
+    include_serena_session: bool = False,
 ) -> None:
     """Run one one-shot control tool call through a short POST-only session."""
     import httpx
@@ -551,13 +607,39 @@ async def _control_call(
             headers=session_headers,
         )
 
+        call_arguments = dict(arguments)
+        call_id = 2
+        if include_serena_session:
+            instructions_resp = await client.post(
+                upstream_url,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {"name": "initial_instructions", "arguments": {}},
+                },
+                headers=session_headers,
+            )
+            instructions_resp.raise_for_status()
+            serena_session_id = _parse_serena_session_id(instructions_resp.content)
+            if serena_session_id:
+                call_arguments = _activate_arguments(
+                    call_arguments.get("project", ""), serena_session_id
+                )
+            else:
+                log.warning(
+                    "Serena did not report an internal session id; "
+                    "activate_project may fail on 2.1.0+"
+                )
+            call_id = 3
+
         call_resp = await client.post(
             upstream_url,
             json={
                 "jsonrpc": "2.0",
-                "id": 2,
+                "id": call_id,
                 "method": "tools/call",
-                "params": {"name": tool_name, "arguments": arguments},
+                "params": {"name": tool_name, "arguments": call_arguments},
             },
             headers=session_headers,
         )
@@ -833,7 +915,7 @@ def build_app(
             headers = {**headers, "Host": upstream_host_header}
         return headers
 
-    async def _open_upstream_session(url: str) -> tuple[str, Response]:
+    async def _open_upstream_session(url: str) -> tuple[str, str | None, Response]:
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
@@ -873,7 +955,22 @@ def build_app(
         )
         if initialized_response.status_code >= 400:
             raise RuntimeError(f"Serena initialized notification failed with HTTP {initialized_response.status_code}")
-        return upstream_session_id, init_response
+
+        serena_session_id = None
+        instructions_body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "initial_instructions", "arguments": {}},
+            }
+        ).encode()
+        instructions_response = await _upstream_request(
+            url, "POST", instructions_body, _upstream_headers(session_headers)
+        )
+        if instructions_response.status_code < 400:
+            serena_session_id = _parse_serena_session_id(instructions_response.body)
+        return upstream_session_id, serena_session_id, init_response
 
     async def _close_upstream_session(url: str, upstream_session_id: str) -> None:
         try:
@@ -965,12 +1062,17 @@ def build_app(
                     )
                 session_url = await _url_for_workspace(requested_workspace)
                 try:
-                    upstream_session_id, response = await _open_upstream_session(session_url)
+                    (
+                        upstream_session_id,
+                        serena_session_id,
+                        response,
+                    ) = await _open_upstream_session(session_url)
                     downstream_session_id, _ = await sessions.create(
                         project,
                         upstream_session_id,
                         requested_workspace,
                         upstream_url=session_url,
+                        serena_session_id=serena_session_id,
                     )
                 except WorkspaceBusy as busy:
                     return _busy_response(busy, message)
@@ -1011,8 +1113,17 @@ def build_app(
 
             async def refresh_session() -> None:
                 session_url = await _url_for_workspace(entry.workspace)
-                upstream_session_id, _ = await _open_upstream_session(session_url)
-                await sessions.replace_upstream(downstream_session_id, entry, upstream_session_id)
+                (
+                    upstream_session_id,
+                    serena_session_id,
+                    _,
+                ) = await _open_upstream_session(session_url)
+                await sessions.replace_upstream(
+                    downstream_session_id,
+                    entry,
+                    upstream_session_id,
+                    serena_session_id,
+                )
 
             async def forward_with_recovery() -> Response:
                 tool_name = (message.get("params") or {}).get("name", "")

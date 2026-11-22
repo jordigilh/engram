@@ -401,6 +401,24 @@ class TestAdminEndpoint:
             )
 
 
+class TestSerenaSessionCompatibility:
+    def test_parses_internal_session_id_from_initial_instructions(self):
+        body = (
+            b'event: message\ndata: {"jsonrpc":"2.0","id":2,"result":'
+            b'{"content":[{"type":"text","text":"Your Serena session id is `abc123def`."}]}}\n\n'
+        )
+        assert (
+            serena_multiplex._parse_serena_session_id(body) == "abc123def"
+        )
+
+    def test_activate_arguments_include_session_only_when_known(self):
+        assert serena_multiplex._activate_arguments("/ws", None) == {"project": "/ws"}
+        assert serena_multiplex._activate_arguments("/ws", "s1") == {
+            "project": "/ws",
+            "session": "s1",
+        }
+
+
 class TestSpoolDrain:
     def test_drains_and_removes_events(self, tmp_path):
         event = {

@@ -863,6 +863,26 @@ class TestBuildApp:
                 if method == "POST" and message.get("method") == "notifications/initialized":
                     return httpx.Response(202, content=b"")
                 if method == "POST" and message.get("method") == "tools/call":
+                    name = (message.get("params") or {}).get("name", "")
+                    if name == "initial_instructions":
+                        return httpx.Response(
+                            200,
+                            content=json.dumps(
+                                {
+                                    "jsonrpc": "2.0",
+                                    "id": message.get("id"),
+                                    "result": {
+                                        "content": [
+                                            {
+                                                "type": "text",
+                                                "text": "Your Serena session id is `s1`.",
+                                            }
+                                        ],
+                                        "isError": False,
+                                    },
+                                }
+                            ).encode(),
+                        )
                     start_line = 666 if activated[-1] == str(worktree.resolve()) else 439
                     result = {
                         "jsonrpc": "2.0",

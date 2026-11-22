@@ -452,9 +452,31 @@ optional `shared_key` for sharing one subprocess across routes. Do not define
 both `endpoint` and `backends` for one instance.
 
 The tracked [`docs/runtime-kubernaut.toml.example`](runtime-kubernaut.toml.example)
-is a Kubernaut-specific example, including the optional Kubernaut RCA backend
-and its `kubernaut-v1.5` release route. Use the generic example for unrelated
-projects.
+is a Kubernaut-specific example, including the optional Kubernaut RCA backend.
+Use the generic example for unrelated projects.
+
+#### Normalized MCP tool surface
+
+Every code repo must expose the same tool names through the gateway. The
+gateway normalizes the `code` and `zg` zvec backend keys to one agent-visible
+set; do not hand-tune per-repo subsets.
+
+- **zvec-grep (search and graph):** `zvec_grep_search`, `zvec_grep_rg`,
+  `zvec_grep_callgraph_*`, `zvec_grep_codegraph_*`.
+- **Pattern search:** `zvec_grep_rg`. It replaces Serena's
+  `search_for_pattern`; Serena is no longer the pattern-search backend.
+- **Serena (exact symbols, diagnostics, edits):** `find_symbol`,
+  `get_symbols_overview`, `find_declaration`, `find_referencing_symbols`,
+  `find_implementations`, `get_diagnostics_for_file`, `replace_content`,
+  `replace_in_files`, `replace_symbol_body`, `insert_after_symbol`,
+  `insert_before_symbol`, `rename_symbol`, `safe_delete_symbol`.
+- **Hidden from agents:** zvec index/server management tools, and
+  `activate_project`/`query_project`/`list_queryable_projects` where
+  path-addressed routing is in use.
+
+Onboarding check: query the project route's `tools/list` and confirm the zvec
+and Serena sets above match every other repo. If a repo lacks zvec, add the
+zvec backend; do not fall back to Serena pattern search.
 
 Mount the registry read-only and expose the gateway port:
 

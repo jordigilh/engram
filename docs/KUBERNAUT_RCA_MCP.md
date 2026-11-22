@@ -13,7 +13,6 @@ The Engram gateway adds the RCA backend only for these project identities:
 
 - `kubernaut`
 - `kubernaut-operator`
-- `kubernaut-v1.5`
 - `kubernaut-v1.6`
 
 Other projects, including `kubernaut-console`, do not receive the RCA MCP entry.

@@ -232,7 +232,7 @@ systemctl --user enable --now engram-serena-multiplex-kubernaut-family.service
 
 The 4 unit files are named/scoped for this project's own repo family
 (`kubernaut`, `kubernaut-operator`, `kubernaut-console`,
-`kubernaut-demo-scenarios`, `kubernaut-v1.5`, `kubernaut-v1.6`) — for a
+`kubernaut-demo-scenarios`, `kubernaut-v1.6`) — for a
 different family, copy and rename them, and edit each unit's `--project`/
 `ExecStart` args plus the OpenCode plugin's project/branch routes to match. See each
 unit file's own header comments (and the direct-analog `launchd/*.plist`

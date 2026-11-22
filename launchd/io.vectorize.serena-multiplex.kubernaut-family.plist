@@ -46,8 +46,6 @@
         <string>--project</string>
         <string>kubernaut-docs</string>
         <string>--project</string>
-        <string>kubernaut-v1.5</string>
-        <string>--project</string>
         <string>kubernaut-v1.6</string>
         <string>--allowed-root</string>
         <string>__HOME__/go/src/github.com/jordigilh/kubernaut</string>
@@ -59,8 +57,6 @@
         <string>__HOME__/go/src/github.com/jordigilh/kubernaut-demo-scenarios</string>
         <string>--allowed-root</string>
         <string>__HOME__/go/src/github.com/jordigilh/kubernaut-docs</string>
-        <string>--allowed-root</string>
-        <string>__HOME__/go/src/github.com/jordigilh/kubernaut-v1.5</string>
         <string>--allowed-root</string>
         <string>__HOME__/go/src/github.com/jordigilh/kubernaut-v1.6</string>
         <string>--allowed-root</string>

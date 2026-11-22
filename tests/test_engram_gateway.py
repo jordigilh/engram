@@ -281,6 +281,23 @@ class TestFilterRelevantTools:
 
         assert {tool["name"] for tool in filtered} == {"zvec_grep_rg"}
 
+    def test_zg_backend_matches_code_agent_surface(self, engram_gateway):
+        tools = [
+            _tool("zvec_grep_search"),
+            _tool("zvec_grep_rg"),
+            _tool("zvec_grep_codegraph_node"),
+            _tool("zvec_grep_index"),
+            _tool("zvec_grep_server_status"),
+        ]
+
+        filtered = engram_gateway.filter_relevant_tools("zg", tools)
+
+        assert {tool["name"] for tool in filtered} == {
+            "zvec_grep_search",
+            "zvec_grep_rg",
+            "zvec_grep_codegraph_node",
+        }
+
     def test_code_backend_hides_zvec_management_tools(self, engram_gateway):
         tools = [
             _tool("praxis_code_search"),

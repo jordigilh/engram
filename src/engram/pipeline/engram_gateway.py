@@ -708,6 +708,25 @@ ZVEC_MANAGEMENT_TOOLS = frozenset({
     "zvec_grep_server_status",
 })
 
+# One agent-visible zvec surface regardless of whether the deployment keys the
+# backend as "code" (legacy) or "zg" (native). Management/index tools stay off
+# the aggregated route.
+ZVEC_AGENT_TOOLS = frozenset({
+    "zvec_grep_search",
+    "zvec_search_code",
+    "zvec_grep_rg",
+    "zvec_grep_callgraph_blast_radius",
+    "zvec_grep_callgraph_shortest_path",
+    "zvec_grep_callgraph_cluster",
+    "zvec_grep_callgraph_communities",
+    "zvec_grep_codegraph_affected",
+    "zvec_grep_codegraph_node",
+    "zvec_grep_codegraph_neighbors",
+    "zvec_grep_codegraph_relation_path",
+    "zvec_grep_codegraph_explain",
+    "zvec_grep_codegraph_capabilities",
+})
+
 MANUAL_MENTAL_MODEL_TOOLS = frozenset({"manual_mental_model"})
 METHODOLOGY_BANK_PATHS = frozenset({"/mcp/shared-memory", "/mcp/hindsight"})
 
@@ -751,6 +770,7 @@ RELEVANT_TOOLS_BY_BACKEND: dict[str, frozenset[str]] = {
     "issues": RELEVANT_HINDSIGHT_TOOLS,
     "hindsight": METHODOLOGY_HINDSIGHT_TOOLS,
     "serena": RELEVANT_SERENA_TOOLS,
+    "zg": ZVEC_AGENT_TOOLS,
     "docs_manual": MANUAL_MENTAL_MODEL_TOOLS,
     "issues_manual": MANUAL_MENTAL_MODEL_TOOLS,
     "kuadrant_docs": RECALL_ONLY_HINDSIGHT_TOOLS,

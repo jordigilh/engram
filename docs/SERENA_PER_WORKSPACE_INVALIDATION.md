@@ -207,6 +207,17 @@ kills the process group and respawns. A successful TCP connect is not liveness.
 The same bounded request applies after `restart_language_server`, so a hung LSP
 session is recycled like a stale one.
 
+**Process-wide GIL hang (2026-11-22 stack sample).** The captured sample shows
+the main thread in Python deallocation/asyncio-task cleanup while worker
+threads wait on the GIL; the listener stays open at ~83 MB. This is a
+process-wide stall, not an LSP reload problem: `restart_language_server`
+cannot recover it, and SIGTERM may be ignored. Recovery requires SIGKILL of the
+process (or process group), then a fresh process. Engram therefore ships a
+request-level watchdog (`engram.pipeline.serena_liveness`) that probes
+`initialize` and runs a deployment-provided recovery command. Shared-daemon
+deployments must run it; supervisor-owned workspaces already recycle the
+process on the same signal.
+
 ### 3.7 Serena version compatibility (validated against 2.1.0)
 
 - `mcp-session-id` header flow is unchanged; the downstream-session model
@@ -309,6 +320,10 @@ Landed:
 - Request-level liveness: per-workspace spawn/reuse performs a bounded MCP
   `initialize`; a hung-but-listening process is killed and respawned. The same
   bounded probe runs after `restart_language_server`.
+- Process-level hang watchdog: `src/engram/pipeline/serena_liveness.py` probes
+  a Serena MCP endpoint and runs a deployment-provided SIGKILL/restart command
+  on timeout. The 2026-11-22 stack sample shows a process-wide
+  GIL/asyncio-dealloc stall that only process kill recovers.
 - Authorization timeouts return typed `workspace_auth_timeout` (503, retry),
   distinct from a genuine 403 denial; exact allowlisted roots skip git.
 - The worktree fingerprint excludes index mtime (IDE `git status` refreshes do

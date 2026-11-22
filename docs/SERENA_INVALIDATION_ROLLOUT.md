@@ -14,6 +14,10 @@ repository; this is the ordered procedure and the pass/fail checks.
   Serena in-process (Apache-2.0 process boundary).
 - The deployed Serena build exposes `restart_language_server` in the context
   used by the multiplex. Startup fails closed if it does not.
+- A process-level liveness watchdog runs against the shared daemon, with a
+  recovery command that **SIGKILLs** the hung process before launchd/systemd
+  restarts it. The 2026-11-22 stack sample is a process-wide GIL/asyncio-dealloc
+  stall; `restart_language_server` and SIGTERM do not recover it.
 - A dedicated invalidation token file exists with `0600` permissions.
 - The spool directory and `<spool>/.state` are writable by both the git hooks
   and the multiplex user.

@@ -49,30 +49,36 @@ From `luuuc/sense` @ `a678631`:
 ## Fix
 
 `zvec-grep#67` ports shape-aware fusion weights (identifier 1.1/1.0, mixed
-1.0/1.0, natural language 1.0/2.0) and sets the measured-best local model as the
-default, chosen across the full catalog in `zvec-grep#66`.
+1.0/1.0, natural language 1.0/2.0) and adds per-repository model selection: a
+workspace embeds with one model, so a fresh workspace with no explicit model,
+no stored model and no configured default picks the measured-best model for its
+dominant source language (tie/unknown -> the generalist
+`gte-modernbert-base`). The table comes from the twelve-model sweep in
+`zvec-grep#66`.
 
-Resulting zvec-grep versus Sense, nDCG@10 / MRR@10:
+Resulting zvec-grep versus Sense, nDCG@10 / MRR@10, with the selected model:
 
-| Lane | zvec-grep | Sense |
-|---|---|---|
-| go | **0.6461** / **0.8438** | 0.5763 / 0.7304 |
-| python | **0.6282** / **0.6875** | 0.5258 / 0.5938 |
-| rust | **0.6500** / **0.7917** | 0.5312 / 0.7812 |
-| typescript | **0.6689** / **0.8438** | 0.5164 / 0.6970 |
-| java | **0.4663** / **0.5491** | 0.4227 / 0.5458 |
+| Lane | Model | zvec-grep | Sense |
+|---|---|---|---|
+| go | gte-modernbert-base | **0.6461** / **0.8438** | 0.5763 / 0.7304 |
+| python | multilingual-e5-small | **0.7596** / **0.9063** | 0.5258 / 0.5938 |
+| rust | jina-embeddings-v2-base-code | **0.7224** / **0.8063** | 0.5312 / 0.7812 |
+| typescript | gte-modernbert-base | **0.6689** / **0.8438** | 0.5164 / 0.6970 |
+| java | qwen3-embedding-0.6b | **0.5348** / **0.6563** | 0.4227 / 0.5458 |
 
 zvec-grep leads Sense on nDCG and MRR in all five lanes. Models remain
-tool-native, so this is not a controlled model comparison.
+tool-native, so this is not a controlled model comparison. Against the
+pre-change floors, 19 of 20 cells improve and the twentieth ties.
 
 ## Caveats
 
 - All five lanes are `role: "tuning"`; there is no holdout, so the model choice
   is selected on the data it is scored on.
-- No model cleared all 20 per-metric floors. The chosen one misses three python
-  metrics by at most 0.0125, and those floors were re-pinned in the same change
-  with the trade documented. Python remains MiniLM's strongest lane, which is
-  the main argument for per-language model routes (`zvec-grep#66`).
+- No single model cleared all 20 per-metric floors; per-repository selection
+  does. In a polyglot repository only the dominant language gets its best
+  model, and the others stay indexed under it at up to ~0.13 nDCG below their
+  own best. That trade is accepted deliberately, and per-language routing is
+  still open in `zvec-grep#66`.
 - An existing index keeps its stored model while the new fusion weights apply,
   so it needs one `zg --index --rebuild` to pick up the default.
 

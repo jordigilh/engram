@@ -706,7 +706,6 @@ ZVEC_MANAGEMENT_TOOLS = frozenset({
     "zvec_grep_index_drop",
     "zvec_grep_index_status",
     "zvec_grep_server_status",
-    "zvec_grep_rg",
 })
 
 MANUAL_MENTAL_MODEL_TOOLS = frozenset({"manual_mental_model"})
@@ -723,7 +722,6 @@ RELEVANT_SERENA_TOOLS = frozenset(
         "replace_symbol_body",
         "insert_after_symbol",
         "insert_before_symbol",
-        "search_for_pattern",
         "get_symbols_overview",
         "find_symbol",
         "find_referencing_symbols",

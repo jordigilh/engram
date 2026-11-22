@@ -264,35 +264,39 @@ class TestFilterRelevantTools:
 
         assert {t["name"] for t in filtered} == {"find_symbol"}
 
-    def test_serena_pattern_search_description_guides_toward_symbol_tools(self, engram_gateway):
-        original_description = "Search project files with a regular expression."
+    def test_serena_no_longer_exposes_pattern_search(self, engram_gateway):
         tools = [
-            _tool("search_for_pattern", original_description),
+            _tool("search_for_pattern", "Search project files with a regular expression."),
             _tool("find_symbol", "Find symbols by name."),
         ]
 
         filtered = engram_gateway.filter_relevant_tools("serena", tools)
-        descriptions = {tool["name"]: tool["description"] for tool in filtered}
 
-        pattern_description = descriptions["search_for_pattern"]
-        assert pattern_description.startswith(original_description)
-        assert "find_symbol" in pattern_description
-        assert "find_referencing_symbols" in pattern_description
-        assert "regex" in pattern_description.lower()
-        assert "multiline" in pattern_description.lower()
-        assert tools[0]["description"] == original_description
+        assert {tool["name"] for tool in filtered} == {"find_symbol"}
+
+    def test_code_backend_exposes_zvec_rg(self, engram_gateway):
+        tools = [_tool("zvec_grep_rg"), _tool("zvec_grep_index")]
+
+        filtered = engram_gateway.filter_relevant_tools("code", tools)
+
+        assert {tool["name"] for tool in filtered} == {"zvec_grep_rg"}
 
     def test_code_backend_hides_zvec_management_tools(self, engram_gateway):
         tools = [
             _tool("praxis_code_search"),
             _tool("zvec_grep_search"),
+            _tool("zvec_grep_rg"),
             _tool("zvec_grep_index"),
             _tool("zvec_grep_index_status"),
         ]
 
         filtered = engram_gateway.filter_relevant_tools("code", tools)
 
-        assert {tool["name"] for tool in filtered} == {"praxis_code_search", "zvec_grep_search"}
+        assert {tool["name"] for tool in filtered} == {
+            "praxis_code_search",
+            "zvec_grep_search",
+            "zvec_grep_rg",
+        }
 
     def test_empty_tool_list_stays_empty(self, engram_gateway):
         assert engram_gateway.filter_relevant_tools("docs", []) == []

@@ -18,6 +18,7 @@ ZVEC_WORKSPACE_READ_TOOLS = frozenset(
     {
         "zvec_grep_search",
         "zvec_search_code",
+        "zvec_grep_rg",
         "zvec_grep_callgraph_blast_radius",
         "zvec_grep_callgraph_shortest_path",
         "zvec_grep_callgraph_cluster",

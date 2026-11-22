@@ -142,6 +142,7 @@ export function shouldGateSessions(project: string, policy: WorktreeIndexPolicy 
 
 const ZVEC_WORKSPACE_READ_TOOLS = [
   "zvec_grep_search",
+  "zvec_grep_rg",
   "zvec_grep_callgraph_blast_radius",
   "zvec_grep_callgraph_shortest_path",
   "zvec_grep_callgraph_cluster",

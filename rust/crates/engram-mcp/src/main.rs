@@ -6,12 +6,12 @@ use engram_mcp::{
     build_project_adapters, router_with_options, OriginPolicy, Project, Registry, SessionPolicy,
 };
 
-/// Native Engram MCP lifecycle server (issue #211, slice 1).
+/// Native Engram MCP gateway (issue #211, slices 1-2).
 #[derive(Debug, Parser)]
 #[command(name = "engram-mcp", version, about)]
 struct Args {
-    /// Comma-separated project routes to serve, for example `engram,kubernaut`.
-    #[arg(long, value_delimiter = ',', default_value = "engram")]
+    /// Comma-separated project routes to serve when no registry is configured.
+    #[arg(long, value_delimiter = ',')]
     projects: Vec<String>,
 
     /// Loopback bind address. Non-loopback binds are refused.
@@ -52,16 +52,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
-    let projects: Vec<Project> = if let Some(path) = &args.config {
-        let registry = Registry::load(path)?;
+    let config = match &args.config {
+        Some(path) => Some(path.clone()),
+        None if args.projects.is_empty() => default_config_path(),
+        None => None,
+    };
+    let projects: Vec<Project> = if let Some(path) = config {
+        let registry = Registry::load(&path)?;
         let mut projects = Vec::new();
         for (name, spec) in &registry.projects {
             let adapters = build_project_adapters(name, spec)?;
             projects.push(Project::with_backends(name.clone(), adapters));
         }
-        futures::future::join_all(projects.iter().map(Project::prewarm)).await;
         projects
     } else {
+        if args.projects.is_empty() {
+            return Err("provide --config or --projects".into());
+        }
         let mut projects = Vec::new();
         for name in args.projects {
             let name = name.trim();
@@ -78,6 +85,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         SessionPolicy::Required
     };
+    let address = SocketAddr::new(host, args.port);
+    let listener = tokio::net::TcpListener::bind(address).await?;
+
+    // Bind first, then warm catalogs in the background. A slow backend must
+    // not delay the listener or take down unrelated routes.
+    for project in &projects {
+        let project = project.clone();
+        tokio::spawn(async move {
+            project.prewarm().await;
+        });
+    }
+
     let app = router_with_options(
         projects,
         policy,
@@ -86,9 +105,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             allowed_origins: args.allow_origins,
         },
     );
-    let address = SocketAddr::new(host, args.port);
-    let listener = tokio::net::TcpListener::bind(address).await?;
     println!("engram-mcp listening on http://{address}/mcp/<project>");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+fn default_config_path() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    let path = PathBuf::from(home).join(".engram/runtime/native-instances.toml");
+    path.is_file().then_some(path)
 }

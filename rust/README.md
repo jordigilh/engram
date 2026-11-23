@@ -20,8 +20,8 @@ Implemented:
   zvec freshness arguments.
 - Hindsight scope enforcement, gateway-owned manual mental-model writer, and
   automatic `docs_manual`/`issues_manual` synthesis.
-- Best-effort concurrent catalog prewarm; `tools/list` refreshes and replaces
-  the cache, `tools/call` routes from it.
+- Best-effort concurrent catalog prewarm after the listener binds; `tools/list`
+  refreshes and replaces the cache, `tools/call` routes from it.
 - Bounded session state: 30-minute idle TTL, 256 sessions per project with
   oldest-idle eviction, a global cap, one-shot cancellation, and random ids.
 
@@ -44,8 +44,9 @@ cargo test --all
 cargo run -p engram-mcp -- --config ~/.engram/runtime/native-instances.toml --port 8898
 ```
 
-Without `--config`, named static project routes are served without backends.
-The server binds loopback only and refuses a non-loopback `--host`. Add
+Without `--config`, the server uses `~/.engram/runtime/native-instances.toml`
+when it exists, or named static routes from `--projects`. The server binds
+loopback only and refuses a non-loopback `--host`. Add
 `--allow-stateless` to accept non-`initialize` requests without a session.
 In that migration mode, `DELETE` and cancellation fencing apply only to
 requests that carry `Mcp-Session-Id`.

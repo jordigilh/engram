@@ -545,6 +545,8 @@ async fn permanent_http_and_jsonrpc_errors_are_not_retried() {
         .await
         .expect_err("500 is permanent");
     assert!(error.message.contains("HTTP 500"));
+    assert!(!error.message.contains("token="));
+    assert!(error.message.contains("?…"));
     assert_eq!(mock.call_attempts.load(Ordering::SeqCst), 1);
 
     let (url, mock) = spawn_mock(MockConfig {

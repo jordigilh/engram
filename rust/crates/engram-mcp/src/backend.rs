@@ -217,12 +217,18 @@ impl HttpRelayAdapter {
             .json(payload)
             .send()
             .await
-            .map_err(|error| BackendError::transient(format!("HTTP transport failed: {error}")))?;
+            .map_err(|error| {
+                BackendError::transient(format!(
+                    "HTTP transport failed for {}: {}",
+                    redacted_url(url),
+                    error.without_url()
+                ))
+            })?;
         if response.status().is_success() {
             return Ok(response);
         }
         let status = response.status().as_u16();
-        let message = format!("HTTP {status} from {url}");
+        let message = format!("HTTP {status} from {}", redacted_url(url));
         if matches!(status, 502..=504) {
             Err(BackendError::transient(message))
         } else {
@@ -270,6 +276,19 @@ impl BackendAdapter for HttpRelayAdapter {
     fn supports_workspace(&self) -> bool {
         true
     }
+}
+
+fn redacted_url(url: &Url) -> String {
+    let mut text = format!("{}://{}", url.scheme(), url.host_str().unwrap_or(""));
+    if let Some(port) = url.port() {
+        text.push(':');
+        text.push_str(&port.to_string());
+    }
+    text.push_str(url.path());
+    if url.query().is_some() {
+        text.push_str("?…");
+    }
+    text
 }
 
 fn header_value(response: &reqwest::Response, name: &str) -> Option<String> {
@@ -352,7 +371,9 @@ impl BackendAdapter for ScopedHindsightAdapter {
 
     async fn call_tool(&self, name: &str, arguments: Value) -> Result<Value, BackendError> {
         if name == "recall" {
-            let mut forwarded = arguments.as_object().cloned().unwrap_or_default();
+            let Some(mut forwarded) = arguments.as_object().cloned() else {
+                return Ok(tool_error("recall arguments must be an object"));
+            };
             forwarded.remove("tag_groups");
             if !self.scope_tags.is_empty() {
                 forwarded.insert("tags".into(), json!(self.scope_tags));
@@ -556,11 +577,19 @@ pub fn build_project_adapters(project: &str, spec: &ProjectSpec) -> Result<Adapt
         adapters.push((key.clone(), adapter));
     }
     for bank in ["docs", "issues"] {
-        if let Some((_, upstream)) = adapters.iter().find(|(key, _)| key == bank) {
-            adapters.push((
-                format!("{bank}_manual"),
-                Arc::new(ManualMentalModelAdapter::new(Arc::clone(upstream))),
-            ));
+        let Some(upstream) = adapters
+            .iter()
+            .find(|(key, _)| key == bank)
+            .map(|(_, adapter)| Arc::clone(adapter))
+        else {
+            continue;
+        };
+        let key = format!("{bank}_manual");
+        let manual = Arc::new(ManualMentalModelAdapter::new(upstream)) as Arc<dyn BackendAdapter>;
+        if let Some(position) = adapters.iter().position(|(name, _)| name == &key) {
+            adapters[position] = (key, manual);
+        } else {
+            adapters.push((key, manual));
         }
     }
     Ok(adapters)
@@ -719,6 +748,75 @@ mod tests {
         );
         assert_eq!(arguments["metadata"]["name"], "Architecture");
         assert_eq!(arguments["metadata"]["owner"], "me");
+    }
+
+    #[test]
+    fn scoped_hindsight_rejects_non_object_recall_arguments() {
+        let upstream = Arc::new(Fake::default());
+        let scoped = ScopedHindsightAdapter::new(upstream, vec!["project".into()], false, vec![]);
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime
+            .block_on(scoped.call_tool("recall", json!([1, 2])))
+            .unwrap();
+        assert_eq!(result["isError"], true);
+    }
+
+    #[test]
+    fn manual_adapter_replaces_an_explicit_backend_key() {
+        let spec = crate::registry::ProjectSpec {
+            backends: vec![
+                (
+                    "docs".into(),
+                    crate::registry::BackendSpec {
+                        kind: BackendKind::Http,
+                        url: Some("http://127.0.0.1:1/mcp".into()),
+                        headers: BTreeMap::new(),
+                        timeout_seconds: 60.0,
+                        workspace_routing: false,
+                        allow_insecure_http: false,
+                        scope_tags: vec![],
+                        allow_unscoped: false,
+                        mental_model_ids: vec![],
+                        command: None,
+                        args: vec![],
+                        env: BTreeMap::new(),
+                    },
+                ),
+                (
+                    "docs_manual".into(),
+                    crate::registry::BackendSpec {
+                        kind: BackendKind::Http,
+                        url: Some("http://127.0.0.1:2/mcp".into()),
+                        headers: BTreeMap::new(),
+                        timeout_seconds: 60.0,
+                        workspace_routing: false,
+                        allow_insecure_http: false,
+                        scope_tags: vec![],
+                        allow_unscoped: false,
+                        mental_model_ids: vec![],
+                        command: None,
+                        args: vec![],
+                        env: BTreeMap::new(),
+                    },
+                ),
+            ],
+        };
+        let adapters = build_project_adapters("demo", &spec).unwrap();
+        assert_eq!(
+            adapters
+                .iter()
+                .filter(|(key, _)| key == "docs_manual")
+                .count(),
+            1
+        );
+        let manual = adapters
+            .iter()
+            .find(|(key, _)| key == "docs_manual")
+            .map(|(_, adapter)| Arc::clone(adapter))
+            .unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let tools = runtime.block_on(manual.list_tools()).unwrap();
+        assert_eq!(tools[0]["name"], "manual_mental_model");
     }
 
     #[test]

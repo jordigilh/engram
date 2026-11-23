@@ -95,6 +95,12 @@ impl Project {
             return;
         };
         let aggregation = aggregate_tools_list(&backends.adapters).await;
+        for (backend, error) in &aggregation.errors {
+            eprintln!(
+                "engram-mcp: project {:?} backend {backend:?} prewarm failed: {error}",
+                self.name
+            );
+        }
         *backends.catalog.write().await = aggregation.catalog;
     }
 }
@@ -360,6 +366,11 @@ async fn post_endpoint(
         "tools/list" => {
             if let Some(backends) = configured.backends.clone() {
                 let aggregation = aggregate_tools_list(&backends.adapters).await;
+                for (backend, error) in &aggregation.errors {
+                    eprintln!(
+                        "engram-mcp: project {project:?} backend {backend:?} unavailable: {error}"
+                    );
+                }
                 let tools = aggregation.catalog.tools.clone();
                 *backends.catalog.write().await = aggregation.catalog;
                 sse(tools_list_result(id, &tools))
@@ -378,7 +389,7 @@ async fn post_endpoint(
             let Some(backends) = configured.backends.clone() else {
                 return sse(method_not_found_error(
                     id,
-                    "tools/call (routing lands in #211 slice 2)",
+                    "tools/call is not available for static projects",
                 ));
             };
             let params = message.get("params");

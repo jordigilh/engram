@@ -175,6 +175,9 @@ fn parse_backend(project: &str, backend: &str, settings: &Value) -> Result<Backe
         })?,
         None => backend == "serena",
     };
+    if backend == "hindsight" && kind != BackendKind::Http {
+        return Err("Backend 'hindsight' must use an HTTP Hindsight bank endpoint".into());
+    }
     if backend == "serena" && workspace_routing && kind != BackendKind::Http {
         return Err(format!(
             "Backend {project:?}/{backend:?} workspace_routing=true requires an HTTP Serena multiplex endpoint"
@@ -211,11 +214,11 @@ fn parse_backend(project: &str, backend: &str, settings: &Value) -> Result<Backe
             }
             spec.headers = parse_headers(project, backend, settings.get("headers"))?;
             if backend == "hindsight" {
-                spec.scope_tags = parse_string_list(project, backend, settings.get("scope_tags"))?;
+                spec.scope_tags = parse_scope_list(project, backend, settings.get("scope_tags"))?;
                 spec.allow_unscoped =
                     optional_bool(project, backend, settings, "allow_unscoped")?.unwrap_or(false);
                 spec.mental_model_ids =
-                    parse_string_list(project, backend, settings.get("mental_model_ids"))?;
+                    parse_scope_list(project, backend, settings.get("mental_model_ids"))?;
                 if spec.scope_tags.is_empty() && !spec.allow_unscoped {
                     return Err(format!(
                         "Backend {project:?}/{backend:?} requires scope_tags or explicit allow_unscoped=true"
@@ -399,6 +402,27 @@ fn parse_string_list(
     Ok(values)
 }
 
+/// Scope/model-id lists are trimmed and must not contain blanks. Arguments and
+/// environment values keep their exact bytes.
+fn parse_scope_list(
+    project: &str,
+    backend: &str,
+    value: Option<&Value>,
+) -> Result<Vec<String>, String> {
+    let values = parse_string_list(project, backend, value)?;
+    let mut scoped = Vec::new();
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(format!(
+                "Backend {project:?}/{backend:?} scope values must be non-empty strings"
+            ));
+        }
+        scoped.push(trimmed.to_string());
+    }
+    Ok(scoped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -497,6 +521,9 @@ endpoint = "http://127.0.0.1:9001/mcp/kubernaut"
             ("[instances.demo.backends.hindsight]\nkind=\"http\"\nurl=\"http://127.0.0.1:8888/mcp/other\"\nallow_unscoped=true\n", "/mcp/shared-memory"),
             ("[instances.demo.backends.hindsight]\nkind=\"http\"\nurl=\"http://example.com/mcp/hindsight\"\nallow_unscoped=true\n", "must use HTTPS"),
             ("[instances.demo.backends.hindsight]\nkind=\"http\"\nurl=\"http://127.0.0.1:8888/mcp/hindsight\"\nallow_unscoped=false\n", "requires scope_tags"),
+            ("[instances.demo.backends.hindsight]\nkind=\"stdio\"\ncommand=\"/opt/hindsight\"\n", "must use an HTTP Hindsight bank endpoint"),
+            ("[instances.demo.backends.hindsight]\nkind=\"http\"\nurl=\"http://127.0.0.1:8888/mcp/hindsight\"\nscope_tags=[\"  \"]\n", "scope values must be non-empty"),
+            ("[instances.demo.backends.hindsight]\nkind=\"http\"\nurl=\"http://127.0.0.1:8888/mcp/hindsight\"\nmental_model_ids=[\"\"]\nallow_unscoped=true\n", "scope values must be non-empty"),
             ("[instances.demo.backends.serena]\nkind=\"stdio\"\ncommand=\"/opt/serena\"\nworkspace_routing=true\n", "workspace_routing=true requires an HTTP Serena"),
             ("[instances.demo.backends.docs]\nkind=\"http\"\nurl=\"http://127.0.0.1/mcp\"\nheaders={ Authorization = 1 }\n", "headers must be a string-to-string table"),
             ("[instances.demo.backends.docs]\nkind=\"http\"\nurl=\"http://127.0.0.1/mcp\"\ntimeout_seconds=0\n", "timeout_seconds must be between"),

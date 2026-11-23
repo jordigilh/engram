@@ -5,22 +5,26 @@
 //! stable `initialize` result. Additions required by #211 are session ids,
 //! `DELETE` termination, cancellation, and project-bound session isolation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use axum::body::Bytes;
-use axum::extract::{Path, Request, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
+use crate::aggregate::{aggregate_tools_list, Aggregation};
+use crate::backend::{prepare_arguments, tool_error, BackendAdapter};
+use crate::catalog::{zvec_rg_arguments, Catalog, Route};
 use crate::protocol::{
     initialize_result, method_not_found_error, request_cancelled_error, tools_list_result,
 };
-use crate::session::{SessionStore, MAX_SESSIONS_PER_PROJECT};
+use crate::session::{request_id_key, SessionStore, MAX_SESSIONS_PER_PROJECT};
 
 pub const SESSION_HEADER: &str = "mcp-session-id";
 
@@ -34,12 +38,54 @@ pub enum SessionPolicy {
     Optional,
 }
 
-/// One project route. Slice 1 only carries a static tool catalog; slice 2
-/// replaces it with backend aggregation.
-#[derive(Debug, Clone)]
+/// One project route. Static projects carry a fixed catalog (slice-1 tests);
+/// registry-backed projects aggregate HTTP backends.
+#[derive(Clone)]
 pub struct Project {
     pub name: String,
     pub tools: Vec<Value>,
+    pub backends: Option<Arc<BackendSet>>,
+}
+
+pub struct BackendSet {
+    pub adapters: Vec<(String, Arc<dyn BackendAdapter>)>,
+    pub catalog: tokio::sync::RwLock<Catalog>,
+    reservations: tokio::sync::RwLock<BTreeMap<String, Route>>,
+    refresh_lock: tokio::sync::Mutex<()>,
+    generation: AtomicU64,
+    published_generation: AtomicU64,
+}
+
+impl BackendSet {
+    pub fn new(adapters: Vec<(String, Arc<dyn BackendAdapter>)>) -> Self {
+        Self {
+            adapters,
+            catalog: tokio::sync::RwLock::new(Catalog::default()),
+            reservations: tokio::sync::RwLock::new(BTreeMap::new()),
+            refresh_lock: tokio::sync::Mutex::new(()),
+            generation: AtomicU64::new(0),
+            published_generation: AtomicU64::new(0),
+        }
+    }
+
+    /// Aggregate and publish only if no later-started refresh already won.
+    /// Refreshes are serialized so a concurrent refresh cannot publish a
+    /// catalog built from stale name reservations.
+    pub async fn refresh(&self) -> Aggregation {
+        let _refresh = self.refresh_lock.lock().await;
+        let start = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let reservations = self.reservations.read().await.clone();
+        let mut aggregation = aggregate_tools_list(&self.adapters, &reservations).await;
+        let mut catalog = self.catalog.write().await;
+        if self.published_generation.load(Ordering::SeqCst) < start {
+            *catalog = aggregation.catalog.clone();
+            *self.reservations.write().await = aggregation.reservations.clone();
+            self.published_generation.store(start, Ordering::SeqCst);
+        } else {
+            aggregation.catalog = catalog.clone();
+        }
+        aggregation
+    }
 }
 
 impl Project {
@@ -47,6 +93,7 @@ impl Project {
         Self {
             name: name.into(),
             tools: Vec::new(),
+            backends: None,
         }
     }
 
@@ -54,16 +101,56 @@ impl Project {
         Self {
             name: name.into(),
             tools,
+            backends: None,
+        }
+    }
+
+    pub fn with_backends(
+        name: impl Into<String>,
+        adapters: Vec<(String, Arc<dyn BackendAdapter>)>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            tools: Vec::new(),
+            backends: Some(Arc::new(BackendSet::new(adapters))),
+        }
+    }
+
+    /// Best-effort catalog warm-up. A dead backend is simply absent from the
+    /// catalog; prewarm never fails the process.
+    pub async fn prewarm(&self) {
+        let Some(backends) = &self.backends else {
+            return;
+        };
+        let aggregation = backends.refresh().await;
+        for (backend, error) in &aggregation.errors {
+            eprintln!(
+                "engram-mcp: project {:?} backend {backend:?} prewarm failed: {error}",
+                self.name
+            );
         }
     }
 }
 
-#[derive(Debug)]
 struct AppState {
-    projects: BTreeMap<String, Project>,
+    projects: BTreeMap<String, Arc<Project>>,
     sessions: Mutex<SessionStore>,
+    in_flight: Arc<Mutex<HashMap<(String, String), tokio_util::sync::CancellationToken>>>,
     policy: SessionPolicy,
     origins: OriginPolicy,
+}
+
+struct InFlightGuard {
+    map: Arc<Mutex<HashMap<(String, String), tokio_util::sync::CancellationToken>>>,
+    key: (String, String),
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        if let Ok(mut map) = self.map.lock() {
+            map.remove(&self.key);
+        }
+    }
 }
 
 /// DNS-rebinding defense. A browser-originated request is accepted only when
@@ -122,14 +209,15 @@ pub fn router_with_options(
     policy: SessionPolicy,
     origins: OriginPolicy,
 ) -> Router {
-    let projects: BTreeMap<String, Project> = projects
+    let projects: BTreeMap<String, Arc<Project>> = projects
         .into_iter()
-        .map(|project| (project.name.clone(), project))
+        .map(|project| (project.name.clone(), Arc::new(project)))
         .collect();
     let max_sessions = MAX_SESSIONS_PER_PROJECT * projects.len().max(1);
     let state = Arc::new(AppState {
         projects,
         sessions: Mutex::new(SessionStore::with_max_sessions(max_sessions)),
+        in_flight: Arc::new(Mutex::new(HashMap::new())),
         policy,
         origins,
     });
@@ -235,6 +323,7 @@ async fn post_endpoint(
     State(state): State<Arc<AppState>>,
     Path(project): Path<String>,
     headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
     body: Bytes,
 ) -> Response {
     let Some(configured) = state.projects.get(&project) else {
@@ -303,7 +392,21 @@ async fn post_endpoint(
                 .get("params")
                 .and_then(|params| params.get("requestId")),
         ) {
-            lock_sessions(&state).cancel(session_id, request_id);
+            let key = request_id_key(request_id);
+            let token = state
+                .in_flight
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(&(session_id.to_string(), key))
+                .cloned();
+            if let Some(token) = token {
+                // An in-flight call consumes its own cancellation entry, so a
+                // later request id reuse starts clean.
+                token.cancel();
+                lock_sessions(&state).take_cancelled(session_id, request_id);
+            } else {
+                lock_sessions(&state).cancel(session_id, request_id);
+            }
         }
         return StatusCode::ACCEPTED.into_response();
     }
@@ -316,25 +419,145 @@ async fn post_endpoint(
 
     match method {
         "ping" => sse(json!({"jsonrpc": "2.0", "id": id, "result": {}})),
-        "tools/list" => sse(tools_list_result(id, &configured.tools)),
-        "tools/call" => {
-            let cancelled = session_id
-                .as_deref()
-                .map(|session_id| lock_sessions(&state).take_cancelled(session_id, &id))
-                .unwrap_or(false);
-            if cancelled {
-                sse(request_cancelled_error(id))
+        "tools/list" => {
+            if let Some(backends) = configured.backends.clone() {
+                let aggregation = backends.refresh().await;
+                for (backend, error) in &aggregation.errors {
+                    eprintln!(
+                        "engram-mcp: project {project:?} backend {backend:?} unavailable: {error}"
+                    );
+                }
+                sse(tools_list_result(id, &aggregation.catalog.tools))
             } else {
-                // Backend routing is #211 slice 2. Return an explicit protocol
-                // error rather than pretending the call succeeded.
-                sse(method_not_found_error(
+                sse(tools_list_result(id, &configured.tools))
+            }
+        }
+        "tools/call" => {
+            if configured.backends.is_none() {
+                let cancelled = session_id
+                    .as_deref()
+                    .map(|session_id| lock_sessions(&state).take_cancelled(session_id, &id))
+                    .unwrap_or(false);
+                if cancelled {
+                    return sse(request_cancelled_error(id));
+                }
+                return sse(method_not_found_error(
                     id,
-                    "tools/call (routing lands in #211 slice 2)",
-                ))
+                    "tools/call is not available for static projects",
+                ));
+            }
+            let backends = configured.backends.clone().expect("checked above");
+            let params = message.get("params");
+            let tool_name = params
+                .and_then(|params| params.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let arguments = params
+                .and_then(|params| params.get("arguments"))
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            let request_key = request_id_key(&id);
+            if let Some(session_id) = session_id.clone() {
+                let token = tokio_util::sync::CancellationToken::new();
+                let key = (session_id.clone(), request_key);
+                state
+                    .in_flight
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .insert(key.clone(), token.clone());
+                let _guard = InFlightGuard {
+                    map: Arc::clone(&state.in_flight),
+                    key,
+                };
+                // A cancellation that arrived before token registration is
+                // consumed here; one that arrives after registration cancels
+                // the token and is observed by select!.
+                if lock_sessions(&state).take_cancelled(&session_id, &id) {
+                    return sse(request_cancelled_error(id));
+                }
+                let call_id = id.clone();
+                tokio::select! {
+                    result = handle_backend_call(
+                        &backends,
+                        call_id,
+                        tool_name,
+                        arguments,
+                        query.get("workspace").map(String::as_str),
+                    ) => result,
+                    _ = token.cancelled() => sse(request_cancelled_error(id.clone())),
+                }
+            } else {
+                handle_backend_call(
+                    &backends,
+                    id,
+                    tool_name,
+                    arguments,
+                    query.get("workspace").map(String::as_str),
+                )
+                .await
             }
         }
         _ => sse(method_not_found_error(id, method)),
     }
+}
+
+async fn handle_backend_call(
+    backends: &BackendSet,
+    id: Value,
+    tool_name: &str,
+    arguments: Value,
+    workspace: Option<&str>,
+) -> Response {
+    let route = backends.catalog.read().await.route(tool_name).cloned();
+    let Some((backend_key, raw_name)) = route else {
+        return tool_result(
+            id,
+            tool_error(format!(
+                "Unknown tool: {tool_name:?} (never existed, or its backend is currently down)"
+            )),
+        );
+    };
+    let Some((_, adapter)) = backends
+        .adapters
+        .iter()
+        .find(|(key, _)| key == &backend_key)
+    else {
+        return tool_result(
+            id,
+            tool_error(format!(
+                "Backend {backend_key:?} for tool {tool_name:?} is not wired up"
+            )),
+        );
+    };
+
+    let outcome = if tool_name == "search_for_pattern" && raw_name == "zvec_grep_rg" {
+        let empty = Map::new();
+        match zvec_rg_arguments(arguments.as_object().unwrap_or(&empty), workspace) {
+            Ok(arguments) => adapter.call_tool(&raw_name, arguments).await,
+            Err(error) => return tool_result(id, tool_error(error)),
+        }
+    } else {
+        let arguments = prepare_arguments(&raw_name, arguments);
+        if workspace.is_some() && adapter.supports_workspace() {
+            adapter
+                .call_tool_with_workspace(&raw_name, arguments, workspace.unwrap_or_default())
+                .await
+        } else {
+            adapter.call_tool(&raw_name, arguments).await
+        }
+    };
+
+    match outcome {
+        Ok(result) => tool_result(id, result),
+        Err(error) => tool_result(
+            id,
+            tool_error(format!("backend '{backend_key}' failed: {}", error.message)),
+        ),
+    }
+}
+
+fn tool_result(id: Value, result: Value) -> Response {
+    sse(json!({"jsonrpc": "2.0", "id": id, "result": result}))
 }
 
 fn session_header(headers: &HeaderMap) -> Result<Option<String>, ()> {
@@ -372,11 +595,56 @@ pub fn tool_definition(name: &str, description: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::BackendError;
+    use async_trait::async_trait;
+    use std::sync::atomic::AtomicUsize;
 
     #[test]
     fn tool_definition_has_required_fields() {
         let tool = tool_definition("alpha_search", "Alpha search");
         assert_eq!(tool["name"], "alpha_search");
         assert_eq!(tool["inputSchema"]["type"], "object");
+    }
+
+    struct SlowBackend {
+        current: Arc<AtomicUsize>,
+        max: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl BackendAdapter for SlowBackend {
+        async fn list_tools(&self) -> Result<Vec<Value>, BackendError> {
+            let current = self.current.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max.fetch_max(current, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            self.current.fetch_sub(1, Ordering::SeqCst);
+            Ok(vec![tool_definition("recall", "recall")])
+        }
+
+        async fn call_tool(&self, _name: &str, _arguments: Value) -> Result<Value, BackendError> {
+            Ok(json!({}))
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_refreshes_are_serialized() {
+        let current = Arc::new(AtomicUsize::new(0));
+        let max = Arc::new(AtomicUsize::new(0));
+        let set = Arc::new(BackendSet::new(vec![(
+            "docs".into(),
+            Arc::new(SlowBackend {
+                current: Arc::clone(&current),
+                max: Arc::clone(&max),
+            }) as Arc<dyn BackendAdapter>,
+        )]));
+        let first = Arc::clone(&set);
+        let second = Arc::clone(&set);
+        let (one, two) = tokio::join!(
+            tokio::spawn(async move { first.refresh().await }),
+            tokio::spawn(async move { second.refresh().await })
+        );
+        one.expect("first refresh");
+        two.expect("second refresh");
+        assert_eq!(max.load(Ordering::SeqCst), 1);
     }
 }

@@ -1,40 +1,37 @@
 # Native Engram MCP runtime
 
-This Cargo workspace is the foundation for issue
-[#211](https://github.com/jordigilh/engram/issues/211). The first stacked PR
-contains **only** the `engram-mcp` crate and its lifecycle contract.
+This Cargo workspace implements issue
+[#211](https://github.com/jordigilh/engram/issues/211) slices 1 and 2 in the
+`engram-mcp` crate: MCP lifecycle plus HTTP backend routing and catalog parity.
+The Python gateway remains runnable and authoritative during migration.
+Rust 1.88+ is required (the HTTP client stack's ICU dependencies).
 
-## Scope of this slice
+## Scope
 
 Implemented:
 
-- `initialize` with the Python gateway's protocol version, capabilities, and
-  `serverInfo` shape.
-- `Mcp-Session-Id` issuance and `DELETE` termination.
-- `notifications/initialized` and notification `202` responses.
-- `notifications/cancelled` with request-id fencing (`-32800`).
-- `tools/list` with project-scoped catalogs.
-- Per-project session isolation: a session is valid only on the route that
-  created it.
+- MCP lifecycle: `initialize`, notifications, `tools/list`, `DELETE`,
+  cancellation, session isolation, bounded sessions, Origin/Host validation.
+- Registry loading from `instances.toml`: HTTP backends, legacy `endpoint`,
+  full validation, insertion order preserved.
+- HTTP backend adapter: one-shot MCP sessions, JSON/SSE parsing, read-only
+  retry policy, workspace query forwarding.
+- Catalog aggregation and filtering: backend prefixes, collision
+  qualification, per-backend allowlists, `search_for_pattern` alias, managed
+  zvec freshness arguments.
+- Hindsight scope enforcement, gateway-owned manual mental-model writer, and
+  automatic `docs_manual`/`issues_manual` synthesis.
+- Best-effort concurrent catalog prewarm after the listener binds; `tools/list`
+  refreshes and replaces the cache, `tools/call` routes from it.
 - Bounded session state: 30-minute idle TTL, 256 sessions per project with
   oldest-idle eviction, a global cap, one-shot cancellation, and random ids.
-- `Origin` and loopback `Host` validation for browser-originated requests:
-  loopback origins and an explicit `--allow-origin` allowlist pass; requests
-  without `Origin` (native MCP clients) remain allowed.
-- `ping` returns `{}`; unknown methods return `-32601` instead of a fake
-  initialize result.
-- Re-`initialize` with a valid session reuses it rather than creating an
-  orphan.
-- Non-`initialize` requests require `Mcp-Session-Id` by default. Use
-  `--allow-stateless` only for Python-gateway parity during migration.
-- A supplied session header is validated on every request, including
-  `initialize`; terminated or cross-project sessions return 404.
-- Cancellation notifications must be versioned and id-less; malformed
-  envelopes are rejected without changing cancellation state.
 
 Deliberately not implemented in this slice:
 
-- Backend routing and `tools/call` dispatch (#211 slice 2).
+- Stdio and `shadow_http` adapters. Registry parsing accepts them for config
+  compatibility, but adapter construction rejects them with a startup error.
+- Response shaping (recall/Serena normalization, `max_answer_chars`
+  truncation) and the typed freshness envelope (#211 slice 3).
 - SCIP reads (#212), edit/diagnostics (#213), ingestion (#214), language
   adapters (#215).
 - Any change to the Python gateway. `src/engram/pipeline/engram_gateway.py`
@@ -45,26 +42,32 @@ Deliberately not implemented in this slice:
 ```bash
 cd rust
 cargo test --all
-cargo run -p engram-mcp -- --projects engram,kubernaut --port 8898
+cargo run -p engram-mcp -- --config ~/.engram/runtime/native-instances.toml --port 8898
 ```
 
-The server binds loopback only and refuses a non-loopback `--host`. Add
+Without `--config`, the server uses `~/.engram/runtime/native-instances.toml`
+when it exists, or named static routes from `--projects`. The server binds
+loopback only and refuses a non-loopback `--host`. Add
 `--allow-stateless` to accept non-`initialize` requests without a session.
 In that migration mode, `DELETE` and cancellation fencing apply only to
-requests that carry `Mcp-Session-Id`; header-less traffic stays stateless.
+requests that carry `Mcp-Session-Id`.
 
 ## Contract tests
 
-`crates/engram-mcp/tests/lifecycle.rs` covers initialize, notifications,
-tools/list isolation, DELETE, cancellation, cross-project session rejection,
-Origin validation, transport errors, and stateless compatibility. Unit tests
-cover the JSON-RPC payload shapes and the session store.
+- `tests/lifecycle.rs`: initialize, notifications, tools/list isolation,
+  DELETE, cancellation, Origin/Host validation, transport errors.
+- `tests/gateway_routing.rs`: real HTTP adapter against a mock MCP server
+  (session sequence, retry matrix, workspace), catalog aggregation, prefix
+  routing, search alias, zvec freshness, Hindsight scope, manual writer,
+  prewarm, catalog replacement, legacy host.
+- Unit tests: JSON-RPC shapes, catalog filters, registry validation, session
+  store, adapter parsing.
 
 ## Stacked follow-ups
 
-1. #211 slice 2: gateway backend routing and contract parity with the Python
-   aggregation path.
-2. #212: Go SCIP read path with epoch admission.
-3. #213: edit/diagnostics layer and Serena retirement gate.
-4. #214: Rust ingestion and Cocoindex retirement.
-5. #215: additional language adapters.
+1. #211 slice 3: typed busy/outcome responses and freshness envelope.
+2. #211 follow-up: stdio and shadow adapters if still required.
+3. #212: Go SCIP read path with epoch admission.
+4. #213: edit/diagnostics layer and Serena retirement gate.
+5. #214: Rust ingestion and Cocoindex retirement.
+6. #215: additional language adapters.

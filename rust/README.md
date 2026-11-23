@@ -23,6 +23,13 @@ Implemented:
   automatic `docs_manual`/`issues_manual` synthesis.
 - Best-effort concurrent catalog prewarm after the listener binds; `tools/list`
   refreshes and replaces the cache, `tools/call` routes from it.
+- Typed `-32002` envelopes: `workspace_unbound` (409), `workspace_flushing`
+  (503 + `Retry-After`), and `outcome_unknown` (409, non-retryable) for
+  transport-uncertain writes. `workspace_auth_timeout` is defined for future
+  authorization paths.
+- Freshness envelope `_meta.engram_freshness` on `tools/list` and successful
+  `tools/call` results: project, workspace, catalog generation/state, refresh
+  time, and per-backend errors.
 - Bounded session state: 30-minute idle TTL, 256 sessions per project with
   oldest-idle eviction, a global cap, one-shot cancellation, and random ids.
 
@@ -31,7 +38,7 @@ Deliberately not implemented in this slice:
 - Stdio and `shadow_http` adapters. Registry parsing accepts them for config
   compatibility, but adapter construction rejects them with a startup error.
 - Response shaping (recall/Serena normalization, `max_answer_chars`
-  truncation) and the typed freshness envelope (#211 slice 3).
+  truncation).
 - SCIP reads (#212), edit/diagnostics (#213), ingestion (#214), language
   adapters (#215).
 - Any change to the Python gateway. `src/engram/pipeline/engram_gateway.py`
@@ -65,9 +72,8 @@ requests that carry `Mcp-Session-Id`.
 
 ## Stacked follow-ups
 
-1. #211 slice 3: typed busy/outcome responses and freshness envelope.
-2. #211 follow-up: stdio and shadow adapters if still required.
-3. #212: Go SCIP read path with epoch admission.
-4. #213: edit/diagnostics layer and Serena retirement gate.
-5. #214: Rust ingestion and Cocoindex retirement.
-6. #215: additional language adapters.
+1. #211 follow-up: stdio and shadow adapters if still required.
+2. #212: Go SCIP read path with epoch admission.
+3. #213: edit/diagnostics layer and Serena retirement gate.
+4. #214: Rust ingestion and Cocoindex retirement.
+5. #215: additional language adapters.

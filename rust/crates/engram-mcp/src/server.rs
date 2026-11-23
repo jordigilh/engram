@@ -15,12 +15,16 @@ use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
+use axum::{Json, Router};
 use serde_json::{json, Map, Value};
 
 use crate::aggregate::{aggregate_tools_list, Aggregation};
-use crate::backend::{prepare_arguments, tool_error, BackendAdapter};
+use crate::backend::{is_write_tool, prepare_arguments, tool_error, BackendAdapter};
 use crate::catalog::{zvec_rg_arguments, Catalog, Route};
+use crate::error::TypedError;
+use crate::freshness::{
+    attach_freshness, freshness_for_static, now_ms, CatalogState, FreshnessEnvelope, FreshnessState,
+};
 use crate::protocol::{
     initialize_result, method_not_found_error, request_cancelled_error, tools_list_result,
 };
@@ -52,6 +56,7 @@ pub struct BackendSet {
     pub catalog: tokio::sync::RwLock<Catalog>,
     reservations: tokio::sync::RwLock<BTreeMap<String, Route>>,
     refresh_lock: tokio::sync::Mutex<()>,
+    freshness: tokio::sync::RwLock<FreshnessState>,
     generation: AtomicU64,
     published_generation: AtomicU64,
 }
@@ -63,6 +68,10 @@ impl BackendSet {
             catalog: tokio::sync::RwLock::new(Catalog::default()),
             reservations: tokio::sync::RwLock::new(BTreeMap::new()),
             refresh_lock: tokio::sync::Mutex::new(()),
+            freshness: tokio::sync::RwLock::new(FreshnessState {
+                state: Some(CatalogState::Refreshing),
+                ..Default::default()
+            }),
             generation: AtomicU64::new(0),
             published_generation: AtomicU64::new(0),
         }
@@ -74,6 +83,7 @@ impl BackendSet {
     pub async fn refresh(&self) -> Aggregation {
         let _refresh = self.refresh_lock.lock().await;
         let start = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.freshness.write().await.state = Some(CatalogState::Refreshing);
         let reservations = self.reservations.read().await.clone();
         let mut aggregation = aggregate_tools_list(&self.adapters, &reservations).await;
         let mut catalog = self.catalog.write().await;
@@ -81,10 +91,32 @@ impl BackendSet {
             *catalog = aggregation.catalog.clone();
             *self.reservations.write().await = aggregation.reservations.clone();
             self.published_generation.store(start, Ordering::SeqCst);
+            *self.freshness.write().await = FreshnessState {
+                state: Some(CatalogState::Ready),
+                generation: start,
+                refreshed_at_ms: Some(now_ms()),
+                backend_errors: aggregation.errors.clone(),
+            };
         } else {
             aggregation.catalog = catalog.clone();
         }
         aggregation
+    }
+
+    pub async fn freshness(&self, project: &str, workspace: Option<&str>) -> FreshnessEnvelope {
+        let state = self.freshness.read().await.clone();
+        FreshnessEnvelope {
+            project: project.to_string(),
+            workspace: workspace.map(str::to_string),
+            generation: self.published_generation.load(Ordering::SeqCst),
+            state: state.state.unwrap_or(CatalogState::Ready),
+            refreshed_at_ms: state.refreshed_at_ms,
+            backend_errors: state.backend_errors,
+        }
+    }
+
+    pub fn needs_flushing(&self) -> bool {
+        self.published_generation.load(Ordering::SeqCst) == 0
     }
 }
 
@@ -427,9 +459,15 @@ async fn post_endpoint(
                         "engram-mcp: project {project:?} backend {backend:?} unavailable: {error}"
                     );
                 }
-                sse(tools_list_result(id, &aggregation.catalog.tools))
+                let freshness = backends.freshness(&project, None).await;
+                let mut payload = tools_list_result(id, &aggregation.catalog.tools);
+                attach_to_payload(&mut payload, &freshness);
+                sse(payload)
             } else {
-                sse(tools_list_result(id, &configured.tools))
+                let freshness = freshness_for_static(&project, None);
+                let mut payload = tools_list_result(id, &configured.tools);
+                attach_to_payload(&mut payload, &freshness);
+                sse(payload)
             }
         }
         "tools/call" => {
@@ -447,6 +485,14 @@ async fn post_endpoint(
                 ));
             }
             let backends = configured.backends.clone().expect("checked above");
+            if backends.needs_flushing() {
+                return typed_response(
+                    id,
+                    TypedError::flushing()
+                        .with_epoch(0)
+                        .with_retry_after_ms(1_000),
+                );
+            }
             let params = message.get("params");
             let tool_name = params
                 .and_then(|params| params.get("name"))
@@ -479,6 +525,7 @@ async fn post_endpoint(
                 tokio::select! {
                     result = handle_backend_call(
                         &backends,
+                        &project,
                         call_id,
                         tool_name,
                         arguments,
@@ -489,6 +536,7 @@ async fn post_endpoint(
             } else {
                 handle_backend_call(
                     &backends,
+                    &project,
                     id,
                     tool_name,
                     arguments,
@@ -503,11 +551,13 @@ async fn post_endpoint(
 
 async fn handle_backend_call(
     backends: &BackendSet,
+    project: &str,
     id: Value,
     tool_name: &str,
     arguments: Value,
     workspace: Option<&str>,
 ) -> Response {
+    let freshness = backends.freshness(project, workspace).await;
     let route = backends.catalog.read().await.route(tool_name).cloned();
     let Some((backend_key, raw_name)) = route else {
         return tool_result(
@@ -515,6 +565,7 @@ async fn handle_backend_call(
             tool_error(format!(
                 "Unknown tool: {tool_name:?} (never existed, or its backend is currently down)"
             )),
+            &freshness,
         );
     };
     let Some((_, adapter)) = backends
@@ -527,14 +578,19 @@ async fn handle_backend_call(
             tool_error(format!(
                 "Backend {backend_key:?} for tool {tool_name:?} is not wired up"
             )),
+            &freshness,
         );
     };
+
+    if adapter.supports_workspace() && workspace.is_none() {
+        return typed_response(id, TypedError::unbound().with_epoch(freshness.generation));
+    }
 
     let outcome = if tool_name == "search_for_pattern" && raw_name == "zvec_grep_rg" {
         let empty = Map::new();
         match zvec_rg_arguments(arguments.as_object().unwrap_or(&empty), workspace) {
             Ok(arguments) => adapter.call_tool(&raw_name, arguments).await,
-            Err(error) => return tool_result(id, tool_error(error)),
+            Err(error) => return tool_result(id, tool_error(error), &freshness),
         }
     } else {
         let arguments = prepare_arguments(&raw_name, arguments);
@@ -548,16 +604,44 @@ async fn handle_backend_call(
     };
 
     match outcome {
-        Ok(result) => tool_result(id, result),
+        Ok(result) => tool_result(id, result, &freshness),
+        Err(error) if error.uncertain && is_write_tool(&raw_name) => typed_response(
+            id,
+            TypedError::outcome_unknown(workspace.map(str::to_string))
+                .with_epoch(freshness.generation),
+        ),
         Err(error) => tool_result(
             id,
             tool_error(format!("backend '{backend_key}' failed: {}", error.message)),
+            &freshness,
         ),
     }
 }
 
-fn tool_result(id: Value, result: Value) -> Response {
+fn tool_result(id: Value, mut result: Value, freshness: &FreshnessEnvelope) -> Response {
+    attach_freshness(&mut result, freshness);
     sse(json!({"jsonrpc": "2.0", "id": id, "result": result}))
+}
+
+fn attach_to_payload(payload: &mut Value, freshness: &FreshnessEnvelope) {
+    if let Some(result) = payload.get_mut("result") {
+        attach_freshness(result, freshness);
+    }
+}
+
+fn typed_response(id: Value, error: TypedError) -> Response {
+    let status =
+        StatusCode::from_u16(error.kind.http_status()).unwrap_or(StatusCode::SERVICE_UNAVAILABLE);
+    let mut response = (status, Json(error.payload(id))).into_response();
+    for (name, value) in error.headers() {
+        if let (Ok(name), Ok(value)) = (
+            HeaderName::from_bytes(name.as_bytes()),
+            HeaderValue::from_str(&value),
+        ) {
+            response.headers_mut().insert(name, value);
+        }
+    }
+    response
 }
 
 fn session_header(headers: &HeaderMap) -> Result<Option<String>, ()> {

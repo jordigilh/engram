@@ -7,6 +7,8 @@
 pub mod aggregate;
 pub mod backend;
 pub mod catalog;
+pub mod error;
+pub mod freshness;
 pub mod protocol;
 pub mod registry;
 pub mod server;
@@ -18,6 +20,8 @@ pub use backend::{
     ManualMentalModelAdapter, ScopedHindsightAdapter,
 };
 pub use catalog::{build_catalog, Catalog};
+pub use error::{ErrorKind, TypedError};
+pub use freshness::{FreshnessEnvelope, FRESHNESS_SCHEMA_VERSION};
 pub use protocol::{initialize_result, tools_list_result};
 pub use registry::{BackendKind, BackendSpec, ProjectSpec, Registry};
 pub use server::{

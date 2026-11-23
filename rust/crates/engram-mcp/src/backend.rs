@@ -20,6 +20,9 @@ use crate::registry::{BackendKind, ProjectSpec};
 pub struct BackendError {
     pub message: String,
     pub transient: bool,
+    /// The request may have reached the backend before the failure. Only
+    /// writes use this to return `outcome_unknown`.
+    pub uncertain: bool,
 }
 
 impl BackendError {
@@ -27,6 +30,7 @@ impl BackendError {
         Self {
             message: message.into(),
             transient: false,
+            uncertain: false,
         }
     }
 
@@ -34,7 +38,13 @@ impl BackendError {
         Self {
             message: message.into(),
             transient: true,
+            uncertain: false,
         }
+    }
+
+    pub fn uncertain(mut self) -> Self {
+        self.uncertain = true;
+        self
     }
 }
 
@@ -151,9 +161,13 @@ impl HttpRelayAdapter {
                 "method": method,
                 "params": params.unwrap_or_else(|| json!({}))
             });
-            let response = self.post_json(&request_url, &call, Some(&session)).await?;
+            let response = self
+                .post_json(&request_url, &call, Some(&session))
+                .await
+                .map_err(BackendError::uncertain)?;
             let body = response.bytes().await.map_err(|error| {
                 BackendError::transient(format!("{method} response read failed: {error}"))
+                    .uncertain()
             })?;
             parse_rpc_response(&body, &json!(2), method)
         }
@@ -536,7 +550,8 @@ fn parse_rpc_response(
     }
     Err(BackendError::permanent(format!(
         "{label} returned no JSON-RPC response for id {expected_id}"
-    )))
+    ))
+    .uncertain())
 }
 
 pub struct ScopedHindsightAdapter {
@@ -718,6 +733,46 @@ fn valid_model_id(value: &str) -> bool {
                     .chars()
                     .all(|character| character.is_ascii_alphanumeric())
         })
+}
+
+const READ_ONLY_TOOLS: [&str; 31] = [
+    "recall",
+    "list_mental_models",
+    "get_mental_model",
+    "zvec_grep_search",
+    "zvec_search_code",
+    "zvec_grep_rg",
+    "zvec_grep_callgraph_blast_radius",
+    "zvec_grep_callgraph_shortest_path",
+    "zvec_grep_callgraph_cluster",
+    "zvec_grep_callgraph_communities",
+    "zvec_grep_codegraph_affected",
+    "zvec_grep_codegraph_node",
+    "zvec_grep_codegraph_neighbors",
+    "zvec_grep_codegraph_relation_path",
+    "zvec_grep_codegraph_explain",
+    "zvec_grep_codegraph_capabilities",
+    "get_symbols_overview",
+    "find_symbol",
+    "find_referencing_symbols",
+    "find_implementations",
+    "find_declaration",
+    "get_diagnostics_for_file",
+    "list_queryable_projects",
+    "query_project",
+    "read_file",
+    "find_file",
+    "list_dir",
+    "get_current_config",
+    "search_for_pattern",
+    "ping",
+    "tools/list",
+];
+
+/// Fail safe: anything not proven read-only is treated as a write, so a
+/// transport failure returns `outcome_unknown` instead of inviting a replay.
+pub fn is_write_tool(name: &str) -> bool {
+    !READ_ONLY_TOOLS.contains(&name)
 }
 
 pub fn tool_error(message: impl Into<String>) -> Value {

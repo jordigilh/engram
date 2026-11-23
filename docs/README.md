@@ -8,7 +8,7 @@ does and why, see the [root README](../README.md).
 - [How It Works](#how-it-works)
 - [Key Design Decisions](#key-design-decisions)
 - [Architecture](#architecture)
-- [Hindsight vs. CocoIndex vs. Serena: Division of Labor](#hindsight-vs-cocoindex-vs-serena-division-of-labor)
+- [Hindsight vs. CocoIndex vs. zvec-grep vs. Serena: Division of Labor](#hindsight-vs-cocoindex-vs-zvec-grep-vs-serena-division-of-labor)
 - [Red Hat Chai Bot and Fullsend Research](REDHAT_CHAI_BOT_RESEARCH.md)
 - [Semantic Code Intelligence: Findings and Pilot Decision](SEMANTIC_CODE_INTELLIGENCE.md)
 - [Knowledge Graph and Mental Models](#knowledge-graph-and-mental-models)
@@ -53,14 +53,15 @@ With CocoIndex integration, each configured project's docs and issues banks are
 continuously fresh — CocoIndex runs as a KeepAlive service, detects
 source changes via delta processing, and re-ingests only the modified content.
 This replaces legacy batch importers with sub-hour staleness for docs/issues and
-sub-minute freshness for code.
+sub-minute freshness for code. Code freshness now comes from zvec-grep's
+per-workspace index refresh; CocoIndex no longer ingests code.
 
-| Source | Previous Model | CocoIndex Model | Target Freshness |
-|--------|---------------|-----------------|------------------|
-| Docs | Legacy batch importer | File-watching (instant) | < 1 hour |
-| Issues + PRs | Legacy batch importer | Polling every 5 min (all items) | < 5 minutes |
-| Code | Not indexed | File-watching (instant) + hybrid search | < 5 minutes |
-| Transcripts | Manual maintenance run | File-watching (instant) | < 1 hour |
+| Source | Previous Model | Current Model | Target Freshness |
+|--------|---------------|---------------|------------------|
+| Docs | Legacy batch importer | CocoIndex file-watching (instant) | < 1 hour |
+| Issues + PRs | Legacy batch importer | CocoIndex polling every 5 min (all items) | < 5 minutes |
+| Code | Not indexed | zvec-grep workspace indexing + refresh | < 5 minutes |
+| Transcripts | Manual maintenance run | CocoIndex file-watching (instant) | < 1 hour |
 
 ---
 
@@ -79,7 +80,7 @@ graph TB
     subgraph gateway["Engram gateway (:8896 runtime / :8898 native)"]
         relay["Route + backend aggregation"]
         serena["Serena backend"]
-        code_mcp["CocoIndex code search"]
+        code_mcp["zvec-grep code search"]
     end
 
     subgraph engram["Hindsight (:8888)"]
@@ -91,9 +92,8 @@ graph TB
         litellm["LiteLLM"]
     end
 
-    subgraph cocoindex_engine["CocoIndex"]
+    subgraph cocoindex_engine["CocoIndex (ingestion)"]
         coco_flows["engram-flows-configured --project <project>"]
-        coco_search["engram-search-configured --project <project>"]
     end
 
     subgraph vertex["Optional LLM backend"]
@@ -126,7 +126,6 @@ graph TB
     nightly_script --> api
     coco_flows --> pg
     coco_flows -->|"retain API"| api
-    coco_search --> pg
 ```
 
 ### Components
@@ -138,7 +137,7 @@ graph TB
 | Runtime secrets | `~/.engram/config.env` | Credentials and LLM/runtime secrets (never committed) |
 | Hindsight process | `~/.engram/hindsight-venv/bin/hindsight-api` or Podman Quadlet | Native macOS service or containerized Linux service |
 | MCP config | OpenCode plugin + `~/.engram/opencode.json` | Derives the project route and connects to the unified Engram gateway |
-| Serena | [oraios/serena](https://github.com/oraios/serena) behind the gateway | Type-aware code intelligence — `find_symbol`/`find_referencing_symbols`/`get_symbols_overview`/diagnostics, backed by the real per-language LSP (`gopls`/`pyright`/`rust-analyzer`/`typescript-language-server`) — see [Division of Labor](#hindsight-vs-cocoindex-vs-serena-division-of-labor) below |
+| Serena | [oraios/serena](https://github.com/oraios/serena) behind the gateway | Type-aware code intelligence — `find_symbol`/`find_referencing_symbols`/`get_symbols_overview`/diagnostics, backed by the real per-language LSP (`gopls`/`pyright`/`rust-analyzer`/`typescript-language-server`) — see [Division of Labor](#hindsight-vs-cocoindex-vs-zvec-grep-vs-serena-division-of-labor) below |
 | Behavioral rule | `cursor/examples/*.mdc` or the OpenCode plugin | Instructs the agent to recall and follow project methodology |
 | Example rules | `cursor/examples/*.mdc` | Ready-made rules for Go, Python, Rust, TypeScript, minimal |
 | Learning job | `engram-nightly-learn` | Processes transcripts, extracts patterns |
@@ -149,9 +148,9 @@ graph TB
 | Effectiveness report | `python -m engram.maintenance.report` | Metrics aggregation, token analysis, mental model stats |
 | Dashboard generator | `python -m engram.pipeline.generate_dashboard` | Auto-updates `docs/DASHBOARD.md` from daily reports |
 | MCP hook | `cursor/hooks.json` + `hooks/log-mcp-calls.sh` | Real-time MCP call logging with hit/miss |
-| CocoIndex flows | `engram-flows-configured --project <project>` | Incremental ingestion for docs, issues, code, transcripts |
-| Code search | `engram-search-configured --project <project>` behind the gateway | MCP hybrid code search (dense + BM25 via RRF fusion) |
-| Gateway | Runtime image/native gateway | Sole client-facing MCP route; aggregates Hindsight, CocoIndex, Serena, and optional backends |
+| CocoIndex flows | `engram-flows-configured --project <project>` | Incremental ingestion for docs, issues, and transcripts (ingestion-only) |
+| Code search | zvec-grep daemon behind the gateway | Semantic/structural code search, call graph, code graph, and managed ripgrep over per-workspace indexes |
+| Gateway | Runtime image/native gateway | Sole client-facing MCP route; aggregates Hindsight, zvec-grep, Serena, and optional backends |
 | Hindsight proxy | `engram-hindsight-proxy` | Sole owner of port 8888; blue/green API restarts happen behind it |
 | Service plists | `~/Library/LaunchAgents/io.vectorize.hindsight.service-{blue,green}.plist` | KeepAlive + RunAtLoad; exactly one active at a time, bound to an internal port (18888/18889) |
 | Restart plist | `~/Library/LaunchAgents/io.vectorize.hindsight.restart.plist` | 1 AM: runs `hindsight-blue-green-restart.sh` — health-checked blue/green swap, not a raw `pkill` |
@@ -167,21 +166,40 @@ graph TB
 | `shared-memory` | Corrections, instructions, workflow patterns | `concise` | Haiku 4.5 per window |
 | `<project>-docs` | Published architecture, API, operations docs | `chunks` | $0 (embeddings only) |
 | `<project>-issues` | GitHub issues + PRs or Jira work items | `chunks` | $0 (embeddings only) |
-| `<project>` code table | Codebase semantic chunks (functions, types, blocks) | `tree-sitter + dense embed + BM25 tsvector` | $0 (local embeddings) |
+| `<project>` code workspace | Codebase semantic chunks (functions, types, blocks) in zvec-grep's per-checkout index | tree-sitter chunking + lexical + vector indexing | $0 (local embeddings) |
 
 ---
 
-## Hindsight vs. CocoIndex vs. Serena: Division of Labor
+## Hindsight vs. CocoIndex vs. zvec-grep vs. Serena: Division of Labor
 
-Hindsight, CocoIndex, and Serena sit at three different layers and their
+> **Code-search migration (issue #210):** CocoIndex is now ingestion-only for
+> docs, issues, and transcripts. Code search, structural pattern search,
+> call-graph queries, and code-graph queries are served by zvec-grep. The
+> CocoIndex comparisons below describe its earlier code-search role and remain
+> for historical context.
+
+Hindsight, CocoIndex, zvec-grep, and Serena sit at different layers and their
 capabilities barely overlap — they are complementary, not substitutable for
 one another. The one-line version: **Hindsight remembers** (distilled facts
-and decisions across sessions), **CocoIndex finds** (search by meaning or by
-structural shape, kept fresh automatically), and **Serena knows and edits**
-(exact, type-resolved facts about the code as it exists *right now*, via the
-real compiler/language server, plus refactors applied through that same
-compiler-level understanding — no memory, no search-by-concept, just ground
-truth and safe edits for a symbol you already know the name or position of).
+and decisions across sessions), **CocoIndex ingests** (keeps the docs/issues
+corpus fresh), **zvec-grep finds code** (semantic search, structural shape,
+and graph queries over fresh per-workspace indexes), and **Serena knows and
+edits** (exact, type-resolved facts about the code as it exists *right now*,
+via the real compiler/language server, plus refactors applied through that
+same compiler-level understanding — no memory, no search-by-concept, just
+ground truth and safe edits for a symbol you already know the name or
+position of).
+
+### Current division of labor
+
+| Layer | Owns | Serves |
+|-------|------|--------|
+| **Hindsight** | `shared-memory`, `<project>-docs`, `<project>-issues` banks | `recall` — semantic vector search plus local reranker over distilled facts and mental models |
+| **CocoIndex** | Docs/issues/transcript ingestion only | Calls Hindsight's `retain` API; no code route |
+| **zvec-grep** | Per-workspace code indexes | `zvec_grep_search`, `zvec_grep_rg`, `search_for_pattern`, `zvec_grep_callgraph_*`, `zvec_grep_codegraph_*` |
+| **Serena** | No persisted index | LSP-backed `find_symbol`, references, diagnostics, rename, and body replacement against the live checkout |
+
+### Historical: pre-#210 CocoIndex code-search role
 
 None can substitute for the other two — each closes a different gap in what
 makes an agent's context both fresh and correct:
@@ -342,12 +360,10 @@ flowchart TB
 ```
 
 > **Note:** Code search runs as a parallel gateway tool, not through Hindsight's
-> recall pipeline. It queries
-> a separate pgvector table maintained by CocoIndex using **hybrid search** —
-> dense vector similarity for semantic queries and BM25 full-text matching for
-> exact identifiers, fused via Reciprocal Rank Fusion (RRF). OpenCode invokes it
-> through the project's Engram route alongside — not instead of — the 3-tier
-> recall hierarchy.
+> recall pipeline. It queries zvec-grep's per-workspace index using hybrid
+> lexical + vector retrieval, with structural and graph tools in the same
+> backend. OpenCode invokes it through the project's Engram route alongside —
+> not instead of — the 3-tier recall hierarchy.
 
 ### Entity Graph
 

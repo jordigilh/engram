@@ -7,7 +7,8 @@ How to add a new GitHub organization/project to the Engram knowledge system with
 Each project gets:
 - **Dedicated Hindsight banks**: `<project>-docs` and `<project>-issues` for isolated memory
 - **Shared memory bank (`shared-memory`)**: Behavioral corrections and coding conventions are universal
-- **Dedicated pgvector table**: `cocoindex.<project>_code_embeddings` for code search isolation
+- **Dedicated code workspace**: zvec-grep indexes per checkout; CocoIndex is
+  ingestion-only for docs/issues/transcripts
 - **Configured CocoIndex instance**: The shared generic adapter with its own state database
 - **Dedicated launchd service**: Independent process lifecycle
 - **OpenCode plugin configuration**: `opencode.json` loads the unified gateway plugin and derives the project route
@@ -15,8 +16,8 @@ Each project gets:
   project backends from a mounted TOML registry instead of requiring a native
   gateway process on the host
 
-> **2026-08-21 update**: the four backend servers below (`hindsight-docs`,
-> `hindsight-issues`, `cocoindex-code`, `serena`) are now fronted by one
+> **2026-08-21 update**: the backend servers below (`hindsight-docs`,
+> `hindsight-issues`, `zvec-grep`, `serena`) are now fronted by one
 > aggregating gateway, `engram-gateway` (`src/engram/pipeline/
 > engram_gateway.py`, supervised by `launchd/io.vectorize.engram-runtime.plist`)
 > instead of each getting its own client-specific MCP entries — see
@@ -45,7 +46,7 @@ Each project gets:
 ## Variants
 
 The steps below describe the full pattern (dedicated docs bank + issues bank +
-code table + own launchd service). Two lighter variants exist, both shipped
+zvec-grep code workspace + own launchd service). Two lighter variants exist, both shipped
 for real during the 2026-07-15 Engram-onboarding + kubernaut-operator/console
 work (see [FINDINGS.md](FINDINGS.md)):
 
@@ -63,15 +64,15 @@ means no GitHub issue source is configured.
 project that wants its own focused recall/search view without the overhead of
 a fully separate bank/table/pipeline (e.g. `kubernaut-operator`/
 `kubernaut-console`, which are still ingested into the shared `kubernaut-docs`
-bank / `code_embeddings` table, already tagged by repo at ingestion time). No
+bank and share kubernaut-family zvec-grep workspace indexing, already tagged by
+repo at ingestion time). No
 new bank, no new CocoIndex app, no new launchd service — just:
 1. Have the agent recall the repo-tagged source material, generate the complete
    Markdown itself, and store it with the gateway's manual mental-model tool
    using `tags: ["<repo>"]`. Do not delegate creation or refresh to
    Hindsight's LLM-backed `create_mental_model`/`refresh_mental_model` tools.
-2. An optional `repo` parameter on `engram.search.kubernaut`'s `search_code()` /
-   `cocoindex_search` MCP tool, which adds a `filepath LIKE '<repo>/%'` filter
-   to scope code search the same way.
+2. An optional `repo` parameter on the zvec-grep search tool, which scopes
+   code search to a configured source tag or repository alias.
 3. A hand-authored `.cursor/rules/hindsight-memory.mdc` that defaults to the
    repo's own tag/prefix for own-repo work, and explicitly drops the filter
    for cross-repo/upstream triage (see `cursor/operator-hindsight-memory.mdc`).
@@ -209,9 +210,8 @@ Those are precisely the changes this setup is designed to avoid.
 Copy [`projects.toml.example`](projects.toml.example) to
 `~/.engram/projects.toml` and add one `[projects.<project>]` table plus one
 `[[projects.<project>.sources]]` record for each repository/workspace. The
-configuration supplies banks, the code table, source roots, file patterns,
-issue repositories, workspace prefixes, and the per-project CocoIndex state
-database. The generic entrypoints are installed once with Engram:
+configuration supplies banks, source roots, file patterns, issue repositories,
+workspace prefixes, and the per-project CocoIndex state database. The generic entrypoints are installed once with Engram:
 
 ```bash
 uv pip install --python ~/.engram/venv/bin/python -e .
@@ -222,10 +222,12 @@ Run the same adapter for every project by changing only the project key:
 ```bash
 ~/.engram/venv/bin/engram-flows-configured \
   --project <project> --config ~/.engram/projects.toml \
-  --mode backfill --apps docs code issues
-~/.engram/venv/bin/engram-search-configured \
-  --project <project> --config ~/.engram/projects.toml
+  --mode backfill --apps docs issues
 ```
+
+Code search is not a CocoIndex app. Register the project's code backend as a
+zvec-grep route in the runtime registry (`~/.engram/runtime/instances.toml` or
+`native-instances.toml`) and let zvec-grep index each workspace.
 
 Omit an app whose corresponding bank/source is not configured. The only
 project-specific files are deployment-local configuration and rendered service
@@ -233,14 +235,13 @@ files; the repository's Python source remains unchanged for each new project.
 
 ### 4. Configure the project sources
 
-At minimum, configure a documentation/code source and its bank/table, or an
-issues bank with `issues_repos`:
+At minimum, configure a documentation source and its bank, or an issues bank
+with `issues_repos`:
 
 ```toml
 [projects.<project>]
 docs_bank = "<project>-docs"
 issues_bank = "<project>-issues" # omit when issues are out of scope
-code_table = "<project>_code_embeddings"
 issues_repos = ["<org>/<repo>"]
 
 [projects.<project>.paths]
@@ -250,13 +251,12 @@ cocoindex_db = "~/.engram/<project>-cocoindex.db"
 tag = "<repo>"
 root = "~/go/src/github.com/<org>/<repo>"
 docs_include = ["**/*.md"]
-code_include = ["**/*.go", "**/*.py"]
-code_exclude = ["**/.git/**", "**/vendor/**", "**/node_modules/**"]
 ```
 
 Add more `sources` records when a project contains multiple repositories; they
-share the configured bank/table while retaining their source tag in document
-metadata and indexed paths.
+share the configured bank while retaining their source tag in document
+metadata and indexed paths. Code is not configured here: zvec-grep indexes each
+checkout independently.
 
 > **Gotcha**: use the configuration-driven entrypoint rather than copying a
 > flow module. It owns one stable `coco.ContextKey` for all projects, so a
@@ -266,8 +266,7 @@ metadata and indexed paths.
 ### 5. Create the banks and models
 
 Create only the banks named by the project table. The generic flow writes to
-those banks and the generic search adapter reads the configured code table;
-neither requires a source edit.
+those banks; code search no longer reads a configured pgvector table.
 
 ### 6. Create the deployment service
 
@@ -331,8 +330,8 @@ helper scripts; those belong under `~/.engram`.
 
 ### 7. Choose Your Code-Intelligence Backend
 
-> See [docs/README.md's Division of Labor](README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor)
-> for how Serena's role here differs from Hindsight (memory) and CocoIndex
+> See [docs/README.md's Division of Labor](README.md#hindsight-vs-cocoindex-vs-zvec-grep-vs-serena-division-of-labor)
+> for how Serena's role here differs from Hindsight (memory) and zvec-grep
 > (search) — this section is setup instructions only, not a conceptual
 > overview.
 
@@ -526,7 +525,7 @@ use the source checkout for production; use
 [Plugin distribution](OPENCODE.md#plugin-distribution) for checksum verification,
 updates, rollback, and the explicit local-development override.
 
-The gateway owns the Hindsight, CocoIndex, Serena, and project-specific backend
+The gateway owns the Hindsight, zvec-grep, Serena, and project-specific backend
 connections. Do not register those backends separately, or the client will see
 duplicate tools and bypass the gateway's isolation and routing. OpenChamber
 should connect to the OpenCode server's resolved configuration rather than
@@ -790,9 +789,8 @@ launchctl list | grep cocoindex
 # Check CocoIndex logs
 tail -20 ~/.engram/logs/cocoindex-<project>-stderr.log
 
-# Check code embeddings
-psql -h localhost -U hindsight -d hindsight \
-  -c "SELECT count(*) FROM cocoindex.<project>_code_embeddings;"
+# Check zvec-grep workspace index
+zg --status /path/to/tracked/checkout
 
 # Test recall
 curl -X POST http://localhost:8888/v1/default/banks/<project>-docs/memories/recall \
@@ -1016,9 +1014,9 @@ self-healing to fire first. Use the **family** variant instead of generic
 - **Banks**: Fully separate Hindsight banks per project (full variant); or a
   shared bank filtered by `tags` at recall/mental-model-creation time
   (tag-scoped variant — see Variants above)
-- **Code index**: Separate pgvector tables (`code_embeddings` vs `<project>_code_embeddings`);
-  or the shared table filtered by `repo`-prefixed `filepath` at search time
-  (tag-scoped variant)
+- **Code index**: zvec-grep keeps a per-checkout `.zvec-grep` index; there is
+  no shared pgvector code table. Cross-repo/tag-scoped lookup is scoped by
+  workspace roots instead
 - **CocoIndex state**: Separate SQLite databases (`cocoindex.db` vs `<project>-cocoindex.db`)
   (full variant only — the tag-scoped variant adds no new CocoIndex app at all)
 - **MCP routing**: One workspace route maps to the project's mounted TOML `instances` entry; the optional Kubernaut RCA backend is configured as data, not a new gateway branch

@@ -1,6 +1,11 @@
 # Semantic Code Intelligence: Findings and Pilot Decision
 
-**Status:** The local gateway integration now routes Kubernaut and
+**Status (updated 2026-11-23, issue #210):** All managed project code routes now
+go to zvec-grep; CocoIndex is ingestion-only for docs, issues, and transcripts.
+The pilot status text below is retained as the original 2026-09-22 decision
+record.
+
+**Original status (2026-09-22):** The local gateway integration now routes Kubernaut and
 `kubernaut-operator` code tools to zvec-grep as primary and schedules CocoIndex
 comparisons asynchronously for semantic search and comparable Go core/operator
 graph calls. The native gateway also routes the live `kubernaut-operator`

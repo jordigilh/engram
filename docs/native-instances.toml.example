@@ -33,9 +33,8 @@ timeout_seconds = 300
 #
 # [instances."my-project".backends.code]
 # kind = "stdio"
-# command = "/path/to/engram-search-my-project"
-# args = []
-# env = { COCOINDEX_PG_URL = "postgresql://user:password@127.0.0.1:5432/database" }
+# command = "/path/to/zg"
+# args = ["--server", "--stdio", "--mcp-toolset", "full"]
 # shared_key = "my-project-code"
 
 [instances."my-project".backends.serena]
@@ -52,10 +51,15 @@ workspace_routing = false
 # configured Git checkout also covers its registered linked Git worktrees;
 # non-Git aggregate roots still need an exact allowed_roots entry.
 #
+# CocoIndex is ingestion-only; there is no CocoIndex code backend to shadow.
+# A shadow backend compares two zvec-grep endpoints when testing a new zvec
+# build against the current one.
+#
 # [instances."my-project".backends.code_shadow]
 # kind = "shadow_http"
 # url = "http://127.0.0.1:7999/mcp"
-# shadow_url = "http://127.0.0.1:8891/mcp"
+# A second zvec-grep build to compare against the primary above.
+# shadow_url = "http://127.0.0.1:7998/mcp"
 # timeout_seconds = 300
 # shadow_timeout_seconds = 180
 # shadow_log = "~/.engram/logs/code-shadow.jsonl"

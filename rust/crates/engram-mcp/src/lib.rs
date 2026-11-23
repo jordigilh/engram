@@ -11,5 +11,7 @@ pub mod server;
 pub mod session;
 
 pub use protocol::{initialize_result, tools_list_result};
-pub use server::{router, router_with_policy, Project, SessionPolicy};
+pub use server::{
+    router, router_with_options, router_with_policy, OriginPolicy, Project, SessionPolicy,
+};
 pub use session::SessionStore;

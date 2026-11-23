@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 
 use clap::Parser;
-use engram_mcp::{router_with_policy, Project, SessionPolicy};
+use engram_mcp::{router_with_options, OriginPolicy, Project, SessionPolicy};
 
 /// Native Engram MCP lifecycle server (issue #211, slice 1).
 #[derive(Debug, Parser)]
@@ -23,6 +23,11 @@ struct Args {
     /// Off by default (MCP behavior); on for Python-gateway parity.
     #[arg(long)]
     allow_stateless: bool,
+
+    /// Additional browser Origin allowed to call the gateway. Loopback
+    /// origins are always allowed; requests without Origin are native clients.
+    #[arg(long = "allow-origin", value_name = "ORIGIN")]
+    allow_origins: Vec<String>,
 }
 
 #[tokio::main]
@@ -54,7 +59,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         SessionPolicy::Required
     };
-    let app = router_with_policy(projects.into_values(), policy);
+    let app = router_with_options(
+        projects.into_values(),
+        policy,
+        OriginPolicy {
+            allow_no_origin: true,
+            allowed_origins: args.allow_origins,
+        },
+    );
     let address = SocketAddr::new(host, args.port);
     let listener = tokio::net::TcpListener::bind(address).await?;
     println!("engram-mcp listening on http://{address}/mcp/<project>");

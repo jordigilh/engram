@@ -18,8 +18,15 @@ Implemented:
   created it.
 - Bounded session state: 30-minute idle TTL, a hard session cap, one-shot
   cancellation, and random session ids.
+- `Origin` validation for browser-originated requests: loopback origins and an
+  explicit `--allow-origin` allowlist pass; requests without `Origin` (native
+  MCP clients) remain allowed.
 - Non-`initialize` requests require `Mcp-Session-Id` by default. Use
   `--allow-stateless` only for Python-gateway parity during migration.
+- A supplied session header is validated on every request, including
+  `initialize`; terminated or cross-project sessions return 404.
+- Cancellation notifications must be versioned and id-less; malformed
+  envelopes are rejected without changing cancellation state.
 
 Deliberately not implemented in this slice:
 
@@ -46,8 +53,8 @@ requests that carry `Mcp-Session-Id`; header-less traffic stays stateless.
 
 `crates/engram-mcp/tests/lifecycle.rs` covers initialize, notifications,
 tools/list isolation, DELETE, cancellation, cross-project session rejection,
-transport errors, and stateless compatibility. Unit tests cover the JSON-RPC
-payload shapes and the session store.
+Origin validation, transport errors, and stateless compatibility. Unit tests
+cover the JSON-RPC payload shapes and the session store.
 
 ## Stacked follow-ups
 

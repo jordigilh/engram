@@ -9,8 +9,9 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Request, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
@@ -62,6 +63,43 @@ struct AppState {
     projects: BTreeMap<String, Project>,
     sessions: Mutex<SessionStore>,
     policy: SessionPolicy,
+    origins: OriginPolicy,
+}
+
+/// DNS-rebinding defense. A browser-originated request is accepted only when
+/// its `Origin` is explicitly configured or is itself a loopback origin.
+/// Requests without `Origin` are native MCP clients and stay allowed by
+/// default.
+#[derive(Debug, Clone)]
+pub struct OriginPolicy {
+    pub allow_no_origin: bool,
+    pub allowed_origins: Vec<String>,
+}
+
+impl Default for OriginPolicy {
+    fn default() -> Self {
+        Self {
+            allow_no_origin: true,
+            allowed_origins: Vec::new(),
+        }
+    }
+}
+
+impl OriginPolicy {
+    pub fn allows(&self, headers: &HeaderMap) -> bool {
+        match headers.get(header::ORIGIN) {
+            None => self.allow_no_origin,
+            Some(value) => value
+                .to_str()
+                .map(|origin| {
+                    self.allowed_origins
+                        .iter()
+                        .any(|allowed| allowed.eq_ignore_ascii_case(origin))
+                        || is_loopback_origin(origin)
+                })
+                .unwrap_or(false),
+        }
+    }
 }
 
 /// Build the project-scoped MCP router with the MCP-default session policy.
@@ -75,6 +113,15 @@ pub fn router_with_policy(
     projects: impl IntoIterator<Item = Project>,
     policy: SessionPolicy,
 ) -> Router {
+    router_with_options(projects, policy, OriginPolicy::default())
+}
+
+/// Build the router with explicit session and origin policy.
+pub fn router_with_options(
+    projects: impl IntoIterator<Item = Project>,
+    policy: SessionPolicy,
+    origins: OriginPolicy,
+) -> Router {
     let projects = projects
         .into_iter()
         .map(|project| (project.name.clone(), project))
@@ -83,6 +130,7 @@ pub fn router_with_policy(
         projects,
         sessions: Mutex::new(SessionStore::new()),
         policy,
+        origins,
     });
 
     Router::new()
@@ -92,7 +140,40 @@ pub fn router_with_policy(
                 .post(post_endpoint)
                 .delete(delete_endpoint),
         )
+        .layer(middleware::from_fn_with_state(state.clone(), origin_guard))
         .with_state(state)
+}
+
+async fn origin_guard(
+    State(state): State<Arc<AppState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if state.origins.allows(request.headers()) {
+        next.run(request).await
+    } else {
+        StatusCode::FORBIDDEN.into_response()
+    }
+}
+
+/// Loopback origins are safe by construction for a loopback-bound server. A
+/// rebinding attack carries the attacker's external origin and is rejected.
+fn is_loopback_origin(origin: &str) -> bool {
+    let lower = origin.to_ascii_lowercase();
+    let Some(rest) = lower
+        .strip_prefix("http://")
+        .or_else(|| lower.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or("");
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    let host = if let Some(after_bracket) = authority.strip_prefix('[') {
+        after_bracket.split(']').next().unwrap_or("")
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
 async fn get_endpoint(State(state): State<Arc<AppState>>, Path(project): Path<String>) -> Response {
@@ -149,6 +230,14 @@ async fn post_endpoint(
         Err(()) => return StatusCode::BAD_REQUEST.into_response(),
     };
 
+    // A session presented on a route must belong to that route, including on
+    // initialize. Unknown, deleted, or cross-project sessions are 404.
+    if let Some(session_id) = &session_id {
+        if !lock_sessions(&state).validate(session_id, &project) {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+    }
+
     if method == "initialize" {
         let Some(id) = message_id else {
             return StatusCode::ACCEPTED.into_response();
@@ -169,15 +258,14 @@ async fn post_endpoint(
         return StatusCode::BAD_REQUEST.into_response();
     }
 
-    // A session presented on a route must belong to that route. Unknown,
-    // deleted, or cross-project sessions are indistinguishable to the caller.
-    if let Some(session_id) = &session_id {
-        if !lock_sessions(&state).validate(session_id, &project) {
-            return StatusCode::NOT_FOUND.into_response();
-        }
-    }
-
     if method == "notifications/cancelled" {
+        // MCP notifications must carry the protocol version and must not carry
+        // a request id. Reject malformed envelopes before mutating state.
+        if message.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+            || message.get("id").is_some()
+        {
+            return StatusCode::BAD_REQUEST.into_response();
+        }
         if let (Some(session_id), Some(request_id)) = (
             session_id.as_deref(),
             message

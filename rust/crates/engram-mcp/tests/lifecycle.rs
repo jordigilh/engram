@@ -4,7 +4,7 @@ use axum::body::{to_bytes, Body};
 use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::Router;
 use engram_mcp::server::tool_definition;
-use engram_mcp::{router, router_with_policy, Project, SessionPolicy};
+use engram_mcp::{router, router_with_options, router_with_policy, Project, SessionPolicy};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -467,8 +467,141 @@ async fn non_utf8_session_header_is_rejected() {
 }
 
 #[tokio::test]
-async fn get_unknown_project_is_not_found() {
+async fn origin_validation_rejects_external_and_allows_loopback() {
     let app = app();
-    let (status, _, _) = call(&app, "GET", "/mcp/missing", None, None).await;
+    let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}});
+
+    let rejected = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/alpha")
+                .header("origin", "https://evil.example")
+                .body(Body::from(init.to_string()))
+                .expect("valid request"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+
+    let loopback = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/alpha")
+                .header("origin", "http://127.0.0.1:3000")
+                .body(Body::from(init.to_string()))
+                .expect("valid request"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(loopback.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn configured_origin_is_allowed() {
+    let app = router_with_options(
+        [Project::new("alpha")],
+        SessionPolicy::Required,
+        engram_mcp::OriginPolicy {
+            allow_no_origin: true,
+            allowed_origins: vec!["https://app.example".into()],
+        },
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/alpha")
+                .header("origin", "https://app.example")
+                .body(Body::from(
+                    json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"}).to_string(),
+                ))
+                .expect("valid request"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn initialize_rejects_deleted_or_cross_project_sessions() {
+    let app = app();
+    let alpha = initialize(&app, "alpha").await;
+    let (status, _, _) = call(&app, "DELETE", "/mcp/alpha", Some(&alpha), None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/mcp/alpha",
+        Some(&alpha),
+        Some(json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"})),
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let beta_session = initialize(&app, "beta").await;
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/mcp/alpha",
+        Some(&beta_session),
+        Some(json!({"jsonrpc": "2.0", "id": 2, "method": "initialize"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn malformed_cancellation_does_not_record_a_fence() {
+    let app = app();
+    let session = initialize(&app, "alpha").await;
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/mcp/alpha",
+        Some(&session),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "notifications/cancelled",
+            "params": {"requestId": 42}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/mcp/alpha",
+        Some(&session),
+        Some(json!({
+            "jsonrpc": "1.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": 42}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (_, _, body) = call(
+        &app,
+        "POST",
+        "/mcp/alpha",
+        Some(&session),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "tools/call",
+            "params": {"name": "alpha_search", "arguments": {}}
+        })),
+    )
+    .await;
+    assert_eq!(sse_data(&body)["error"]["code"], -32601);
 }

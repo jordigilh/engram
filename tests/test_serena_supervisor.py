@@ -324,10 +324,12 @@ def test_cancel_during_readiness_keeps_port_until_child_exits(tmp_path):
             assert supervisor._starting == 1
         finally:
             allow_terminate.set()
-            for _ in range(200):
-                if port not in supervisor._reserved_ports:
-                    break
-                await asyncio.sleep(0.02)
+
+            async def drain() -> None:
+                while supervisor._starting:
+                    await asyncio.sleep(0.02)
+
+            await asyncio.wait_for(drain(), timeout=10)
         assert port not in supervisor._reserved_ports
         assert supervisor._starting == 0
 

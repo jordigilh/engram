@@ -33,9 +33,8 @@ timeout_seconds = 300
 #
 # [instances."my-project".backends.code]
 # kind = "stdio"
-# command = "/path/to/engram-search-my-project"
-# args = []
-# env = { COCOINDEX_PG_URL = "postgresql://user:password@127.0.0.1:5432/database" }
+# command = "/path/to/zg"
+# args = ["--server", "--stdio", "--mcp-toolset", "full"]
 # shared_key = "my-project-code"
 
 [instances."my-project".backends.serena]
@@ -52,12 +51,8 @@ workspace_routing = false
 # configured Git checkout also covers its registered linked Git worktrees;
 # non-Git aggregate roots still need an exact allowed_roots entry.
 #
-# [instances."my-project".backends.code_shadow]
-# kind = "shadow_http"
-# url = "http://127.0.0.1:7999/mcp"
-# shadow_url = "http://127.0.0.1:8891/mcp"
-# timeout_seconds = 300
-# shadow_timeout_seconds = 180
-# shadow_log = "~/.engram/logs/code-shadow.jsonl"
-# source_roots = { my-project = "/path/to/my-project" }
-# allowed_roots = ["/path/to/my-project"]
+# A shadow backend compares a CocoIndex reference response with the primary
+# engine. The gateway's shadow comparison parses the shadow as CocoIndex
+# output, so there is no supported shadow reference now that CocoIndex code
+# search is retired. Do not configure a zvec-grep-to-zvec-grep shadow until the
+# gateway can parse a zvec-grep reference response.

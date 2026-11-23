@@ -1,11 +1,20 @@
 # CocoIndex Operations Guide
 
+> **Status (issue #210):** CocoIndex is **ingestion-only** for docs, issues, and
+> transcripts. In this deployment, every managed project's code-search route
+> points at the zvec-grep daemon (`:7999`), which serves semantic search,
+> `search_for_pattern`, managed ripgrep, call-graph, and code-graph tools. The
+> hybrid code-search, structural pattern-search, and call-graph sections below
+> document the retired CocoIndex-backed implementations and are retained for
+> migration history.
+
 ## Overview
 
 CocoIndex is the incremental ingestion engine in the Engram stack. It replaces
-legacy batch importers with continuous, delta-aware sync for four source types:
-documentation, GitHub issues, codebase, and agent
-transcripts.
+legacy batch importers with continuous, delta-aware sync for documentation,
+GitHub issues, and agent transcripts. Code search is no longer part of the live
+CocoIndex path; a deployment may still run the legacy code ingestion app until
+#214 replaces it, but no client route reads that pgvector table.
 
 For operational configuration of GitHub and Jira issue polling, including
 credentials, LaunchAgents, backfills, and verification, see
@@ -63,7 +72,10 @@ flowchart LR
 
 ## Flow Catalog
 
-CocoIndex declares four flows, each with a source, transform pipeline, and sink.
+CocoIndex's flow catalog is below. Code search is retired; the **code** flow may
+still run on deployments that have not disabled it, writing a pgvector table
+that no client route reads. The code row and sections below are retained for
+migration history.
 
 | Flow | Source | Transforms | Sink | Frequency |
 |------|--------|-----------|------|-----------|
@@ -232,8 +244,8 @@ every X shaped like this" queries Serena can't do (LSP navigation starts from
 a known symbol/cursor position, not a structural shape), while reusing
 CocoIndex — infrastructure Engram already runs — instead of standing up a
 separate MCP server per language. See
-`docs/README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor` for the
-full three-way comparison across all of Hindsight, CocoIndex, and Serena.
+`docs/README.md#hindsight-vs-cocoindex-vs-zvec-grep-vs-serena-division-of-labor` for the
+full four-way comparison across all of Hindsight, CocoIndex, zvec-grep, and Serena.
 
 ### Why SQL command attachment (not a manual trigger)
 
@@ -439,6 +451,10 @@ python3 -m engram.maintenance.report
 
 ## Troubleshooting
 
+> Code-search troubleshooting in this section applies only to the retired
+> CocoIndex code flow. For zvec-grep, use `zg --status <path>` and reindex with
+> `zg --index <path>`; gateway searches refresh and wait for freshness.
+
 ### pg0 not running
 
 ```
@@ -458,12 +474,14 @@ curl -s http://localhost:8888/health
 ~/.engram/hindsight-blue-green-restart.sh
 ```
 
-### Embedding model mismatch
+### Embedding model mismatch (legacy code flow)
 
-If you upgrade the embedding model in Hindsight, the CocoIndex code table's
-embeddings (stored separately in pgvector) will use a different vector space.
+If a deployment still runs the legacy CocoIndex code ingestion app and you
+upgrade the embedding model in Hindsight, that code table's embeddings (stored
+separately in pgvector) will use a different vector space. This does not affect
+zvec-grep code search.
 
-**Fix:** Run a full backfill to re-embed all code chunks:
+**Fix:** Run a full backfill to re-embed all legacy code chunks:
 
 ```bash
 ~/.engram/venv/bin/engram-flows-configured --project kubernaut --config ~/.engram/projects.toml --mode backfill
@@ -509,12 +527,22 @@ If you have more than 10,000 items, increase the source `limit` in
 
 ### Stale code index results
 
-If code search returns outdated results, the delta processor may have missed
-file changes (e.g., files modified outside the watched directory).
+Code search is served by zvec-grep. If results look stale, check the workspace
+index and rebuild it:
 
 ```bash
-# Force reprocessing
-~/.engram/venv/bin/engram-flows-configured --project kubernaut --config ~/.engram/projects.toml --mode backfill
+zg --status /path/to/checkout
+zg --index /path/to/checkout --rebuild
+```
+
+Gateway searches request `freshness: "wait_for_fresh"`, so they refresh the
+requested workspace before returning. Direct zvec-grep clients use eventual
+freshness. The legacy CocoIndex code flow, if still enabled, needs its own
+backfill:
+
+```bash
+~/.engram/venv/bin/engram-flows-configured --project <project> \
+  --config ~/.engram/projects.toml --mode backfill --apps code
 ```
 
 ---
@@ -525,11 +553,12 @@ To add a new source to a configured flow:
 
 1. Add a source record to the project's `projects.toml` table (file watcher,
    API poller, or tracker connector)
-2. Select the source's docs/code patterns and connector settings
-3. Run the generic configured flow; it selects the Hindsight or pgvector sink
-   from the same TOML values
+2. Select the source's docs patterns and connector settings. Code is indexed by
+   zvec-grep, not as a CocoIndex source.
+3. Run the generic configured flow; it writes docs/issues/transcripts to the
+   Hindsight retain API
 4. Test with backfill mode: `~/.engram/venv/bin/engram-flows-configured --project <project> --config ~/.engram/projects.toml --mode backfill`
-5. Verify the data appears in recall or search results
+5. Verify the data appears in recall results
 
 CocoIndex handles lineage tracking automatically — when a source document is
 modified, only its chunks are re-processed. When a source is deleted, its
@@ -545,7 +574,7 @@ chunks are removed from the sink.
 | tree-sitter parsing | $0 | CPU-only, no external API |
 | GitHub API | $0 | Uses `gh` CLI with authenticated rate limit |
 | Delta processing | $0 | CPU-only incremental reprocessing |
-| Storage | ~50 MB | Configured pgvector code table (scales with codebase size) |
+| Storage | ~50 MB | Hindsight banks (plus a legacy pgvector code table only while the legacy code flow is enabled) |
 
 **Total: $0/month** — CocoIndex runs entirely locally with no LLM or external
 API costs. The only resource consumed is CPU time for embedding generation and

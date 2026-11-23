@@ -2,7 +2,7 @@
 
 Engram integrates with OpenCode and OpenChamber through one MCP entry. The
 OpenCode plugin supplies project-aware recall, compaction context, and
-MCP-over-CLI guidance. The gateway owns Hindsight, CocoIndex, Serena, and
+MCP-over-CLI guidance. The gateway owns Hindsight, zvec-grep, Serena, and
 optional project-specific backends.
 
 The recommended setup is **hybrid**:
@@ -162,7 +162,7 @@ continue to use their explicit `root` argument and the existing exact-root /
 registered-worktree authorization, so sibling-repository queries do not change
 Serena's active workspace.
 
-Users do not register Hindsight, CocoIndex, or Serena separately. Do not add a
+Users do not register Hindsight, zvec-grep, or Serena separately. Do not add a
 second gateway entry through OpenChamber's Settings -> MCP; OpenChamber should
 use the OpenCode server's resolved configuration.
 
@@ -528,7 +528,7 @@ the system-recall identity aligned with the route.
 ## Migration
 
 Remove old direct MCP entries for `hindsight-docs`, `hindsight-issues`,
-`cocoindex-code`, and `serena` after enabling the plugin. Keep one explicit
+`cocoindex-code`, `zvec-grep`, and `serena` after enabling the plugin. Keep one explicit
 `mcp.servers.engram` gateway entry when using the hybrid setup. Leaving the old
 backend entries in place causes duplicate tools and bypasses the gateway's
 backend isolation. Keep the native V2 `mcp.servers.engram` shape shown above.

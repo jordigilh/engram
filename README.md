@@ -24,7 +24,7 @@ flowchart LR
     subgraph session["During Sessions (zero LLM cost)"]
         A[OpenCode / OpenChamber] -->|one Engram MCP entry| G[Engram Gateway]
         G -->|recall + retain| B[Engram / Hindsight]
-        G -->|code search| CI_MCP[CocoIndex]
+        G -->|code search + graph| ZG[zvec-grep]
         G -->|LSP + refactoring| S[Serena]
     end
 
@@ -33,13 +33,11 @@ flowchart LR
         D -->|manual writer| E["Canonical mental model"]
     end
 
-    subgraph cocoindex["CocoIndex (live sync)"]
+    subgraph cocoindex["CocoIndex (docs/issues ingestion)"]
         docs_src[Docs] --> CI[CocoIndex Engine]
         issues_src[Issues] --> CI
-        code_src[Code] --> CI
         transcripts_src[Transcripts] --> CI
         CI -->|"retain API"| B
-        CI -->|"pgvector"| CI_MCP
     end
 ```
 
@@ -56,38 +54,37 @@ writes and reviews complete Markdown, then stores it through the manual
 mental-model writer. The gateway does not expose Hindsight's Vertex-backed
 `reflect`, `create_mental_model`, or `refresh_mental_model` operations.
 
-## Three services, distinct benefits
+## Four services, distinct benefits
 
-Engram combines three complementary services behind one gateway. They are not
-three interchangeable ways to search the same data:
+Engram combines four complementary services behind one gateway. They are not
+interchangeable ways to search the same data:
 
 - **Hindsight remembers and serves** — persistent corrections, decisions,
   conventions, and manually authored mental models survive across sessions.
   Its knowledge graph connects entities and facts so recall can surface related
   context, not just exact text matches.
-- **CocoIndex finds and keeps context fresh** — live filesystem/GitHub
-  ingestion feeds Hindsight's document banks, while hybrid dense-plus-BM25
-  search handles code. Its graphify-inspired code-graph extension, built on
-  CocoIndex's `match_code()` primitive, answers cross-file questions such as
-  blast radius, shortest paths, and Leiden-detected function clusters. This is
-  an Engram extension inspired by Graphify's precision policy, not a separate
-  Graphify service or dependency.
+- **CocoIndex ingests and keeps the corpus fresh** — live filesystem/GitHub
+  ingestion feeds Hindsight's document banks for docs, issues, and transcripts.
+  CocoIndex is ingestion-only: it does not serve code search.
+- **zvec-grep searches code** — per-workspace semantic search, structural
+  pattern search (`search_for_pattern`), managed ripgrep, and call-graph/code-graph
+  queries all come from the zvec-grep MCP daemon.
 - **Serena knows and edits exact code** — language-server-backed symbol lookup,
   references, diagnostics, semantic rename, and body replacement operate on
   the current checkout with compiler-level semantics.
 
 The gateway exposes these capabilities as one project-scoped MCP server, so
-OpenCode/OpenChamber gets the combined benefit without managing three backend
+OpenCode/OpenChamber gets the combined benefit without managing four backend
 registrations.
 
 ## What it solves
 
-Three components, each closing a different gap, working together:
+Four components, each closing a different gap, working together:
 
 | Problem | How Engram fixes it |
 |---------|-------------------|
 | Agent burns many grep/glob/read sweeps just to answer "what calls this" or "how does X work" | Structural graph queries (`zvec_grep_callgraph_*` / `zvec_grep_codegraph_*`, served by the zvec-grep MCP daemon through the Engram gateway) + hybrid/structural code search answer relational and semantic questions directly, in one call |
-| Training data and mental context go stale the moment code changes, risking wrong or outdated reviews/features | **CocoIndex** live-syncs docs/code/issues continuously, so results always reflect the current corpus, not a snapshot |
+| Training data and mental context go stale the moment code changes, risking wrong or outdated reviews/features | **CocoIndex** live-syncs docs/issues/transcripts, and **zvec-grep** refreshes the requested code workspace on a gateway search (waiting for indexing) while direct clients use eventual freshness |
 | Reviews and new features can contradict past decisions or repeat already-solved mistakes | **Hindsight**'s knowledge graph + mental models surface prior corrections, conventions, and architecture decisions automatically |
 | Every session starts with amnesia, repeating the same mistakes | **Hindsight**'s recall surfaces past corrections automatically; they become persistent patterns |
 | Text-based rename/refactor risks missed references or false-positive matches across languages | **Serena**'s LSP-backed `rename_symbol`/`replace_symbol_body` apply refactors via real compiler semantics, language-agnostically |
@@ -95,17 +92,17 @@ Three components, each closing a different gap, working together:
 | *(side effect)* Exploration and rework waste tokens | Fewer sweeps + fewer repeated mistakes → lower token cost — tracked as a metric, not the primary goal |
 
 Each component covers genuinely distinct ground and none can substitute for
-the other two — see [docs/README.md's Division of Labor](docs/README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor)
-for the full breakdown of how CocoIndex, Hindsight, and Serena divide
+the others — see [docs/README.md's Division of Labor](docs/README.md#hindsight-vs-cocoindex-vs-zvec-grep-vs-serena-division-of-labor)
+for the full breakdown of how CocoIndex, zvec-grep, Hindsight, and Serena divide
 responsibility.
 
 ## Key features
 
 - **Call-graph queries via the zvec-grep daemon** — structural graph queries that answer relational questions grep/glob can't: blast radius ("what breaks if I change this"), shortest path between two functions, and compiler-attested code-graph navigation, resolved with certainty classes instead of name matching. The earlier Graphify-inspired CocoIndex spike was retired (issue [#199](https://github.com/jordigilh/engram/issues/199)); its history is recorded in [docs/CALL_GRAPH_CLUSTERING.md](docs/CALL_GRAPH_CLUSTERING.md) and [docs/COCOINDEX.md#graphify-inspired-call-graph-queries](docs/COCOINDEX.md#graphify-inspired-call-graph-queries)
 - **LSP-backed code intelligence, language-agnostic by construction** — the same tool surface (`find_symbol`/`find_referencing_symbols`/diagnostics) works identically whether the repo is Go, Python, Rust, or TypeScript, wrapping each language's real LSP (`gopls`, `pyright`, `rust-analyzer`, `typescript-language-server`). Includes **semantic refactoring** (`rename_symbol`, `replace_symbol_body`): a rename or body replacement is resolved and applied via the compiler's own understanding of the code, not text search-replace, so every real reference updates correctly and an unrelated same-named match elsewhere is never touched — see [docs/NEW_PROJECT_SETUP.md](docs/NEW_PROJECT_SETUP.md#code-intelligence) for setup
-- **Hybrid code search** — tree-sitter AST-aware chunking keeps chunk boundaries on function/type/block nodes instead of arbitrary character offsets; dense embeddings (pgvector) handle semantic queries while BM25 (tsvector + GIN) handles exact identifiers — results fused via Reciprocal Rank Fusion
-- **Structural pattern search** — tree-sitter by-example matching answers "find code shaped like X" (e.g. every function matching a signature) as a distinct MCP tool per project — see docs/COCOINDEX.md
-- **Live sync** — docs, code, and transcripts watch for filesystem changes in real time; issues and PRs poll GitHub every 5 minutes, so nothing reflects a stale snapshot
+- **Hybrid code search via zvec-grep** — per-workspace indexes combine lexical and vector retrieval; results carry bounded source snippets and freshness metadata
+- **Structural pattern search** — zvec-grep's `search_for_pattern` runs tree-sitter by-example matching to answer "find code shaped like X" (e.g. every function matching a signature)
+- **Fresh code search** — CocoIndex watches docs/issues/transcripts. Gateway code searches refresh the requested zvec-grep workspace and wait for indexing before they return. Direct zvec-grep clients use eventual freshness and may not yet reflect recent edits.
 - **Hindsight knowledge graph** — entities link across sessions for richer retrieval
 - **Mental models** — agent-authored, curated documents (not scattered facts)
 - **Learns from corrections** — detects when you correct the agent, extracts the lesson
@@ -115,7 +112,7 @@ responsibility.
 - **Self-evaluating** — weekly trend metrics (corrections/session, rework %, exploration efficiency, productivity density), ingestion coverage, data freshness
 - **Recoverable** — transcripts are source of truth; `python3 -m engram.maintenance.recover_memories --apply` re-extracts recoverable corrections and instructions
 
-See [docs/README.md's Division of Labor](docs/README.md#hindsight-vs-cocoindex-vs-serena-division-of-labor) for which of Hindsight, CocoIndex, or Serena is responsible for each of these.
+See [docs/README.md's Division of Labor](docs/README.md#hindsight-vs-cocoindex-vs-zvec-grep-vs-serena-division-of-labor) for which of Hindsight, CocoIndex, zvec-grep, or Serena is responsible for each of these.
 
 ## Quick start
 
@@ -149,11 +146,13 @@ graph TB
         rerank["Local Reranker"]
     end
 
-    subgraph cocoindex_engine["CocoIndex"]
+    subgraph cocoindex_engine["CocoIndex (ingestion)"]
         coco["engram-flows-configured"]
-        coco_search["engram-search-configured"]
         coco --> pg
-        coco_search --> pg
+    end
+
+    subgraph zvec_engine["zvec-grep"]
+        zg["semantic search, graphs, managed rg"]
     end
 
     subgraph vertex["Optional LLM backend"]
@@ -168,7 +167,7 @@ graph TB
     nightly["engram-nightly-learn<br/>(on-demand only, no schedule)"]
 
     gateway --> api
-    gateway --> coco_search
+    gateway --> zg
     gateway --> serena
     api --> pg
     api --> emb
@@ -210,16 +209,16 @@ story since that's the actual goal.
 
 ## Expected benefits from CocoIndex integration
 
-CocoIndex replaces batch scripts with continuous, incremental ingestion across
-up to four source types, depending on the project configuration. The expected
-improvements:
+CocoIndex replaces batch scripts with continuous, incremental ingestion for
+docs, issues, and transcripts. Code search is served separately by zvec-grep
+over per-workspace indexes. The expected improvements:
 
-| Dimension | Before (batch scripts) | After (CocoIndex live sync) |
-|-----------|----------------------|----------------------------|
+| Dimension | Before (batch scripts) | After (current stack) |
+|-----------|----------------------|-----------------------|
 | **Issues coverage** | 500 items (hardcoded cap) | All issues + PRs (~1,471 items) |
 | **Issues freshness** | ~24 hours (nightly batch) | < 5 minutes (polling every 300s) |
 | **Docs freshness** | Manual re-run | Instant (filesystem watching) |
-| **Code search** | Not available | Hybrid search (dense + BM25 via RRF) over pgvector + tree-sitter |
+| **Code search** | Not available | zvec-grep hybrid lexical + vector search over per-workspace indexes |
 | **Transcript learning** | Nightly batch only | Continuous detection (regex, zero LLM cost) + on-demand extraction |
 | **Exploration overhead** | Agent greps/globs for context | Recall front-loads synthesized knowledge |
 

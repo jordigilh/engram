@@ -14,11 +14,11 @@ its exact directory:
 {
   "plugins": [
     {
-      "package": "/Users/<user>/.engram/opencode-plugins/engram-opencode-plugin-0.1.2",
+      "package": "/Users/<user>/.engram/opencode-plugins/engram-opencode-plugin-0.1.3",
       "options": {
         "pluginArtifact": {
           "package": "engram-opencode-plugin",
-          "version": "0.1.2",
+          "version": "0.1.3",
           "source": "github-release"
         }
       }

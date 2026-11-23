@@ -1145,6 +1145,11 @@ def build_app(
                     )
 
                 if invalidation_enabled:
+                    if message.get("method") != "tools/call":
+                        # initialize/notifications/tools/list are lifecycle and
+                        # discovery, not workspace-scoped tool calls. Forward them
+                        # so a bound client can still discover the catalog.
+                        return await forward_raw()
                     effective_workspace = entry.workspace or requested_workspace
                     if effective_workspace is None and require_workspace == "enforce":
                         return _busy_response(
@@ -1153,6 +1158,16 @@ def build_app(
                     if route == "agnostic":
                         return _busy_response(
                             WorkspaceBusy("workspace_unbound", effective_workspace),
+                            message,
+                        )
+                    if "id" not in message and not is_read_only_tool(tool_name):
+                        # A mutating JSON-RPC notification cannot be reconciled.
+                        return _busy_response(
+                            WorkspaceBusy(
+                                "outcome_unknown",
+                                effective_workspace,
+                                retryable=False,
+                            ),
                             message,
                         )
                     if effective_workspace is not None:

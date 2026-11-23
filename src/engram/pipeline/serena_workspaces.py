@@ -208,21 +208,33 @@ def probe_worktree(workspace: str, timeout_s: float = PROBE_TIMEOUT_S) -> ProbeR
         return ProbeResult(head=None, fingerprint="", error="git probe failed")
 
     git_dir = _run_git(["rev-parse", "--git-dir"], workspace, timeout_s)
+    if git_dir is None:
+        return ProbeResult(
+            head=head,
+            fingerprint="",
+            error="cannot resolve git metadata directory",
+        )
     ref = _run_git(["symbolic-ref", "-q", "HEAD"], workspace, timeout_s)
     parts = [head]
     lock_held = False
-    if git_dir:
-        gd = pathlib.Path(git_dir)
-        if not gd.is_absolute():
-            gd = pathlib.Path(workspace) / gd
-        for name in ("index.lock", "HEAD.lock"):
-            if (gd / name).exists():
-                lock_held = True
-                parts.append(f"lock:{name}")
-        if ref:
-            # The ref itself may live in the common dir; the per-worktree lock
-            # is what matters for this checkout.
-            if (gd / (ref + ".lock")).exists():
+    gd = pathlib.Path(git_dir)
+    if not gd.is_absolute():
+        gd = pathlib.Path(workspace) / gd
+    for name in ("index.lock", "HEAD.lock"):
+        if (gd / name).exists():
+            lock_held = True
+            parts.append(f"lock:{name}")
+    if ref:
+        # A linked worktree's branch ref lives in the common dir, not the
+        # private worktree git dir. Ask Git for the exact path.
+        ref_lock = _run_git(
+            ["rev-parse", "--git-path", f"{ref}.lock"], workspace, timeout_s
+        )
+        if ref_lock:
+            ref_lock_path = pathlib.Path(ref_lock)
+            if not ref_lock_path.is_absolute():
+                ref_lock_path = pathlib.Path(workspace) / ref_lock_path
+            if ref_lock_path.exists():
                 lock_held = True
                 parts.append(f"lock:{ref}.lock")
     parts.append(f"ref:{ref or ''}")
@@ -315,21 +327,44 @@ class WorkspaceRuntime:
                 and transaction_id in self.state.terminal_transactions
             ):
                 return {"applied": False, "reason": "tombstoned"}
-            if phase == "begin":
-                if mutation_id is not None and mutation_id in self.state.seen_mutations:
-                    return {"applied": False, "reason": "duplicate"}
-                if mutation_id is not None:
-                    self.state.seen_mutations.append(mutation_id)
-                    self.state.last_mutation_id = mutation_id
-                if transaction_id:
-                    self.state.git_active.add(transaction_id)
-            else:
-                if transaction_id:
-                    self.state.git_active.discard(transaction_id)
-                    self.state.terminal_transactions.append(transaction_id)
-            self.state.epoch += 1
-            self.state.state = "flushing"
-            self._persist()
+            snapshot = (
+                set(self.state.git_active),
+                list(self.state.terminal_transactions),
+                list(self.state.seen_mutations),
+                self.state.last_mutation_id,
+                self.state.epoch,
+                self.state.state,
+            )
+            try:
+                if phase == "begin":
+                    if mutation_id is not None and mutation_id in self.state.seen_mutations:
+                        return {"applied": False, "reason": "duplicate"}
+                    if mutation_id is not None:
+                        self.state.seen_mutations.append(mutation_id)
+                        self.state.last_mutation_id = mutation_id
+                    if transaction_id:
+                        self.state.git_active.add(transaction_id)
+                else:
+                    if transaction_id:
+                        self.state.git_active.discard(transaction_id)
+                        self.state.terminal_transactions.append(transaction_id)
+                self.state.epoch += 1
+                self.state.state = "flushing"
+                self._persist()
+            except Exception:
+                (
+                    self.state.git_active,
+                    terminal,
+                    seen,
+                    self.state.last_mutation_id,
+                    self.state.epoch,
+                    self.state.state,
+                ) = snapshot
+                self.state.terminal_transactions = deque(
+                    terminal, maxlen=DEDUP_WINDOW
+                )
+                self.state.seen_mutations = deque(seen, maxlen=DEDUP_WINDOW)
+                raise
             return {
                 "applied": True,
                 "epoch": self.state.epoch,
@@ -451,6 +486,14 @@ class WorkspaceRuntime:
                 epoch=start_epoch,
                 retry_after_ms=RETRY_AFTER_MS,
             )
+        async with self._state_lock:
+            if self.state.git_active:
+                raise WorkspaceBusy(
+                    "workspace_flushing",
+                    self.workspace,
+                    epoch=start_epoch,
+                    retry_after_ms=RETRY_AFTER_MS,
+                )
 
         async def _activate_and_restart() -> None:
             if self.prepare_workspace is not None:
@@ -476,8 +519,26 @@ class WorkspaceRuntime:
                 retry_after_ms=RETRY_AFTER_MS,
             ) from exc
 
+        async with self._state_lock:
+            if self.state.epoch != start_epoch or self.state.git_active:
+                self.state.state = "flushing"
+                raise WorkspaceBusy(
+                    "workspace_flushing",
+                    self.workspace,
+                    epoch=self.state.epoch,
+                    retry_after_ms=RETRY_AFTER_MS,
+                )
+            # A planned supervisor recycle increments the generation while the
+            # old process is torn down. Bind the proof to the replacement.
+            start_generation = self.state.runtime_generation
+
         settled = await asyncio.to_thread(self.probe, self.workspace)
-        if settled.lock_held or settled.error is not None:
+        if (
+            settled.lock_held
+            or settled.error is not None
+            or settled.head != probe.head
+            or settled.fingerprint != probe.fingerprint
+        ):
             raise WorkspaceBusy(
                 "workspace_flushing",
                 self.workspace,
@@ -506,6 +567,7 @@ class WorkspaceRuntime:
             if (
                 self.state.epoch != start_epoch
                 or self.state.runtime_generation != start_generation
+                or self.state.git_active
             ):
                 self.state.state = "flushing"
                 raise WorkspaceBusy(
@@ -517,6 +579,22 @@ class WorkspaceRuntime:
             self.state.state = "ready"
             self.state.activated_epoch = start_epoch
             return settled
+
+    async def _acquire_barrier(self) -> int:
+        task = asyncio.create_task(
+            asyncio.to_thread(
+                self.barrier.acquire_shared, self.barrier_timeout_s
+            )
+        )
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            try:
+                fd = await task
+                self.barrier.release_shared(fd)
+            except Exception:  # noqa: BLE001 - preserve cancellation
+                pass
+            raise
 
     async def serve(
         self,
@@ -542,13 +620,20 @@ class WorkspaceRuntime:
             if needs_refresh:
                 probe = await self._ensure_ready(current_epoch, start_generation)
                 start_epoch = current_epoch
+            else:
+                async with self._state_lock:
+                    if self.state.git_active:
+                        raise WorkspaceBusy(
+                            "workspace_flushing",
+                            self.workspace,
+                            epoch=self.state.epoch,
+                            retry_after_ms=RETRY_AFTER_MS,
+                        )
 
             if is_read_only_tool(tool_name):
                 response = await forward()
             else:
-                fd = await asyncio.to_thread(
-                    self.barrier.acquire_shared, self.barrier_timeout_s
-                )
+                fd = await self._acquire_barrier()
                 try:
                     async with self._state_lock:
                         ready = (
@@ -556,6 +641,7 @@ class WorkspaceRuntime:
                             and self.state.epoch == start_epoch
                             and self.state.activated_epoch == start_epoch
                             and self.state.runtime_generation == start_generation
+                            and not self.state.git_active
                         )
                         if not ready:
                             self.state.state = "flushing"
@@ -580,6 +666,23 @@ class WorkspaceRuntime:
                             epoch=epoch,
                             retry_after_ms=RETRY_AFTER_MS,
                         )
+                    async with self._state_lock:
+                        still_ready = (
+                            self.state.state == "ready"
+                            and self.state.epoch == start_epoch
+                            and self.state.activated_epoch == start_epoch
+                            and self.state.runtime_generation == start_generation
+                            and not self.state.git_active
+                        )
+                        if not still_ready:
+                            self.state.state = "flushing"
+                    if not still_ready:
+                        raise WorkspaceBusy(
+                            "workspace_flushing",
+                            self.workspace,
+                            epoch=self.state.epoch,
+                            retry_after_ms=RETRY_AFTER_MS,
+                        )
                     response = await forward()
                 finally:
                     await asyncio.to_thread(
@@ -588,10 +691,10 @@ class WorkspaceRuntime:
 
             post = await asyncio.to_thread(self.probe, self.workspace)
             async with self._state_lock:
-                if post.error is not None or post.lock_held or (
-                    post.head is not None
-                    and probe.head is not None
-                    and post.head != probe.head
+                if (
+                    post.error is not None
+                    or post.lock_held
+                    or post.fingerprint != probe.fingerprint
                 ):
                     self.state.epoch += 1
                     self.state.state = "flushing"

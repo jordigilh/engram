@@ -64,6 +64,7 @@ class WorkspaceProcessSupervisor:
         self._locks: dict[str, asyncio.Lock] = {}
         self._recycled: list[str] = []
         self._reserved_ports: set[int] = set()
+        self._starting = 0
         self._lock = asyncio.Lock()
 
     @staticmethod
@@ -86,8 +87,9 @@ class WorkspaceProcessSupervisor:
         raise RuntimeError("no free supervisor ports")
 
     @staticmethod
-    def _mcp_alive(port: int, timeout: float) -> bool:
-        """Request-level liveness: a listening-but-hung process must fail."""
+    def _mcp_alive(port: int, timeout: float, require_success: bool = False) -> bool:
+        """Request-level liveness. Startup requires 2xx; warm liveness accepts
+        any HTTP answer as proof the process is responsive."""
         body = json.dumps(
             {
                 "jsonrpc": "2.0",
@@ -122,6 +124,8 @@ class WorkspaceProcessSupervisor:
                     conn.getresponse().read()
                 except (OSError, http.client.HTTPException):
                     pass
+            if require_success:
+                return 200 <= response.status < 300
             return response.status < 600
         except (OSError, http.client.HTTPException):
             return False
@@ -131,7 +135,7 @@ class WorkspaceProcessSupervisor:
     async def _wait_ready(self, port: int) -> bool:
         deadline = self._clock() + self.ready_timeout_s
         while self._clock() < deadline:
-            if await asyncio.to_thread(self._mcp_alive, port, 1.0):
+            if await asyncio.to_thread(self._mcp_alive, port, 1.0, True):
                 return True
             await asyncio.sleep(0.05)
         return False
@@ -166,6 +170,17 @@ class WorkspaceProcessSupervisor:
     async def _stop_entry(self, entry: _Process) -> None:
         await self._terminate_and_wait(entry.process)
 
+    async def _retire_entry(self, key: str, entry: _Process, *, recycled: bool = True) -> None:
+        async with self._lock:
+            self._reserved_ports.add(entry.port)
+        try:
+            await self._stop_entry(entry)
+        finally:
+            async with self._lock:
+                self._reserved_ports.discard(entry.port)
+        if recycled:
+            self._recycled.append(key)
+
     async def ensure(self, workspace: str) -> str:
         key = self._key(workspace)
         lock = self._locks.setdefault(key, asyncio.Lock())
@@ -184,8 +199,7 @@ class WorkspaceProcessSupervisor:
                         log.warning("Serena for %s is hung; recycling", key)
                         async with self._lock:
                             self._procs.pop(key, None)
-                        await self._stop_entry(entry)
-                        self._recycled.append(key)
+                        await self._retire_entry(key, entry)
                         entry = None
                 if entry is not None:
                     entry.last_used = now
@@ -195,15 +209,20 @@ class WorkspaceProcessSupervisor:
                 victim = None
                 if (
                     self.max_processes is not None
-                    and len(self._procs) >= self.max_processes
+                    and len(self._procs) + self._starting >= self.max_processes
                 ):
+                    candidates = list(self._procs.items())
+                    if not candidates:
+                        raise RuntimeError(
+                            "all Serena process slots are starting; retry"
+                        )
                     victim_key, victim = min(
-                        self._procs.items(), key=lambda item: item[1].last_used
+                        candidates, key=lambda item: item[1].last_used
                     )
                     self._procs.pop(victim_key, None)
+                self._starting += 1
             if victim is not None:
-                await self._stop_entry(victim)
-                self._recycled.append(victim_key)
+                await self._retire_entry(victim_key, victim)
                 log.info("evicted LRU Serena for %s", victim_key)
 
             async with self._lock:
@@ -218,13 +237,23 @@ class WorkspaceProcessSupervisor:
             except OSError as exc:
                 async with self._lock:
                     self._reserved_ports.discard(port)
+                    self._starting -= 1
                 raise RuntimeError(
                     f"could not spawn Serena for {key}: {exc}"
                 ) from exc
 
-            if not await self._wait_ready(port):
+            try:
+                ready = await self._wait_ready(port)
+            except asyncio.CancelledError:
                 async with self._lock:
                     self._reserved_ports.discard(port)
+                    self._starting -= 1
+                await self._terminate_and_wait(process)
+                raise
+            if not ready:
+                async with self._lock:
+                    self._reserved_ports.discard(port)
+                    self._starting -= 1
                 await self._terminate_and_wait(process)
                 raise RuntimeError(f"Serena did not listen on port {port}")
 
@@ -239,6 +268,7 @@ class WorkspaceProcessSupervisor:
                     last_probe=self._clock(),
                     started_at=self._clock(),
                 )
+                self._starting -= 1
             log.info("started Serena for %s on %d", key, port)
             return url
 

@@ -8,9 +8,19 @@ import sys
 from engram.pipeline.serena_supervisor import WorkspaceProcessSupervisor
 
 FAKE_SERVER = (
-    "import http.server,sys;"
-    "http.server.HTTPServer(('127.0.0.1', int(sys.argv[1])), "
-    "http.server.SimpleHTTPRequestHandler).serve_forever()"
+    "import http.server,sys\n"
+    "class H(http.server.BaseHTTPRequestHandler):\n"
+    "    def do_POST(self):\n"
+    "        self.rfile.read(int(self.headers.get('Content-Length', 0)))\n"
+    "        body = b'{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}'\n"
+    "        self.send_response(200)\n"
+    "        self.send_header('Content-Type', 'application/json')\n"
+    "        self.send_header('Content-Length', str(len(body)))\n"
+    "        self.end_headers()\n"
+    "        self.wfile.write(body)\n"
+    "    def log_message(self, *args):\n"
+    "        pass\n"
+    "http.server.HTTPServer(('127.0.0.1', int(sys.argv[1])), H).serve_forever()"
 )
 
 

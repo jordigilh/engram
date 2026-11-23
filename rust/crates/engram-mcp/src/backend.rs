@@ -62,6 +62,7 @@ pub trait BackendAdapter: Send + Sync {
 pub const MAX_FORWARD_TIMEOUT_S: f64 = 600.0;
 pub const HTTP_RETRY_ATTEMPTS: usize = 2;
 pub const HTTP_RETRY_DELAY: Duration = Duration::from_millis(250);
+pub const MAX_TOOL_PAGES: usize = 100;
 
 pub struct HttpRelayAdapter {
     url: Url,
@@ -139,6 +140,7 @@ impl HttpRelayAdapter {
             .map(|workspace| url_with_workspace(&self.url, workspace))
             .unwrap_or_else(|| self.url.clone());
         let session = self.open_session(&request_url).await?;
+        let _cleanup = self.session_cleanup(&request_url, &session);
         let outcome = async {
             let initialized = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
             self.post_json(&request_url, &initialized, Some(&session))
@@ -156,7 +158,6 @@ impl HttpRelayAdapter {
             parse_rpc_response(&body, &json!(2), method)
         }
         .await;
-        self.close_session(&request_url, &session).await;
         outcome
     }
 
@@ -178,12 +179,18 @@ impl HttpRelayAdapter {
             )
             .await?;
         let session_id = header_value(&response, "mcp-session-id");
-        let body = response.bytes().await.map_err(|error| {
-            BackendError::transient(format!("initialize response read failed: {error}"))
-        })?;
         let session = UpstreamSession {
             id: session_id,
             protocol_version: "2024-11-05".to_string(),
+        };
+        let body = match response.bytes().await {
+            Ok(body) => body,
+            Err(error) => {
+                self.close_session(url, &session).await;
+                return Err(BackendError::transient(format!(
+                    "initialize response read failed: {error}"
+                )));
+            }
         };
         match parse_rpc_response(&body, &json!(1), "initialize") {
             Ok(result) => {
@@ -216,8 +223,18 @@ impl HttpRelayAdapter {
             .await;
     }
 
+    fn session_cleanup(&self, url: &Url, session: &UpstreamSession) -> SessionCleanup {
+        SessionCleanup {
+            client: self.client.clone(),
+            url: url.clone(),
+            headers: self.request_headers(session.id.as_deref(), Some(&session.protocol_version)),
+            session: session.clone(),
+        }
+    }
+
     async fn list_tools_once(&self) -> Result<Vec<Value>, BackendError> {
         let session = self.open_session(&self.url).await?;
+        let _cleanup = self.session_cleanup(&self.url, &session);
         let outcome = async {
             self.post_json(
                 &self.url,
@@ -228,7 +245,14 @@ impl HttpRelayAdapter {
             let mut tools = Vec::new();
             let mut cursor: Option<String> = None;
             let mut seen = std::collections::HashSet::new();
+            let mut pages = 0_usize;
             loop {
+                pages += 1;
+                if pages > MAX_TOOL_PAGES {
+                    return Err(BackendError::permanent(
+                        "tools/list exceeded the pagination limit",
+                    ));
+                }
                 let params = cursor
                     .as_ref()
                     .map(|cursor| json!({"cursor": cursor}))
@@ -268,7 +292,6 @@ impl HttpRelayAdapter {
             Ok(tools)
         }
         .await;
-        self.close_session(&self.url, &session).await;
         outcome
     }
 
@@ -333,9 +356,37 @@ impl HttpRelayAdapter {
     }
 }
 
+#[derive(Clone)]
 struct UpstreamSession {
     id: Option<String>,
     protocol_version: String,
+}
+
+/// Closes the upstream session even when the request future is dropped by
+/// cancellation or a client disconnect. Drop cannot await, so the DELETE is
+/// handed to the runtime.
+struct SessionCleanup {
+    client: reqwest::Client,
+    url: Url,
+    headers: reqwest::header::HeaderMap,
+    session: UpstreamSession,
+}
+
+impl Drop for SessionCleanup {
+    fn drop(&mut self) {
+        let Some(id) = self.session.id.take() else {
+            return;
+        };
+        if id.is_empty() {
+            return;
+        }
+        let client = self.client.clone();
+        let url = self.url.clone();
+        let headers = self.headers.clone();
+        tokio::spawn(async move {
+            let _ = client.delete(url).headers(headers).send().await;
+        });
+    }
 }
 
 #[async_trait]

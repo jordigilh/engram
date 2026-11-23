@@ -130,9 +130,22 @@ impl Project {
 struct AppState {
     projects: BTreeMap<String, Arc<Project>>,
     sessions: Mutex<SessionStore>,
-    in_flight: Mutex<HashMap<(String, String), tokio_util::sync::CancellationToken>>,
+    in_flight: Arc<Mutex<HashMap<(String, String), tokio_util::sync::CancellationToken>>>,
     policy: SessionPolicy,
     origins: OriginPolicy,
+}
+
+struct InFlightGuard {
+    map: Arc<Mutex<HashMap<(String, String), tokio_util::sync::CancellationToken>>>,
+    key: (String, String),
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        if let Ok(mut map) = self.map.lock() {
+            map.remove(&self.key);
+        }
+    }
 }
 
 /// DNS-rebinding defense. A browser-originated request is accepted only when
@@ -199,7 +212,7 @@ pub fn router_with_options(
     let state = Arc::new(AppState {
         projects,
         sessions: Mutex::new(SessionStore::with_max_sessions(max_sessions)),
-        in_flight: Mutex::new(HashMap::new()),
+        in_flight: Arc::new(Mutex::new(HashMap::new())),
         policy,
         origins,
     });
@@ -436,13 +449,18 @@ async fn post_endpoint(
             let request_key = request_id_key(&id);
             if let Some(session_id) = session_id.clone() {
                 let token = tokio_util::sync::CancellationToken::new();
+                let key = (session_id.clone(), request_key);
                 state
                     .in_flight
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .insert((session_id.clone(), request_key.clone()), token.clone());
+                    .insert(key.clone(), token.clone());
+                let _guard = InFlightGuard {
+                    map: Arc::clone(&state.in_flight),
+                    key,
+                };
                 let call_id = id.clone();
-                let result = tokio::select! {
+                tokio::select! {
                     result = handle_backend_call(
                         &backends,
                         call_id,
@@ -451,13 +469,7 @@ async fn post_endpoint(
                         query.get("workspace").map(String::as_str),
                     ) => result,
                     _ = token.cancelled() => sse(request_cancelled_error(id.clone())),
-                };
-                state
-                    .in_flight
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .remove(&(session_id, request_key));
-                result
+                }
             } else {
                 handle_backend_call(
                     &backends,

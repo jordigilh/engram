@@ -161,10 +161,7 @@ impl HttpRelayAdapter {
                 "method": method,
                 "params": params.unwrap_or_else(|| json!({}))
             });
-            let response = self
-                .post_json(&request_url, &call, Some(&session))
-                .await
-                .map_err(BackendError::uncertain)?;
+            let response = self.post_json(&request_url, &call, Some(&session)).await?;
             let body = response.bytes().await.map_err(|error| {
                 BackendError::transient(format!("{method} response read failed: {error}"))
                     .uncertain()
@@ -356,6 +353,7 @@ impl HttpRelayAdapter {
                     redacted_url(url),
                     error.without_url()
                 ))
+                .uncertain()
             })?;
         if response.status().is_success() {
             return Ok(response);
@@ -735,7 +733,7 @@ fn valid_model_id(value: &str) -> bool {
         })
 }
 
-const READ_ONLY_TOOLS: [&str; 31] = [
+const READ_ONLY_TOOLS: [&str; 38] = [
     "recall",
     "list_mental_models",
     "get_mental_model",
@@ -765,6 +763,13 @@ const READ_ONLY_TOOLS: [&str; 31] = [
     "list_dir",
     "get_current_config",
     "search_for_pattern",
+    "kuadrant_code_search",
+    "get_evidence",
+    "get_related_events",
+    "get_failure_history",
+    "get_incident_timeline",
+    "zvec_grep_index_status",
+    "zvec_grep_server_status",
     "ping",
     "tools/list",
 ];
@@ -1024,6 +1029,27 @@ mod tests {
             .block_on(scoped.call_tool("recall", json!([1, 2])))
             .unwrap();
         assert_eq!(result["isError"], true);
+    }
+
+    #[test]
+    fn read_only_catalog_tools_are_not_classified_as_writes() {
+        for name in [
+            "recall",
+            "find_symbol",
+            "zvec_grep_search",
+            "kuadrant_code_search",
+            "get_evidence",
+            "get_related_events",
+            "get_failure_history",
+            "get_incident_timeline",
+            "zvec_grep_index_status",
+            "zvec_grep_server_status",
+        ] {
+            assert!(!is_write_tool(name), "{name} should be read-only");
+        }
+        assert!(is_write_tool("retain"));
+        assert!(is_write_tool("rename_symbol"));
+        assert!(is_write_tool("unknown_future_tool"));
     }
 
     #[test]

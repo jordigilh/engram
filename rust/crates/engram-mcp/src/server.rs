@@ -115,8 +115,8 @@ impl BackendSet {
         }
     }
 
-    pub fn needs_flushing(&self) -> bool {
-        self.published_generation.load(Ordering::SeqCst) == 0
+    pub async fn needs_flushing(&self) -> bool {
+        self.freshness.read().await.state == Some(CatalogState::Refreshing)
     }
 }
 
@@ -485,13 +485,16 @@ async fn post_endpoint(
                 ));
             }
             let backends = configured.backends.clone().expect("checked above");
-            if backends.needs_flushing() {
-                return typed_response(
-                    id,
-                    TypedError::flushing()
-                        .with_epoch(0)
-                        .with_retry_after_ms(1_000),
-                );
+            let workspace = query.get("workspace").map(String::as_str);
+            if backends.needs_flushing().await {
+                let freshness = backends.freshness(&project, workspace).await;
+                let mut error = TypedError::flushing()
+                    .with_epoch(freshness.generation)
+                    .with_retry_after_ms(1_000);
+                if let Some(workspace) = workspace {
+                    error = error.in_workspace(workspace);
+                }
+                return typed_response(id, error);
             }
             let params = message.get("params");
             let tool_name = params
@@ -529,20 +532,17 @@ async fn post_endpoint(
                         call_id,
                         tool_name,
                         arguments,
-                        query.get("workspace").map(String::as_str),
+                        workspace,
                     ) => result,
-                    _ = token.cancelled() => sse(request_cancelled_error(id.clone())),
+                    _ = token.cancelled() => cancelled_response(
+                        &backends,
+                        id.clone(),
+                        tool_name,
+                        workspace,
+                    ).await,
                 }
             } else {
-                handle_backend_call(
-                    &backends,
-                    &project,
-                    id,
-                    tool_name,
-                    arguments,
-                    query.get("workspace").map(String::as_str),
-                )
-                .await
+                handle_backend_call(&backends, &project, id, tool_name, arguments, workspace).await
             }
         }
         _ => sse(method_not_found_error(id, method)),
@@ -627,6 +627,24 @@ fn attach_to_payload(payload: &mut Value, freshness: &FreshnessEnvelope) {
     if let Some(result) = payload.get_mut("result") {
         attach_freshness(result, freshness);
     }
+}
+
+async fn cancelled_response(
+    backends: &BackendSet,
+    id: Value,
+    tool_name: &str,
+    workspace: Option<&str>,
+) -> Response {
+    let route = backends.catalog.read().await.route(tool_name).cloned();
+    if let Some((_, raw_name)) = route {
+        if is_write_tool(&raw_name) {
+            return typed_response(
+                id,
+                TypedError::outcome_unknown(workspace.map(str::to_string)),
+            );
+        }
+    }
+    sse(request_cancelled_error(id))
 }
 
 fn typed_response(id: Value, error: TypedError) -> Response {

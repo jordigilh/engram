@@ -27,6 +27,7 @@ struct MockState {
     call_fail_first: usize,
     call_fail_status: u16,
     call_jsonrpc_error: bool,
+    call_no_response: bool,
     init_jsonrpc_error: bool,
     call_delay_ms: u64,
     sse_notification_first: bool,
@@ -58,6 +59,7 @@ struct MockConfig {
     call_fail_first: usize,
     call_fail_status: Option<u16>,
     call_jsonrpc_error: bool,
+    call_no_response: bool,
     init_jsonrpc_error: bool,
     call_delay_ms: u64,
     sse_notification_first: bool,
@@ -74,6 +76,7 @@ async fn spawn_mock(config: MockConfig) -> (String, MockState) {
         call_fail_first: config.call_fail_first,
         call_fail_status: config.call_fail_status.unwrap_or(503),
         call_jsonrpc_error: config.call_jsonrpc_error,
+        call_no_response: config.call_no_response,
         init_jsonrpc_error: config.init_jsonrpc_error,
         call_delay_ms: config.call_delay_ms,
         sse_notification_first: config.sse_notification_first,
@@ -190,6 +193,13 @@ async fn mock_post(
         }
         "tools/call" => {
             let attempt = state.call_attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            if state.call_no_response {
+                return Json(json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/progress"
+                }))
+                .into_response();
+            }
             if state.call_jsonrpc_error {
                 return Json(json!({
                     "jsonrpc": "2.0",
@@ -1285,8 +1295,7 @@ async fn write_transport_failure_is_typed_outcome_unknown() {
     let (url, _mock) = spawn_mock(MockConfig {
         tools: vec![tool("recall"), tool("retain")],
         call_result: json!({"content": [], "isError": false}),
-        call_fail_first: 1,
-        call_fail_status: Some(503),
+        call_no_response: true,
         ..Default::default()
     })
     .await;
@@ -1384,4 +1393,68 @@ async fn freshness_envelope_is_attached_to_catalog_and_results() {
             .unwrap()
             > 0
     );
+}
+
+#[tokio::test]
+async fn read_transport_failure_remains_a_tool_error() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("recall")],
+        call_result: json!({"content": [], "isError": false}),
+        call_fail_first: 5,
+        call_fail_status: Some(503),
+        ..Default::default()
+    })
+    .await;
+    let adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
+    let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    let (status, body) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 45,
+            "method": "tools/call",
+            "params": {"name": "docs_recall", "arguments": {}}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(sse_data(&body)["result"]["isError"], true);
+}
+
+#[tokio::test]
+async fn definitive_write_rejection_is_not_outcome_unknown() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("retain")],
+        call_jsonrpc_error: true,
+        ..Default::default()
+    })
+    .await;
+    let adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
+    let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    let (status, body) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 46,
+            "method": "tools/call",
+            "params": {"name": "docs_retain", "arguments": {"content": "x"}}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(sse_data(&body)["result"]["isError"], true);
 }

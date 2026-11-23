@@ -1077,3 +1077,106 @@ async fn projects_list_and_call_only_their_own_tools() {
         .filter(|record| record.method == "tools/call")
         .all(|record| record.tool.as_deref() == Some("beta_search")));
 }
+
+#[tokio::test]
+async fn pending_cancellation_before_call_registration_is_honored() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("recall")],
+        call_result: json!({"content": [], "isError": false}),
+        ..Default::default()
+    })
+    .await;
+    let adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
+    let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": 91}
+        }),
+    )
+    .await;
+    let (_, body) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 91,
+            "method": "tools/call",
+            "params": {"name": "docs_recall", "arguments": {}}
+        }),
+    )
+    .await;
+    assert_eq!(sse_data(&body)["error"]["code"], -32800);
+}
+
+#[tokio::test]
+async fn request_id_reuse_after_in_flight_cancellation_is_clean() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("recall")],
+        call_result: json!({"content": [], "isError": false}),
+        call_delay_ms: 150,
+        ..Default::default()
+    })
+    .await;
+    let adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
+    let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    let call_app = app.clone();
+    let call_session = session.clone();
+    let pending = tokio::spawn(async move {
+        call(
+            &call_app,
+            "/mcp/alpha",
+            Some(&call_session),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 92,
+                "method": "tools/call",
+                "params": {"name": "docs_recall", "arguments": {}}
+            }),
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": 92}
+        }),
+    )
+    .await;
+    let (_, body) = pending.await.expect("cancelled call");
+    assert_eq!(sse_data(&body)["error"]["code"], -32800);
+
+    let (_, body) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 92,
+            "method": "tools/call",
+            "params": {"name": "docs_recall", "arguments": {}}
+        }),
+    )
+    .await;
+    assert_eq!(sse_data(&body)["result"]["isError"], false);
+}

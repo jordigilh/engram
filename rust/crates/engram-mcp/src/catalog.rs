@@ -396,13 +396,15 @@ pub fn inject_search_for_pattern(catalog: &mut Catalog) -> Option<String> {
     if catalog.routes.contains_key("search_for_pattern") {
         return None;
     }
-    let owner = catalog
-        .routes
-        .iter()
-        .find(|(_, (backend, raw))| {
-            matches!(backend.as_str(), "zg" | "code") && raw == "zvec_grep_rg"
-        })
-        .map(|(_, (backend, _))| backend.clone())?;
+    let owner = ["zg", "code"]
+        .into_iter()
+        .find(|backend| {
+            catalog
+                .routes
+                .values()
+                .any(|(owner, raw)| owner == backend && raw == "zvec_grep_rg")
+        })?
+        .to_string();
     if !matches!(owner.as_str(), "zg" | "code") {
         return None;
     }
@@ -566,6 +568,28 @@ mod tests {
         assert!(is_retryable_raw_tool("docs_recall"));
         assert!(is_retryable_raw_tool("kuadrant_code_search"));
         assert!(!is_retryable_raw_tool("retain"));
+    }
+
+    #[test]
+    fn alias_prefers_zg_over_code_regardless_of_public_name_order() {
+        let mut catalog = build_catalog(vec![
+            ("code".into(), vec![tool("zvec_grep_rg")]),
+            ("zg".into(), vec![tool("zvec_grep_rg")]),
+        ]);
+        // `code` owns the unqualified name and `zg` is qualified, so a sorted
+        // public-name scan would pick code first.
+        assert_eq!(
+            catalog.routes["zvec_grep_rg"],
+            ("code".into(), "zvec_grep_rg".into())
+        );
+        assert_eq!(
+            inject_search_for_pattern(&mut catalog).as_deref(),
+            Some("zg")
+        );
+        assert_eq!(
+            catalog.routes["search_for_pattern"],
+            ("zg".into(), "zvec_grep_rg".into())
+        );
     }
 
     #[test]

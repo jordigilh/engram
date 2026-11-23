@@ -51,6 +51,7 @@ pub struct BackendSet {
     pub adapters: Vec<(String, Arc<dyn BackendAdapter>)>,
     pub catalog: tokio::sync::RwLock<Catalog>,
     reservations: tokio::sync::RwLock<BTreeMap<String, Route>>,
+    refresh_lock: tokio::sync::Mutex<()>,
     generation: AtomicU64,
     published_generation: AtomicU64,
 }
@@ -61,13 +62,17 @@ impl BackendSet {
             adapters,
             catalog: tokio::sync::RwLock::new(Catalog::default()),
             reservations: tokio::sync::RwLock::new(BTreeMap::new()),
+            refresh_lock: tokio::sync::Mutex::new(()),
             generation: AtomicU64::new(0),
             published_generation: AtomicU64::new(0),
         }
     }
 
     /// Aggregate and publish only if no later-started refresh already won.
+    /// Refreshes are serialized so a concurrent refresh cannot publish a
+    /// catalog built from stale name reservations.
     pub async fn refresh(&self) -> Aggregation {
+        let _refresh = self.refresh_lock.lock().await;
         let start = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let reservations = self.reservations.read().await.clone();
         let mut aggregation = aggregate_tools_list(&self.adapters, &reservations).await;
@@ -388,15 +393,19 @@ async fn post_endpoint(
                 .and_then(|params| params.get("requestId")),
         ) {
             let key = request_id_key(request_id);
-            lock_sessions(&state).cancel(session_id, request_id);
-            if let Some(token) = state
+            let token = state
                 .in_flight
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .get(&(session_id.to_string(), key))
-                .cloned()
-            {
+                .cloned();
+            if let Some(token) = token {
+                // An in-flight call consumes its own cancellation entry, so a
+                // later request id reuse starts clean.
                 token.cancel();
+                lock_sessions(&state).take_cancelled(session_id, request_id);
+            } else {
+                lock_sessions(&state).cancel(session_id, request_id);
             }
         }
         return StatusCode::ACCEPTED.into_response();
@@ -424,19 +433,20 @@ async fn post_endpoint(
             }
         }
         "tools/call" => {
-            let cancelled = session_id
-                .as_deref()
-                .map(|session_id| lock_sessions(&state).take_cancelled(session_id, &id))
-                .unwrap_or(false);
-            if cancelled {
-                return sse(request_cancelled_error(id));
-            }
-            let Some(backends) = configured.backends.clone() else {
+            if configured.backends.is_none() {
+                let cancelled = session_id
+                    .as_deref()
+                    .map(|session_id| lock_sessions(&state).take_cancelled(session_id, &id))
+                    .unwrap_or(false);
+                if cancelled {
+                    return sse(request_cancelled_error(id));
+                }
                 return sse(method_not_found_error(
                     id,
                     "tools/call is not available for static projects",
                 ));
-            };
+            }
+            let backends = configured.backends.clone().expect("checked above");
             let params = message.get("params");
             let tool_name = params
                 .and_then(|params| params.get("name"))
@@ -459,6 +469,12 @@ async fn post_endpoint(
                     map: Arc::clone(&state.in_flight),
                     key,
                 };
+                // A cancellation that arrived before token registration is
+                // consumed here; one that arrives after registration cancels
+                // the token and is observed by select!.
+                if lock_sessions(&state).take_cancelled(&session_id, &id) {
+                    return sse(request_cancelled_error(id));
+                }
                 let call_id = id.clone();
                 tokio::select! {
                     result = handle_backend_call(
@@ -579,11 +595,56 @@ pub fn tool_definition(name: &str, description: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::BackendError;
+    use async_trait::async_trait;
+    use std::sync::atomic::AtomicUsize;
 
     #[test]
     fn tool_definition_has_required_fields() {
         let tool = tool_definition("alpha_search", "Alpha search");
         assert_eq!(tool["name"], "alpha_search");
         assert_eq!(tool["inputSchema"]["type"], "object");
+    }
+
+    struct SlowBackend {
+        current: Arc<AtomicUsize>,
+        max: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl BackendAdapter for SlowBackend {
+        async fn list_tools(&self) -> Result<Vec<Value>, BackendError> {
+            let current = self.current.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max.fetch_max(current, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            self.current.fetch_sub(1, Ordering::SeqCst);
+            Ok(vec![tool_definition("recall", "recall")])
+        }
+
+        async fn call_tool(&self, _name: &str, _arguments: Value) -> Result<Value, BackendError> {
+            Ok(json!({}))
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_refreshes_are_serialized() {
+        let current = Arc::new(AtomicUsize::new(0));
+        let max = Arc::new(AtomicUsize::new(0));
+        let set = Arc::new(BackendSet::new(vec![(
+            "docs".into(),
+            Arc::new(SlowBackend {
+                current: Arc::clone(&current),
+                max: Arc::clone(&max),
+            }) as Arc<dyn BackendAdapter>,
+        )]));
+        let first = Arc::clone(&set);
+        let second = Arc::clone(&set);
+        let (one, two) = tokio::join!(
+            tokio::spawn(async move { first.refresh().await }),
+            tokio::spawn(async move { second.refresh().await })
+        );
+        one.expect("first refresh");
+        two.expect("second refresh");
+        assert_eq!(max.load(Ordering::SeqCst), 1);
     }
 }

@@ -171,27 +171,46 @@ class WorkspaceProcessSupervisor:
         await self._terminate_and_wait(entry.process)
 
     async def _terminate_failed_start(
-        self, process: asyncio.subprocess.Process
+        self, process: asyncio.subprocess.Process, port: int | None
     ) -> None:
-        """Reap a startup child even when the starting task is cancelled."""
-        task = asyncio.ensure_future(self._terminate_and_wait(process))
+        """Reap a failed startup child, then release its port and slot.
+
+        Runs as its own task so repeated cancellation of the caller cannot
+        release the port while the child is still shutting down.
+        """
         try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            try:
-                await asyncio.shield(task)
-            except asyncio.CancelledError:
-                pass
-            raise
+            await self._terminate_and_wait(process)
+        finally:
+            async with self._lock:
+                if port is not None:
+                    self._reserved_ports.discard(port)
+                self._starting -= 1
+
+    async def _terminate_and_release(
+        self, process: asyncio.subprocess.Process, port: int
+    ) -> None:
+        """Reap a retiring child, then release its port.
+
+        Runs as its own task so cancelling the caller cannot free the port
+        before the old listener has exited.
+        """
+        try:
+            await self._terminate_and_wait(process)
+        finally:
+            async with self._lock:
+                self._reserved_ports.discard(port)
 
     async def _retire_entry(self, key: str, entry: _Process, *, recycled: bool = True) -> None:
         async with self._lock:
             self._reserved_ports.add(entry.port)
+        cleanup = asyncio.ensure_future(
+            self._terminate_and_release(entry.process, entry.port)
+        )
         try:
-            await self._stop_entry(entry)
-        finally:
-            async with self._lock:
-                self._reserved_ports.discard(entry.port)
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            # The cleanup task owns the port and keeps running.
+            raise
         if recycled:
             self._recycled.append(key)
 
@@ -240,6 +259,7 @@ class WorkspaceProcessSupervisor:
             process = None
             reserved_port: int | None = None
             published = False
+            cancelled = False
             try:
                 if victim is not None:
                     await self._retire_entry(victim_key, victim)
@@ -279,16 +299,25 @@ class WorkspaceProcessSupervisor:
                     published = True
                 log.info("started Serena for %s on %d", key, port)
                 return url
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
             finally:
-                try:
-                    if not published and process is not None:
-                        await self._terminate_failed_start(process)
-                finally:
-                    if not published and reserved_port is not None:
-                        async with self._lock:
-                            self._reserved_ports.discard(reserved_port)
-                    async with self._lock:
-                        self._starting -= 1
+                if published:
+                    self._starting -= 1
+                elif process is not None:
+                    cleanup = asyncio.ensure_future(
+                        self._terminate_failed_start(process, reserved_port)
+                    )
+                    if not cancelled:
+                        # Wait for a failed child to exit before propagating
+                        # the startup error. On cancellation the cleanup task
+                        # keeps running and owns the port and slot.
+                        await asyncio.shield(cleanup)
+                else:
+                    if reserved_port is not None:
+                        self._reserved_ports.discard(reserved_port)
+                    self._starting -= 1
 
     async def drain_recycled(self) -> list[str]:
         async with self._lock:

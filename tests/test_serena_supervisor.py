@@ -238,3 +238,52 @@ def test_cancelled_retirement_releases_starting_slot(tmp_path):
             assert first is not None
 
     asyncio.run(run())
+
+
+def test_cancel_during_readiness_keeps_port_until_child_exits(tmp_path):
+    import pytest
+
+    supervisor = WorkspaceProcessSupervisor(
+        [sys.executable, "-c", HANG_SERVER, "{port}"],
+        port_base=_free_port(),
+        port_span=5,
+        ready_timeout_s=30,
+        max_processes=1,
+    )
+    terminate_entered = asyncio.Event()
+    allow_terminate = asyncio.Event()
+
+    async def blocked_terminate(process):
+        terminate_entered.set()
+        await allow_terminate.wait()
+        await original_terminate(process)
+
+    original_terminate = supervisor._terminate_and_wait
+    supervisor._terminate_and_wait = blocked_terminate
+
+    async def run():
+        task = asyncio.create_task(supervisor.ensure(str(tmp_path)))
+        for _ in range(200):
+            if supervisor._reserved_ports:
+                break
+            await asyncio.sleep(0.02)
+        assert supervisor._reserved_ports
+        port = next(iter(supervisor._reserved_ports))
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        await asyncio.wait_for(terminate_entered.wait(), timeout=5)
+        assert port in supervisor._reserved_ports
+        assert supervisor._starting == 1
+
+        allow_terminate.set()
+        for _ in range(200):
+            if port not in supervisor._reserved_ports:
+                break
+            await asyncio.sleep(0.02)
+        assert port not in supervisor._reserved_ports
+        assert supervisor._starting == 0
+
+    asyncio.run(run())

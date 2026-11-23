@@ -84,7 +84,7 @@
     },
     {
       "id":"copy-selected-workflow-details",
-      "query":"How are selected workflow details copied into the final investigation result?",
+      "query":"How does selection assemble the final investigation result from the chosen workflow and the discovery result?",
       "category":"multi-symbol data flow",
       "judgments":[
         {"unit_id":"src/tools/workflows.rs::apply_selected_workflow","grade":3,"rationale":"Copies resolved workflow identity and discovered parameters into the result."},

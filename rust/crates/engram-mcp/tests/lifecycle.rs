@@ -4,7 +4,7 @@ use axum::body::{to_bytes, Body};
 use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::Router;
 use engram_mcp::server::tool_definition;
-use engram_mcp::{router, Project};
+use engram_mcp::{router, router_with_policy, Project, SessionPolicy};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -316,8 +316,31 @@ async fn transport_errors_are_explicit() {
 }
 
 #[tokio::test]
-async fn stateless_requests_keep_python_gateway_compatibility() {
+async fn stateless_requests_are_rejected_by_default() {
     let app = app();
+
+    let (status, _, body) = call(
+        &app,
+        "POST",
+        "/mcp/alpha",
+        None,
+        Some(json!({"jsonrpc": "2.0", "id": 11, "method": "tools/list"})),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn stateless_requests_can_be_enabled_for_python_parity() {
+    let app = router_with_policy(
+        [Project::with_tools(
+            "alpha",
+            vec![tool_definition("alpha_search", "Alpha search")],
+        )],
+        SessionPolicy::Optional,
+    );
 
     let (status, _, body) = call(
         &app,
@@ -333,4 +356,119 @@ async fn stateless_requests_keep_python_gateway_compatibility() {
         sse_data(&body)["result"]["tools"][0]["name"],
         "alpha_search"
     );
+}
+
+#[tokio::test]
+async fn delete_cannot_be_bypassed_by_dropping_the_session_header() {
+    let app = app();
+    let session = initialize(&app, "alpha").await;
+    let (status, _, _) = call(&app, "DELETE", "/mcp/alpha", Some(&session), None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/mcp/alpha",
+        None,
+        Some(json!({"jsonrpc": "2.0", "id": 12, "method": "tools/list"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn cancellation_is_one_shot() {
+    let app = app();
+    let session = initialize(&app, "alpha").await;
+
+    call(
+        &app,
+        "POST",
+        "/mcp/alpha",
+        Some(&session),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": 99}
+        })),
+    )
+    .await;
+
+    let (_, _, first) = call(
+        &app,
+        "POST",
+        "/mcp/alpha",
+        Some(&session),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 99,
+            "method": "tools/call",
+            "params": {"name": "alpha_search", "arguments": {}}
+        })),
+    )
+    .await;
+    assert_eq!(sse_data(&first)["error"]["code"], -32800);
+
+    let (_, _, second) = call(
+        &app,
+        "POST",
+        "/mcp/alpha",
+        Some(&session),
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 99,
+            "method": "tools/call",
+            "params": {"name": "alpha_search", "arguments": {}}
+        })),
+    )
+    .await;
+    assert_eq!(sse_data(&second)["error"]["code"], -32601);
+}
+
+#[tokio::test]
+async fn explicit_null_id_is_treated_as_a_notification() {
+    let app = app();
+
+    let (status, _, body) = call(
+        &app,
+        "POST",
+        "/mcp/alpha",
+        None,
+        Some(json!({"jsonrpc": "2.0", "id": null, "method": "initialize"})),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn non_utf8_session_header_is_rejected() {
+    let app = app();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/alpha")
+                .header(
+                    "mcp-session-id",
+                    axum::http::HeaderValue::from_bytes(b"\xff").expect("opaque header"),
+                )
+                .body(Body::from(
+                    json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+                ))
+                .expect("valid request"),
+        )
+        .await
+        .expect("router responds");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn get_unknown_project_is_not_found() {
+    let app = app();
+    let (status, _, _) = call(&app, "GET", "/mcp/missing", None, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

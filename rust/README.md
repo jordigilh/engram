@@ -16,7 +16,10 @@ Implemented:
 - `tools/list` with project-scoped catalogs.
 - Per-project session isolation: a session is valid only on the route that
   created it.
-- Stateless requests remain accepted for Python-gateway compatibility.
+- Bounded session state: 30-minute idle TTL, a hard session cap, one-shot
+  cancellation, and random session ids.
+- Non-`initialize` requests require `Mcp-Session-Id` by default. Use
+  `--allow-stateless` only for Python-gateway parity during migration.
 
 Deliberately not implemented in this slice:
 
@@ -34,7 +37,8 @@ cargo test --all
 cargo run -p engram-mcp -- --projects engram,kubernaut --port 8898
 ```
 
-The server binds loopback only and exposes `/mcp/<project>`.
+The server binds loopback only and refuses a non-loopback `--host`. Add
+`--allow-stateless` to accept non-`initialize` requests without a session.
 
 ## Contract tests
 

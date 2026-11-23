@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use clap::Parser;
-use engram_mcp::{router, Project};
+use engram_mcp::{router_with_policy, Project, SessionPolicy};
 
 /// Native Engram MCP lifecycle server (issue #211, slice 1).
 #[derive(Debug, Parser)]
@@ -12,27 +12,50 @@ struct Args {
     #[arg(long, value_delimiter = ',', default_value = "engram")]
     projects: Vec<String>,
 
-    /// Loopback bind address. Deployment-local; never a public interface.
+    /// Loopback bind address. Non-loopback binds are refused.
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
 
     #[arg(long, default_value_t = 8898)]
     port: u16,
+
+    /// Accept non-initialize requests without `Mcp-Session-Id`.
+    /// Off by default (MCP behavior); on for Python-gateway parity.
+    #[arg(long)]
+    allow_stateless: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    let projects: BTreeMap<String, Project> = args
-        .projects
-        .into_iter()
-        .map(|name| {
-            let project = Project::new(name.clone());
-            (name, project)
-        })
-        .collect();
-    let app = router(projects.into_values());
-    let address: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
+
+    let host: IpAddr = args
+        .host
+        .parse()
+        .map_err(|_| format!("invalid --host {:?}: expected an IP address", args.host))?;
+    if !host.is_loopback() {
+        return Err(format!(
+            "refusing non-loopback bind {host}; the MCP catalog is unauthenticated"
+        )
+        .into());
+    }
+
+    let mut projects: BTreeMap<String, Project> = BTreeMap::new();
+    for name in args.projects {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("--projects contains an empty name".into());
+        }
+        projects.insert(name.to_string(), Project::new(name));
+    }
+
+    let policy = if args.allow_stateless {
+        SessionPolicy::Optional
+    } else {
+        SessionPolicy::Required
+    };
+    let app = router_with_policy(projects.into_values(), policy);
+    let address = SocketAddr::new(host, args.port);
     let listener = tokio::net::TcpListener::bind(address).await?;
     println!("engram-mcp listening on http://{address}/mcp/<project>");
     axum::serve(listener, app).await?;

@@ -6,7 +6,7 @@
 //! `DELETE` termination, cancellation, and project-bound session isolation.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use axum::body::Bytes;
 use axum::extract::{Path, State};
@@ -22,6 +22,16 @@ use crate::protocol::{
 use crate::session::SessionStore;
 
 pub const SESSION_HEADER: &str = "mcp-session-id";
+
+/// Whether a non-`initialize` request must carry a session header.
+///
+/// MCP-compliant clients always use the header after `initialize`. `Optional`
+/// keeps the Python gateway's stateless behavior for migration and is opt-in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionPolicy {
+    Required,
+    Optional,
+}
 
 /// One project route. Slice 1 only carries a static tool catalog; slice 2
 /// replaces it with backend aggregation.
@@ -51,11 +61,20 @@ impl Project {
 struct AppState {
     projects: BTreeMap<String, Project>,
     sessions: Mutex<SessionStore>,
+    policy: SessionPolicy,
 }
 
-/// Build the project-scoped MCP router. Unknown project names return 404
-/// rather than falling through to another route.
+/// Build the project-scoped MCP router with the MCP-default session policy.
 pub fn router(projects: impl IntoIterator<Item = Project>) -> Router {
+    router_with_policy(projects, SessionPolicy::Required)
+}
+
+/// Build the router with an explicit session policy. Unknown project names
+/// return 404 rather than falling through to another route.
+pub fn router_with_policy(
+    projects: impl IntoIterator<Item = Project>,
+    policy: SessionPolicy,
+) -> Router {
     let projects = projects
         .into_iter()
         .map(|project| (project.name.clone(), project))
@@ -63,6 +82,7 @@ pub fn router(projects: impl IntoIterator<Item = Project>) -> Router {
     let state = Arc::new(AppState {
         projects,
         sessions: Mutex::new(SessionStore::new()),
+        policy,
     });
 
     Router::new()
@@ -75,9 +95,15 @@ pub fn router(projects: impl IntoIterator<Item = Project>) -> Router {
         .with_state(state)
 }
 
-async fn get_endpoint() -> StatusCode {
-    // The gateway never streams server-initiated events in this slice.
-    StatusCode::METHOD_NOT_ALLOWED
+async fn get_endpoint(State(state): State<Arc<AppState>>, Path(project): Path<String>) -> Response {
+    if !state.projects.contains_key(&project) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    (
+        StatusCode::METHOD_NOT_ALLOWED,
+        [(header::ALLOW, "POST, DELETE")],
+    )
+        .into_response()
 }
 
 async fn delete_endpoint(
@@ -88,18 +114,13 @@ async fn delete_endpoint(
     if !state.projects.contains_key(&project) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let Some(session_id) = session_header(&headers) else {
-        return StatusCode::BAD_REQUEST.into_response();
+    let session_id = match session_header(&headers) {
+        Ok(Some(session_id)) => session_id,
+        Ok(None) | Err(()) => return StatusCode::BAD_REQUEST.into_response(),
     };
 
-    let removed = {
-        let mut sessions = state.sessions.lock().expect("session store poisoned");
-        match sessions.project_for(&session_id) {
-            Some(owner) if owner == project => sessions.remove(&session_id),
-            _ => false,
-        }
-    };
-    if removed {
+    let mut sessions = lock_sessions(&state);
+    if sessions.validate(&session_id, &project) && sessions.remove(&session_id) {
         StatusCode::OK.into_response()
     } else {
         StatusCode::NOT_FOUND.into_response()
@@ -121,14 +142,20 @@ async fn post_endpoint(
     let Some(method) = message.get("method").and_then(Value::as_str) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    let message_id = message.get("id").cloned();
-    let session_id = session_header(&headers);
+    // Python parity: an explicit `"id": null` is a notification.
+    let message_id = message.get("id").filter(|value| !value.is_null()).cloned();
+    let session_id = match session_header(&headers) {
+        Ok(session_id) => session_id,
+        Err(()) => return StatusCode::BAD_REQUEST.into_response(),
+    };
 
     if method == "initialize" {
-        let id = message_id.unwrap_or(Value::Null);
-        let new_session = {
-            let mut sessions = state.sessions.lock().expect("session store poisoned");
-            sessions.create(&project)
+        let Some(id) = message_id else {
+            return StatusCode::ACCEPTED.into_response();
+        };
+        let new_session = lock_sessions(&state).create(&project);
+        let Ok(new_session) = new_session else {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
         };
         let mut response = sse(initialize_result(id));
         response.headers_mut().insert(
@@ -138,14 +165,14 @@ async fn post_endpoint(
         return response;
     }
 
+    if session_id.is_none() && state.policy == SessionPolicy::Required {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
     // A session presented on a route must belong to that route. Unknown,
     // deleted, or cross-project sessions are indistinguishable to the caller.
     if let Some(session_id) = &session_id {
-        let owner = {
-            let sessions = state.sessions.lock().expect("session store poisoned");
-            sessions.project_for(session_id).map(str::to_string)
-        };
-        if owner.as_deref() != Some(project.as_str()) {
+        if !lock_sessions(&state).validate(session_id, &project) {
             return StatusCode::NOT_FOUND.into_response();
         }
     }
@@ -157,8 +184,7 @@ async fn post_endpoint(
                 .get("params")
                 .and_then(|params| params.get("requestId")),
         ) {
-            let mut sessions = state.sessions.lock().expect("session store poisoned");
-            sessions.cancel(session_id, request_id);
+            lock_sessions(&state).cancel(session_id, request_id);
         }
         return StatusCode::ACCEPTED.into_response();
     }
@@ -174,10 +200,7 @@ async fn post_endpoint(
         "tools/call" => {
             let cancelled = session_id
                 .as_deref()
-                .map(|session_id| {
-                    let sessions = state.sessions.lock().expect("session store poisoned");
-                    sessions.is_cancelled(session_id, &id)
-                })
+                .map(|session_id| lock_sessions(&state).take_cancelled(session_id, &id))
                 .unwrap_or(false);
             if cancelled {
                 sse(request_cancelled_error(id))
@@ -196,11 +219,21 @@ async fn post_endpoint(
     }
 }
 
-fn session_header(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get(SESSION_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string)
+fn session_header(headers: &HeaderMap) -> Result<Option<String>, ()> {
+    match headers.get(SESSION_HEADER) {
+        None => Ok(None),
+        Some(value) => value
+            .to_str()
+            .map(|value| Some(value.to_string()))
+            .map_err(|_| ()),
+    }
+}
+
+fn lock_sessions(state: &AppState) -> MutexGuard<'_, SessionStore> {
+    state
+        .sessions
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn sse(value: Value) -> Response {

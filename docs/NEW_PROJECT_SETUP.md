@@ -228,7 +228,12 @@ Run the same adapter for every project by changing only the project key:
 
 Code search is not a CocoIndex app. Register the project's code backend as a
 zvec-grep route in the runtime registry (`~/.engram/runtime/instances.toml` or
-`native-instances.toml`) and let zvec-grep index each workspace.
+`native-instances.toml`); the HTTP form in
+[`runtime-instances.toml.example`](runtime-instances.toml.example) points at
+`:7999`. Run the shared daemon (`zg --server on`) or reuse an existing one, then
+index each intended checkout once with `zg --index <path>`. Gateway searches
+refresh the requested workspace and wait for indexing; direct clients use
+eventual freshness.
 
 Omit an app whose corresponding bank/source is not configured. The only
 project-specific files are deployment-local configuration and rendered service

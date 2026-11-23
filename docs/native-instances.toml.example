@@ -52,7 +52,7 @@ workspace_routing = false
 # non-Git aggregate roots still need an exact allowed_roots entry.
 #
 # A shadow backend compares a CocoIndex reference response with the primary
-# engine. `_compare_shadow_responses` parses the shadow as CocoIndex output, so
-# there is no supported shadow reference now that CocoIndex code search is
-# retired. Do not configure a zvec-grep-to-zvec-grep shadow until the gateway
-# can parse a zvec-grep reference response.
+# engine. The gateway's shadow comparison parses the shadow as CocoIndex
+# output, so there is no supported shadow reference now that CocoIndex code
+# search is retired. Do not configure a zvec-grep-to-zvec-grep shadow until the
+# gateway can parse a zvec-grep reference response.

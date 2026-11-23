@@ -508,3 +508,39 @@ class TestAuthorizationTimeout:
             serena_multiplex._authorize_workspace(
                 str(worktree), frozenset({allowed.resolve()})
             )
+
+
+class TestEventPersistence:
+    def test_persist_failure_keeps_epoch_and_flushing_fence(self, tmp_path):
+        async def noop(_workspace):
+            return None
+
+        runtime = serena_workspaces.WorkspaceRuntime(
+            "/tmp/ws",
+            noop,
+            noop,
+            probe=lambda _ws: _probe(),
+            state_path=str(tmp_path / "state.json"),
+        )
+
+        def fail():
+            raise OSError("disk full")
+
+        runtime._persist = fail
+        event = {
+            "version": 1,
+            "workspace": "/tmp/ws",
+            "mutation_id": "m1",
+            "transaction_id": "t1",
+            "phase": "begin",
+        }
+        with pytest.raises(OSError):
+            asyncio.run(runtime.apply_event(event))
+
+        # The mutation still fences in-flight reads even though it could not
+        # be persisted; only the replay bookkeeping rolls back.
+        assert runtime.state.epoch == 1
+        assert runtime.state.state == "flushing"
+        assert runtime.state.git_active == set()
+        assert "m1" not in runtime.state.seen_mutations
+

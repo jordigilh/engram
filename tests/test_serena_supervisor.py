@@ -174,3 +174,67 @@ def test_idle_eviction_stops_process(tmp_path):
             await supervisor.stop()
 
     asyncio.run(run())
+
+
+def test_spawn_failure_releases_starting_slot_and_port(tmp_path):
+    supervisor = WorkspaceProcessSupervisor(
+        ["/nonexistent/serena-binary", "{port}"],
+        port_base=_free_port(),
+        port_span=5,
+        ready_timeout_s=1,
+    )
+
+    async def run():
+        try:
+            try:
+                await supervisor.ensure(str(tmp_path))
+            except RuntimeError:
+                pass
+            else:  # pragma: no cover - spawn must fail
+                raise AssertionError("ensure should fail")
+            assert supervisor._starting == 0
+            assert supervisor._reserved_ports == set()
+        finally:
+            await supervisor.stop()
+
+    asyncio.run(run())
+
+
+def test_cancelled_retirement_releases_starting_slot(tmp_path):
+    ws_a = tmp_path / "a"
+    ws_b = tmp_path / "b"
+    ws_a.mkdir()
+    ws_b.mkdir()
+    supervisor = WorkspaceProcessSupervisor(
+        [sys.executable, "-c", FAKE_SERVER, "{port}"],
+        port_base=_free_port(),
+        port_span=5,
+        ready_timeout_s=5,
+        max_processes=1,
+    )
+
+    async def run():
+        first = await supervisor.ensure(str(ws_a))
+        victim_entry = supervisor._procs[str(ws_a.resolve())]
+        entered = asyncio.Event()
+
+        async def hanging_retire(key, entry, *, recycled=True):
+            entered.set()
+            await asyncio.Event().wait()
+
+        supervisor._retire_entry = hanging_retire
+        task = asyncio.create_task(supervisor.ensure(str(ws_b)))
+        try:
+            await entered.wait()
+            assert supervisor._starting == 1
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            assert supervisor._starting == 0
+        finally:
+            await supervisor._terminate_and_wait(victim_entry.process)
+            assert first is not None
+
+    asyncio.run(run())

@@ -170,6 +170,20 @@ class WorkspaceProcessSupervisor:
     async def _stop_entry(self, entry: _Process) -> None:
         await self._terminate_and_wait(entry.process)
 
+    async def _terminate_failed_start(
+        self, process: asyncio.subprocess.Process
+    ) -> None:
+        """Reap a startup child even when the starting task is cancelled."""
+        task = asyncio.ensure_future(self._terminate_and_wait(process))
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                pass
+            raise
+
     async def _retire_entry(self, key: str, entry: _Process, *, recycled: bool = True) -> None:
         async with self._lock:
             self._reserved_ports.add(entry.port)
@@ -207,6 +221,7 @@ class WorkspaceProcessSupervisor:
 
             async with self._lock:
                 victim = None
+                victim_key = None
                 if (
                     self.max_processes is not None
                     and len(self._procs) + self._starting >= self.max_processes
@@ -221,56 +236,59 @@ class WorkspaceProcessSupervisor:
                     )
                     self._procs.pop(victim_key, None)
                 self._starting += 1
-            if victim is not None:
-                await self._retire_entry(victim_key, victim)
-                log.info("evicted LRU Serena for %s", victim_key)
 
-            async with self._lock:
-                port = await self._next_port()
+            process = None
+            reserved_port: int | None = None
+            published = False
             try:
-                process = await asyncio.create_subprocess_exec(
-                    *self._render(key, port),
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                    start_new_session=True,
-                )
-            except OSError as exc:
+                if victim is not None:
+                    await self._retire_entry(victim_key, victim)
+                    log.info("evicted LRU Serena for %s", victim_key)
+
                 async with self._lock:
-                    self._reserved_ports.discard(port)
-                    self._starting -= 1
-                raise RuntimeError(
-                    f"could not spawn Serena for {key}: {exc}"
-                ) from exc
+                    port = await self._next_port()
+                    reserved_port = port
+                try:
+                    process = await asyncio.create_subprocess_exec(
+                        *self._render(key, port),
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"could not spawn Serena for {key}: {exc}"
+                    ) from exc
 
-            try:
                 ready = await self._wait_ready(port)
-            except asyncio.CancelledError:
-                async with self._lock:
-                    self._reserved_ports.discard(port)
-                    self._starting -= 1
-                await self._terminate_and_wait(process)
-                raise
-            if not ready:
-                async with self._lock:
-                    self._reserved_ports.discard(port)
-                    self._starting -= 1
-                await self._terminate_and_wait(process)
-                raise RuntimeError(f"Serena did not listen on port {port}")
+                if not ready:
+                    raise RuntimeError(f"Serena did not listen on port {port}")
 
-            url = f"http://127.0.0.1:{port}/mcp"
-            async with self._lock:
-                self._reserved_ports.discard(port)
-                self._procs[key] = _Process(
-                    process=process,
-                    url=url,
-                    port=port,
-                    last_used=self._clock(),
-                    last_probe=self._clock(),
-                    started_at=self._clock(),
-                )
-                self._starting -= 1
-            log.info("started Serena for %s on %d", key, port)
-            return url
+                url = f"http://127.0.0.1:{port}/mcp"
+                async with self._lock:
+                    self._reserved_ports.discard(port)
+                    reserved_port = None
+                    self._procs[key] = _Process(
+                        process=process,
+                        url=url,
+                        port=port,
+                        last_used=self._clock(),
+                        last_probe=self._clock(),
+                        started_at=self._clock(),
+                    )
+                    published = True
+                log.info("started Serena for %s on %d", key, port)
+                return url
+            finally:
+                try:
+                    if not published and process is not None:
+                        await self._terminate_failed_start(process)
+                finally:
+                    if not published and reserved_port is not None:
+                        async with self._lock:
+                            self._reserved_ports.discard(reserved_port)
+                    async with self._lock:
+                        self._starting -= 1
 
     async def drain_recycled(self) -> list[str]:
         async with self._lock:

@@ -609,55 +609,65 @@ async def _control_call(
         session_id = init_resp.headers.get("mcp-session-id")
         session_headers = {**headers, "mcp-session-id": session_id} if session_id else headers
 
-        await client.post(
-            upstream_url,
-            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
-            headers=session_headers,
-        )
+        try:
+            await client.post(
+                upstream_url,
+                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                headers=session_headers,
+            )
 
-        call_arguments = dict(arguments)
-        call_id = 2
-        if include_serena_session:
-            instructions_resp = await client.post(
+            call_arguments = dict(arguments)
+            call_id = 2
+            if include_serena_session:
+                instructions_resp = await client.post(
+                    upstream_url,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {"name": "initial_instructions", "arguments": {}},
+                    },
+                    headers=session_headers,
+                )
+                instructions_resp.raise_for_status()
+                serena_session_id = _parse_serena_session_id(
+                    instructions_resp.content
+                )
+                if serena_session_id:
+                    call_arguments = _activate_arguments(
+                        call_arguments.get("project", ""), serena_session_id
+                    )
+                else:
+                    log.warning(
+                        "Serena did not report an internal session id; "
+                        "activate_project may fail on 2.1.0+"
+                    )
+                call_id = 3
+
+            call_resp = await client.post(
                 upstream_url,
                 json={
                     "jsonrpc": "2.0",
-                    "id": 2,
+                    "id": call_id,
                     "method": "tools/call",
-                    "params": {"name": "initial_instructions", "arguments": {}},
+                    "params": {"name": tool_name, "arguments": call_arguments},
                 },
                 headers=session_headers,
             )
-            instructions_resp.raise_for_status()
-            serena_session_id = _parse_serena_session_id(instructions_resp.content)
-            if serena_session_id:
-                call_arguments = _activate_arguments(
-                    call_arguments.get("project", ""), serena_session_id
+            call_resp.raise_for_status()
+            result = _parse_sse_json(call_resp.content)
+            if result.get("error"):
+                raise RuntimeError(
+                    f"{tool_name} failed: {result.get('error')}"
                 )
-            else:
-                log.warning(
-                    "Serena did not report an internal session id; "
-                    "activate_project may fail on 2.1.0+"
-                )
-            call_id = 3
-
-        call_resp = await client.post(
-            upstream_url,
-            json={
-                "jsonrpc": "2.0",
-                "id": call_id,
-                "method": "tools/call",
-                "params": {"name": tool_name, "arguments": call_arguments},
-            },
-            headers=session_headers,
-        )
-        call_resp.raise_for_status()
-        result = _parse_sse_json(call_resp.content)
-        if result.get("result", {}).get("isError"):
-            raise RuntimeError(f"{tool_name} failed: {result}")
-
-        if session_id:
-            await client.delete(upstream_url, headers=session_headers)
+            if result.get("result", {}).get("isError"):
+                raise RuntimeError(f"{tool_name} failed: {result}")
+        finally:
+            if session_id:
+                try:
+                    await client.delete(upstream_url, headers=session_headers)
+                except (httpx.HTTPError, OSError):
+                    pass
 
 
 def _make_restart_lsp(
@@ -1066,10 +1076,13 @@ def build_app(
                     and requested_workspace is None
                 ):
                     return _busy_response(
-                        WorkspaceBusy("workspace_unbound", None), message
+                        WorkspaceBusy(
+                            "workspace_unbound", None, retryable=False
+                        ),
+                        message,
                     )
-                session_url = await _url_for_workspace(requested_workspace)
                 try:
+                    session_url = await _url_for_workspace(requested_workspace)
                     (
                         upstream_session_id,
                         serena_session_id,
@@ -1149,15 +1162,33 @@ def build_app(
                         # initialize/notifications/tools/list are lifecycle and
                         # discovery, not workspace-scoped tool calls. Forward them
                         # so a bound client can still discover the catalog.
-                        return await forward_raw()
+                        try:
+                            response = await forward_raw()
+                            if not _looks_like_upstream_session_loss(
+                                response.status_code, response.body
+                            ):
+                                return response
+                            # Discovery is safe to replay on a fresh session
+                            # after the supervisor replaced the process.
+                            await refresh_session()
+                            return await forward_raw()
+                        except WorkspaceBusy as busy:
+                            return _busy_response(busy, message)
                     effective_workspace = entry.workspace or requested_workspace
                     if effective_workspace is None and require_workspace == "enforce":
                         return _busy_response(
-                            WorkspaceBusy("workspace_unbound", None), message
+                            WorkspaceBusy(
+                                "workspace_unbound", None, retryable=False
+                            ),
+                            message,
                         )
                     if route == "agnostic":
                         return _busy_response(
-                            WorkspaceBusy("workspace_unbound", effective_workspace),
+                            WorkspaceBusy(
+                                "workspace_unbound",
+                                effective_workspace,
+                                retryable=False,
+                            ),
                             message,
                         )
                     if "id" not in message and not is_read_only_tool(tool_name):
@@ -1171,7 +1202,10 @@ def build_app(
                             message,
                         )
                     if effective_workspace is not None:
-                        runtime = await _runtime_for(effective_workspace)
+                        try:
+                            runtime = await _runtime_for(effective_workspace)
+                        except WorkspaceBusy as busy:
+                            return _busy_response(busy, message)
                         if invalidation_spool_dir:
                             for event, path in read_spool_events(
                                 invalidation_spool_dir, runtime.workspace

@@ -332,8 +332,6 @@ class WorkspaceRuntime:
                 list(self.state.terminal_transactions),
                 list(self.state.seen_mutations),
                 self.state.last_mutation_id,
-                self.state.epoch,
-                self.state.state,
             )
             try:
                 if phase == "begin":
@@ -352,18 +350,20 @@ class WorkspaceRuntime:
                 self.state.state = "flushing"
                 self._persist()
             except Exception:
+                # The event stays replayable: roll back only the durable
+                # bookkeeping. Keep the advanced epoch and the flushing state
+                # so a read that started before the mutation is still fenced.
                 (
                     self.state.git_active,
                     terminal,
                     seen,
                     self.state.last_mutation_id,
-                    self.state.epoch,
-                    self.state.state,
                 ) = snapshot
                 self.state.terminal_transactions = deque(
                     terminal, maxlen=DEDUP_WINDOW
                 )
                 self.state.seen_mutations = deque(seen, maxlen=DEDUP_WINDOW)
+                self.state.state = "flushing"
                 raise
             return {
                 "applied": True,

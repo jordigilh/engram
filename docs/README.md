@@ -52,15 +52,17 @@ flowchart LR
 With CocoIndex integration, each configured project's docs and issues banks are
 continuously fresh — CocoIndex runs as a KeepAlive service, detects
 source changes via delta processing, and re-ingests only the modified content.
-This replaces legacy batch importers with sub-hour staleness for docs/issues and
-sub-minute freshness for code. Code freshness now comes from zvec-grep's
-per-workspace index refresh; CocoIndex no longer ingests code.
+This replaces legacy batch importers with sub-hour staleness for docs/issues.
+Code freshness now comes from zvec-grep's on-query workspace refresh. Some live
+deployments still run CocoIndex's legacy code ingestion app, which writes its
+own pgvector table, but no gateway route reads that table or serves code search
+from it; CocoIndex is not a code-search backend.
 
 | Source | Previous Model | Current Model | Target Freshness |
 |--------|---------------|---------------|------------------|
 | Docs | Legacy batch importer | CocoIndex file-watching (instant) | < 1 hour |
 | Issues + PRs | Legacy batch importer | CocoIndex polling every 5 min (all items) | < 5 minutes |
-| Code | Not indexed | zvec-grep workspace indexing + refresh | < 5 minutes |
+| Code | Not indexed | zvec-grep workspace indexing; gateway searches refresh on demand | < 5 minutes |
 | Transcripts | Manual maintenance run | CocoIndex file-watching (instant) | < 1 hour |
 
 ---

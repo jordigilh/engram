@@ -84,7 +84,7 @@ Four components, each closing a different gap, working together:
 | Problem | How Engram fixes it |
 |---------|-------------------|
 | Agent burns many grep/glob/read sweeps just to answer "what calls this" or "how does X work" | Structural graph queries (`zvec_grep_callgraph_*` / `zvec_grep_codegraph_*`, served by the zvec-grep MCP daemon through the Engram gateway) + hybrid/structural code search answer relational and semantic questions directly, in one call |
-| Training data and mental context go stale the moment code changes, risking wrong or outdated reviews/features | **CocoIndex** live-syncs docs/issues/transcripts continuously and **zvec-grep** keeps per-workspace code indexes fresh, so results reflect the current corpus, not a snapshot |
+| Training data and mental context go stale the moment code changes, risking wrong or outdated reviews/features | **CocoIndex** live-syncs docs/issues/transcripts, and **zvec-grep** refreshes the requested code workspace on a gateway search (waiting for indexing) while direct clients use eventual freshness |
 | Reviews and new features can contradict past decisions or repeat already-solved mistakes | **Hindsight**'s knowledge graph + mental models surface prior corrections, conventions, and architecture decisions automatically |
 | Every session starts with amnesia, repeating the same mistakes | **Hindsight**'s recall surfaces past corrections automatically; they become persistent patterns |
 | Text-based rename/refactor risks missed references or false-positive matches across languages | **Serena**'s LSP-backed `rename_symbol`/`replace_symbol_body` apply refactors via real compiler semantics, language-agnostically |
@@ -102,7 +102,7 @@ responsibility.
 - **LSP-backed code intelligence, language-agnostic by construction** — the same tool surface (`find_symbol`/`find_referencing_symbols`/diagnostics) works identically whether the repo is Go, Python, Rust, or TypeScript, wrapping each language's real LSP (`gopls`, `pyright`, `rust-analyzer`, `typescript-language-server`). Includes **semantic refactoring** (`rename_symbol`, `replace_symbol_body`): a rename or body replacement is resolved and applied via the compiler's own understanding of the code, not text search-replace, so every real reference updates correctly and an unrelated same-named match elsewhere is never touched — see [docs/NEW_PROJECT_SETUP.md](docs/NEW_PROJECT_SETUP.md#code-intelligence) for setup
 - **Hybrid code search via zvec-grep** — per-workspace indexes combine lexical and vector retrieval; results carry bounded source snippets and freshness metadata
 - **Structural pattern search** — zvec-grep's `search_for_pattern` runs tree-sitter by-example matching to answer "find code shaped like X" (e.g. every function matching a signature)
-- **Live sync** — CocoIndex watches docs/issues/transcripts and zvec-grep refreshes code workspaces as files change, so nothing reflects a stale snapshot
+- **Fresh code search** — CocoIndex watches docs/issues/transcripts. Gateway code searches refresh the requested zvec-grep workspace and wait for indexing before they return. Direct zvec-grep clients use eventual freshness and may not yet reflect recent edits.
 - **Hindsight knowledge graph** — entities link across sessions for richer retrieval
 - **Mental models** — agent-authored, curated documents (not scattered facts)
 - **Learns from corrections** — detects when you correct the agent, extracts the lesson

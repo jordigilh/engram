@@ -51,17 +51,8 @@ workspace_routing = false
 # configured Git checkout also covers its registered linked Git worktrees;
 # non-Git aggregate roots still need an exact allowed_roots entry.
 #
-# CocoIndex is ingestion-only; there is no CocoIndex code backend to shadow.
-# A shadow backend compares two zvec-grep endpoints when testing a new zvec
-# build against the current one.
-#
-# [instances."my-project".backends.code_shadow]
-# kind = "shadow_http"
-# url = "http://127.0.0.1:7999/mcp"
-# A second zvec-grep build to compare against the primary above.
-# shadow_url = "http://127.0.0.1:7998/mcp"
-# timeout_seconds = 300
-# shadow_timeout_seconds = 180
-# shadow_log = "~/.engram/logs/code-shadow.jsonl"
-# source_roots = { my-project = "/path/to/my-project" }
-# allowed_roots = ["/path/to/my-project"]
+# A shadow backend compares a CocoIndex reference response with the primary
+# engine. `_compare_shadow_responses` parses the shadow as CocoIndex output, so
+# there is no supported shadow reference now that CocoIndex code search is
+# retired. Do not configure a zvec-grep-to-zvec-grep shadow until the gateway
+# can parse a zvec-grep reference response.

@@ -106,10 +106,11 @@ from the full pattern:
    specifically means "GitHub repos to total issues/PRs via `gh`," which does
    not apply to Jira. The `<project>-issues` bank and mental models still work
    normally for recall; only GitHub-specific totals are skipped.
-5. Also narrow the **code** source patterns in `~/.engram/projects.toml` to
-   match the epic's actual footprint (e.g. one workspace/package directory
-   inside a monorepo, not every package) — a Jira-scoped issues bank paired
-   with a whole-monorepo code index would defeat the same narrow-scope goal.
+5. Narrow the **code** workspace to the epic's actual footprint: index only the
+   intended checkout, workspace, or package root with zvec-grep
+   (`zg --index <path>`), not the whole monorepo. A Jira-scoped issues bank
+   paired with a whole-monorepo code index would defeat the same narrow-scope
+   goal.
 
 ## Steps
 

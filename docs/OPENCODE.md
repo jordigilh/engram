@@ -528,7 +528,7 @@ the system-recall identity aligned with the route.
 ## Migration
 
 Remove old direct MCP entries for `hindsight-docs`, `hindsight-issues`,
-`zvec-grep`, and `serena` after enabling the plugin. Keep one explicit
+`cocoindex-code`, `zvec-grep`, and `serena` after enabling the plugin. Keep one explicit
 `mcp.servers.engram` gateway entry when using the hybrid setup. Leaving the old
 backend entries in place causes duplicate tools and bypasses the gateway's
 backend isolation. Keep the native V2 `mcp.servers.engram` shape shown above.

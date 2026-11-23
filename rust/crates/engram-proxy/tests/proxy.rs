@@ -371,14 +371,12 @@ async fn client_abort_mid_relay_does_not_kill_listener() {
         aborting.write_all(b"x").await.expect("write");
         // Dropping sends FIN; the backend then writes into a closed peer.
     }
-    let write_result = tokio::time::timeout(Duration::from_secs(5), write_receiver)
+    // A successful local write does not prove delivery, so only assert that
+    // the backend finished its post-EOF write before checking the listener.
+    let _write_result = tokio::time::timeout(Duration::from_secs(5), write_receiver)
         .await
         .expect("backend write deadline")
         .expect("backend write signal");
-    assert!(
-        write_result.is_err(),
-        "the large backend write should hit the vanished client: {write_result:?}"
-    );
 
     let (live_port, backend) = spawn_echo_backend().await;
     write_state(&temp.state_path(), live_port);

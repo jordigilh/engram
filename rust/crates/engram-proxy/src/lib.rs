@@ -597,6 +597,95 @@ mod tests {
         }
     }
 
+    struct PendingReaderFailWriter;
+
+    impl AsyncRead for PendingReaderFailWriter {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            _buffer: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::task::Poll::Pending
+        }
+    }
+
+    impl AsyncWrite for PendingReaderFailWriter {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            _buffer: &[u8],
+        ) -> std::task::Poll<io::Result<usize>> {
+            std::task::Poll::Ready(Err(io::Error::from(io::ErrorKind::BrokenPipe)))
+        }
+
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    struct OneByteBackend {
+        sent: bool,
+    }
+
+    impl AsyncRead for OneByteBackend {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buffer: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            if self.sent {
+                return std::task::Poll::Ready(Ok(()));
+            }
+            self.sent = true;
+            buffer.put_slice(b"x");
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncWrite for OneByteBackend {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buffer: &[u8],
+        ) -> std::task::Poll<io::Result<usize>> {
+            std::task::Poll::Ready(Ok(buffer.len()))
+        }
+
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn relay_reports_client_write_failure() {
+        let backend: BoxStream = Box::new(OneByteBackend { sent: false });
+        let error = relay(PendingReaderFailWriter, backend)
+            .await
+            .expect_err("client write must fail");
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert!(is_expected_disconnect(error.kind()));
+    }
+
     #[tokio::test(start_paused = true)]
     async fn handle_client_timeout_closes_client() {
         use tokio::io::AsyncReadExt;

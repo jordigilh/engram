@@ -44,6 +44,87 @@ Deliberately not implemented in this slice:
 - Any change to the Python gateway. `src/engram/pipeline/engram_gateway.py`
   stays runnable and authoritative.
 
+## Hindsight proxy (`engram-proxy`)
+
+`crates/engram-proxy` is the native, byte-transparent TCP proxy that owns the
+public Hindsight port and fronts the blue/green `hindsight-api` pair. It is a
+direct replacement for `src/engram/pipeline/hindsight_proxy.py` and performs no
+HTTP/MCP parsing or header rewriting. The Python proxy remains authoritative
+until an operator opts in.
+
+Contract:
+
+- Listener defaults to `0.0.0.0:8888` (`HINDSIGHT_PROXY_HOST`,
+  `HINDSIGHT_PROXY_PORT`).
+- The backend is always `127.0.0.1`; the port is re-read from
+  `~/.engram/state/active-backend.port`
+  (`HINDSIGHT_ACTIVE_BACKEND_FILE`) for **every new client connection**.
+- A missing, unreadable, empty, or invalid state file falls back to
+  `18888` (`HINDSIGHT_DEFAULT_BACKEND_PORT`).
+- Backend connect timeout is 5 seconds; refusal/timeout closes only that
+  client.
+- Existing connections stay pinned to the backend they resolved at accept
+  time, so a blue/green swap is invisible to them.
+- The accept loop spawns one relay per connection; a hung backend cannot stall
+  the listener. Accept errors retry with bounded backoff; the listener never
+  exits on its own.
+- Both sockets use `TCP_NODELAY`, matching asyncio's transport defaults.
+
+Intentional differences from the Python reference (all documented and tested):
+
+- Only the first address returned by the listener host lookup is bound;
+  Python binds every result. The default `0.0.0.0` is unaffected.
+- State values `0`, negative, `>65535`, and underscore forms fall back to the
+  default instead of being passed to `connect`; `+18888` is accepted.
+- Missing `HOME` with no explicit `HINDSIGHT_ACTIVE_BACKEND_FILE` is a startup
+  error.
+- There is no idle timeout: Cursor keeps persistent HTTP connections open
+  indefinitely. A relay closes both sides as soon as either direction reaches
+  EOF or errors, matching the Python `_pump`, so a half-closed client cannot
+  pin a relay task.
+
+Run (from `rust/`):
+
+```bash
+cargo run -p engram-proxy
+# or, after build, use the absolute path in service definitions:
+./target/release/engram-proxy
+```
+
+The binary prints one `PROXY_LISTEN=<addr>` line on stdout before serving.
+
+### Opt-in and rollback
+
+The existing launchd/systemd unit keeps running the Python proxy. To evaluate
+the Rust proxy, run it on an alternate listener and a temporary state file:
+
+```bash
+HINDSIGHT_PROXY_PORT=8889 \
+HINDSIGHT_ACTIVE_BACKEND_FILE="$HOME/.engram/state/active-backend.port" \
+  /absolute/path/to/rust/target/release/engram-proxy
+```
+
+Smoke test before switching:
+
+1. Compare loopback retain and recall through `127.0.0.1:8889` with the same
+   operations against Hindsight directly on the active blue/green port.
+2. Hold a long-lived connection through the proxy while
+   `hindsight-blue-green-restart.sh` performs a swap; the connection must keep
+   working and new connections must use the new port.
+3. Check resident memory with a representative number of idle connections
+   (relay tasks are unbounded, matching Python).
+
+Rollback: stop the `engram-proxy` process and leave the existing Python proxy
+unit untouched. Path precedence matters for manual runs: `~/.cargo/bin` may
+shadow the venv's `engram-hindsight-proxy` console script, so always invoke
+`./target/release/engram-proxy` by absolute path. A dedicated opt-in launchd
+plist is deferred to the deployment follow-up.
+
+Tests: `cargo test -p engram-proxy --locked` covers state-file parsing and
+fallback, byte transparency, concurrent clients, pinned blue/green switching,
+backend refusal/timeout, listener responsiveness under a hung client, and the
+documented environment contract via the real binary.
+
 ## Run
 
 ```bash

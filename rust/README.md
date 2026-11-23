@@ -4,6 +4,7 @@ This Cargo workspace implements issue
 [#211](https://github.com/jordigilh/engram/issues/211) slices 1 and 2 in the
 `engram-mcp` crate: MCP lifecycle plus HTTP backend routing and catalog parity.
 The Python gateway remains runnable and authoritative during migration.
+Rust 1.88+ is required (the HTTP client stack's ICU dependencies).
 
 ## Scope
 

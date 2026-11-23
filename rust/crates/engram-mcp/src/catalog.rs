@@ -42,22 +42,47 @@ pub fn prefixed_tool_name(backend_key: &str, raw_name: &str) -> String {
 /// Merge each backend's raw tool list into one catalog, preserving backend
 /// order and qualifying a duplicate unprefixed name with its backend key.
 pub fn build_catalog(per_backend_tools: Vec<(String, Vec<Value>)>) -> Catalog {
+    build_catalog_reserved(per_backend_tools, &BTreeMap::new()).0
+}
+
+/// Build a catalog while preserving public-name reservations across refreshes.
+/// A name stays bound to its original `(backend, raw_tool)` even when that
+/// backend is temporarily absent, so a surviving backend cannot silently take
+/// over a name a client already cached.
+pub fn build_catalog_reserved(
+    per_backend_tools: Vec<(String, Vec<Value>)>,
+    reservations: &BTreeMap<String, Route>,
+) -> (Catalog, BTreeMap<String, Route>) {
     let mut catalog = Catalog::default();
+    let mut next_reservations = reservations.clone();
     for (backend_key, tools) in per_backend_tools {
         for tool in tools {
             let Some(raw_name) = tool.get("name").and_then(Value::as_str) else {
                 continue;
             };
-            let mut final_name = prefixed_tool_name(&backend_key, raw_name);
-            if catalog.routes.contains_key(&final_name) {
+            let identity = (backend_key.clone(), raw_name.to_string());
+            let existing = reservations
+                .iter()
+                .find(|(_, owner)| **owner == identity)
+                .map(|(name, _)| name.clone());
+            let mut final_name =
+                existing.unwrap_or_else(|| prefixed_tool_name(&backend_key, raw_name));
+            if next_reservations
+                .get(&final_name)
+                .is_some_and(|owner| owner != &identity)
+            {
                 let base_name = format!("{backend_key}_{raw_name}");
                 final_name = base_name.clone();
                 let mut duplicate = 2;
-                while catalog.routes.contains_key(&final_name) {
+                while next_reservations
+                    .get(&final_name)
+                    .is_some_and(|owner| owner != &identity)
+                {
                     final_name = format!("{base_name}_{duplicate}");
                     duplicate += 1;
                 }
             }
+            next_reservations.insert(final_name.clone(), identity);
             catalog.routes.insert(
                 final_name.clone(),
                 (backend_key.clone(), raw_name.to_string()),
@@ -69,7 +94,7 @@ pub fn build_catalog(per_backend_tools: Vec<(String, Vec<Value>)>) -> Catalog {
             catalog.tools.push(definition);
         }
     }
-    catalog
+    (catalog, next_reservations)
 }
 
 const RELEVANT_HINDSIGHT: [&str; 5] = [
@@ -178,7 +203,7 @@ pub fn filter_relevant_tools(backend_key: &str, tools: Vec<Value>) -> Vec<Value>
 pub fn search_for_pattern_tool() -> Value {
     json!({
         "name": "search_for_pattern",
-        "description": "Search project files with a regular expression across the workspace. Backed by zvec-grep's managed ripgrep (no LSP process). Accepts the same arguments as the historical Serena tool; returns file-grouped matches with line numbers. Prefer `find_symbol` for symbol definitions and `find_referencing_symbols` for callers/references. Use this tool for literal or regex text searches. `substring_pattern` is a regex; with multiline matching, `.` can cross lines and `|` needs grouping. Prefer anchored patterns and narrow path/context filters; split broad alternatives into focused searches and reduce scope or context before raising `max_answer_chars`. If the answer limit is exceeded, Engram returns the available matches grouped by file and line.",
+        "description": "Search project files with a regular expression across the workspace. Backed by zvec-grep's managed ripgrep (no LSP process). Accepts the same arguments as the historical Serena tool; returns file-grouped matches with line numbers. Prefer `find_symbol` for symbol definitions and `find_referencing_symbols` for callers/references. Use this tool for literal or regex text searches. `substring_pattern` is a regex; with multiline matching, `.` can cross lines and `|` needs grouping. Prefer anchored patterns and narrow path/context filters; split broad alternatives into focused searches and reduce scope or context.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -190,8 +215,7 @@ pub fn search_for_pattern_tool() -> Value {
                 "relative_path": {"type": "string", "default": ""},
                 "restrict_search_to_code_files": {"type": "boolean", "default": false},
                 "skip_ignored_files": {"type": "boolean", "default": true},
-                "multiline": {"type": "boolean", "default": true},
-                "max_answer_chars": {"type": "integer", "default": -1}
+                "multiline": {"type": "boolean", "default": true}
             },
             "required": ["substring_pattern"]
         },
@@ -351,12 +375,13 @@ pub fn managed_zvec_arguments(raw_name: &str, arguments: Value) -> Value {
     Value::Object(object)
 }
 
-const HTTP_READ_ONLY_RETRYABLE: [&str; 7] = [
+const HTTP_READ_ONLY_RETRYABLE: [&str; 8] = [
     "recall",
     "docs_recall",
     "issues_recall",
     "kuadrant_docs_recall",
     "kuadrant_issues_recall",
+    "kuadrant_code_search",
     "list_mental_models",
     "get_mental_model",
 ];
@@ -373,8 +398,11 @@ pub fn inject_search_for_pattern(catalog: &mut Catalog) -> Option<String> {
     }
     let owner = catalog
         .routes
-        .get("zvec_grep_rg")
-        .map(|(backend, _)| backend.clone())?;
+        .iter()
+        .find(|(_, (backend, raw))| {
+            matches!(backend.as_str(), "zg" | "code") && raw == "zvec_grep_rg"
+        })
+        .map(|(_, (backend, _))| backend.clone())?;
     if !matches!(owner.as_str(), "zg" | "code") {
         return None;
     }
@@ -536,6 +564,42 @@ mod tests {
         let rg = managed_zvec_arguments("zvec_grep_rg", json!({"root": "/w"}));
         assert!(rg.get("freshness").is_none());
         assert!(is_retryable_raw_tool("docs_recall"));
+        assert!(is_retryable_raw_tool("kuadrant_code_search"));
         assert!(!is_retryable_raw_tool("retain"));
+    }
+
+    #[test]
+    fn reservations_keep_public_names_bound_across_refresh() {
+        let first = build_catalog_reserved(
+            vec![
+                ("code".into(), vec![tool("shared_name")]),
+                ("serena".into(), vec![tool("shared_name")]),
+            ],
+            &BTreeMap::new(),
+        );
+        assert_eq!(
+            first.0.routes["shared_name"],
+            ("code".into(), "shared_name".into())
+        );
+        assert_eq!(
+            first.0.routes["serena_shared_name"],
+            ("serena".into(), "shared_name".into())
+        );
+
+        let second =
+            build_catalog_reserved(vec![("serena".into(), vec![tool("shared_name")])], &first.1);
+        assert!(!second.0.routes.contains_key("shared_name"));
+        assert_eq!(
+            second.0.routes["serena_shared_name"],
+            ("serena".into(), "shared_name".into())
+        );
+    }
+
+    #[test]
+    fn alias_schema_does_not_promise_a_limit_it_does_not_apply() {
+        let alias = search_for_pattern_tool();
+        assert!(alias["inputSchema"]["properties"]
+            .get("max_answer_chars")
+            .is_none());
     }
 }

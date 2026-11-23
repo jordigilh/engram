@@ -19,12 +19,17 @@ use tower::ServiceExt;
 #[derive(Clone)]
 struct MockState {
     tools: Vec<Value>,
+    second_page: Vec<Value>,
+    paged: bool,
     call_result: Value,
     list_fail_first: usize,
     list_always_fail: Arc<std::sync::atomic::AtomicBool>,
     call_fail_first: usize,
     call_fail_status: u16,
     call_jsonrpc_error: bool,
+    init_jsonrpc_error: bool,
+    call_delay_ms: u64,
+    sse_notification_first: bool,
     list_attempts: Arc<AtomicUsize>,
     call_attempts: Arc<AtomicUsize>,
     records: Arc<Mutex<Vec<Record>>>,
@@ -37,6 +42,7 @@ struct Record {
     arguments: Option<Value>,
     session: Option<String>,
     accept: Option<String>,
+    protocol_version: Option<String>,
     workspace: Option<String>,
     init: Option<Value>,
 }
@@ -44,23 +50,33 @@ struct Record {
 #[derive(Default)]
 struct MockConfig {
     tools: Vec<Value>,
+    second_page: Vec<Value>,
+    paged: bool,
     call_result: Value,
     list_fail_first: usize,
     list_always_fail: bool,
     call_fail_first: usize,
     call_fail_status: Option<u16>,
     call_jsonrpc_error: bool,
+    init_jsonrpc_error: bool,
+    call_delay_ms: u64,
+    sse_notification_first: bool,
 }
 
 async fn spawn_mock(config: MockConfig) -> (String, MockState) {
     let state = MockState {
         tools: config.tools,
+        second_page: config.second_page,
+        paged: config.paged,
         call_result: config.call_result,
         list_fail_first: config.list_fail_first,
         list_always_fail: Arc::new(std::sync::atomic::AtomicBool::new(config.list_always_fail)),
         call_fail_first: config.call_fail_first,
         call_fail_status: config.call_fail_status.unwrap_or(503),
         call_jsonrpc_error: config.call_jsonrpc_error,
+        init_jsonrpc_error: config.init_jsonrpc_error,
+        call_delay_ms: config.call_delay_ms,
+        sse_notification_first: config.sse_notification_first,
         list_attempts: Arc::new(AtomicUsize::new(0)),
         call_attempts: Arc::new(AtomicUsize::new(0)),
         records: Arc::new(Mutex::new(Vec::new())),
@@ -109,12 +125,28 @@ async fn mock_post(
             .get("accept")
             .and_then(|value| value.to_str().ok())
             .map(str::to_string),
+        protocol_version: headers
+            .get("mcp-protocol-version")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
         workspace: query.get("workspace").cloned(),
         init: (method == "initialize").then(|| body.clone()),
     });
 
     match method.as_str() {
         "initialize" => {
+            if state.init_jsonrpc_error {
+                let mut response = Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body.get("id"),
+                    "error": {"code": -32000, "message": "initialize rejected"}
+                }))
+                .into_response();
+                response
+                    .headers_mut()
+                    .insert("mcp-session-id", "sess-1".parse().unwrap());
+                return response;
+            }
             let mut response = Json(json!({
                 "jsonrpc": "2.0",
                 "id": body.get("id"),
@@ -132,8 +164,24 @@ async fn mock_post(
             if state.list_always_fail.load(Ordering::SeqCst) || attempt <= state.list_fail_first {
                 return StatusCode::SERVICE_UNAVAILABLE.into_response();
             }
-            let payload =
-                json!({"jsonrpc": "2.0", "id": body.get("id"), "result": {"tools": state.tools}});
+            let cursor = body
+                .get("params")
+                .and_then(|params| params.get("cursor"))
+                .and_then(Value::as_str);
+            let (tools, next_cursor) = if state.paged {
+                match cursor {
+                    None => (state.tools.clone(), Some("page-2")),
+                    Some("page-2") => (state.second_page.clone(), None),
+                    Some(_) => (Vec::new(), None),
+                }
+            } else {
+                (state.tools.clone(), None)
+            };
+            let mut result = json!({"tools": tools});
+            if let Some(next) = next_cursor {
+                result["nextCursor"] = json!(next);
+            }
+            let payload = json!({"jsonrpc": "2.0", "id": body.get("id"), "result": result});
             (
                 [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
                 format!("event: message\ndata: {payload}\n\n"),
@@ -155,8 +203,21 @@ async fn mock_post(
                     .unwrap_or(StatusCode::SERVICE_UNAVAILABLE)
                     .into_response();
             }
-            Json(json!({"jsonrpc": "2.0", "id": body.get("id"), "result": state.call_result}))
-                .into_response()
+            if state.call_delay_ms > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(state.call_delay_ms)).await;
+            }
+            let response =
+                json!({"jsonrpc": "2.0", "id": body.get("id"), "result": state.call_result});
+            if state.sse_notification_first {
+                return (
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    format!(
+                        "event: message\ndata: {{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}}\n\nevent: message\ndata: {response}\n\n"
+                    ),
+                )
+                    .into_response();
+            }
+            Json(response).into_response()
         }
         _ => StatusCode::BAD_REQUEST.into_response(),
     }
@@ -237,7 +298,7 @@ async fn http_adapter_runs_one_shot_session_and_forwards_workspace() {
         ..Default::default()
     })
     .await;
-    let adapter = HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0).expect("adapter");
+    let adapter = HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, true).expect("adapter");
 
     assert_eq!(adapter.list_tools().await.unwrap()[0]["name"], "recall");
     let result = adapter
@@ -296,7 +357,7 @@ async fn reads_retry_transient_failures_but_writes_do_not() {
         ..Default::default()
     })
     .await;
-    let adapter = HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0).expect("adapter");
+    let adapter = HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).expect("adapter");
 
     assert_eq!(adapter.list_tools().await.unwrap()[0]["name"], "recall");
     assert_eq!(mock.list_attempts.load(Ordering::SeqCst), 2);
@@ -312,7 +373,7 @@ async fn reads_retry_transient_failures_but_writes_do_not() {
         ..Default::default()
     })
     .await;
-    let adapter = HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0).expect("adapter");
+    let adapter = HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).expect("adapter");
     let error = adapter
         .call_tool("retain", json!({"content": "x"}))
         .await
@@ -389,7 +450,7 @@ async fn tools_call_works_immediately_after_prewarm() {
     })
     .await;
     let adapter: Arc<dyn BackendAdapter> =
-        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0).unwrap());
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
     let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]);
     project.prewarm().await;
     let app = router([project]);
@@ -419,7 +480,7 @@ async fn search_for_pattern_alias_translates_and_requires_workspace() {
     })
     .await;
     let adapter: Arc<dyn BackendAdapter> =
-        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0).unwrap());
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
     let project = Project::with_backends("alpha", vec![("zg".into(), adapter)]);
     project.prewarm().await;
     let app = router([project]);
@@ -500,7 +561,7 @@ async fn managed_zvec_search_gets_freshness_controls() {
     })
     .await;
     let adapter: Arc<dyn BackendAdapter> =
-        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0).unwrap());
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
     let project = Project::with_backends("alpha", vec![("zg".into(), adapter)]);
     project.prewarm().await;
     let app = router([project]);
@@ -539,7 +600,7 @@ async fn permanent_http_and_jsonrpc_errors_are_not_retried() {
         ..Default::default()
     })
     .await;
-    let adapter = HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0).expect("adapter");
+    let adapter = HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).expect("adapter");
     let error = adapter
         .call_tool("recall", json!({}))
         .await
@@ -554,7 +615,7 @@ async fn permanent_http_and_jsonrpc_errors_are_not_retried() {
         ..Default::default()
     })
     .await;
-    let adapter = HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0).expect("adapter");
+    let adapter = HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).expect("adapter");
     let error = adapter
         .call_tool("recall", json!({}))
         .await
@@ -572,7 +633,7 @@ async fn tools_list_replaces_the_catalog_after_total_failure() {
     })
     .await;
     let adapter: Arc<dyn BackendAdapter> =
-        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0).unwrap());
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
     let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]);
     project.prewarm().await;
     let app = router([project]);
@@ -667,10 +728,11 @@ async fn partial_backend_failure_keeps_survivors_and_projects_are_isolated() {
         ..Default::default()
     })
     .await;
-    let dead_adapter: Arc<dyn BackendAdapter> =
-        Arc::new(HttpRelayAdapter::new("http://127.0.0.1:1/mcp", BTreeMap::new(), 1.0).unwrap());
+    let dead_adapter: Arc<dyn BackendAdapter> = Arc::new(
+        HttpRelayAdapter::new("http://127.0.0.1:1/mcp", BTreeMap::new(), 1.0, false).unwrap(),
+    );
     let live: Arc<dyn BackendAdapter> =
-        Arc::new(HttpRelayAdapter::new(&docs_url, BTreeMap::new(), 5.0).unwrap());
+        Arc::new(HttpRelayAdapter::new(&docs_url, BTreeMap::new(), 5.0, false).unwrap());
     let alpha = Project::with_backends(
         "alpha",
         vec![
@@ -713,4 +775,305 @@ async fn partial_backend_failure_keeps_survivors_and_projects_are_isolated() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn sends_negotiated_version_and_follows_tools_pagination() {
+    let (url, mock) = spawn_mock(MockConfig {
+        tools: vec![tool("page_one")],
+        second_page: vec![tool("page_two")],
+        paged: true,
+        ..Default::default()
+    })
+    .await;
+    let adapter = HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).expect("adapter");
+    let tools = adapter.list_tools().await.unwrap();
+    let names: Vec<&str> = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["page_one", "page_two"]);
+
+    let records = mock.records.lock().unwrap();
+    assert_eq!(records[0].protocol_version, None);
+    for record in records.iter().skip(1) {
+        assert_eq!(record.protocol_version.as_deref(), Some("2024-11-05"));
+    }
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.method == "tools/list")
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn sse_notification_before_response_is_skipped_by_rpc_id() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        call_result: json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+        sse_notification_first: true,
+        ..Default::default()
+    })
+    .await;
+    let adapter = HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).expect("adapter");
+    let result = adapter.call_tool("recall", json!({})).await.unwrap();
+    assert_eq!(result["isError"], false);
+    assert_eq!(result["content"][0]["text"], "ok");
+}
+
+#[tokio::test]
+async fn initialize_jsonrpc_error_stops_the_handshake() {
+    let (url, mock) = spawn_mock(MockConfig {
+        init_jsonrpc_error: true,
+        ..Default::default()
+    })
+    .await;
+    let adapter = HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).expect("adapter");
+    let error = adapter.list_tools().await.expect_err("initialize rejects");
+    assert!(error.message.contains("initialize failed"));
+    assert_eq!(mock.list_attempts.load(Ordering::SeqCst), 0);
+    assert!(mock
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|record| record.method == "initialize"));
+}
+
+#[tokio::test]
+async fn workspace_routing_flag_controls_forwarding() {
+    let (editor_url, editor) = spawn_mock(MockConfig {
+        tools: vec![tool("find_symbol")],
+        call_result: json!({"content": [], "isError": false}),
+        ..Default::default()
+    })
+    .await;
+    let registry = Registry::parse_str(&format!(
+        r#"
+[instances.editor.backends.editor]
+kind = "http"
+url = "{editor_url}"
+workspace_routing = true
+"#
+    ))
+    .unwrap();
+    let adapters = build_project_adapters("editor", registry.get("editor").unwrap()).unwrap();
+    let project = Project::with_backends("editor", adapters);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "editor").await;
+    let (_, _) = call(
+        &app,
+        "/mcp/editor?workspace=%2Fwork",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 20,
+            "method": "tools/call",
+            "params": {"name": "find_symbol", "arguments": {}}
+        }),
+    )
+    .await;
+    assert!(editor
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|record| record.method == "tools/call")
+        .all(|record| record.workspace.as_deref() == Some("/work")));
+
+    let (serena_url, serena) = spawn_mock(MockConfig {
+        tools: vec![tool("find_symbol")],
+        call_result: json!({"content": [], "isError": false}),
+        ..Default::default()
+    })
+    .await;
+    let registry = Registry::parse_str(&format!(
+        r#"
+[instances.fixed.backends.serena]
+kind = "http"
+url = "{serena_url}"
+workspace_routing = false
+"#
+    ))
+    .unwrap();
+    let adapters = build_project_adapters("fixed", registry.get("fixed").unwrap()).unwrap();
+    let project = Project::with_backends("fixed", adapters);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "fixed").await;
+    let (_, _) = call(
+        &app,
+        "/mcp/fixed?workspace=%2Fwork",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 21,
+            "method": "tools/call",
+            "params": {"name": "find_symbol", "arguments": {}}
+        }),
+    )
+    .await;
+    assert!(serena
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|record| record.method == "tools/call")
+        .all(|record| record.workspace.is_none()));
+}
+
+#[tokio::test]
+async fn in_flight_cancellation_returns_cancelled() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("recall")],
+        call_result: json!({"content": [], "isError": false}),
+        call_delay_ms: 500,
+        ..Default::default()
+    })
+    .await;
+    let adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
+    let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    let call_app = app.clone();
+    let call_session = session.clone();
+    let started = tokio::time::Instant::now();
+    let pending = tokio::spawn(async move {
+        call(
+            &call_app,
+            "/mcp/alpha",
+            Some(&call_session),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 77,
+                "method": "tools/call",
+                "params": {"name": "docs_recall", "arguments": {}}
+            }),
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": 77}
+        }),
+    )
+    .await;
+    let (_, body) = pending.await.expect("call completes");
+    assert_eq!(sse_data(&body)["error"]["code"], -32800);
+    assert!(started.elapsed() < std::time::Duration::from_millis(400));
+}
+
+#[tokio::test]
+async fn projects_list_and_call_only_their_own_tools() {
+    let (alpha_url, alpha_mock) = spawn_mock(MockConfig {
+        tools: vec![tool("alpha_search")],
+        call_result: json!({"content": [{"type": "text", "text": "alpha"}], "isError": false}),
+        ..Default::default()
+    })
+    .await;
+    let (beta_url, beta_mock) = spawn_mock(MockConfig {
+        tools: vec![tool("beta_search")],
+        call_result: json!({"content": [{"type": "text", "text": "beta"}], "isError": false}),
+        ..Default::default()
+    })
+    .await;
+    let alpha_adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&alpha_url, BTreeMap::new(), 5.0, false).unwrap());
+    let beta_adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&beta_url, BTreeMap::new(), 5.0, false).unwrap());
+    let alpha = Project::with_backends("alpha", vec![("code".into(), alpha_adapter)]);
+    let beta = Project::with_backends("beta", vec![("code".into(), beta_adapter)]);
+    alpha.prewarm().await;
+    beta.prewarm().await;
+    let app = router([alpha, beta]);
+    let alpha_session = initialize(&app, "alpha").await;
+    let beta_session = initialize(&app, "beta").await;
+
+    let (_, alpha_body) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&alpha_session),
+        json!({"jsonrpc": "2.0", "id": 30, "method": "tools/list"}),
+    )
+    .await;
+    let alpha_names: Vec<String> = sse_data(&alpha_body)["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap().to_string())
+        .collect();
+    assert!(alpha_names.contains(&"alpha_search".to_string()));
+    assert!(!alpha_names.contains(&"beta_search".to_string()));
+
+    let (_, beta_body) = call(
+        &app,
+        "/mcp/beta",
+        Some(&beta_session),
+        json!({"jsonrpc": "2.0", "id": 31, "method": "tools/list"}),
+    )
+    .await;
+    let beta_names: Vec<String> = sse_data(&beta_body)["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap().to_string())
+        .collect();
+    assert!(beta_names.contains(&"beta_search".to_string()));
+    assert!(!beta_names.contains(&"alpha_search".to_string()));
+
+    let (_, alpha_call) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&alpha_session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 32,
+            "method": "tools/call",
+            "params": {"name": "alpha_search", "arguments": {}}
+        }),
+    )
+    .await;
+    assert_eq!(
+        sse_data(&alpha_call)["result"]["content"][0]["text"],
+        "alpha"
+    );
+    let (_, beta_call) = call(
+        &app,
+        "/mcp/beta",
+        Some(&beta_session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 33,
+            "method": "tools/call",
+            "params": {"name": "beta_search", "arguments": {}}
+        }),
+    )
+    .await;
+    assert_eq!(sse_data(&beta_call)["result"]["content"][0]["text"], "beta");
+
+    assert!(alpha_mock
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|record| record.method == "tools/call")
+        .all(|record| record.tool.as_deref() == Some("alpha_search")));
+    assert!(beta_mock
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|record| record.method == "tools/call")
+        .all(|record| record.tool.as_deref() == Some("beta_search")));
 }

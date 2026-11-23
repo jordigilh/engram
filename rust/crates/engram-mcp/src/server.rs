@@ -6,6 +6,7 @@
 //! `DELETE` termination, cancellation, and project-bound session isolation.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use axum::body::Bytes;
@@ -17,13 +18,13 @@ use axum::routing::get;
 use axum::Router;
 use serde_json::{json, Map, Value};
 
-use crate::aggregate::aggregate_tools_list;
+use crate::aggregate::{aggregate_tools_list, Aggregation};
 use crate::backend::{prepare_arguments, tool_error, BackendAdapter};
-use crate::catalog::{zvec_rg_arguments, Catalog};
+use crate::catalog::{zvec_rg_arguments, Catalog, Route};
 use crate::protocol::{
     initialize_result, method_not_found_error, request_cancelled_error, tools_list_result,
 };
-use crate::session::{SessionStore, MAX_SESSIONS_PER_PROJECT};
+use crate::session::{request_id_key, SessionStore, MAX_SESSIONS_PER_PROJECT};
 
 pub const SESSION_HEADER: &str = "mcp-session-id";
 
@@ -49,6 +50,9 @@ pub struct Project {
 pub struct BackendSet {
     pub adapters: Vec<(String, Arc<dyn BackendAdapter>)>,
     pub catalog: tokio::sync::RwLock<Catalog>,
+    reservations: tokio::sync::RwLock<BTreeMap<String, Route>>,
+    generation: AtomicU64,
+    published_generation: AtomicU64,
 }
 
 impl BackendSet {
@@ -56,7 +60,26 @@ impl BackendSet {
         Self {
             adapters,
             catalog: tokio::sync::RwLock::new(Catalog::default()),
+            reservations: tokio::sync::RwLock::new(BTreeMap::new()),
+            generation: AtomicU64::new(0),
+            published_generation: AtomicU64::new(0),
         }
+    }
+
+    /// Aggregate and publish only if no later-started refresh already won.
+    pub async fn refresh(&self) -> Aggregation {
+        let start = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let reservations = self.reservations.read().await.clone();
+        let mut aggregation = aggregate_tools_list(&self.adapters, &reservations).await;
+        let mut catalog = self.catalog.write().await;
+        if self.published_generation.load(Ordering::SeqCst) < start {
+            *catalog = aggregation.catalog.clone();
+            *self.reservations.write().await = aggregation.reservations.clone();
+            self.published_generation.store(start, Ordering::SeqCst);
+        } else {
+            aggregation.catalog = catalog.clone();
+        }
+        aggregation
     }
 }
 
@@ -94,20 +117,20 @@ impl Project {
         let Some(backends) = &self.backends else {
             return;
         };
-        let aggregation = aggregate_tools_list(&backends.adapters).await;
+        let aggregation = backends.refresh().await;
         for (backend, error) in &aggregation.errors {
             eprintln!(
                 "engram-mcp: project {:?} backend {backend:?} prewarm failed: {error}",
                 self.name
             );
         }
-        *backends.catalog.write().await = aggregation.catalog;
     }
 }
 
 struct AppState {
     projects: BTreeMap<String, Arc<Project>>,
     sessions: Mutex<SessionStore>,
+    in_flight: Mutex<HashMap<(String, String), tokio_util::sync::CancellationToken>>,
     policy: SessionPolicy,
     origins: OriginPolicy,
 }
@@ -176,6 +199,7 @@ pub fn router_with_options(
     let state = Arc::new(AppState {
         projects,
         sessions: Mutex::new(SessionStore::with_max_sessions(max_sessions)),
+        in_flight: Mutex::new(HashMap::new()),
         policy,
         origins,
     });
@@ -350,7 +374,17 @@ async fn post_endpoint(
                 .get("params")
                 .and_then(|params| params.get("requestId")),
         ) {
+            let key = request_id_key(request_id);
             lock_sessions(&state).cancel(session_id, request_id);
+            if let Some(token) = state
+                .in_flight
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(&(session_id.to_string(), key))
+                .cloned()
+            {
+                token.cancel();
+            }
         }
         return StatusCode::ACCEPTED.into_response();
     }
@@ -365,15 +399,13 @@ async fn post_endpoint(
         "ping" => sse(json!({"jsonrpc": "2.0", "id": id, "result": {}})),
         "tools/list" => {
             if let Some(backends) = configured.backends.clone() {
-                let aggregation = aggregate_tools_list(&backends.adapters).await;
+                let aggregation = backends.refresh().await;
                 for (backend, error) in &aggregation.errors {
                     eprintln!(
                         "engram-mcp: project {project:?} backend {backend:?} unavailable: {error}"
                     );
                 }
-                let tools = aggregation.catalog.tools.clone();
-                *backends.catalog.write().await = aggregation.catalog;
-                sse(tools_list_result(id, &tools))
+                sse(tools_list_result(id, &aggregation.catalog.tools))
             } else {
                 sse(tools_list_result(id, &configured.tools))
             }
@@ -401,14 +433,41 @@ async fn post_endpoint(
                 .and_then(|params| params.get("arguments"))
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            handle_backend_call(
-                &backends,
-                id,
-                tool_name,
-                arguments,
-                query.get("workspace").map(String::as_str),
-            )
-            .await
+            let request_key = request_id_key(&id);
+            if let Some(session_id) = session_id.clone() {
+                let token = tokio_util::sync::CancellationToken::new();
+                state
+                    .in_flight
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .insert((session_id.clone(), request_key.clone()), token.clone());
+                let call_id = id.clone();
+                let result = tokio::select! {
+                    result = handle_backend_call(
+                        &backends,
+                        call_id,
+                        tool_name,
+                        arguments,
+                        query.get("workspace").map(String::as_str),
+                    ) => result,
+                    _ = token.cancelled() => sse(request_cancelled_error(id.clone())),
+                };
+                state
+                    .in_flight
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .remove(&(session_id, request_key));
+                result
+            } else {
+                handle_backend_call(
+                    &backends,
+                    id,
+                    tool_name,
+                    arguments,
+                    query.get("workspace").map(String::as_str),
+                )
+                .await
+            }
         }
         _ => sse(method_not_found_error(id, method)),
     }
@@ -451,13 +510,12 @@ async fn handle_backend_call(
         }
     } else {
         let arguments = prepare_arguments(&raw_name, arguments);
-        match (backend_key.as_str(), workspace) {
-            ("serena", Some(workspace)) => {
-                adapter
-                    .call_tool_with_workspace(&raw_name, arguments, workspace)
-                    .await
-            }
-            _ => adapter.call_tool(&raw_name, arguments).await,
+        if workspace.is_some() && adapter.supports_workspace() {
+            adapter
+                .call_tool_with_workspace(&raw_name, arguments, workspace.unwrap_or_default())
+                .await
+        } else {
+            adapter.call_tool(&raw_name, arguments).await
         }
     };
 

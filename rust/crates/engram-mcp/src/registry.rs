@@ -302,12 +302,11 @@ fn validate_http(
 }
 
 fn validate_url(project: &str, backend: &str, value: &str) -> Result<Url, String> {
-    let parsed = Url::parse(value).map_err(|_| {
-        format!("Backend {project:?}/{backend:?} url must be an HTTP(S) URL: {value:?}")
-    })?;
+    let parsed = Url::parse(value)
+        .map_err(|_| format!("Backend {project:?}/{backend:?} url must be an HTTP(S) URL"))?;
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
         return Err(format!(
-            "Backend {project:?}/{backend:?} url must be an HTTP(S) URL: {value:?}"
+            "Backend {project:?}/{backend:?} url must be an HTTP(S) URL"
         ));
     }
     if !parsed.username().is_empty() || parsed.password().is_some() {

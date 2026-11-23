@@ -65,8 +65,9 @@ pub const HTTP_RETRY_DELAY: Duration = Duration::from_millis(250);
 
 pub struct HttpRelayAdapter {
     url: Url,
-    headers: BTreeMap<String, String>,
+    headers: reqwest::header::HeaderMap,
     client: reqwest::Client,
+    workspace_routing: bool,
 }
 
 impl HttpRelayAdapter {
@@ -74,6 +75,7 @@ impl HttpRelayAdapter {
         url: &str,
         headers: BTreeMap<String, String>,
         timeout_seconds: f64,
+        workspace_routing: bool,
     ) -> Result<Self, String> {
         if !timeout_seconds.is_finite() || !(1.0..=MAX_FORWARD_TIMEOUT_S).contains(&timeout_seconds)
         {
@@ -81,15 +83,25 @@ impl HttpRelayAdapter {
                 "timeout_seconds must be between 1 and {MAX_FORWARD_TIMEOUT_S}"
             ));
         }
-        let url = Url::parse(url).map_err(|error| format!("invalid backend url: {error}"))?;
+        let url = Url::parse(url).map_err(|_| "invalid backend url".to_string())?;
+        let mut header_map = reqwest::header::HeaderMap::new();
+        for (key, value) in headers {
+            let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+                .map_err(|_| format!("invalid header name {key:?}"))?;
+            let value = reqwest::header::HeaderValue::from_str(&value)
+                .map_err(|_| format!("invalid value for header {key:?}"))?;
+            header_map.insert(name, value);
+        }
         let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs_f64(timeout_seconds))
             .build()
             .map_err(|error| format!("cannot build HTTP client: {error}"))?;
         Ok(Self {
             url,
-            headers,
+            headers: header_map,
             client,
+            workspace_routing,
         })
     }
 
@@ -126,79 +138,160 @@ impl HttpRelayAdapter {
         let request_url = workspace
             .map(|workspace| url_with_workspace(&self.url, workspace))
             .unwrap_or_else(|| self.url.clone());
-        let mut session_id: Option<String> = None;
-        let result = async {
-            let init = self
-                .post_json(
-                    &request_url,
-                    &json!({
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "initialize",
-                        "params": {
-                            "protocolVersion": "2024-11-05",
-                            "capabilities": {},
-                            "clientInfo": {"name": "engram-gateway", "version": "0.0.1"}
-                        }
-                    }),
-                    None,
-                )
-                .await?;
-            session_id = header_value(&init, "mcp-session-id");
-
+        let session = self.open_session(&request_url).await?;
+        let outcome = async {
             let initialized = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
-            self.post_json(&request_url, &initialized, session_id.as_deref())
+            self.post_json(&request_url, &initialized, Some(&session))
                 .await?;
-
             let call = json!({
                 "jsonrpc": "2.0",
                 "id": 2,
                 "method": method,
                 "params": params.unwrap_or_else(|| json!({}))
             });
-            let response = self
-                .post_json(&request_url, &call, session_id.as_deref())
-                .await?;
-            let payload = parse_sse_json(&response.bytes().await.map_err(|error| {
+            let response = self.post_json(&request_url, &call, Some(&session)).await?;
+            let body = response.bytes().await.map_err(|error| {
                 BackendError::transient(format!("{method} response read failed: {error}"))
-            })?)?;
-            if let Some(error) = payload.get("error") {
-                return Err(BackendError::permanent(format!("{method} failed: {error}")));
-            }
-            Ok(payload.get("result").cloned().unwrap_or_else(|| json!({})))
+            })?;
+            parse_rpc_response(&body, &json!(2), method)
         }
         .await;
-
-        if let Some(session_id) = session_id {
-            let _ = self
-                .client
-                .delete(request_url)
-                .headers(self.request_headers(Some(&session_id)))
-                .send()
-                .await;
-        }
-        result
+        self.close_session(&request_url, &session).await;
+        outcome
     }
 
-    fn request_headers(&self, session_id: Option<&str>) -> reqwest::header::HeaderMap {
-        use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, CONTENT_TYPE};
-        let mut headers = HeaderMap::new();
-        for (key, value) in &self.headers {
-            if let (Ok(name), Ok(value)) = (
-                HeaderName::from_bytes(key.as_bytes()),
-                HeaderValue::from_str(value),
-            ) {
-                headers.insert(name, value);
+    async fn open_session(&self, url: &Url) -> Result<UpstreamSession, BackendError> {
+        let response = self
+            .post_json(
+                url,
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "engram-gateway", "version": "0.0.1"}
+                    }
+                }),
+                None,
+            )
+            .await?;
+        let session_id = header_value(&response, "mcp-session-id");
+        let body = response.bytes().await.map_err(|error| {
+            BackendError::transient(format!("initialize response read failed: {error}"))
+        })?;
+        let session = UpstreamSession {
+            id: session_id,
+            protocol_version: "2024-11-05".to_string(),
+        };
+        match parse_rpc_response(&body, &json!(1), "initialize") {
+            Ok(result) => {
+                let protocol_version = result
+                    .get("protocolVersion")
+                    .and_then(Value::as_str)
+                    .unwrap_or("2024-11-05")
+                    .to_string();
+                Ok(UpstreamSession {
+                    id: session.id,
+                    protocol_version,
+                })
+            }
+            Err(error) => {
+                self.close_session(url, &session).await;
+                Err(error)
             }
         }
+    }
+
+    async fn close_session(&self, url: &Url, session: &UpstreamSession) {
+        let Some(session_id) = session.id.as_deref() else {
+            return;
+        };
+        let _ = self
+            .client
+            .delete(url.clone())
+            .headers(self.request_headers(Some(session_id), Some(&session.protocol_version)))
+            .send()
+            .await;
+    }
+
+    async fn list_tools_once(&self) -> Result<Vec<Value>, BackendError> {
+        let session = self.open_session(&self.url).await?;
+        let outcome = async {
+            self.post_json(
+                &self.url,
+                &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+                Some(&session),
+            )
+            .await?;
+            let mut tools = Vec::new();
+            let mut cursor: Option<String> = None;
+            let mut seen = std::collections::HashSet::new();
+            loop {
+                let params = cursor
+                    .as_ref()
+                    .map(|cursor| json!({"cursor": cursor}))
+                    .unwrap_or_else(|| json!({}));
+                let response = self
+                    .post_json(
+                        &self.url,
+                        &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": params}),
+                        Some(&session),
+                    )
+                    .await?;
+                let body = response.bytes().await.map_err(|error| {
+                    BackendError::transient(format!("tools/list response read failed: {error}"))
+                })?;
+                let result = parse_rpc_response(&body, &json!(2), "tools/list")?;
+                tools.extend(
+                    result
+                        .get("tools")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .unwrap_or_default(),
+                );
+                let Some(next) = result
+                    .get("nextCursor")
+                    .and_then(Value::as_str)
+                    .filter(|cursor| !cursor.is_empty())
+                else {
+                    break;
+                };
+                if !seen.insert(next.to_string()) {
+                    return Err(BackendError::permanent(
+                        "tools/list returned a repeated pagination cursor",
+                    ));
+                }
+                cursor = Some(next.to_string());
+            }
+            Ok(tools)
+        }
+        .await;
+        self.close_session(&self.url, &session).await;
+        outcome
+    }
+
+    fn request_headers(
+        &self,
+        session_id: Option<&str>,
+        protocol_version: Option<&str>,
+    ) -> reqwest::header::HeaderMap {
+        use reqwest::header::{HeaderName, HeaderValue, ACCEPT, CONTENT_TYPE};
+        let mut headers = self.headers.clone();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(
             ACCEPT,
             HeaderValue::from_static("application/json, text/event-stream"),
         );
-        if let Some(session_id) = session_id {
+        if let Some(session_id) = session_id.filter(|value| !value.is_empty()) {
             if let Ok(value) = HeaderValue::from_str(session_id) {
                 headers.insert(HeaderName::from_static("mcp-session-id"), value);
+            }
+        }
+        if let Some(protocol_version) = protocol_version {
+            if let Ok(value) = HeaderValue::from_str(protocol_version) {
+                headers.insert(HeaderName::from_static("mcp-protocol-version"), value);
             }
         }
         headers
@@ -208,12 +301,15 @@ impl HttpRelayAdapter {
         &self,
         url: &Url,
         payload: &Value,
-        session_id: Option<&str>,
+        session: Option<&UpstreamSession>,
     ) -> Result<reqwest::Response, BackendError> {
         let response = self
             .client
             .post(url.clone())
-            .headers(self.request_headers(session_id))
+            .headers(self.request_headers(
+                session.and_then(|session| session.id.as_deref()),
+                session.map(|session| session.protocol_version.as_str()),
+            ))
             .json(payload)
             .send()
             .await
@@ -237,15 +333,28 @@ impl HttpRelayAdapter {
     }
 }
 
+struct UpstreamSession {
+    id: Option<String>,
+    protocol_version: String,
+}
+
 #[async_trait]
 impl BackendAdapter for HttpRelayAdapter {
     async fn list_tools(&self) -> Result<Vec<Value>, BackendError> {
-        let result = self.roundtrip("tools/list", None, true, None).await?;
-        Ok(result
-            .get("tools")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default())
+        let mut last_error = None;
+        for attempt in 0..HTTP_RETRY_ATTEMPTS {
+            match self.list_tools_once().await {
+                Ok(tools) => return Ok(tools),
+                Err(error) => {
+                    if attempt + 1 >= HTTP_RETRY_ATTEMPTS || !error.transient {
+                        return Err(error);
+                    }
+                    last_error = Some(error);
+                    tokio::time::sleep(HTTP_RETRY_DELAY).await;
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| BackendError::permanent("tools/list failed")))
     }
 
     async fn call_tool(&self, name: &str, arguments: Value) -> Result<Value, BackendError> {
@@ -274,7 +383,7 @@ impl BackendAdapter for HttpRelayAdapter {
     }
 
     fn supports_workspace(&self) -> bool {
-        true
+        self.workspace_routing
     }
 }
 
@@ -320,18 +429,63 @@ fn url_with_workspace(base: &Url, workspace: &str) -> Url {
 pub fn parse_sse_json(body: &[u8]) -> Result<Value, BackendError> {
     let text = String::from_utf8_lossy(body);
     let text = text.trim();
+    let candidate = sse_events(text)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| text.to_string());
+    serde_json::from_str(&candidate)
+        .map_err(|error| BackendError::permanent(format!("invalid SSE JSON: {error}")))
+}
+
+fn sse_events(text: &str) -> Vec<String> {
+    let mut events = Vec::new();
+    let mut current = Vec::new();
     for line in text.lines() {
-        if let Some(payload) = line.strip_prefix("data:") {
-            let payload = payload.trim();
-            if !payload.is_empty() {
-                return serde_json::from_str(payload).map_err(|error| {
-                    BackendError::permanent(format!("invalid SSE JSON: {error}"))
-                });
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                events.push(current.join("\n"));
+                current.clear();
             }
+        } else if let Some(data) = line.strip_prefix("data:") {
+            current.push(data.trim_start().to_string());
         }
     }
-    serde_json::from_str(text)
-        .map_err(|error| BackendError::permanent(format!("invalid JSON response: {error}")))
+    if !current.is_empty() {
+        events.push(current.join("\n"));
+    }
+    events
+}
+
+fn parse_rpc_response(
+    body: &[u8],
+    expected_id: &Value,
+    label: &str,
+) -> Result<Value, BackendError> {
+    let text = String::from_utf8_lossy(body);
+    let text = text.trim();
+    let mut candidates = if text.starts_with('{') || text.starts_with('[') {
+        vec![text.to_string()]
+    } else {
+        sse_events(text)
+    };
+    if candidates.is_empty() {
+        candidates.push(text.to_string());
+    }
+    for candidate in candidates {
+        let Ok(payload) = serde_json::from_str::<Value>(&candidate) else {
+            continue;
+        };
+        if payload.get("id") != Some(expected_id) {
+            continue;
+        }
+        if let Some(error) = payload.get("error") {
+            return Err(BackendError::permanent(format!("{label} failed: {error}")));
+        }
+        return Ok(payload.get("result").cloned().unwrap_or_else(|| json!({})));
+    }
+    Err(BackendError::permanent(format!(
+        "{label} returned no JSON-RPC response for id {expected_id}"
+    )))
 }
 
 pub struct ScopedHindsightAdapter {
@@ -561,8 +715,13 @@ pub fn build_project_adapters(project: &str, spec: &ProjectSpec) -> Result<Adapt
             .as_deref()
             .ok_or_else(|| format!("Backend {project:?}/{key:?} requires a url"))?;
         let http: Arc<dyn BackendAdapter> = Arc::new(
-            HttpRelayAdapter::new(url, backend.headers.clone(), backend.timeout_seconds)
-                .map_err(|error| format!("Backend {project:?}/{key:?}: {error}"))?,
+            HttpRelayAdapter::new(
+                url,
+                backend.headers.clone(),
+                backend.timeout_seconds,
+                backend.workspace_routing,
+            )
+            .map_err(|error| format!("Backend {project:?}/{key:?}: {error}"))?,
         );
         let adapter = if key == "hindsight" {
             Arc::new(ScopedHindsightAdapter::new(
@@ -759,6 +918,18 @@ mod tests {
             .block_on(scoped.call_tool("recall", json!([1, 2])))
             .unwrap();
         assert_eq!(result["isError"], true);
+    }
+
+    #[test]
+    fn rejects_invalid_configured_headers_without_leaking_values() {
+        let mut headers = BTreeMap::new();
+        headers.insert("Authorization".into(), "bad\nvalue".into());
+        let error = match HttpRelayAdapter::new("http://127.0.0.1:1/mcp", headers, 5.0, false) {
+            Ok(_) => panic!("invalid header must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("Authorization"));
+        assert!(!error.contains("bad"));
     }
 
     #[test]

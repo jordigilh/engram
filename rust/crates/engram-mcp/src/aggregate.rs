@@ -7,17 +7,23 @@ use futures::future::join_all;
 use serde_json::Value;
 
 use crate::backend::BackendAdapter;
-use crate::catalog::{build_catalog, filter_relevant_tools, inject_search_for_pattern, Catalog};
+use crate::catalog::{
+    build_catalog_reserved, filter_relevant_tools, inject_search_for_pattern, Catalog, Route,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct Aggregation {
     pub catalog: Catalog,
+    pub reservations: BTreeMap<String, Route>,
     pub errors: BTreeMap<String, String>,
 }
 
 /// Query every backend concurrently. A dead backend is excluded from the
 /// catalog; the survivors still serve, matching the Python gateway.
-pub async fn aggregate_tools_list(adapters: &[(String, Arc<dyn BackendAdapter>)]) -> Aggregation {
+pub async fn aggregate_tools_list(
+    adapters: &[(String, Arc<dyn BackendAdapter>)],
+    reservations: &BTreeMap<String, Route>,
+) -> Aggregation {
     let results = join_all(adapters.iter().map(|(key, adapter)| {
         let key = key.clone();
         let adapter = Arc::clone(adapter);
@@ -36,9 +42,13 @@ pub async fn aggregate_tools_list(adapters: &[(String, Arc<dyn BackendAdapter>)]
         }
     }
 
-    let mut catalog = build_catalog(per_backend);
+    let (mut catalog, reservations) = build_catalog_reserved(per_backend, reservations);
     inject_search_for_pattern(&mut catalog);
-    Aggregation { catalog, errors }
+    Aggregation {
+        catalog,
+        reservations,
+        errors,
+    }
 }
 
 #[cfg(test)]
@@ -99,7 +109,7 @@ mod tests {
                 }),
             ),
         ];
-        let aggregation = aggregate_tools_list(&adapters).await;
+        let aggregation = aggregate_tools_list(&adapters, &BTreeMap::new()).await;
         assert_eq!(aggregation.errors["dead"], "down");
         assert_eq!(
             aggregation.catalog.routes["docs_recall"],
@@ -120,7 +130,7 @@ mod tests {
                 error: Some("down".into()),
             }),
         )];
-        let aggregation = aggregate_tools_list(&adapters).await;
+        let aggregation = aggregate_tools_list(&adapters, &BTreeMap::new()).await;
         assert!(aggregation.catalog.routes.is_empty());
         assert!(aggregation.catalog.tools.is_empty());
     }

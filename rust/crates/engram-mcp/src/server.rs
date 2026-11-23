@@ -5,18 +5,21 @@
 //! stable `initialize` result. Additions required by #211 are session ids,
 //! `DELETE` termination, cancellation, and project-bound session isolation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use axum::body::Bytes;
-use axum::extract::{Path, Request, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
+use crate::aggregate::aggregate_tools_list;
+use crate::backend::{prepare_arguments, tool_error, BackendAdapter};
+use crate::catalog::{zvec_rg_arguments, Catalog};
 use crate::protocol::{
     initialize_result, method_not_found_error, request_cancelled_error, tools_list_result,
 };
@@ -34,12 +37,27 @@ pub enum SessionPolicy {
     Optional,
 }
 
-/// One project route. Slice 1 only carries a static tool catalog; slice 2
-/// replaces it with backend aggregation.
-#[derive(Debug, Clone)]
+/// One project route. Static projects carry a fixed catalog (slice-1 tests);
+/// registry-backed projects aggregate HTTP backends.
+#[derive(Clone)]
 pub struct Project {
     pub name: String,
     pub tools: Vec<Value>,
+    pub backends: Option<Arc<BackendSet>>,
+}
+
+pub struct BackendSet {
+    pub adapters: Vec<(String, Arc<dyn BackendAdapter>)>,
+    pub catalog: tokio::sync::RwLock<Catalog>,
+}
+
+impl BackendSet {
+    pub fn new(adapters: Vec<(String, Arc<dyn BackendAdapter>)>) -> Self {
+        Self {
+            adapters,
+            catalog: tokio::sync::RwLock::new(Catalog::default()),
+        }
+    }
 }
 
 impl Project {
@@ -47,6 +65,7 @@ impl Project {
         Self {
             name: name.into(),
             tools: Vec::new(),
+            backends: None,
         }
     }
 
@@ -54,13 +73,34 @@ impl Project {
         Self {
             name: name.into(),
             tools,
+            backends: None,
         }
+    }
+
+    pub fn with_backends(
+        name: impl Into<String>,
+        adapters: Vec<(String, Arc<dyn BackendAdapter>)>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            tools: Vec::new(),
+            backends: Some(Arc::new(BackendSet::new(adapters))),
+        }
+    }
+
+    /// Best-effort catalog warm-up. A dead backend is simply absent from the
+    /// catalog; prewarm never fails the process.
+    pub async fn prewarm(&self) {
+        let Some(backends) = &self.backends else {
+            return;
+        };
+        let aggregation = aggregate_tools_list(&backends.adapters).await;
+        *backends.catalog.write().await = aggregation.catalog;
     }
 }
 
-#[derive(Debug)]
 struct AppState {
-    projects: BTreeMap<String, Project>,
+    projects: BTreeMap<String, Arc<Project>>,
     sessions: Mutex<SessionStore>,
     policy: SessionPolicy,
     origins: OriginPolicy,
@@ -122,9 +162,9 @@ pub fn router_with_options(
     policy: SessionPolicy,
     origins: OriginPolicy,
 ) -> Router {
-    let projects: BTreeMap<String, Project> = projects
+    let projects: BTreeMap<String, Arc<Project>> = projects
         .into_iter()
-        .map(|project| (project.name.clone(), project))
+        .map(|project| (project.name.clone(), Arc::new(project)))
         .collect();
     let max_sessions = MAX_SESSIONS_PER_PROJECT * projects.len().max(1);
     let state = Arc::new(AppState {
@@ -235,6 +275,7 @@ async fn post_endpoint(
     State(state): State<Arc<AppState>>,
     Path(project): Path<String>,
     headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
     body: Bytes,
 ) -> Response {
     let Some(configured) = state.projects.get(&project) else {
@@ -316,25 +357,110 @@ async fn post_endpoint(
 
     match method {
         "ping" => sse(json!({"jsonrpc": "2.0", "id": id, "result": {}})),
-        "tools/list" => sse(tools_list_result(id, &configured.tools)),
+        "tools/list" => {
+            if let Some(backends) = configured.backends.clone() {
+                let aggregation = aggregate_tools_list(&backends.adapters).await;
+                let tools = aggregation.catalog.tools.clone();
+                *backends.catalog.write().await = aggregation.catalog;
+                sse(tools_list_result(id, &tools))
+            } else {
+                sse(tools_list_result(id, &configured.tools))
+            }
+        }
         "tools/call" => {
             let cancelled = session_id
                 .as_deref()
                 .map(|session_id| lock_sessions(&state).take_cancelled(session_id, &id))
                 .unwrap_or(false);
             if cancelled {
-                sse(request_cancelled_error(id))
-            } else {
-                // Backend routing is #211 slice 2. Return an explicit protocol
-                // error rather than pretending the call succeeded.
-                sse(method_not_found_error(
+                return sse(request_cancelled_error(id));
+            }
+            let Some(backends) = configured.backends.clone() else {
+                return sse(method_not_found_error(
                     id,
                     "tools/call (routing lands in #211 slice 2)",
-                ))
-            }
+                ));
+            };
+            let params = message.get("params");
+            let tool_name = params
+                .and_then(|params| params.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let arguments = params
+                .and_then(|params| params.get("arguments"))
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            handle_backend_call(
+                &backends,
+                id,
+                tool_name,
+                arguments,
+                query.get("workspace").map(String::as_str),
+            )
+            .await
         }
         _ => sse(method_not_found_error(id, method)),
     }
+}
+
+async fn handle_backend_call(
+    backends: &BackendSet,
+    id: Value,
+    tool_name: &str,
+    arguments: Value,
+    workspace: Option<&str>,
+) -> Response {
+    let route = backends.catalog.read().await.route(tool_name).cloned();
+    let Some((backend_key, raw_name)) = route else {
+        return tool_result(
+            id,
+            tool_error(format!(
+                "Unknown tool: {tool_name:?} (never existed, or its backend is currently down)"
+            )),
+        );
+    };
+    let Some((_, adapter)) = backends
+        .adapters
+        .iter()
+        .find(|(key, _)| key == &backend_key)
+    else {
+        return tool_result(
+            id,
+            tool_error(format!(
+                "Backend {backend_key:?} for tool {tool_name:?} is not wired up"
+            )),
+        );
+    };
+
+    let outcome = if tool_name == "search_for_pattern" && raw_name == "zvec_grep_rg" {
+        let empty = Map::new();
+        match zvec_rg_arguments(arguments.as_object().unwrap_or(&empty), workspace) {
+            Ok(arguments) => adapter.call_tool(&raw_name, arguments).await,
+            Err(error) => return tool_result(id, tool_error(error)),
+        }
+    } else {
+        let arguments = prepare_arguments(&raw_name, arguments);
+        match (backend_key.as_str(), workspace) {
+            ("serena", Some(workspace)) => {
+                adapter
+                    .call_tool_with_workspace(&raw_name, arguments, workspace)
+                    .await
+            }
+            _ => adapter.call_tool(&raw_name, arguments).await,
+        }
+    };
+
+    match outcome {
+        Ok(result) => tool_result(id, result),
+        Err(error) => tool_result(
+            id,
+            tool_error(format!("backend '{backend_key}' failed: {}", error.message)),
+        ),
+    }
+}
+
+fn tool_result(id: Value, result: Value) -> Response {
+    sse(json!({"jsonrpc": "2.0", "id": id, "result": result}))
 }
 
 fn session_header(headers: &HeaderMap) -> Result<Option<String>, ()> {

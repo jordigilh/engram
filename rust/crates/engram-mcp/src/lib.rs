@@ -1,17 +1,27 @@
-//! MCP lifecycle scaffold for the native Engram runtime (issue #211, slice 1).
+//! MCP lifecycle and HTTP gateway scaffold for the native Engram runtime.
 //!
-//! This crate owns exactly one slice: transport and session lifecycle parity
-//! for `initialize`, notifications, `tools/list`, `DELETE`, cancellation, and
-//! per-project isolation. It deliberately has no backend routing; that is
-//! slice 2 of #211. The Python gateway remains the production path and is not
-//! imported or modified here.
+//! Issue #211 slice 1 owns transport/session lifecycle. Slice 2 adds HTTP
+//! backend routing, catalog aggregation, and Hindsight scope enforcement.
+//! The Python gateway remains the production path and is not imported here.
 
+pub mod aggregate;
+pub mod backend;
+pub mod catalog;
 pub mod protocol;
+pub mod registry;
 pub mod server;
 pub mod session;
 
+pub use aggregate::{aggregate_tools_list, Aggregation};
+pub use backend::{
+    build_project_adapters, BackendAdapter, BackendError, HttpRelayAdapter,
+    ManualMentalModelAdapter, ScopedHindsightAdapter,
+};
+pub use catalog::{build_catalog, Catalog};
 pub use protocol::{initialize_result, tools_list_result};
+pub use registry::{BackendKind, BackendSpec, ProjectSpec, Registry};
 pub use server::{
-    router, router_with_options, router_with_policy, OriginPolicy, Project, SessionPolicy,
+    router, router_with_options, router_with_policy, BackendSet, OriginPolicy, Project,
+    SessionPolicy,
 };
 pub use session::SessionStore;

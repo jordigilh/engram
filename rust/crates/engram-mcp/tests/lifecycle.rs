@@ -471,33 +471,54 @@ async fn origin_validation_rejects_external_and_allows_loopback() {
     let app = app();
     let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}});
 
-    let rejected = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/mcp/alpha")
-                .header("origin", "https://evil.example")
-                .body(Body::from(init.to_string()))
-                .expect("valid request"),
-        )
-        .await
-        .expect("router responds");
-    assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+    for origin in [
+        "https://evil.example",
+        "http://localhost.evil.example",
+        "http://user@localhost.evil.example",
+        "null",
+    ] {
+        let rejected = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp/alpha")
+                    .header("origin", origin)
+                    .body(Body::from(init.to_string()))
+                    .expect("valid request"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(
+            rejected.status(),
+            StatusCode::FORBIDDEN,
+            "origin {origin:?} must be rejected"
+        );
+    }
 
-    let loopback = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/mcp/alpha")
-                .header("origin", "http://127.0.0.1:3000")
-                .body(Body::from(init.to_string()))
-                .expect("valid request"),
-        )
-        .await
-        .expect("router responds");
-    assert_eq!(loopback.status(), StatusCode::OK);
+    for origin in [
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://[::1]:3000",
+    ] {
+        let loopback = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp/alpha")
+                    .header("origin", origin)
+                    .body(Body::from(init.to_string()))
+                    .expect("valid request"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(
+            loopback.status(),
+            StatusCode::OK,
+            "loopback origin {origin:?} must be allowed"
+        );
+    }
 }
 
 #[tokio::test]

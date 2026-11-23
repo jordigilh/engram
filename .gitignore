@@ -8,6 +8,7 @@ node_modules/
 .zvec-grep/
 coverage/
 .coverage
+rust/target/
 opencode-plugin/dist/
 opencode-plugin/release/
 

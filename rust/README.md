@@ -39,6 +39,8 @@ cargo run -p engram-mcp -- --projects engram,kubernaut --port 8898
 
 The server binds loopback only and refuses a non-loopback `--host`. Add
 `--allow-stateless` to accept non-`initialize` requests without a session.
+In that migration mode, `DELETE` and cancellation fencing apply only to
+requests that carry `Mcp-Session-Id`; header-less traffic stays stateless.
 
 ## Contract tests
 

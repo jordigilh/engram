@@ -15,12 +15,13 @@ use serde_json::Value;
 
 pub const SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 pub const MAX_SESSIONS: usize = 1_024;
-pub const MAX_CANCELLED_PER_SESSION: usize = 1_024;
+pub const MAX_CANCELLED_PER_SESSION: usize = 64;
 pub const MAX_REQUEST_ID_LEN: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionError {
     Capacity,
+    Random,
 }
 
 #[derive(Debug)]
@@ -47,7 +48,7 @@ impl SessionStore {
         if self.sessions.len() >= MAX_SESSIONS {
             return Err(SessionError::Capacity);
         }
-        let id = random_session_id();
+        let id = random_session_id()?;
         self.sessions.insert(
             id.clone(),
             Session {
@@ -133,15 +134,15 @@ pub fn request_id_key(request_id: &Value) -> String {
     }
 }
 
-fn random_session_id() -> String {
+fn random_session_id() -> Result<String, SessionError> {
     let mut bytes = [0_u8; 16];
-    getrandom::getrandom(&mut bytes).expect("OS random source is available");
+    getrandom::getrandom(&mut bytes).map_err(|_| SessionError::Random)?;
     let mut id = String::with_capacity(7 + bytes.len() * 2);
     id.push_str("engram-");
     for byte in bytes {
         id.push_str(&format!("{byte:02x}"));
     }
-    id
+    Ok(id)
 }
 
 #[cfg(test)]

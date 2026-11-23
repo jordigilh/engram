@@ -252,6 +252,7 @@ def test_cancel_during_readiness_keeps_port_until_child_exits(tmp_path):
     )
     terminate_entered = asyncio.Event()
     allow_terminate = asyncio.Event()
+    ready_entered = asyncio.Event()
 
     async def blocked_terminate(process):
         terminate_entered.set()
@@ -261,12 +262,17 @@ def test_cancel_during_readiness_keeps_port_until_child_exits(tmp_path):
     original_terminate = supervisor._terminate_and_wait
     supervisor._terminate_and_wait = blocked_terminate
 
+    original_wait_ready = supervisor._wait_ready
+
+    async def spy_wait_ready(port):
+        ready_entered.set()
+        return await original_wait_ready(port)
+
+    supervisor._wait_ready = spy_wait_ready
+
     async def run():
         task = asyncio.create_task(supervisor.ensure(str(tmp_path)))
-        for _ in range(200):
-            if supervisor._reserved_ports:
-                break
-            await asyncio.sleep(0.02)
+        await asyncio.wait_for(ready_entered.wait(), timeout=5)
         assert supervisor._reserved_ports
         port = next(iter(supervisor._reserved_ports))
 

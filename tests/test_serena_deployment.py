@@ -12,7 +12,6 @@ EXPECTED_CANONICAL_ROOTS = {
     "kubernaut-operator",
     "kubernaut-console",
     "kubernaut-demo-scenarios",
-    "kubernaut-v1.5",
     "kubernaut-v1.6",
 }
 

@@ -264,35 +264,56 @@ class TestFilterRelevantTools:
 
         assert {t["name"] for t in filtered} == {"find_symbol"}
 
-    def test_serena_pattern_search_description_guides_toward_symbol_tools(self, engram_gateway):
-        original_description = "Search project files with a regular expression."
+    def test_serena_no_longer_exposes_pattern_search(self, engram_gateway):
         tools = [
-            _tool("search_for_pattern", original_description),
+            _tool("search_for_pattern", "Search project files with a regular expression."),
             _tool("find_symbol", "Find symbols by name."),
         ]
 
         filtered = engram_gateway.filter_relevant_tools("serena", tools)
-        descriptions = {tool["name"]: tool["description"] for tool in filtered}
 
-        pattern_description = descriptions["search_for_pattern"]
-        assert pattern_description.startswith(original_description)
-        assert "find_symbol" in pattern_description
-        assert "find_referencing_symbols" in pattern_description
-        assert "regex" in pattern_description.lower()
-        assert "multiline" in pattern_description.lower()
-        assert tools[0]["description"] == original_description
+        assert {tool["name"] for tool in filtered} == {"find_symbol"}
+
+    def test_code_backend_exposes_zvec_rg(self, engram_gateway):
+        tools = [_tool("zvec_grep_rg"), _tool("zvec_grep_index")]
+
+        filtered = engram_gateway.filter_relevant_tools("code", tools)
+
+        assert {tool["name"] for tool in filtered} == {"zvec_grep_rg"}
+
+    def test_zg_backend_matches_code_agent_surface(self, engram_gateway):
+        tools = [
+            _tool("zvec_grep_search"),
+            _tool("zvec_grep_rg"),
+            _tool("zvec_grep_codegraph_node"),
+            _tool("zvec_grep_index"),
+            _tool("zvec_grep_server_status"),
+        ]
+
+        filtered = engram_gateway.filter_relevant_tools("zg", tools)
+
+        assert {tool["name"] for tool in filtered} == {
+            "zvec_grep_search",
+            "zvec_grep_rg",
+            "zvec_grep_codegraph_node",
+        }
 
     def test_code_backend_hides_zvec_management_tools(self, engram_gateway):
         tools = [
             _tool("praxis_code_search"),
             _tool("zvec_grep_search"),
+            _tool("zvec_grep_rg"),
             _tool("zvec_grep_index"),
             _tool("zvec_grep_index_status"),
         ]
 
         filtered = engram_gateway.filter_relevant_tools("code", tools)
 
-        assert {tool["name"] for tool in filtered} == {"praxis_code_search", "zvec_grep_search"}
+        assert {tool["name"] for tool in filtered} == {
+            "praxis_code_search",
+            "zvec_grep_search",
+            "zvec_grep_rg",
+        }
 
     def test_empty_tool_list_stays_empty(self, engram_gateway):
         assert engram_gateway.filter_relevant_tools("docs", []) == []
@@ -419,6 +440,80 @@ class TestAggregateToolsList:
         }
         assert catalog["docs_manual_mental_model"] == ("docs_manual", "manual_mental_model")
         assert errors == {}
+
+    def test_search_for_pattern_alias_is_injected_for_zvec(self, engram_gateway):
+        zg = FakeAdapter(
+            tools=[_tool("zvec_grep_search"), _tool("zvec_grep_rg")]
+        )
+
+        tool_defs, catalog, errors = asyncio.run(
+            engram_gateway.aggregate_tools_list({"zg": zg})
+        )
+
+        names = {tool["name"] for tool in tool_defs}
+        assert "search_for_pattern" in names
+        assert catalog["search_for_pattern"] == ("zg", "zvec_grep_rg")
+        assert errors == {}
+
+    def test_zvec_rg_arguments_translate_serena_shape(self, engram_gateway):
+        args = engram_gateway._zvec_rg_arguments(
+            {
+                "substring_pattern": "WorkflowName",
+                "context_lines_before": 2,
+                "context_lines_after": 3,
+                "paths_include_glob": "**/*.go",
+                "paths_exclude_glob": "vendor/**",
+                "relative_path": "pkg",
+                "skip_ignored_files": False,
+                "multiline": True,
+            },
+            "/workspace",
+        )
+
+        assert args["root"] == "/workspace"
+        command = args["command"]
+        assert command.startswith("rg ")
+        assert "-U" in command
+        assert "-B 2" in command
+        assert "-A 3" in command
+        assert "**/*.go" in command
+        assert "!vendor/**" in command
+        assert "pkg/**" in command
+        assert "--no-ignore" in command
+        assert "WorkflowName" in command
+
+    def test_search_for_pattern_alias_dispatches_to_zvec_rg(self, engram_gateway):
+        adapter = FakeAdapter(
+            call_results={
+                "zvec_grep_rg": {
+                    "content": [{"type": "text", "text": "hit"}],
+                    "isError": False,
+                }
+            }
+        )
+        message = {
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {
+                "name": "search_for_pattern",
+                "arguments": {"substring_pattern": "Syncer"},
+            },
+        }
+
+        response = asyncio.run(
+            engram_gateway.handle_tools_call(
+                message,
+                {"search_for_pattern": ("zg", "zvec_grep_rg")},
+                {"zg": adapter},
+                workspace="/workspace",
+            )
+        )
+
+        assert response["result"]["isError"] is False
+        assert adapter.call_log[0][0] == "zvec_grep_rg"
+        assert adapter.call_log[0][1]["root"] == "/workspace"
+        assert "Syncer" in adapter.call_log[0][1]["command"]
 
     def test_zvec_graph_tools_are_exposed_unprefixed(self, engram_gateway):
         graph_tools = [
@@ -1342,6 +1437,14 @@ class TestBuildBackendAdapters:
 
 
 class TestZvecShadowRelayAdapter:
+    def test_managed_rg_does_not_get_freshness(self, engram_gateway):
+        arguments = engram_gateway._managed_zvec_arguments(
+            "zvec_grep_rg", {"root": "/workspace", "command": "rg foo ."}
+        )
+
+        assert "autoUpdate" not in arguments
+        assert "freshness" not in arguments
+
     def test_managed_graph_reads_wait_for_fresh_index_too(self, engram_gateway):
         arguments = engram_gateway._managed_zvec_arguments(
             "zvec_grep_callgraph_blast_radius", {"root": "/workspace", "function": "main"}
@@ -1849,7 +1952,9 @@ class TestLoadInstanceRegistry:
 
         assert set(registry) == {"my-project"}
         assert set(registry["my-project"]) == {"docs", "issues", "hindsight", "code", "serena"}
-        assert registry["my-project"]["code"]["kind"] == "stdio"
+        assert registry["my-project"]["code"]["kind"] == "http"
+        assert registry["my-project"]["code"]["url"].endswith(":7999/mcp")
+        assert registry["my-project"]["code"]["timeout_seconds"] == 300
         assert registry["my-project"]["serena"]["args"][-1] == "/path/to/my-project"
         assert registry["my-project"]["serena"]["workspace_routing"] is False
         assert registry["my-project"]["hindsight"]["url"].endswith("/mcp/shared-memory/")

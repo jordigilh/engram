@@ -1,0 +1,8 @@
+#!/bin/sh
+# Emit a worktree_completed invalidation after a merge.
+HOOKS_SRC_DIR=$(dirname "$0")
+[ -L "$0" ] && HOOKS_SRC_DIR=$(dirname "$(readlink "$0")")
+if [ -f "$HOOKS_SRC_DIR/_invalidate-{{FAMILY_NAME}}-workspaces.sh" ]; then
+    "$HOOKS_SRC_DIR/_invalidate-{{FAMILY_NAME}}-workspaces.sh" worktree_completed 2>/dev/null || true
+fi
+exit 0

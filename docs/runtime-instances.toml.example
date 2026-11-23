@@ -32,7 +32,10 @@ allow_insecure_http = true # only for a trusted local container bridge; prefer H
 
 [instances."my-project".backends.code]
 kind = "http"
-url = "http://host.containers.internal:8891/mcp"
+# zvec-grep is the code backend: semantic search, call graph, code graph, and
+# the managed rg engine behind the public `search_for_pattern` tool.
+url = "http://host.containers.internal:7999/mcp"
+headers = { Host = "localhost:7999" }
 # Set above the default 60s when this backend performs cold graph builds.
 timeout_seconds = 180
 

@@ -18,6 +18,8 @@ ZVEC_WORKSPACE_READ_TOOLS = frozenset(
     {
         "zvec_grep_search",
         "zvec_search_code",
+        "zvec_grep_rg",
+        "search_for_pattern",
         "zvec_grep_callgraph_blast_radius",
         "zvec_grep_callgraph_shortest_path",
         "zvec_grep_callgraph_cluster",
@@ -46,9 +48,15 @@ _GIT_REPOSITORY_ENVIRONMENT = frozenset(
 )
 
 
+ZVEC_FRESHNESS_TOOLS = ZVEC_WORKSPACE_READ_TOOLS - {"zvec_grep_rg"}
+
+
 def managed_zvec_arguments(tool: str, arguments: dict) -> dict:
-    """Require every managed workspace read to wait for a fresh index."""
-    if tool not in ZVEC_WORKSPACE_READ_TOOLS:
+    """Require every managed *search* read to wait for a fresh index.
+
+    Graph/rg tools do not accept freshness controls, so they pass through.
+    """
+    if tool not in ZVEC_FRESHNESS_TOOLS:
         return arguments
     return {
         **arguments,

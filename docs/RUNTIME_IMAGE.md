@@ -21,8 +21,8 @@ for example, cold code-graph builds can take longer than the default. `stdio`
 backends are also supported when their command and required workspace are
 available inside the container.
 
-The complete Kubernaut example, including its optional RCA backend and the
-`kubernaut-v1.5` route, is in `docs/runtime-kubernaut.toml.example`.
+The complete Kubernaut example, including its optional RCA backend, is in
+`docs/runtime-kubernaut.toml.example`.
 
 Projects without separate release-line backends need only one `[instances]`
 entry. Projects with release-specific backends should add an explicit route

@@ -1,0 +1,118 @@
+#!/bin/sh
+# Emit one per-workspace invalidation event for the {{FAMILY_NAME}} Serena
+# multiplex, and (on `begin`) hold the exclusive write barrier for the git
+# transaction. Generated from git-hooks/family-invalidate/; deployment owns the
+# URL, token file, spool, and barrier directory.
+#
+# Exit: `begin` exits non-zero when the barrier cannot be acquired, so git
+# aborts the transaction (fail closed). All other phases exit 0; the spool is
+# the durable record.
+#
+# Usage: _invalidate-{{FAMILY_NAME}}-workspaces.sh <phase>
+#   phase = begin | ref_committed | worktree_completed | aborted
+
+PHASE="$1"
+[ -n "$PHASE" ] || exit 0
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+TOPLEVEL=$(CDPATH= cd -- "$TOPLEVEL" 2>/dev/null && pwd -P) || exit 0
+HEAD_OID=$(git rev-parse HEAD 2>/dev/null || true)
+
+SPOOL_DIR="${INVALIDATION_SPOOL_DIR:-$HOME/.engram/invalidation-spool/{{FAMILY_NAME}}}"
+TOKEN_FILE="${INVALIDATION_TOKEN_FILE:-$HOME/.engram/serena-invalidation-token}"
+URL="${INVALIDATION_URL:-http://127.0.0.1:8893/admin/invalidate}"
+BARRIER_DIR="${INVALIDATION_BARRIER_DIR:-$SPOOL_DIR/.barrier}"
+BARRIER_PY="$SCRIPT_DIR/serena_barrier.py"
+
+mkdir -p "$SPOOL_DIR" 2>/dev/null || exit 0
+TX_DIR="$SPOOL_DIR/.tx"
+mkdir -p "$TX_DIR" "$BARRIER_DIR" 2>/dev/null || true
+KEY=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:16])' "$TOPLEVEL" 2>/dev/null)
+[ -n "$KEY" ] || exit 1
+TX_FILE="$TX_DIR/$KEY"
+LOCK_FILE="$BARRIER_DIR/$KEY.lock"
+READY_FILE="$BARRIER_DIR/$KEY.ready"
+RELEASE_FILE="$BARRIER_DIR/$KEY.release"
+
+RELEASE_BARRIER=1
+case "$PHASE" in
+    begin)
+        TX=$(uuidgen 2>/dev/null || printf 'tx-%s-%s' "$(date +%s)" "$$")
+        printf '%s' "$TX" >"$TX_FILE" 2>/dev/null || true
+        RELEASE_BARRIER=0
+        rm -f "$RELEASE_FILE" "$READY_FILE" 2>/dev/null || true
+        if [ -f "$BARRIER_PY" ]; then
+            nohup python3 "$BARRIER_PY" hold \
+                --lock "$LOCK_FILE" --ready "$READY_FILE" \
+                --release "$RELEASE_FILE" --timeout 5 --max-hold 60 \
+                >/dev/null 2>&1 &
+            i=0
+            while [ ! -f "$READY_FILE" ] && [ "$i" -lt 100 ]; do
+                sleep 0.05
+                i=$((i + 1))
+            done
+            if [ ! -f "$READY_FILE" ]; then
+                echo "serena barrier unavailable for $TOPLEVEL" >&2
+                exit 1
+            fi
+        fi
+        ;;
+    ref_committed)
+        TX=$(cat "$TX_FILE" 2>/dev/null || true)
+        [ -n "$TX" ] || TX="tx-$(date +%s)-$$"
+        ACTION=$(git reflog -1 --format=%gs 2>/dev/null || true)
+        case "$ACTION" in
+            checkout*|merge*|rebase*|reset*|pull*|cherry-pick*|revert*) RELEASE_BARRIER=0 ;;
+        esac
+        ;;
+    *)
+        TX=$(cat "$TX_FILE" 2>/dev/null || true)
+        [ -n "$TX" ] || TX="tx-$(date +%s)-$$"
+        ;;
+esac
+
+if [ "$RELEASE_BARRIER" = "1" ] && [ -f "$BARRIER_PY" ] && [ -f "$READY_FILE" ]; then
+    python3 "$BARRIER_PY" release --ready "$READY_FILE" \
+        --release "$RELEASE_FILE" >/dev/null 2>&1 || true
+fi
+
+MUTATION="$(printf '%s' "$HEAD_OID" | cut -c1-12):$(date +%s):$$"
+EVENT=$(python3 -c 'import json,sys; print(json.dumps({"version":1,"workspace":sys.argv[1],"mutation_id":sys.argv[2],"transaction_id":sys.argv[3],"phase":sys.argv[4],"reason":"git"}, separators=(",",":")))' \
+    "$TOPLEVEL" "$MUTATION" "$TX" "$PHASE")
+
+TX_HASH=$(printf '%s' "$TX" | shasum -a 256 2>/dev/null | cut -d' ' -f1)
+[ -n "$TX_HASH" ] || TX_HASH="tx-$(date +%s)-$$"
+MUT_SAFE=$(printf '%s' "$MUTATION" | tr -c 'A-Za-z0-9._-' '_')
+SPOOL_FILE="$SPOOL_DIR/${TX_HASH}-${PHASE}-${MUT_SAFE}.json"
+TMP_FILE="$SPOOL_FILE.tmp.$$"
+printf '%s' "$EVENT" >"$TMP_FILE" 2>/dev/null && mv "$TMP_FILE" "$SPOOL_FILE" 2>/dev/null
+
+if [ -f "$TOKEN_FILE" ]; then
+    TOKEN=$(cat "$TOKEN_FILE" 2>/dev/null || true)
+else
+    TOKEN=""
+fi
+if [ -n "$TOKEN" ]; then
+    if curl -fsS --max-time 2 -H 'Content-Type: application/json' \
+        -H "X-Engram-Invalidation-Token: $TOKEN" \
+        -d "$EVENT" "$URL" >/dev/null 2>&1; then
+        rm -f "$SPOOL_FILE" 2>/dev/null || true
+    fi
+else
+    if curl -fsS --max-time 2 -H 'Content-Type: application/json' \
+        -d "$EVENT" "$URL" >/dev/null 2>&1; then
+        rm -f "$SPOOL_FILE" 2>/dev/null || true
+    fi
+fi
+
+case "$PHASE" in
+    aborted|worktree_completed) rm -f "$TX_FILE" 2>/dev/null || true ;;
+    ref_committed)
+        if [ "$RELEASE_BARRIER" = "1" ]; then
+            rm -f "$TX_FILE" 2>/dev/null || true
+        fi
+        ;;
+esac
+
+exit 0

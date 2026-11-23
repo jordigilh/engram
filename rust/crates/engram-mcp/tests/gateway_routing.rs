@@ -1489,7 +1489,7 @@ async fn definitive_write_rejection_is_not_outcome_unknown() {
 
 #[tokio::test]
 async fn upstream_typed_busy_is_relayed_to_the_client() {
-    let (url, _mock) = spawn_mock(MockConfig {
+    let (url, mock) = spawn_mock(MockConfig {
         tools: vec![tool("recall")],
         call_typed_busy: true,
         ..Default::default()
@@ -1530,4 +1530,5 @@ async fn upstream_typed_busy_is_relayed_to_the_client() {
     assert_eq!(payload["error"]["data"]["kind"], "workspace_flushing");
     assert_eq!(payload["error"]["data"]["workspace"], "/work");
     assert_eq!(payload["error"]["data"]["epoch"], 4);
+    assert_eq!(mock.call_attempts.load(Ordering::SeqCst), 1);
 }

@@ -767,6 +767,50 @@ mod tests {
         }
     }
 
+    struct PanicOnce {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl BackendAdapter for PanicOnce {
+        async fn list_tools(&self) -> Result<Vec<Value>, BackendError> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(vec![tool_definition("recall", "recall")])
+            } else {
+                panic!("adapter panic during refresh")
+            }
+        }
+
+        async fn call_tool(&self, _name: &str, _arguments: Value) -> Result<Value, BackendError> {
+            Ok(json!({}))
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_panic_restores_the_previous_freshness_state() {
+        let set = Arc::new(BackendSet::new(vec![(
+            "docs".into(),
+            Arc::new(PanicOnce {
+                calls: AtomicUsize::new(0),
+            }) as Arc<dyn BackendAdapter>,
+        )]));
+        set.refresh().await;
+        assert!(!set.needs_flushing());
+        let generation = set.freshness("alpha", None).generation;
+
+        let refreshing = Arc::clone(&set);
+        let outcome = tokio::spawn(async move { refreshing.refresh().await }).await;
+        assert!(
+            outcome.is_err(),
+            "adapter panic must abort the refresh task"
+        );
+
+        assert!(!set.needs_flushing());
+        let freshness = set.freshness("alpha", None);
+        assert_eq!(freshness.state, CatalogState::Ready);
+        assert_eq!(freshness.generation, generation);
+    }
+
     #[tokio::test]
     async fn concurrent_refreshes_are_serialized() {
         let current = Arc::new(AtomicUsize::new(0));

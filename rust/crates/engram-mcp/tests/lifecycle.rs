@@ -223,6 +223,30 @@ async fn host_header_must_be_loopback() {
             "loopback host {host:?} must be allowed"
         );
     }
+
+    // HTTP/2 carries authority in the URI, not the Host header. Exercise the
+    // fallback arm directly with absolute-form request URIs.
+    for (uri, expected) in [
+        ("http://evil.example/mcp/alpha", StatusCode::FORBIDDEN),
+        ("http://127.0.0.1/mcp/alpha", StatusCode::OK),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .body(Body::from(init.to_string()))
+                    .expect("valid request"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(
+            response.status(),
+            expected,
+            "absolute-form uri {uri:?} must follow its authority"
+        );
+    }
 }
 
 #[tokio::test]

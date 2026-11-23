@@ -27,6 +27,8 @@ struct MockState {
     call_fail_first: usize,
     call_fail_status: u16,
     call_jsonrpc_error: bool,
+    call_no_response: bool,
+    call_typed_busy: bool,
     init_jsonrpc_error: bool,
     call_delay_ms: u64,
     sse_notification_first: bool,
@@ -58,6 +60,8 @@ struct MockConfig {
     call_fail_first: usize,
     call_fail_status: Option<u16>,
     call_jsonrpc_error: bool,
+    call_no_response: bool,
+    call_typed_busy: bool,
     init_jsonrpc_error: bool,
     call_delay_ms: u64,
     sse_notification_first: bool,
@@ -74,6 +78,8 @@ async fn spawn_mock(config: MockConfig) -> (String, MockState) {
         call_fail_first: config.call_fail_first,
         call_fail_status: config.call_fail_status.unwrap_or(503),
         call_jsonrpc_error: config.call_jsonrpc_error,
+        call_no_response: config.call_no_response,
+        call_typed_busy: config.call_typed_busy,
         init_jsonrpc_error: config.init_jsonrpc_error,
         call_delay_ms: config.call_delay_ms,
         sse_notification_first: config.sse_notification_first,
@@ -190,6 +196,38 @@ async fn mock_post(
         }
         "tools/call" => {
             let attempt = state.call_attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            if state.call_no_response {
+                return Json(json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/progress"
+                }))
+                .into_response();
+            }
+            if state.call_typed_busy {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    [
+                        ("x-engram-error", "workspace_flushing"),
+                        ("retry-after", "2"),
+                    ],
+                    Json(json!({
+                        "jsonrpc": "2.0",
+                        "id": body.get("id"),
+                        "error": {
+                            "code": -32002,
+                            "message": "workspace_flushing",
+                            "data": {
+                                "kind": "workspace_flushing",
+                                "retryable": true,
+                                "workspace": "/work",
+                                "epoch": 4,
+                                "retry_after_ms": 2000
+                            }
+                        }
+                    })),
+                )
+                    .into_response();
+            }
             if state.call_jsonrpc_error {
                 return Json(json!({
                     "jsonrpc": "2.0",
@@ -1179,4 +1217,318 @@ async fn request_id_reuse_after_in_flight_cancellation_is_clean() {
     )
     .await;
     assert_eq!(sse_data(&body)["result"]["isError"], false);
+}
+
+fn json_body(body: &str) -> Value {
+    serde_json::from_str(body).expect("JSON body")
+}
+
+#[tokio::test]
+async fn typed_workspace_unbound_is_409_with_header() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("find_symbol")],
+        call_result: json!({"content": [], "isError": false}),
+        ..Default::default()
+    })
+    .await;
+    let registry = Registry::parse_str(&format!(
+        r#"
+[instances.editor.backends.editor]
+kind = "http"
+url = "{url}"
+workspace_routing = true
+"#
+    ))
+    .unwrap();
+    let adapters = build_project_adapters("editor", registry.get("editor").unwrap()).unwrap();
+    let project = Project::with_backends("editor", adapters);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "editor").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/editor")
+                .header("mcp-session-id", &session)
+                .body(Body::from(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": 40,
+                        "method": "tools/call",
+                        "params": {"name": "find_symbol", "arguments": {}}
+                    })
+                    .to_string(),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.headers()["x-engram-error"], "workspace_unbound");
+    let body = to_bytes(response.into_body(), 32 * 1024).await.unwrap();
+    let payload = json_body(&String::from_utf8_lossy(&body));
+    assert_eq!(payload["error"]["code"], -32002);
+    assert_eq!(payload["error"]["data"]["kind"], "workspace_unbound");
+    assert_eq!(payload["error"]["data"]["retryable"], false);
+}
+
+#[tokio::test]
+async fn typed_workspace_flushing_before_initial_catalog() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("recall")],
+        call_result: json!({"content": [], "isError": false}),
+        ..Default::default()
+    })
+    .await;
+    let adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
+    let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]);
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/alpha")
+                .header("mcp-session-id", &session)
+                .body(Body::from(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": 41,
+                        "method": "tools/call",
+                        "params": {"name": "docs_recall", "arguments": {}}
+                    })
+                    .to_string(),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.headers()["x-engram-error"], "workspace_flushing");
+    assert_eq!(response.headers()["retry-after"], "1");
+    let body = to_bytes(response.into_body(), 32 * 1024).await.unwrap();
+    let payload = json_body(&String::from_utf8_lossy(&body));
+    assert_eq!(payload["error"]["data"]["kind"], "workspace_flushing");
+    assert_eq!(payload["error"]["data"]["retryable"], true);
+}
+
+#[tokio::test]
+async fn write_transport_failure_is_typed_outcome_unknown() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("recall"), tool("retain")],
+        call_result: json!({"content": [], "isError": false}),
+        call_no_response: true,
+        ..Default::default()
+    })
+    .await;
+    let adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
+    let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/alpha")
+                .header("mcp-session-id", &session)
+                .body(Body::from(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": 42,
+                        "method": "tools/call",
+                        "params": {"name": "docs_retain", "arguments": {"content": "x"}}
+                    })
+                    .to_string(),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.headers()["x-engram-error"], "outcome_unknown");
+    let body = to_bytes(response.into_body(), 32 * 1024).await.unwrap();
+    let payload = json_body(&String::from_utf8_lossy(&body));
+    assert_eq!(payload["error"]["data"]["kind"], "outcome_unknown");
+    assert_eq!(payload["error"]["data"]["retryable"], false);
+}
+
+#[tokio::test]
+async fn freshness_envelope_is_attached_to_catalog_and_results() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("recall")],
+        call_result: json!({"content": [], "isError": false}),
+        ..Default::default()
+    })
+    .await;
+    let adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
+    let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    let (_, body) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({"jsonrpc": "2.0", "id": 43, "method": "tools/list"}),
+    )
+    .await;
+    let list = sse_data(&body);
+    assert_eq!(
+        list["result"]["_meta"]["engram_freshness"]["schema_version"],
+        "engram-freshness.v1"
+    );
+    assert_eq!(
+        list["result"]["_meta"]["engram_freshness"]["catalog_state"],
+        "ready"
+    );
+    assert_eq!(
+        list["result"]["_meta"]["engram_freshness"]["project"],
+        "alpha"
+    );
+
+    let (_, body) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 44,
+            "method": "tools/call",
+            "params": {"name": "docs_recall", "arguments": {}}
+        }),
+    )
+    .await;
+    let call_payload = sse_data(&body);
+    assert_eq!(
+        call_payload["result"]["_meta"]["engram_freshness"]["catalog_state"],
+        "ready"
+    );
+    assert!(
+        call_payload["result"]["_meta"]["engram_freshness"]["catalog_generation"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+}
+
+#[tokio::test]
+async fn read_transport_failure_remains_a_tool_error() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("recall")],
+        call_result: json!({"content": [], "isError": false}),
+        call_fail_first: 5,
+        call_fail_status: Some(503),
+        ..Default::default()
+    })
+    .await;
+    let adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
+    let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    let (status, body) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 45,
+            "method": "tools/call",
+            "params": {"name": "docs_recall", "arguments": {}}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(sse_data(&body)["result"]["isError"], true);
+}
+
+#[tokio::test]
+async fn definitive_write_rejection_is_not_outcome_unknown() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("retain")],
+        call_jsonrpc_error: true,
+        ..Default::default()
+    })
+    .await;
+    let adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
+    let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    let (status, body) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 46,
+            "method": "tools/call",
+            "params": {"name": "docs_retain", "arguments": {"content": "x"}}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(sse_data(&body)["result"]["isError"], true);
+}
+
+#[tokio::test]
+async fn upstream_typed_busy_is_relayed_to_the_client() {
+    let (url, mock) = spawn_mock(MockConfig {
+        tools: vec![tool("recall")],
+        call_typed_busy: true,
+        ..Default::default()
+    })
+    .await;
+    let adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
+    let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/alpha")
+                .header("mcp-session-id", &session)
+                .body(Body::from(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": 47,
+                        "method": "tools/call",
+                        "params": {"name": "docs_recall", "arguments": {}}
+                    })
+                    .to_string(),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.headers()["x-engram-error"], "workspace_flushing");
+    assert_eq!(response.headers()["retry-after"], "2");
+    let body = to_bytes(response.into_body(), 32 * 1024).await.unwrap();
+    let payload = json_body(&String::from_utf8_lossy(&body));
+    assert_eq!(payload["error"]["data"]["kind"], "workspace_flushing");
+    assert_eq!(payload["error"]["data"]["workspace"], "/work");
+    assert_eq!(payload["error"]["data"]["epoch"], 4);
+    assert_eq!(mock.call_attempts.load(Ordering::SeqCst), 1);
 }

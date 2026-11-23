@@ -13,6 +13,7 @@ use thiserror::Error;
 use url::Url;
 
 use crate::catalog::{is_retryable_raw_tool, managed_zvec_arguments};
+use crate::error::{ErrorKind, TypedError};
 use crate::registry::{BackendKind, ProjectSpec};
 
 #[derive(Debug, Clone, Error)]
@@ -20,6 +21,11 @@ use crate::registry::{BackendKind, ProjectSpec};
 pub struct BackendError {
     pub message: String,
     pub transient: bool,
+    /// The request may have reached the backend before the failure. Only
+    /// writes use this to return `outcome_unknown`.
+    pub uncertain: bool,
+    /// A typed busy/outcome envelope received from the upstream backend.
+    pub typed: Option<TypedError>,
 }
 
 impl BackendError {
@@ -27,6 +33,8 @@ impl BackendError {
         Self {
             message: message.into(),
             transient: false,
+            uncertain: false,
+            typed: None,
         }
     }
 
@@ -34,7 +42,20 @@ impl BackendError {
         Self {
             message: message.into(),
             transient: true,
+            uncertain: false,
+            typed: None,
         }
+    }
+
+    pub fn uncertain(mut self) -> Self {
+        self.uncertain = true;
+        self
+    }
+
+    pub fn typed(mut self, typed: TypedError) -> Self {
+        self.typed = Some(typed);
+        self.transient = false;
+        self
     }
 }
 
@@ -143,7 +164,7 @@ impl HttpRelayAdapter {
         let _cleanup = self.session_cleanup(&request_url, &session);
         let outcome = async {
             let initialized = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
-            self.post_json(&request_url, &initialized, Some(&session))
+            self.post_json(&request_url, &initialized, Some(&session), false)
                 .await?;
             let call = json!({
                 "jsonrpc": "2.0",
@@ -151,11 +172,14 @@ impl HttpRelayAdapter {
                 "method": method,
                 "params": params.unwrap_or_else(|| json!({}))
             });
-            let response = self.post_json(&request_url, &call, Some(&session)).await?;
+            let response = self
+                .post_json(&request_url, &call, Some(&session), true)
+                .await?;
             let body = response.bytes().await.map_err(|error| {
                 BackendError::transient(format!("{method} response read failed: {error}"))
+                    .uncertain()
             })?;
-            parse_rpc_response(&body, &json!(2), method)
+            parse_rpc_response(&body, &json!(2), method, true)
         }
         .await;
         outcome
@@ -176,6 +200,7 @@ impl HttpRelayAdapter {
                     }
                 }),
                 None,
+                false,
             )
             .await?;
         let session_id = header_value(&response, "mcp-session-id");
@@ -192,7 +217,7 @@ impl HttpRelayAdapter {
                 )));
             }
         };
-        match parse_rpc_response(&body, &json!(1), "initialize") {
+        match parse_rpc_response(&body, &json!(1), "initialize", false) {
             Ok(result) => {
                 let protocol_version = result
                     .get("protocolVersion")
@@ -240,6 +265,7 @@ impl HttpRelayAdapter {
                 &self.url,
                 &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
                 Some(&session),
+                false,
             )
             .await?;
             let mut tools = Vec::new();
@@ -262,12 +288,13 @@ impl HttpRelayAdapter {
                         &self.url,
                         &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": params}),
                         Some(&session),
+                        false,
                     )
                     .await?;
                 let body = response.bytes().await.map_err(|error| {
                     BackendError::transient(format!("tools/list response read failed: {error}"))
                 })?;
-                let result = parse_rpc_response(&body, &json!(2), "tools/list")?;
+                let result = parse_rpc_response(&body, &json!(2), "tools/list", false)?;
                 tools.extend(
                     result
                         .get("tools")
@@ -325,6 +352,7 @@ impl HttpRelayAdapter {
         url: &Url,
         payload: &Value,
         session: Option<&UpstreamSession>,
+        uncertain_on_transport: bool,
     ) -> Result<reqwest::Response, BackendError> {
         let response = self
             .client
@@ -337,23 +365,86 @@ impl HttpRelayAdapter {
             .send()
             .await
             .map_err(|error| {
-                BackendError::transient(format!(
+                let mut error = BackendError::transient(format!(
                     "HTTP transport failed for {}: {}",
                     redacted_url(url),
                     error.without_url()
-                ))
+                ));
+                if uncertain_on_transport {
+                    error = error.uncertain();
+                }
+                error
             })?;
         if response.status().is_success() {
             return Ok(response);
         }
         let status = response.status().as_u16();
+        let retry_after_ms = response
+            .headers()
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(|seconds| seconds.saturating_mul(1_000));
+        let kind = response
+            .headers()
+            .get("x-engram-error")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let body = response.bytes().await.ok();
+        let data = body
+            .as_deref()
+            .and_then(|body| serde_json::from_slice::<Value>(body).ok())
+            .and_then(|payload| payload.get("error").cloned())
+            .and_then(|error| error.get("data").cloned());
+        let typed = kind
+            .as_deref()
+            .and_then(|kind| upstream_typed_error(kind, data.as_ref(), retry_after_ms));
         let message = format!("HTTP {status} from {}", redacted_url(url));
-        if matches!(status, 502..=504) {
-            Err(BackendError::transient(message))
+        let mut error = if matches!(status, 502..=504) {
+            BackendError::transient(message)
         } else {
-            Err(BackendError::permanent(message))
+            BackendError::permanent(message)
+        };
+        if let Some(typed) = typed {
+            error = error.typed(typed);
         }
+        Err(error)
     }
+}
+
+fn upstream_typed_error(
+    kind: &str,
+    data: Option<&Value>,
+    retry_after_ms: Option<u64>,
+) -> Option<TypedError> {
+    let workspace = data
+        .and_then(|data| data.get("workspace"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let epoch = data
+        .and_then(|data| data.get("epoch"))
+        .and_then(Value::as_u64);
+    let retry_after_ms = data
+        .and_then(|data| data.get("retry_after_ms"))
+        .and_then(Value::as_u64)
+        .or(retry_after_ms);
+    let mut error = match kind {
+        "workspace_flushing" => TypedError::flushing(),
+        "workspace_unbound" => TypedError::unbound(),
+        "workspace_auth_timeout" => TypedError::new(ErrorKind::WorkspaceAuthTimeout),
+        "outcome_unknown" => TypedError::outcome_unknown(workspace.clone()),
+        _ => return None,
+    };
+    if let Some(workspace) = workspace {
+        error = error.in_workspace(workspace);
+    }
+    if let Some(epoch) = epoch {
+        error = error.with_epoch(epoch);
+    }
+    if let Some(retry_after_ms) = retry_after_ms {
+        error = error.with_retry_after_ms(retry_after_ms);
+    }
+    Some(error)
 }
 
 #[derive(Clone)]
@@ -511,6 +602,7 @@ fn parse_rpc_response(
     body: &[u8],
     expected_id: &Value,
     label: &str,
+    uncertain_on_no_response: bool,
 ) -> Result<Value, BackendError> {
     let text = String::from_utf8_lossy(body);
     let text = text.trim();
@@ -534,9 +626,14 @@ fn parse_rpc_response(
         }
         return Ok(payload.get("result").cloned().unwrap_or_else(|| json!({})));
     }
-    Err(BackendError::permanent(format!(
+    let error = BackendError::permanent(format!(
         "{label} returned no JSON-RPC response for id {expected_id}"
-    )))
+    ));
+    Err(if uncertain_on_no_response {
+        error.uncertain()
+    } else {
+        error
+    })
 }
 
 pub struct ScopedHindsightAdapter {
@@ -718,6 +815,53 @@ fn valid_model_id(value: &str) -> bool {
                     .chars()
                     .all(|character| character.is_ascii_alphanumeric())
         })
+}
+
+const READ_ONLY_TOOLS: [&str; 38] = [
+    "recall",
+    "list_mental_models",
+    "get_mental_model",
+    "zvec_grep_search",
+    "zvec_search_code",
+    "zvec_grep_rg",
+    "zvec_grep_callgraph_blast_radius",
+    "zvec_grep_callgraph_shortest_path",
+    "zvec_grep_callgraph_cluster",
+    "zvec_grep_callgraph_communities",
+    "zvec_grep_codegraph_affected",
+    "zvec_grep_codegraph_node",
+    "zvec_grep_codegraph_neighbors",
+    "zvec_grep_codegraph_relation_path",
+    "zvec_grep_codegraph_explain",
+    "zvec_grep_codegraph_capabilities",
+    "get_symbols_overview",
+    "find_symbol",
+    "find_referencing_symbols",
+    "find_implementations",
+    "find_declaration",
+    "get_diagnostics_for_file",
+    "list_queryable_projects",
+    "query_project",
+    "read_file",
+    "find_file",
+    "list_dir",
+    "get_current_config",
+    "search_for_pattern",
+    "kuadrant_code_search",
+    "get_evidence",
+    "get_related_events",
+    "get_failure_history",
+    "get_incident_timeline",
+    "zvec_grep_index_status",
+    "zvec_grep_server_status",
+    "ping",
+    "tools/list",
+];
+
+/// Fail safe: anything not proven read-only is treated as a write, so a
+/// transport failure returns `outcome_unknown` instead of inviting a replay.
+pub fn is_write_tool(name: &str) -> bool {
+    !READ_ONLY_TOOLS.contains(&name)
 }
 
 pub fn tool_error(message: impl Into<String>) -> Value {
@@ -969,6 +1113,27 @@ mod tests {
             .block_on(scoped.call_tool("recall", json!([1, 2])))
             .unwrap();
         assert_eq!(result["isError"], true);
+    }
+
+    #[test]
+    fn read_only_catalog_tools_are_not_classified_as_writes() {
+        for name in [
+            "recall",
+            "find_symbol",
+            "zvec_grep_search",
+            "kuadrant_code_search",
+            "get_evidence",
+            "get_related_events",
+            "get_failure_history",
+            "get_incident_timeline",
+            "zvec_grep_index_status",
+            "zvec_grep_server_status",
+        ] {
+            assert!(!is_write_tool(name), "{name} should be read-only");
+        }
+        assert!(is_write_tool("retain"));
+        assert!(is_write_tool("rename_symbol"));
+        assert!(is_write_tool("unknown_future_tool"));
     }
 
     #[test]

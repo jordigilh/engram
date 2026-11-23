@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 use crate::protocol::{
     initialize_result, method_not_found_error, request_cancelled_error, tools_list_result,
 };
-use crate::session::SessionStore;
+use crate::session::{SessionStore, MAX_SESSIONS_PER_PROJECT};
 
 pub const SESSION_HEADER: &str = "mcp-session-id";
 
@@ -122,13 +122,14 @@ pub fn router_with_options(
     policy: SessionPolicy,
     origins: OriginPolicy,
 ) -> Router {
-    let projects = projects
+    let projects: BTreeMap<String, Project> = projects
         .into_iter()
         .map(|project| (project.name.clone(), project))
         .collect();
+    let max_sessions = MAX_SESSIONS_PER_PROJECT * projects.len().max(1);
     let state = Arc::new(AppState {
         projects,
-        sessions: Mutex::new(SessionStore::new()),
+        sessions: Mutex::new(SessionStore::with_max_sessions(max_sessions)),
         policy,
         origins,
     });
@@ -149,19 +150,24 @@ async fn origin_guard(
     request: Request,
     next: Next,
 ) -> Response {
-    if state.origins.allows(request.headers()) && host_is_loopback(request.headers()) {
+    if state.origins.allows(request.headers()) && host_is_loopback(request.headers(), request.uri())
+    {
         next.run(request).await
     } else {
         StatusCode::FORBIDDEN.into_response()
     }
 }
 
-/// A missing `Host` is accepted for minimal HTTP clients; a present `Host`
-/// must be a loopback authority as defense in depth for DNS rebinding.
-fn host_is_loopback(headers: &HeaderMap) -> bool {
+/// A missing authority is accepted for minimal HTTP clients; a present
+/// authority must be loopback. HTTP/2 carries it in the URI, HTTP/1.1 in the
+/// `Host` header.
+fn host_is_loopback(headers: &HeaderMap, uri: &axum::http::Uri) -> bool {
     match headers.get(header::HOST) {
-        None => true,
         Some(value) => value.to_str().map(is_loopback_authority).unwrap_or(false),
+        None => uri
+            .authority()
+            .map(|authority| is_loopback_authority(authority.as_str()))
+            .unwrap_or(true),
     }
 }
 
@@ -180,13 +186,17 @@ fn is_loopback_origin(origin: &str) -> bool {
 }
 
 fn is_loopback_authority(authority: &str) -> bool {
-    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    let lower = authority.to_ascii_lowercase();
+    let authority = lower.rsplit('@').next().unwrap_or(&lower);
     let host = if let Some(after_bracket) = authority.strip_prefix('[') {
         after_bracket.split(']').next().unwrap_or("")
     } else {
         authority.split(':').next().unwrap_or("")
     };
-    matches!(host, "localhost" | "127.0.0.1" | "::1")
+    matches!(
+        host.trim_end_matches('.'),
+        "localhost" | "127.0.0.1" | "::1"
+    )
 }
 
 async fn get_endpoint(State(state): State<Arc<AppState>>, Path(project): Path<String>) -> Response {

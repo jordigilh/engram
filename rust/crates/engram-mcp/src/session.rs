@@ -31,14 +31,33 @@ pub struct Session {
     last_seen: Instant,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SessionStore {
     sessions: HashMap<String, Session>,
+    max_sessions: usize,
+}
+
+impl Default for SessionStore {
+    fn default() -> Self {
+        Self {
+            sessions: HashMap::new(),
+            max_sessions: MAX_SESSIONS,
+        }
+    }
 }
 
 impl SessionStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Size the global cap from the configured project count so every project
+    /// can reach its per-project cap without displacing another project.
+    pub fn with_max_sessions(max_sessions: usize) -> Self {
+        Self {
+            sessions: HashMap::new(),
+            max_sessions: max_sessions.max(1),
+        }
     }
 
     /// Create a session, sweeping expired entries first. At a cap the oldest
@@ -68,20 +87,25 @@ impl SessionStore {
         if project_count >= MAX_SESSIONS_PER_PROJECT {
             self.evict_oldest(Some(project));
         }
-        if self.sessions.len() >= MAX_SESSIONS {
-            self.evict_oldest(None);
+        if self.sessions.len() >= self.max_sessions {
+            // Evict the requesting project first so a churny project cannot
+            // terminate another project's live sessions.
+            if !self.evict_oldest(Some(project)) {
+                self.evict_oldest(None);
+            }
         }
     }
 
-    fn evict_oldest(&mut self, project: Option<&str>) {
+    fn evict_oldest(&mut self, project: Option<&str>) -> bool {
         let candidate = self
             .sessions
             .iter()
             .filter(|(_, session)| project.is_none_or(|name| session.project == name))
             .min_by_key(|(_, session)| session.last_seen)
             .map(|(id, _)| id.clone());
-        if let Some(id) = candidate {
-            self.sessions.remove(&id);
+        match candidate {
+            Some(id) => self.sessions.remove(&id).is_some(),
+            None => false,
         }
     }
 
@@ -264,5 +288,33 @@ mod tests {
         assert!(!store.validate(&alpha_ids[0], "alpha"));
         assert!(store.validate(alpha_ids.last().unwrap(), "alpha"));
         assert!(store.validate(&beta, "beta"));
+    }
+
+    #[test]
+    fn global_pressure_evicts_the_requester_before_other_projects() {
+        let mut store = SessionStore::with_max_sessions(MAX_SESSIONS_PER_PROJECT * 5);
+        let mut alpha_ids = Vec::new();
+        for _ in 0..MAX_SESSIONS_PER_PROJECT {
+            alpha_ids.push(store.create("alpha").unwrap());
+        }
+        for project in ["beta", "gamma", "delta", "epsilon"] {
+            for _ in 0..MAX_SESSIONS_PER_PROJECT {
+                store.create(project).unwrap();
+            }
+        }
+        assert_eq!(store.len(), MAX_SESSIONS_PER_PROJECT * 5);
+
+        // epsilon is at its per-project cap and the store is globally full.
+        // The next epsilon session must evict epsilon, not alpha.
+        store.create("epsilon").unwrap();
+
+        assert!(store.validate(&alpha_ids[0], "alpha"));
+        let alpha_count = store
+            .sessions
+            .values()
+            .filter(|session| session.project == "alpha")
+            .count();
+        assert_eq!(alpha_count, MAX_SESSIONS_PER_PROJECT);
+        assert_eq!(store.len(), MAX_SESSIONS_PER_PROJECT * 5);
     }
 }

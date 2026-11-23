@@ -198,7 +198,13 @@ async fn host_header_must_be_loopback() {
         );
     }
 
-    for host in ["localhost:8898", "127.0.0.1:8898", "[::1]:8898"] {
+    for host in [
+        "localhost:8898",
+        "LOCALHOST:8898",
+        "localhost.:8898",
+        "127.0.0.1:8898",
+        "[::1]:8898",
+    ] {
         let allowed = app
             .clone()
             .oneshot(

@@ -16,11 +16,15 @@ Implemented:
 - `tools/list` with project-scoped catalogs.
 - Per-project session isolation: a session is valid only on the route that
   created it.
-- Bounded session state: 30-minute idle TTL, a hard session cap, one-shot
-  cancellation, and random session ids.
-- `Origin` validation for browser-originated requests: loopback origins and an
-  explicit `--allow-origin` allowlist pass; requests without `Origin` (native
-  MCP clients) remain allowed.
+- Bounded session state: 30-minute idle TTL, 256 sessions per project with
+  oldest-idle eviction, a global cap, one-shot cancellation, and random ids.
+- `Origin` and loopback `Host` validation for browser-originated requests:
+  loopback origins and an explicit `--allow-origin` allowlist pass; requests
+  without `Origin` (native MCP clients) remain allowed.
+- `ping` returns `{}`; unknown methods return `-32601` instead of a fake
+  initialize result.
+- Re-`initialize` with a valid session reuses it rather than creating an
+  orphan.
 - Non-`initialize` requests require `Mcp-Session-Id` by default. Use
   `--allow-stateless` only for Python-gateway parity during migration.
 - A supplied session header is validated on every request, including

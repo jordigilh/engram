@@ -124,6 +124,102 @@ async fn initialized_notification_is_accepted_without_a_body() {
 }
 
 #[tokio::test]
+async fn reinitialize_reuses_a_valid_session() {
+    let app = app();
+    let session = initialize(&app, "alpha").await;
+
+    let (status, headers, _) = call(
+        &app,
+        "POST",
+        "/mcp/alpha",
+        Some(&session),
+        Some(json!({"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {}})),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers
+            .get("mcp-session-id")
+            .and_then(|value| value.to_str().ok()),
+        Some(session.as_str())
+    );
+}
+
+#[tokio::test]
+async fn ping_succeeds_and_unknown_methods_are_method_not_found() {
+    let app = app();
+    let session = initialize(&app, "alpha").await;
+
+    let (status, _, body) = call(
+        &app,
+        "POST",
+        "/mcp/alpha",
+        Some(&session),
+        Some(json!({"jsonrpc": "2.0", "id": 20, "method": "ping"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(sse_data(&body)["result"], json!({}));
+
+    let (_, _, body) = call(
+        &app,
+        "POST",
+        "/mcp/alpha",
+        Some(&session),
+        Some(json!({"jsonrpc": "2.0", "id": 21, "method": "no/such/method"})),
+    )
+    .await;
+    assert_eq!(sse_data(&body)["error"]["code"], -32601);
+}
+
+#[tokio::test]
+async fn host_header_must_be_loopback() {
+    let app = app();
+    let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}});
+
+    for host in ["evil.example", "localhost.evil.example"] {
+        let rejected = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp/alpha")
+                    .header("host", host)
+                    .body(Body::from(init.to_string()))
+                    .expect("valid request"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(
+            rejected.status(),
+            StatusCode::FORBIDDEN,
+            "host {host:?} must be rejected"
+        );
+    }
+
+    for host in ["localhost:8898", "127.0.0.1:8898", "[::1]:8898"] {
+        let allowed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp/alpha")
+                    .header("host", host)
+                    .body(Body::from(init.to_string()))
+                    .expect("valid request"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(
+            allowed.status(),
+            StatusCode::OK,
+            "loopback host {host:?} must be allowed"
+        );
+    }
+}
+
+#[tokio::test]
 async fn tools_list_is_scoped_to_the_project() {
     let app = app();
     let alpha = initialize(&app, "alpha").await;

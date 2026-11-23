@@ -15,12 +15,12 @@ use serde_json::Value;
 
 pub const SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 pub const MAX_SESSIONS: usize = 1_024;
+pub const MAX_SESSIONS_PER_PROJECT: usize = 256;
 pub const MAX_CANCELLED_PER_SESSION: usize = 64;
 pub const MAX_REQUEST_ID_LEN: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionError {
-    Capacity,
     Random,
 }
 
@@ -41,13 +41,12 @@ impl SessionStore {
         Self::default()
     }
 
-    /// Create a session, sweeping expired entries first. A caller that loops
-    /// `initialize` cannot grow the map without bound.
+    /// Create a session, sweeping expired entries first. At a cap the oldest
+    /// idle session is evicted, so one project's reconnect churn cannot deny
+    /// `initialize` to another project.
     pub fn create(&mut self, project: &str) -> Result<String, SessionError> {
         self.sweep();
-        if self.sessions.len() >= MAX_SESSIONS {
-            return Err(SessionError::Capacity);
-        }
+        self.make_room(project);
         let id = random_session_id()?;
         self.sessions.insert(
             id.clone(),
@@ -58,6 +57,32 @@ impl SessionStore {
             },
         );
         Ok(id)
+    }
+
+    fn make_room(&mut self, project: &str) {
+        let project_count = self
+            .sessions
+            .values()
+            .filter(|session| session.project == project)
+            .count();
+        if project_count >= MAX_SESSIONS_PER_PROJECT {
+            self.evict_oldest(Some(project));
+        }
+        if self.sessions.len() >= MAX_SESSIONS {
+            self.evict_oldest(None);
+        }
+    }
+
+    fn evict_oldest(&mut self, project: Option<&str>) {
+        let candidate = self
+            .sessions
+            .iter()
+            .filter(|(_, session)| project.is_none_or(|name| session.project == name))
+            .min_by_key(|(_, session)| session.last_seen)
+            .map(|(id, _)| id.clone());
+        if let Some(id) = candidate {
+            self.sessions.remove(&id);
+        }
     }
 
     /// True when the session exists, belongs to `project`, and is unexpired.
@@ -218,5 +243,26 @@ mod tests {
         let id = store.create("alpha").unwrap();
         let long = json!("x".repeat(MAX_REQUEST_ID_LEN + 1));
         assert!(!store.cancel(&id, &long));
+    }
+
+    #[test]
+    fn per_project_cap_evicts_the_oldest_without_affecting_other_projects() {
+        let mut store = SessionStore::new();
+        let beta = store.create("beta").unwrap();
+
+        let mut alpha_ids = Vec::new();
+        for _ in 0..=MAX_SESSIONS_PER_PROJECT {
+            alpha_ids.push(store.create("alpha").unwrap());
+        }
+
+        let alpha_count = store
+            .sessions
+            .values()
+            .filter(|session| session.project == "alpha")
+            .count();
+        assert_eq!(alpha_count, MAX_SESSIONS_PER_PROJECT);
+        assert!(!store.validate(&alpha_ids[0], "alpha"));
+        assert!(store.validate(alpha_ids.last().unwrap(), "alpha"));
+        assert!(store.validate(&beta, "beta"));
     }
 }

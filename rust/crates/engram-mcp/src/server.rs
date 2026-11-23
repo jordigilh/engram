@@ -56,9 +56,34 @@ pub struct BackendSet {
     pub catalog: tokio::sync::RwLock<Catalog>,
     reservations: tokio::sync::RwLock<BTreeMap<String, Route>>,
     refresh_lock: tokio::sync::Mutex<()>,
-    freshness: tokio::sync::RwLock<FreshnessState>,
+    freshness: std::sync::Mutex<FreshnessState>,
     generation: AtomicU64,
     published_generation: AtomicU64,
+}
+
+struct FreshnessGuard<'a> {
+    state: &'a std::sync::Mutex<FreshnessState>,
+    previous: FreshnessState,
+    published: bool,
+}
+
+impl Drop for FreshnessGuard<'_> {
+    fn drop(&mut self) {
+        if !self.published {
+            *self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = self.previous.clone();
+        }
+    }
+}
+
+fn lock_freshness(
+    state: &std::sync::Mutex<FreshnessState>,
+) -> std::sync::MutexGuard<'_, FreshnessState> {
+    state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl BackendSet {
@@ -68,7 +93,7 @@ impl BackendSet {
             catalog: tokio::sync::RwLock::new(Catalog::default()),
             reservations: tokio::sync::RwLock::new(BTreeMap::new()),
             refresh_lock: tokio::sync::Mutex::new(()),
-            freshness: tokio::sync::RwLock::new(FreshnessState {
+            freshness: std::sync::Mutex::new(FreshnessState {
                 state: Some(CatalogState::Refreshing),
                 ..Default::default()
             }),
@@ -83,7 +108,17 @@ impl BackendSet {
     pub async fn refresh(&self) -> Aggregation {
         let _refresh = self.refresh_lock.lock().await;
         let start = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        self.freshness.write().await.state = Some(CatalogState::Refreshing);
+        let previous = {
+            let mut state = lock_freshness(&self.freshness);
+            let previous = state.clone();
+            state.state = Some(CatalogState::Refreshing);
+            previous
+        };
+        let mut guard = FreshnessGuard {
+            state: &self.freshness,
+            previous,
+            published: false,
+        };
         let reservations = self.reservations.read().await.clone();
         let mut aggregation = aggregate_tools_list(&self.adapters, &reservations).await;
         let mut catalog = self.catalog.write().await;
@@ -91,20 +126,21 @@ impl BackendSet {
             *catalog = aggregation.catalog.clone();
             *self.reservations.write().await = aggregation.reservations.clone();
             self.published_generation.store(start, Ordering::SeqCst);
-            *self.freshness.write().await = FreshnessState {
+            *lock_freshness(&self.freshness) = FreshnessState {
                 state: Some(CatalogState::Ready),
                 generation: start,
                 refreshed_at_ms: Some(now_ms()),
                 backend_errors: aggregation.errors.clone(),
             };
+            guard.published = true;
         } else {
             aggregation.catalog = catalog.clone();
         }
         aggregation
     }
 
-    pub async fn freshness(&self, project: &str, workspace: Option<&str>) -> FreshnessEnvelope {
-        let state = self.freshness.read().await.clone();
+    pub fn freshness(&self, project: &str, workspace: Option<&str>) -> FreshnessEnvelope {
+        let state = lock_freshness(&self.freshness).clone();
         FreshnessEnvelope {
             project: project.to_string(),
             workspace: workspace.map(str::to_string),
@@ -115,8 +151,8 @@ impl BackendSet {
         }
     }
 
-    pub async fn needs_flushing(&self) -> bool {
-        self.freshness.read().await.state == Some(CatalogState::Refreshing)
+    pub fn needs_flushing(&self) -> bool {
+        lock_freshness(&self.freshness).state == Some(CatalogState::Refreshing)
     }
 }
 
@@ -459,7 +495,7 @@ async fn post_endpoint(
                         "engram-mcp: project {project:?} backend {backend:?} unavailable: {error}"
                     );
                 }
-                let freshness = backends.freshness(&project, None).await;
+                let freshness = backends.freshness(&project, None);
                 let mut payload = tools_list_result(id, &aggregation.catalog.tools);
                 attach_to_payload(&mut payload, &freshness);
                 sse(payload)
@@ -486,8 +522,8 @@ async fn post_endpoint(
             }
             let backends = configured.backends.clone().expect("checked above");
             let workspace = query.get("workspace").map(String::as_str);
-            if backends.needs_flushing().await {
-                let freshness = backends.freshness(&project, workspace).await;
+            if backends.needs_flushing() {
+                let freshness = backends.freshness(&project, workspace);
                 let mut error = TypedError::flushing()
                     .with_epoch(freshness.generation)
                     .with_retry_after_ms(1_000);
@@ -557,7 +593,7 @@ async fn handle_backend_call(
     arguments: Value,
     workspace: Option<&str>,
 ) -> Response {
-    let freshness = backends.freshness(project, workspace).await;
+    let freshness = backends.freshness(project, workspace);
     let route = backends.catalog.read().await.route(tool_name).cloned();
     let Some((backend_key, raw_name)) = route else {
         return tool_result(
@@ -605,6 +641,9 @@ async fn handle_backend_call(
 
     match outcome {
         Ok(result) => tool_result(id, result, &freshness),
+        Err(error) if error.typed.is_some() => {
+            typed_response(id, error.typed.expect("checked above"))
+        }
         Err(error) if error.uncertain && is_write_tool(&raw_name) => typed_response(
             id,
             TypedError::outcome_unknown(workspace.map(str::to_string))

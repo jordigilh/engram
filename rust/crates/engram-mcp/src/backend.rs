@@ -13,6 +13,7 @@ use thiserror::Error;
 use url::Url;
 
 use crate::catalog::{is_retryable_raw_tool, managed_zvec_arguments};
+use crate::error::{ErrorKind, TypedError};
 use crate::registry::{BackendKind, ProjectSpec};
 
 #[derive(Debug, Clone, Error)]
@@ -23,6 +24,8 @@ pub struct BackendError {
     /// The request may have reached the backend before the failure. Only
     /// writes use this to return `outcome_unknown`.
     pub uncertain: bool,
+    /// A typed busy/outcome envelope received from the upstream backend.
+    pub typed: Option<TypedError>,
 }
 
 impl BackendError {
@@ -31,6 +34,7 @@ impl BackendError {
             message: message.into(),
             transient: false,
             uncertain: false,
+            typed: None,
         }
     }
 
@@ -39,11 +43,18 @@ impl BackendError {
             message: message.into(),
             transient: true,
             uncertain: false,
+            typed: None,
         }
     }
 
     pub fn uncertain(mut self) -> Self {
         self.uncertain = true;
+        self
+    }
+
+    pub fn typed(mut self, typed: TypedError) -> Self {
+        self.typed = Some(typed);
+        self.transient = false;
         self
     }
 }
@@ -153,7 +164,7 @@ impl HttpRelayAdapter {
         let _cleanup = self.session_cleanup(&request_url, &session);
         let outcome = async {
             let initialized = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
-            self.post_json(&request_url, &initialized, Some(&session))
+            self.post_json(&request_url, &initialized, Some(&session), false)
                 .await?;
             let call = json!({
                 "jsonrpc": "2.0",
@@ -161,7 +172,9 @@ impl HttpRelayAdapter {
                 "method": method,
                 "params": params.unwrap_or_else(|| json!({}))
             });
-            let response = self.post_json(&request_url, &call, Some(&session)).await?;
+            let response = self
+                .post_json(&request_url, &call, Some(&session), true)
+                .await?;
             let body = response.bytes().await.map_err(|error| {
                 BackendError::transient(format!("{method} response read failed: {error}"))
                     .uncertain()
@@ -187,6 +200,7 @@ impl HttpRelayAdapter {
                     }
                 }),
                 None,
+                false,
             )
             .await?;
         let session_id = header_value(&response, "mcp-session-id");
@@ -251,6 +265,7 @@ impl HttpRelayAdapter {
                 &self.url,
                 &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
                 Some(&session),
+                false,
             )
             .await?;
             let mut tools = Vec::new();
@@ -273,6 +288,7 @@ impl HttpRelayAdapter {
                         &self.url,
                         &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": params}),
                         Some(&session),
+                        false,
                     )
                     .await?;
                 let body = response.bytes().await.map_err(|error| {
@@ -336,6 +352,7 @@ impl HttpRelayAdapter {
         url: &Url,
         payload: &Value,
         session: Option<&UpstreamSession>,
+        uncertain_on_transport: bool,
     ) -> Result<reqwest::Response, BackendError> {
         let response = self
             .client
@@ -348,24 +365,86 @@ impl HttpRelayAdapter {
             .send()
             .await
             .map_err(|error| {
-                BackendError::transient(format!(
+                let mut error = BackendError::transient(format!(
                     "HTTP transport failed for {}: {}",
                     redacted_url(url),
                     error.without_url()
-                ))
-                .uncertain()
+                ));
+                if uncertain_on_transport {
+                    error = error.uncertain();
+                }
+                error
             })?;
         if response.status().is_success() {
             return Ok(response);
         }
         let status = response.status().as_u16();
+        let retry_after_ms = response
+            .headers()
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(|seconds| seconds.saturating_mul(1_000));
+        let kind = response
+            .headers()
+            .get("x-engram-error")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let body = response.bytes().await.ok();
+        let data = body
+            .as_deref()
+            .and_then(|body| serde_json::from_slice::<Value>(body).ok())
+            .and_then(|payload| payload.get("error").cloned())
+            .and_then(|error| error.get("data").cloned());
+        let typed = kind
+            .as_deref()
+            .and_then(|kind| upstream_typed_error(kind, data.as_ref(), retry_after_ms));
         let message = format!("HTTP {status} from {}", redacted_url(url));
-        if matches!(status, 502..=504) {
-            Err(BackendError::transient(message))
+        let mut error = if matches!(status, 502..=504) {
+            BackendError::transient(message)
         } else {
-            Err(BackendError::permanent(message))
+            BackendError::permanent(message)
+        };
+        if let Some(typed) = typed {
+            error = error.typed(typed);
         }
+        Err(error)
     }
+}
+
+fn upstream_typed_error(
+    kind: &str,
+    data: Option<&Value>,
+    retry_after_ms: Option<u64>,
+) -> Option<TypedError> {
+    let workspace = data
+        .and_then(|data| data.get("workspace"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let epoch = data
+        .and_then(|data| data.get("epoch"))
+        .and_then(Value::as_u64);
+    let retry_after_ms = data
+        .and_then(|data| data.get("retry_after_ms"))
+        .and_then(Value::as_u64)
+        .or(retry_after_ms);
+    let mut error = match kind {
+        "workspace_flushing" => TypedError::flushing(),
+        "workspace_unbound" => TypedError::unbound(),
+        "workspace_auth_timeout" => TypedError::new(ErrorKind::WorkspaceAuthTimeout),
+        "outcome_unknown" => TypedError::outcome_unknown(workspace.clone()),
+        _ => return None,
+    };
+    if let Some(workspace) = workspace {
+        error = error.in_workspace(workspace);
+    }
+    if let Some(epoch) = epoch {
+        error = error.with_epoch(epoch);
+    }
+    if let Some(retry_after_ms) = retry_after_ms {
+        error = error.with_retry_after_ms(retry_after_ms);
+    }
+    Some(error)
 }
 
 #[derive(Clone)]

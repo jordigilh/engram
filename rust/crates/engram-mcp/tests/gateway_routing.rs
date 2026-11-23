@@ -28,6 +28,7 @@ struct MockState {
     call_fail_status: u16,
     call_jsonrpc_error: bool,
     call_no_response: bool,
+    call_typed_busy: bool,
     init_jsonrpc_error: bool,
     call_delay_ms: u64,
     sse_notification_first: bool,
@@ -60,6 +61,7 @@ struct MockConfig {
     call_fail_status: Option<u16>,
     call_jsonrpc_error: bool,
     call_no_response: bool,
+    call_typed_busy: bool,
     init_jsonrpc_error: bool,
     call_delay_ms: u64,
     sse_notification_first: bool,
@@ -77,6 +79,7 @@ async fn spawn_mock(config: MockConfig) -> (String, MockState) {
         call_fail_status: config.call_fail_status.unwrap_or(503),
         call_jsonrpc_error: config.call_jsonrpc_error,
         call_no_response: config.call_no_response,
+        call_typed_busy: config.call_typed_busy,
         init_jsonrpc_error: config.init_jsonrpc_error,
         call_delay_ms: config.call_delay_ms,
         sse_notification_first: config.sse_notification_first,
@@ -199,6 +202,31 @@ async fn mock_post(
                     "method": "notifications/progress"
                 }))
                 .into_response();
+            }
+            if state.call_typed_busy {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    [
+                        ("x-engram-error", "workspace_flushing"),
+                        ("retry-after", "2"),
+                    ],
+                    Json(json!({
+                        "jsonrpc": "2.0",
+                        "id": body.get("id"),
+                        "error": {
+                            "code": -32002,
+                            "message": "workspace_flushing",
+                            "data": {
+                                "kind": "workspace_flushing",
+                                "retryable": true,
+                                "workspace": "/work",
+                                "epoch": 4,
+                                "retry_after_ms": 2000
+                            }
+                        }
+                    })),
+                )
+                    .into_response();
             }
             if state.call_jsonrpc_error {
                 return Json(json!({
@@ -1457,4 +1485,49 @@ async fn definitive_write_rejection_is_not_outcome_unknown() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(sse_data(&body)["result"]["isError"], true);
+}
+
+#[tokio::test]
+async fn upstream_typed_busy_is_relayed_to_the_client() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("recall")],
+        call_typed_busy: true,
+        ..Default::default()
+    })
+    .await;
+    let adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
+    let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/alpha")
+                .header("mcp-session-id", &session)
+                .body(Body::from(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": 47,
+                        "method": "tools/call",
+                        "params": {"name": "docs_recall", "arguments": {}}
+                    })
+                    .to_string(),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.headers()["x-engram-error"], "workspace_flushing");
+    assert_eq!(response.headers()["retry-after"], "2");
+    let body = to_bytes(response.into_body(), 32 * 1024).await.unwrap();
+    let payload = json_body(&String::from_utf8_lossy(&body));
+    assert_eq!(payload["error"]["data"]["kind"], "workspace_flushing");
+    assert_eq!(payload["error"]["data"]["workspace"], "/work");
+    assert_eq!(payload["error"]["data"]["epoch"], 4);
 }

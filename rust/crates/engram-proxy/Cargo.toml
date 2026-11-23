@@ -1,0 +1,22 @@
+[package]
+name = "engram-proxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Byte-transparent TCP proxy that fronts the blue/green Hindsight API."
+
+[lib]
+name = "engram_proxy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "engram-proxy"
+path = "src/main.rs"
+
+[dependencies]
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "test-util", "time"] }

@@ -65,6 +65,7 @@ class WorkspaceProcessSupervisor:
         self._recycled: list[str] = []
         self._reserved_ports: set[int] = set()
         self._starting = 0
+        self._stopped = False
         self._lock = asyncio.Lock()
 
     @staticmethod
@@ -203,6 +204,10 @@ class WorkspaceProcessSupervisor:
     async def _retire_entry(self, key: str, entry: _Process, *, recycled: bool = True) -> None:
         async with self._lock:
             self._reserved_ports.add(entry.port)
+            # Record ownership loss before waiting for the child: a cancelled
+            # caller must not hide the runtime-generation change.
+            if recycled:
+                self._recycled.append(key)
         cleanup = asyncio.ensure_future(
             self._terminate_and_release(entry.process, entry.port)
         )
@@ -211,14 +216,14 @@ class WorkspaceProcessSupervisor:
         except asyncio.CancelledError:
             # The cleanup task owns the port and keeps running.
             raise
-        if recycled:
-            self._recycled.append(key)
 
     async def ensure(self, workspace: str) -> str:
         key = self._key(workspace)
         lock = self._locks.setdefault(key, asyncio.Lock())
         async with lock:
             async with self._lock:
+                if self._stopped:
+                    raise RuntimeError("Serena supervisor is stopped")
                 entry = self._procs.get(key)
             if entry is not None and entry.process.returncode is None:
                 now = self._clock()
@@ -286,6 +291,10 @@ class WorkspaceProcessSupervisor:
 
                 url = f"http://127.0.0.1:{port}/mcp"
                 async with self._lock:
+                    if self._stopped:
+                        raise RuntimeError(
+                            "Serena supervisor stopped during startup"
+                        )
                     self._reserved_ports.discard(port)
                     reserved_port = None
                     self._procs[key] = _Process(
@@ -361,6 +370,7 @@ class WorkspaceProcessSupervisor:
 
     async def stop(self) -> None:
         async with self._lock:
+            self._stopped = True
             entries = list(self._procs.values())
             self._procs.clear()
         for entry in entries:

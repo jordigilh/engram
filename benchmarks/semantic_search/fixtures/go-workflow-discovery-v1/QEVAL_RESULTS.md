@@ -112,6 +112,13 @@ python3 scripts/evaluate_semantic_search.py \
   --k 10
 ```
 
+The archived Go replays were recorded with the previous wording of the
+`copy-selected-workflow-details` query. Their `raw-runs.json` files keep that
+text, while `normalized-runs.json` keys by query ID only. The evaluator matches
+by ID, so treat a recomputation against the current `qrels.json` as score for
+the archived wording, not as a result for the current wording. Rerun the replay
+before comparing it with new runs.
+
 Issue #6 also proposes a separate **deep-candidate rescue** ablation: measure
 relevant-unit recall at depth 50 before changing the top-10 set. Report per-query
 and category changes alongside all four aggregate metrics, and compare each

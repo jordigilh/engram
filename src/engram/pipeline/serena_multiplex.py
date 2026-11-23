@@ -665,8 +665,19 @@ async def _control_call(
         finally:
             if session_id:
                 try:
-                    await client.delete(upstream_url, headers=session_headers)
-                except (httpx.HTTPError, OSError):
+                    await asyncio.wait_for(
+                        client.delete(
+                            upstream_url,
+                            headers=session_headers,
+                            timeout=2.0,
+                        ),
+                        timeout=3.0,
+                    )
+                except (
+                    asyncio.TimeoutError,
+                    httpx.HTTPError,
+                    OSError,
+                ):
                     pass
 
 

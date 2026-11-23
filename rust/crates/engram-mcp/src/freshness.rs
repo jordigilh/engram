@@ -41,6 +41,17 @@ pub struct FreshnessEnvelope {
 }
 
 impl FreshnessEnvelope {
+    pub fn from_state(project: &str, workspace: Option<&str>, state: FreshnessState) -> Self {
+        Self {
+            project: project.to_string(),
+            workspace: workspace.map(str::to_string),
+            generation: state.generation,
+            state: state.state.unwrap_or(CatalogState::Ready),
+            refreshed_at_ms: state.refreshed_at_ms,
+            backend_errors: state.backend_errors,
+        }
+    }
+
     pub fn to_json(&self) -> Value {
         json!({
             "schema_version": FRESHNESS_SCHEMA_VERSION,

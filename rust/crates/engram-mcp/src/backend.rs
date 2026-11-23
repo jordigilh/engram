@@ -179,7 +179,7 @@ impl HttpRelayAdapter {
                 BackendError::transient(format!("{method} response read failed: {error}"))
                     .uncertain()
             })?;
-            parse_rpc_response(&body, &json!(2), method)
+            parse_rpc_response(&body, &json!(2), method, true)
         }
         .await;
         outcome
@@ -217,7 +217,7 @@ impl HttpRelayAdapter {
                 )));
             }
         };
-        match parse_rpc_response(&body, &json!(1), "initialize") {
+        match parse_rpc_response(&body, &json!(1), "initialize", false) {
             Ok(result) => {
                 let protocol_version = result
                     .get("protocolVersion")
@@ -294,7 +294,7 @@ impl HttpRelayAdapter {
                 let body = response.bytes().await.map_err(|error| {
                     BackendError::transient(format!("tools/list response read failed: {error}"))
                 })?;
-                let result = parse_rpc_response(&body, &json!(2), "tools/list")?;
+                let result = parse_rpc_response(&body, &json!(2), "tools/list", false)?;
                 tools.extend(
                     result
                         .get("tools")
@@ -602,6 +602,7 @@ fn parse_rpc_response(
     body: &[u8],
     expected_id: &Value,
     label: &str,
+    uncertain_on_no_response: bool,
 ) -> Result<Value, BackendError> {
     let text = String::from_utf8_lossy(body);
     let text = text.trim();
@@ -625,10 +626,14 @@ fn parse_rpc_response(
         }
         return Ok(payload.get("result").cloned().unwrap_or_else(|| json!({})));
     }
-    Err(BackendError::permanent(format!(
+    let error = BackendError::permanent(format!(
         "{label} returned no JSON-RPC response for id {expected_id}"
-    ))
-    .uncertain())
+    ));
+    Err(if uncertain_on_no_response {
+        error.uncertain()
+    } else {
+        error
+    })
 }
 
 pub struct ScopedHindsightAdapter {

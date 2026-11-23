@@ -105,7 +105,7 @@ impl BackendSet {
     /// Aggregate and publish only if no later-started refresh already won.
     /// Refreshes are serialized so a concurrent refresh cannot publish a
     /// catalog built from stale name reservations.
-    pub async fn refresh(&self) -> Aggregation {
+    pub async fn refresh(&self) -> (Aggregation, FreshnessState) {
         let _refresh = self.refresh_lock.lock().await;
         let start = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let previous = {
@@ -122,33 +122,29 @@ impl BackendSet {
         let reservations = self.reservations.read().await.clone();
         let mut aggregation = aggregate_tools_list(&self.adapters, &reservations).await;
         let mut catalog = self.catalog.write().await;
-        if self.published_generation.load(Ordering::SeqCst) < start {
+        let published_state = if self.published_generation.load(Ordering::SeqCst) < start {
             *catalog = aggregation.catalog.clone();
             *self.reservations.write().await = aggregation.reservations.clone();
             self.published_generation.store(start, Ordering::SeqCst);
-            *lock_freshness(&self.freshness) = FreshnessState {
+            let state = FreshnessState {
                 state: Some(CatalogState::Ready),
                 generation: start,
                 refreshed_at_ms: Some(now_ms()),
                 backend_errors: aggregation.errors.clone(),
             };
+            *lock_freshness(&self.freshness) = state.clone();
             guard.published = true;
+            state
         } else {
             aggregation.catalog = catalog.clone();
-        }
-        aggregation
+            lock_freshness(&self.freshness).clone()
+        };
+        (aggregation, published_state)
     }
 
     pub fn freshness(&self, project: &str, workspace: Option<&str>) -> FreshnessEnvelope {
         let state = lock_freshness(&self.freshness).clone();
-        FreshnessEnvelope {
-            project: project.to_string(),
-            workspace: workspace.map(str::to_string),
-            generation: self.published_generation.load(Ordering::SeqCst),
-            state: state.state.unwrap_or(CatalogState::Ready),
-            refreshed_at_ms: state.refreshed_at_ms,
-            backend_errors: state.backend_errors,
-        }
+        FreshnessEnvelope::from_state(project, workspace, state)
     }
 
     pub fn needs_flushing(&self) -> bool {
@@ -190,7 +186,7 @@ impl Project {
         let Some(backends) = &self.backends else {
             return;
         };
-        let aggregation = backends.refresh().await;
+        let aggregation = backends.refresh().await.0;
         for (backend, error) in &aggregation.errors {
             eprintln!(
                 "engram-mcp: project {:?} backend {backend:?} prewarm failed: {error}",
@@ -489,13 +485,13 @@ async fn post_endpoint(
         "ping" => sse(json!({"jsonrpc": "2.0", "id": id, "result": {}})),
         "tools/list" => {
             if let Some(backends) = configured.backends.clone() {
-                let aggregation = backends.refresh().await;
+                let (aggregation, published_state) = backends.refresh().await;
                 for (backend, error) in &aggregation.errors {
                     eprintln!(
                         "engram-mcp: project {project:?} backend {backend:?} unavailable: {error}"
                     );
                 }
-                let freshness = backends.freshness(&project, None);
+                let freshness = FreshnessEnvelope::from_state(&project, None, published_state);
                 let mut payload = tools_list_result(id, &aggregation.catalog.tools);
                 attach_to_payload(&mut payload, &freshness);
                 sse(payload)
@@ -542,6 +538,13 @@ async fn post_endpoint(
                 .cloned()
                 .unwrap_or_else(|| json!({}));
             let request_key = request_id_key(&id);
+            let dispatched_write = backends
+                .catalog
+                .read()
+                .await
+                .route(tool_name)
+                .map(|(_, raw_name)| is_write_tool(raw_name))
+                .unwrap_or(false);
             if let Some(session_id) = session_id.clone() {
                 let token = tokio_util::sync::CancellationToken::new();
                 let key = (session_id.clone(), request_key);
@@ -571,11 +574,10 @@ async fn post_endpoint(
                         workspace,
                     ) => result,
                     _ = token.cancelled() => cancelled_response(
-                        &backends,
                         id.clone(),
-                        tool_name,
+                        dispatched_write,
                         workspace,
-                    ).await,
+                    ),
                 }
             } else {
                 handle_backend_call(&backends, &project, id, tool_name, arguments, workspace).await
@@ -668,20 +670,12 @@ fn attach_to_payload(payload: &mut Value, freshness: &FreshnessEnvelope) {
     }
 }
 
-async fn cancelled_response(
-    backends: &BackendSet,
-    id: Value,
-    tool_name: &str,
-    workspace: Option<&str>,
-) -> Response {
-    let route = backends.catalog.read().await.route(tool_name).cloned();
-    if let Some((_, raw_name)) = route {
-        if is_write_tool(&raw_name) {
-            return typed_response(
-                id,
-                TypedError::outcome_unknown(workspace.map(str::to_string)),
-            );
-        }
+fn cancelled_response(id: Value, dispatched_write: bool, workspace: Option<&str>) -> Response {
+    if dispatched_write {
+        return typed_response(
+            id,
+            TypedError::outcome_unknown(workspace.map(str::to_string)),
+        );
     }
     sse(request_cancelled_error(id))
 }
@@ -784,6 +778,23 @@ mod tests {
         async fn call_tool(&self, _name: &str, _arguments: Value) -> Result<Value, BackendError> {
             Ok(json!({}))
         }
+    }
+
+    #[tokio::test]
+    async fn refresh_returns_the_same_freshness_snapshot_it_publishes() {
+        let set = Arc::new(BackendSet::new(vec![(
+            "docs".into(),
+            Arc::new(SlowBackend {
+                current: Arc::new(AtomicUsize::new(0)),
+                max: Arc::new(AtomicUsize::new(0)),
+            }) as Arc<dyn BackendAdapter>,
+        )]));
+        let (_aggregation, published) = set.refresh().await;
+        let current = set.freshness("alpha", None);
+        assert_eq!(published.generation, current.generation);
+        assert_eq!(published.state, Some(CatalogState::Ready));
+        assert_eq!(published.refreshed_at_ms, current.refreshed_at_ms);
+        assert_eq!(published.backend_errors, current.backend_errors);
     }
 
     #[tokio::test]

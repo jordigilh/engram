@@ -1,10 +1,11 @@
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::Parser;
 use engram_mcp::{
-    build_project_adapters_with_cache, router_with_options, AdapterCache, OriginPolicy, Project,
-    Registry, SessionPolicy,
+    build_project_adapters_with_cache, router_with_options, AdapterCache, MetricsLog, OriginPolicy,
+    Project, Registry, SessionPolicy,
 };
 
 /// Native Engram MCP gateway (issue #211, slices 1-2).
@@ -84,6 +85,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             projects.push(Project::new(name));
         }
         projects
+    };
+
+    let metrics = MetricsLog::from_environment().map(Arc::new);
+    let projects: Vec<Project> = match &metrics {
+        Some(metrics) => projects
+            .into_iter()
+            .map(|project| project.with_metrics(Arc::clone(metrics)))
+            .collect(),
+        None => projects,
     };
 
     let policy = session_policy(args.require_session);

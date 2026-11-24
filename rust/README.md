@@ -172,14 +172,20 @@ forwarded like Python; catalog refreshes never reject a `tools/call` with 503;
 freshness metadata reports `catalog_state: refreshing`; the runtime defaults to
 stateless sessions.
 
+Phase 4 parity (metrics): every backend `tools/call` appends one JSON line to
+`$ENGRAM_METRICS_LOG`, or `$HOME/.engram/logs/gateway-calls.jsonl` by default.
+Fields match Python: `ts`, `project`, `backend`, `tool`, `is_error`,
+`result_chars` (Unicode characters, not bytes), `est_tokens` (tiktoken
+`cl100k_base`, chars/4 fallback). Failed backend calls log zero counts. A
+missing or unwritable log path degrades to a warning and never fails the call.
+
 Intentional divergences: Rust returns `{}` for `ping` and JSON-RPC `-32601` for
 unknown methods, while Python returns a minimal initialize-shaped success for
 any request id. Rust also refuses non-loopback binds and Host/Origin values.
 
-Still deferred from #224: the shadow adapter, call metrics, the copy of the
-full Python gateway suite, and Serena's `search_for_pattern` overflow shaping
-(raw Serena backend; no live config exposes it, tracked with the Serena
-retirement slice).
+Still deferred from #224: the shadow adapter, the copy of the full Python
+gateway suite, and Serena's `search_for_pattern` overflow shaping (raw Serena
+backend; no live config exposes it, tracked with the Serena retirement slice).
 
 ## Contract tests
 

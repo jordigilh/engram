@@ -25,6 +25,7 @@ use crate::error::TypedError;
 use crate::freshness::{
     attach_freshness, freshness_for_static, now_ms, CatalogState, FreshnessEnvelope, FreshnessState,
 };
+use crate::metrics::MetricsLog;
 use crate::protocol::{
     initialize_result, method_not_found_error, request_cancelled_error, tools_list_result,
 };
@@ -51,6 +52,7 @@ pub struct Project {
     pub name: String,
     pub tools: Vec<Value>,
     pub backends: Option<Arc<BackendSet>>,
+    pub metrics: Option<Arc<MetricsLog>>,
 }
 
 pub struct BackendSet {
@@ -161,6 +163,7 @@ impl Project {
             name: name.into(),
             tools: Vec::new(),
             backends: None,
+            metrics: None,
         }
     }
 
@@ -169,6 +172,7 @@ impl Project {
             name: name.into(),
             tools,
             backends: None,
+            metrics: None,
         }
     }
 
@@ -180,7 +184,15 @@ impl Project {
             name: name.into(),
             tools: Vec::new(),
             backends: Some(Arc::new(BackendSet::new(adapters))),
+            metrics: None,
         }
+    }
+
+    /// Attach the process-wide call metrics sink. Tests and the static project
+    /// constructors leave this unset.
+    pub fn with_metrics(mut self, metrics: Arc<MetricsLog>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// Best-effort catalog warm-up. A dead backend is simply absent from the
@@ -578,11 +590,15 @@ async fn post_endpoint(
                     result = handle_backend_call(
                         &backends,
                         call_id,
-                        tool_name,
-                        arguments,
-                        workspace,
-                        route,
-                        freshness,
+                        BackendCall {
+                            project: &project,
+                            metrics: configured.metrics.as_deref(),
+                            tool_name,
+                            arguments,
+                            workspace,
+                            route,
+                            freshness,
+                        },
                     ) => result,
                     _ = token.cancelled() => cancelled_response(
                         id.clone(),
@@ -592,7 +608,17 @@ async fn post_endpoint(
                 }
             } else {
                 handle_backend_call(
-                    &backends, id, tool_name, arguments, workspace, route, freshness,
+                    &backends,
+                    id,
+                    BackendCall {
+                        project: &project,
+                        metrics: configured.metrics.as_deref(),
+                        tool_name,
+                        arguments,
+                        workspace,
+                        route,
+                        freshness,
+                    },
                 )
                 .await
             }
@@ -601,15 +627,26 @@ async fn post_endpoint(
     }
 }
 
-async fn handle_backend_call(
-    backends: &BackendSet,
-    id: Value,
-    tool_name: &str,
+struct BackendCall<'a> {
+    project: &'a str,
+    metrics: Option<&'a MetricsLog>,
+    tool_name: &'a str,
     arguments: Value,
-    workspace: Option<&str>,
+    workspace: Option<&'a str>,
     route: Option<Route>,
     freshness: FreshnessEnvelope,
-) -> Response {
+}
+
+async fn handle_backend_call(backends: &BackendSet, id: Value, call: BackendCall<'_>) -> Response {
+    let BackendCall {
+        project,
+        metrics,
+        tool_name,
+        arguments,
+        workspace,
+        route,
+        freshness,
+    } = call;
     let Some((backend_key, raw_name)) = route else {
         return tool_result(
             id,
@@ -646,11 +683,14 @@ async fn handle_backend_call(
                 .await
                 .map(|result| truncate_pattern_result(result, max_answer_chars)),
             Err(error) => {
+                if let Some(metrics) = metrics {
+                    metrics.record_error(project, &backend_key, tool_name);
+                }
                 return tool_result(
                     id,
                     tool_error(format!("search_for_pattern failed: {error}")),
                     &freshness,
-                )
+                );
             }
         }
     } else {
@@ -669,26 +709,37 @@ async fn handle_backend_call(
             if raw_name == "recall" || raw_name.ends_with("_recall") {
                 result = normalize_recall_result(result);
             }
+            if let Some(metrics) = metrics {
+                metrics.record_result(project, &backend_key, tool_name, &result);
+            }
             tool_result(id, result, &freshness)
         }
-        Err(error) if error.typed.is_some() => {
-            typed_response(id, error.typed.expect("checked above"))
+        Err(error) => {
+            if let Some(metrics) = metrics {
+                metrics.record_error(project, &backend_key, tool_name);
+            }
+            if let Some(typed) = error.typed {
+                typed_response(id, typed)
+            } else if pattern_alias {
+                tool_result(
+                    id,
+                    tool_error(format!("search_for_pattern failed: {}", error.message)),
+                    &freshness,
+                )
+            } else if error.uncertain && is_write_tool(&raw_name) {
+                typed_response(
+                    id,
+                    TypedError::outcome_unknown(workspace.map(str::to_string))
+                        .with_epoch(freshness.generation),
+                )
+            } else {
+                tool_result(
+                    id,
+                    tool_error(format!("backend '{backend_key}' failed: {}", error.message)),
+                    &freshness,
+                )
+            }
         }
-        Err(error) if pattern_alias => tool_result(
-            id,
-            tool_error(format!("search_for_pattern failed: {}", error.message)),
-            &freshness,
-        ),
-        Err(error) if error.uncertain && is_write_tool(&raw_name) => typed_response(
-            id,
-            TypedError::outcome_unknown(workspace.map(str::to_string))
-                .with_epoch(freshness.generation),
-        ),
-        Err(error) => tool_result(
-            id,
-            tool_error(format!("backend '{backend_key}' failed: {}", error.message)),
-            &freshness,
-        ),
     }
 }
 

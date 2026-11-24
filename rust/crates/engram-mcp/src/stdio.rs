@@ -37,6 +37,23 @@ struct ServiceLease {
     retiring: Arc<StdMutex<Vec<ClientService>>>,
 }
 
+struct RetireGuard {
+    service: Option<ClientService>,
+    queue: Arc<StdMutex<Vec<ClientService>>>,
+}
+
+impl Drop for RetireGuard {
+    fn drop(&mut self) {
+        if let Some(service) = self.service.take() {
+            // Cancellation during retirement must leave the child waitable.
+            self.queue
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(service);
+        }
+    }
+}
+
 impl ServiceLease {
     fn service(&mut self) -> &mut ClientService {
         self.service.as_mut().expect("leased service")
@@ -51,9 +68,12 @@ impl ServiceLease {
         }
     }
 
-    async fn retire(mut self) {
+    fn retire(mut self) {
         if let Some(service) = self.service.take() {
-            let _ = service.cancel().await;
+            self.retiring
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(service);
         }
     }
 }
@@ -139,14 +159,25 @@ impl StdioSubprocessAdapter {
     }
 
     async fn wait_for_retired(&self) {
-        let retired: Vec<ClientService> = self
-            .retiring
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .drain(..)
-            .collect();
-        for service in retired {
-            let _ = service.cancel().await;
+        loop {
+            let service = self
+                .retiring
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .pop();
+            let Some(service) = service else {
+                return;
+            };
+            let mut guard = RetireGuard {
+                service: Some(service),
+                queue: Arc::clone(&self.retiring),
+            };
+            if let Some(service) = guard.service.as_mut() {
+                // `close` borrows, so cancellation drops this guard with the
+                // service still present; the next caller retries retirement.
+                let _ = service.close().await;
+            }
+            let _ = guard.service.take();
         }
     }
 }
@@ -170,7 +201,8 @@ impl BackendAdapter for StdioSubprocessAdapter {
             }
             Err(error) => {
                 let first_error = error.message;
-                lease.retire().await;
+                lease.retire();
+                self.wait_for_retired().await;
                 if let Err(restart) = self.ensure_service().await {
                     return Err(BackendError::transient(format!(
                         "stdio tools/list restart failed: {restart} (first: {first_error})"
@@ -219,7 +251,8 @@ impl BackendAdapter for StdioSubprocessAdapter {
             Err(error) if is_write_tool(name) => {
                 // Recover the child for later calls, but never replay the
                 // write itself; let the gateway surface outcome_unknown.
-                lease.retire().await;
+                lease.retire();
+                self.wait_for_retired().await;
                 let recovery = match self.ensure_service().await {
                     Ok(()) => String::new(),
                     Err(restart_error) => format!(" (restart failed: {restart_error})"),
@@ -231,7 +264,8 @@ impl BackendAdapter for StdioSubprocessAdapter {
             }
             Err(error) => {
                 let first_error = format!("{error}");
-                lease.retire().await;
+                lease.retire();
+                self.wait_for_retired().await;
                 if let Err(restart) = self.ensure_service().await {
                     return Err(BackendError::transient(format!(
                         "stdio tools/call restart failed: {restart} (first: {first_error})"

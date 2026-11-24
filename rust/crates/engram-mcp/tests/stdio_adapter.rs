@@ -159,13 +159,25 @@ async fn a_cancelled_call_does_not_poison_the_session() {
     assert_eq!(result["content"][0]["text"], "echo");
 
     let log = dir.read("log");
-    let starts = log
-        .lines()
+    let lines: Vec<&str> = log.lines().collect();
+    let starts = lines
+        .iter()
         .filter(|line| line.starts_with("start "))
         .count();
     assert_eq!(
         starts, 2,
         "cancelled call must retire the child; log {log:?}"
+    );
+    let first_exit = lines.iter().position(|line| line.starts_with("exit "));
+    let second_start = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("start "))
+        .nth(1)
+        .map(|(index, _)| index);
+    assert!(
+        first_exit.is_some() && first_exit < second_start,
+        "next call must wait for the retired child to exit; log {log:?}"
     );
 }
 

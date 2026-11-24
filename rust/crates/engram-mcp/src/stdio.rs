@@ -48,6 +48,7 @@ pub struct StdioSubprocessAdapter {
     service: Arc<StdMutex<Option<Session>>>,
     retiring: Arc<StdMutex<Vec<tokio::task::JoinHandle<()>>>>,
     retirement_waits: AtomicUsize,
+    retirement_handle_waits: AtomicUsize,
     call_lock: Mutex<()>,
 }
 
@@ -145,6 +146,7 @@ impl StdioSubprocessAdapter {
             service: Arc::new(StdMutex::new(None)),
             retiring: Arc::new(StdMutex::new(Vec::new())),
             retirement_waits: AtomicUsize::new(0),
+            retirement_handle_waits: AtomicUsize::new(0),
             call_lock: Mutex::new(()),
         }
     }
@@ -229,6 +231,11 @@ impl StdioSubprocessAdapter {
         self.retirement_waits.load(Ordering::SeqCst)
     }
 
+    #[doc(hidden)]
+    pub fn retirement_handle_waits(&self) -> usize {
+        self.retirement_handle_waits.load(Ordering::SeqCst)
+    }
+
     async fn wait_for_retired(&self) {
         self.retirement_waits.fetch_add(1, Ordering::SeqCst);
         loop {
@@ -240,6 +247,7 @@ impl StdioSubprocessAdapter {
             let Some(handle) = handle else {
                 return;
             };
+            self.retirement_handle_waits.fetch_add(1, Ordering::SeqCst);
             let mut guard = RetireHandleGuard {
                 handle: Some(handle),
                 queue: Arc::clone(&self.retiring),

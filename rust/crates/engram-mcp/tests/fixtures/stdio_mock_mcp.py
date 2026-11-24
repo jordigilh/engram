@@ -3,7 +3,8 @@
 
 Test-only fixture. Controlled by env vars:
   STDIO_MOCK_MODE: normal | old-protocol | paginate | request-then-respond |
-                   slow | slow-exit | slow-init | die-once | malformed |
+                   slow | slow-exit | slow-init | gated-exit | die-once |
+                   malformed |
                    jsonrpc-error |
                    list-error
   STDIO_MOCK_LOG: optional path for flushed method/pid lines
@@ -140,7 +141,7 @@ def main() -> None:
                         and "method" not in reply
                     ):
                         break
-            if MODE in {"slow", "slow-exit"}:
+            if MODE in {"slow", "slow-exit", "gated-exit"}:
                 time.sleep(1.0)
             send(
                 {
@@ -166,6 +167,10 @@ def main() -> None:
                     "error": {"code": -32601, "message": "method not found"},
                 }
             )
+    if MODE == "gated-exit":
+        gate = os.environ.get("STDIO_MOCK_GATE")
+        while gate and not os.path.exists(gate):
+            time.sleep(0.05)
     if MODE == "slow-exit":
         time.sleep(1.5)
     log(f"exit {os.getpid()}")

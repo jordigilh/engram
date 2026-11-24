@@ -63,6 +63,10 @@ fn adapter(mode: &str) -> (StdioSubprocessAdapter, TempDir) {
         "STDIO_MOCK_STATE".into(),
         dir.path("state").to_string_lossy().into_owned(),
     );
+    env.insert(
+        "STDIO_MOCK_GATE".into(),
+        dir.path("release").to_string_lossy().into_owned(),
+    );
     (
         StdioSubprocessAdapter::new("python3".into(), vec![fixture()], env),
         dir,

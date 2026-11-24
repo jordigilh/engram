@@ -3,7 +3,8 @@
 
 Test-only fixture. Controlled by env vars:
   STDIO_MOCK_MODE: normal | old-protocol | paginate | request-then-respond |
-                   slow | die-once | malformed | jsonrpc-error | list-error
+                   slow | slow-exit | die-once | malformed | jsonrpc-error |
+                   list-error
   STDIO_MOCK_LOG: optional path for flushed method/pid lines
   STDIO_MOCK_STATE: optional marker path for die-once
 """
@@ -32,8 +33,11 @@ def log(message: str) -> None:
 
 
 def send(payload: dict) -> None:
-    sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
-    sys.stdout.flush()
+    try:
+        sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
+        sys.stdout.flush()
+    except BrokenPipeError:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
 
 
 def tool(name: str) -> dict:
@@ -133,7 +137,7 @@ def main() -> None:
                         and "method" not in reply
                     ):
                         break
-            if MODE == "slow":
+            if MODE in {"slow", "slow-exit"}:
                 time.sleep(1.0)
             send(
                 {
@@ -159,6 +163,8 @@ def main() -> None:
                     "error": {"code": -32601, "message": "method not found"},
                 }
             )
+    if MODE == "slow-exit":
+        time.sleep(1.5)
     log(f"exit {os.getpid()}")
 
 

@@ -182,6 +182,64 @@ async fn a_cancelled_call_does_not_poison_the_session() {
 }
 
 #[tokio::test]
+async fn cancellation_during_retirement_keeps_the_cleanup_waitable() {
+    let (adapter, dir) = adapter("slow-exit");
+    let adapter = Arc::new(adapter);
+
+    let first = tokio::spawn({
+        let adapter = Arc::clone(&adapter);
+        async move { adapter.call_tool("alpha", json!({})).await }
+    });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !dir.read("log").contains("call ") {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "first call never reached the child"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    first.abort();
+    assert!(first.await.expect_err("aborted").is_cancelled());
+
+    // Abort a caller while it is awaiting the retired child's cleanup.
+    let second = tokio::spawn({
+        let adapter = Arc::clone(&adapter);
+        async move { adapter.call_tool("alpha", json!({})).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    second.abort();
+    assert!(second.await.expect_err("aborted").is_cancelled());
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(6),
+        adapter.call_tool("alpha", json!({})),
+    )
+    .await
+    .expect("third call must not hang")
+    .expect("third call");
+    assert_eq!(result["content"][0]["text"], "echo");
+
+    let log = dir.read("log");
+    let lines: Vec<&str> = log.lines().collect();
+    let starts = lines
+        .iter()
+        .filter(|line| line.starts_with("start "))
+        .count();
+    assert_eq!(starts, 2, "only one replacement child; log {log:?}");
+    let first_exit = lines.iter().position(|line| line.starts_with("exit "));
+    let second_start = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("start "))
+        .nth(1)
+        .map(|(index, _)| index);
+    assert!(
+        first_exit.is_some() && first_exit < second_start,
+        "replacement must wait for retirement; log {log:?}"
+    );
+}
+
+#[tokio::test]
 async fn write_calls_are_not_replayed_after_an_uncertain_failure() {
     let (adapter, dir) = adapter("die-once");
     let error = adapter

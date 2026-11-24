@@ -1,12 +1,12 @@
 //! Long-lived stdio MCP backend adapter built on the official `rmcp` client.
 
 use std::collections::{BTreeMap, HashSet};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
 use rmcp::model::{CallToolRequestParams, PaginatedRequestParams, Tool};
 use rmcp::service::{RoleClient, RunningService, ServiceError, ServiceExt};
-use rmcp::transport::TokioChildProcess;
 use serde_json::{json, Value};
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -18,6 +18,11 @@ const SAFE_ENV: [&str; 6] = ["PATH", "HOME", "LOGNAME", "SHELL", "TERM", "USER"]
 
 type ClientService = RunningService<RoleClient, ()>;
 
+struct Session {
+    service: ClientService,
+    child: tokio::process::Child,
+}
+
 /// One long-lived stdio MCP child, serialized like the Python adapter.
 pub struct StdioSubprocessAdapter {
     command: String,
@@ -26,36 +31,46 @@ pub struct StdioSubprocessAdapter {
     // The child is leased out while a call is in flight. A dropped future
     // leaves the slot empty, so the next caller spawns a fresh child instead
     // of overlapping the cancelled request on the same one.
-    service: Arc<StdMutex<Option<ClientService>>>,
-    retiring: Arc<StdMutex<Vec<ClientService>>>,
+    service: Arc<StdMutex<Option<Session>>>,
+    retiring: Arc<StdMutex<Vec<tokio::task::JoinHandle<()>>>>,
     call_lock: Mutex<()>,
 }
 
 struct ServiceLease {
-    service: Option<ClientService>,
-    slot: Arc<StdMutex<Option<ClientService>>>,
-    retiring: Arc<StdMutex<Vec<ClientService>>>,
+    service: Option<Session>,
+    slot: Arc<StdMutex<Option<Session>>>,
+    retiring: Arc<StdMutex<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
-struct RetireGuard {
-    service: Option<ClientService>,
-    queue: Arc<StdMutex<Vec<ClientService>>>,
+struct RetireHandleGuard {
+    handle: Option<tokio::task::JoinHandle<()>>,
+    queue: Arc<StdMutex<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
-impl Drop for RetireGuard {
+impl Drop for RetireHandleGuard {
     fn drop(&mut self) {
-        if let Some(service) = self.service.take() {
-            // Cancellation during retirement must leave the child waitable.
+        if let Some(handle) = self.handle.take() {
+            // Cancellation during retirement must leave the cleanup waitable.
             self.queue
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(service);
+                .push(handle);
         }
     }
 }
 
+fn queue_cleanup(session: Session, queue: &Arc<StdMutex<Vec<tokio::task::JoinHandle<()>>>>) {
+    let handle = tokio::spawn(async move {
+        cleanup_session(session).await;
+    });
+    queue
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(handle);
+}
+
 impl ServiceLease {
-    fn service(&mut self) -> &mut ClientService {
+    fn session(&mut self) -> &mut Session {
         self.service.as_mut().expect("leased service")
     }
 
@@ -70,10 +85,7 @@ impl ServiceLease {
 
     fn retire(mut self) {
         if let Some(service) = self.service.take() {
-            self.retiring
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(service);
+            queue_cleanup(service, &self.retiring);
         }
     }
 }
@@ -81,13 +93,7 @@ impl ServiceLease {
 impl Drop for ServiceLease {
     fn drop(&mut self) {
         if let Some(service) = self.service.take() {
-            // The caller was cancelled. Queue the child for the next call to
-            // shut down before it starts a replacement; a bare background
-            // cancel could still overlap the in-flight operation.
-            self.retiring
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(service);
+            queue_cleanup(service, &self.retiring);
         }
     }
 }
@@ -104,7 +110,7 @@ impl StdioSubprocessAdapter {
         }
     }
 
-    async fn spawn(&self) -> Result<ClientService, BackendError> {
+    async fn spawn(&self) -> Result<Session, BackendError> {
         let mut command = Command::new(&self.command);
         command.args(&self.args);
         // Python's stdio client starts children with a deliberately small
@@ -116,15 +122,26 @@ impl StdioSubprocessAdapter {
             }
         }
         command.envs(&self.env);
-        let transport = TokioChildProcess::new(command).map_err(|error| {
+        command.stdin(Stdio::piped()).stdout(Stdio::piped());
+        let mut child = command.spawn().map_err(|error| {
             BackendError::transient(format!(
                 "cannot spawn stdio backend {:?}: {error}",
                 self.command
             ))
         })?;
-        ().serve(transport)
-            .await
-            .map_err(|error| BackendError::transient(format!("stdio initialize failed: {error}")))
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| BackendError::transient("stdio child did not expose stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| BackendError::transient("stdio child did not expose stdout"))?;
+        let transport = tokio::io::join(stdout, stdin);
+        let service = ().serve(transport).await.map_err(|error| {
+            BackendError::transient(format!("stdio initialize failed: {error}"))
+        })?;
+        Ok(Session { service, child })
     }
 
     async fn ensure_service(&self) -> Result<(), BackendError> {
@@ -160,24 +177,24 @@ impl StdioSubprocessAdapter {
 
     async fn wait_for_retired(&self) {
         loop {
-            let service = self
+            let handle = self
                 .retiring
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .pop();
-            let Some(service) = service else {
+            let Some(handle) = handle else {
                 return;
             };
-            let mut guard = RetireGuard {
-                service: Some(service),
+            let mut guard = RetireHandleGuard {
+                handle: Some(handle),
                 queue: Arc::clone(&self.retiring),
             };
-            if let Some(service) = guard.service.as_mut() {
-                // `close` borrows, so cancellation drops this guard with the
-                // service still present; the next caller retries retirement.
-                let _ = service.close().await;
+            if let Some(handle) = guard.handle.as_mut() {
+                // Awaiting `&mut JoinHandle` is cancellation-safe: dropping
+                // this future re-queues the same handle for the next caller.
+                let _ = handle.await;
             }
-            let _ = guard.service.take();
+            let _ = guard.handle.take();
         }
     }
 }
@@ -189,7 +206,7 @@ impl BackendAdapter for StdioSubprocessAdapter {
         self.wait_for_retired().await;
         self.ensure_service().await?;
         let mut lease = self.take_lease();
-        let first = list_tools_pages(lease.service()).await;
+        let first = list_tools_pages(lease.session()).await;
         match first {
             Ok(tools) => {
                 lease.restore();
@@ -209,7 +226,7 @@ impl BackendAdapter for StdioSubprocessAdapter {
                     )));
                 }
                 let mut retry = self.take_lease();
-                let result = list_tools_pages(retry.service()).await;
+                let result = list_tools_pages(retry.session()).await;
                 match result {
                     Ok(tools) => {
                         retry.restore();
@@ -236,7 +253,12 @@ impl BackendAdapter for StdioSubprocessAdapter {
         self.wait_for_retired().await;
         self.ensure_service().await?;
         let mut lease = self.take_lease();
-        let first = lease.service().peer().call_tool(params.clone()).await;
+        let first = lease
+            .session()
+            .service
+            .peer()
+            .call_tool(params.clone())
+            .await;
         let result = match first {
             Ok(result) => {
                 lease.restore();
@@ -272,7 +294,7 @@ impl BackendAdapter for StdioSubprocessAdapter {
                     )));
                 }
                 let mut retry = self.take_lease();
-                let result = retry.service().peer().call_tool(params).await;
+                let result = retry.session().service.peer().call_tool(params).await;
                 match result {
                     Ok(result) => {
                         retry.restore();
@@ -294,6 +316,17 @@ impl BackendAdapter for StdioSubprocessAdapter {
     }
 }
 
+async fn cleanup_session(mut session: Session) {
+    let _ = session.service.cancel().await;
+    if tokio::time::timeout(std::time::Duration::from_secs(5), session.child.wait())
+        .await
+        .is_err()
+    {
+        let _ = session.child.kill().await;
+        let _ = session.child.wait().await;
+    }
+}
+
 fn is_definitive(error: &BackendError) -> bool {
     error.typed.is_none() && !error.transient && !error.uncertain
 }
@@ -302,7 +335,7 @@ fn service_error_is_definitive(error: &ServiceError) -> bool {
     matches!(error, ServiceError::McpError(_))
 }
 
-async fn list_tools_pages(service: &mut ClientService) -> Result<Vec<Tool>, BackendError> {
+async fn list_tools_pages(session: &mut Session) -> Result<Vec<Tool>, BackendError> {
     let mut tools = Vec::new();
     let mut cursor: Option<String> = None;
     let mut seen = HashSet::new();
@@ -316,13 +349,18 @@ async fn list_tools_pages(service: &mut ClientService) -> Result<Vec<Tool>, Back
             ),
             None => None,
         };
-        let result = service.peer().list_tools(params).await.map_err(|error| {
-            if service_error_is_definitive(&error) {
-                BackendError::permanent(format!("stdio tools/list rejected: {error}"))
-            } else {
-                BackendError::transient(format!("stdio tools/list failed: {error}"))
-            }
-        })?;
+        let result = session
+            .service
+            .peer()
+            .list_tools(params)
+            .await
+            .map_err(|error| {
+                if service_error_is_definitive(&error) {
+                    BackendError::permanent(format!("stdio tools/list rejected: {error}"))
+                } else {
+                    BackendError::transient(format!("stdio tools/list failed: {error}"))
+                }
+            })?;
         tools.extend(result.tools);
         let Some(next) = result.next_cursor.filter(|cursor| !cursor.is_empty()) else {
             return Ok(tools);

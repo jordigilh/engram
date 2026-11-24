@@ -17,6 +17,15 @@ Needing fewer exploratory sweeps to reach that accuracy is also, naturally,
 cheaper — reduced token consumption is a measured side effect of this, not
 the goal (see [Value](#value-measuring-effectiveness) below).
 
+> **Migration status (2026-11-24):** the client-facing gateway is Rust
+> (`engram-mcp`, port 8898); the Python gateway is rollback-only. Serena,
+> CocoIndex/search, Python ingestion, the Python Hindsight proxy, and the
+> flows server are **still Python**. The runtime is not fully migrated, and
+> the Python code cannot be deleted yet. Final removal is tracked in
+> [#232](https://github.com/jordigilh/engram/issues/232). Architecture text
+> below that mentions `:8896` or CocoIndex ingestion describes the
+> pre-cutover topology unless it says otherwise.
+
 ## How it works
 
 ```mermaid

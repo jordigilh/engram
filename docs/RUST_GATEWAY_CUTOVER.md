@@ -3,6 +3,11 @@
 Target: replace the Python `engram-gateway` on `127.0.0.1:8898` with
 `engram-mcp`, keeping Python installed and runnable for rollback.
 
+> **Status: executed on 2026-11-24.** `engram-mcp` serves `:8898` under
+> `io.vectorize.engram-mcp`; all 22 routes were re-verified after the switch.
+> The Python plist remains installed for rollback. This did **not** remove the
+> rest of the Python runtime; see #232.
+
 ## Preconditions
 
 - `docs/RUST_GATEWAY_SHADOW_RUN.md` shows 22/22 catalog matches and

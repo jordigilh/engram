@@ -69,7 +69,10 @@ The stdio route (`kubernaut-operator-tls-e2e-lanes-498`) completed its
 `tools/list` through the Rust stdio adapter, confirming the Phase 3 transport
 works against the live configuration.
 
-## Remaining before cutover
+## After the run
 
-- Serena `search_for_pattern` overflow shaping (#213).
-- Cutover/rollback runbook and launchd switch; Python stays as rollback.
+- Cutover executed on 2026-11-24: `engram-mcp` serves `:8898`; Python remains
+  the documented rollback.
+- Serena `search_for_pattern` overflow shaping is deferred to #213.
+- Deleting the Python code is tracked in #232 and blocked on the remaining
+  runtime slices.

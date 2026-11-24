@@ -561,13 +561,13 @@ clients that bypass the gateway retain zvec-grep's eventual mode.
 > **Evolution (2026-08-13, shared HTTP daemons instead of one stdio process
 > per window)**: for a large family (kubernaut-family: 6 repos), opening N
 > repos as N separate OpenCode sessions can still spawn N
-> `cocoindex-code`/`serena` subprocesses (loading the same ~855-package Go
-> module N times). If that's a real resource concern, run
-> `engram-search-configured --project <project>`/`serena start-mcp-server` once each as permanent
-> `launchd` daemons (`--transport streamable-http`, fixed host/port) instead,
-> and register their project routes through the OpenCode plugin. See
-> `launchd/io.vectorize.cocoindex-code.kubernaut-family.plist`,
-> `launchd/io.vectorize.serena.kubernaut-family.plist`, and
+> `serena` subprocesses (loading the same large Go module N times). Code
+> search is zvec-grep and needs no per-family daemon. If the N Serena
+> processes are a real resource concern, run
+> `serena start-mcp-server` once for the family as a permanent
+> `launchd` daemon (`--transport streamable-http`, fixed host/port) instead,
+> and register the project routes through the OpenCode plugin. See
+> `launchd/io.vectorize.serena.kubernaut-family.plist` and
 > `launchd/io.vectorize.serena-project-server.plist` for the concrete
 > templates, and `docs/findings/2026-08.md`'s 2026-08-13 (same day, seventh
 > and eighth follow-ups) entry for the full rationale and a real gotcha this
@@ -586,12 +586,9 @@ clients that bypass the gateway retain zvec-grep's eventual mode.
 >
 > **On Linux**: same architecture, `systemd --user` units instead of
 > `launchd` plists — see `docs/INSTALL-linux.md` step 9 and
-> `systemd/engram-cocoindex-code-kubernaut-family.service` /
 > `systemd/engram-serena-kubernaut-family.service` /
 > `systemd/engram-serena-project-server.service` for the direct analogs of
-> this section's 3 plists, including a real Postgres-reachability gotcha
-> specific to Linux's containerized Hindsight deployment that macOS doesn't
-> have (step 9 documents the fix).
+> this section's plists.
 >
 > **This still leaves one gap**, closed by step 8a below: the shared `serena`
 > daemon has exactly one process-global "active project" at a time, so only

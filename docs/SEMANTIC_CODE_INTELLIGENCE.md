@@ -422,13 +422,13 @@ Codanna `0.16.0` was enabled on 2026-09-21 as a temporary semantic-search
 experiment and removed from the active Kubernaut client configuration on
 2026-09-23. The current working-tree gateway registry now configures the
 `kubernaut` and `kubernaut-operator` code routes with `ZvecShadowRelayAdapter`:
-zvec-grep is primary, and CocoIndex search plus comparable graph queries run
-asynchronously as a shadow. Other Kubernaut-family routes continue using the
-shared CocoIndex backend.
+zvec-grep is the only code-search backend. The CocoIndex shadow and its
+`engram-search-configured` services were retired in #214; the code below is
+retained as migration history.
 
 The primary URL defaults to `http://127.0.0.1:7999/mcp` and can be overridden
-with `ZVEC_GREP_MCP_URL`; the shadow URL defaults to
-`http://127.0.0.1:8891/mcp` and can be overridden with `COCOINDEX_MCP_URL`.
+with `ZVEC_GREP_MCP_URL`. Historical shadow URL `http://127.0.0.1:8891/mcp`
+and `COCOINDEX_MCP_URL` no longer have a live service behind them.
 The URL is an HTTP listener, not an executable path. On macOS, the
 `io.vectorize.zvec-grep` LaunchAgent runs the published multi-architecture Rust
 image through `scripts/run-zvec-grep-container.sh`; `zg` remains bound to

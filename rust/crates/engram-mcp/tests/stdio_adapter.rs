@@ -272,6 +272,7 @@ async fn cancellation_during_retirement_keeps_the_cleanup_waitable() {
     // Release the gated child so the third call can finish retirement.
     std::fs::write(dir.path("release"), b"1").expect("release gate");
 
+    let handles_before_third = adapter.retirement_handle_waits();
     let result = tokio::time::timeout(
         Duration::from_secs(8),
         adapter.call_tool("alpha", json!({})),
@@ -280,6 +281,10 @@ async fn cancellation_during_retirement_keeps_the_cleanup_waitable() {
     .expect("third call must not hang")
     .expect("third call");
     assert_eq!(result["content"][0]["text"], "echo");
+    assert!(
+        adapter.retirement_handle_waits() > handles_before_third,
+        "third caller must take the requeued cleanup handle"
+    );
 
     let log = dir.read("log");
     let lines: Vec<&str> = log.lines().collect();

@@ -209,7 +209,7 @@ journalctl --user -u engram-cocoindex.service -f
 > the direct equivalent of launchd's LaunchAgents starting at login without
 > needing an active terminal session.
 
-## 9. (Optional, Repo Families Only) Shared cocoindex-code/Serena Daemons + Serena Multiplex
+## 9. (Optional, Repo Families Only) Shared Serena Daemons + Serena Multiplex
 
 If you're onboarding a **family of repos under one org that should share one
 code-intelligence backend**, use the shared-daemon guidance in
@@ -217,47 +217,28 @@ code-intelligence backend**, use the shared-daemon guidance in
 [`OPENCODE.md`](OPENCODE.md). This section is only the Linux
 (`systemd --user`) command sequence.
 
+> **Code search is zvec-grep.** The old `cocoindex-code` daemon and its unit
+> template were retired in #214; no `pg_dsn` or CocoIndex database is needed
+> for code search. The remaining units are Serena-only.
+
 ```bash
-cp systemd/engram-cocoindex-code-kubernaut-family.service ~/.config/systemd/user/
 cp systemd/engram-serena-kubernaut-family.service ~/.config/systemd/user/
 cp systemd/engram-serena-project-server.service ~/.config/systemd/user/
 cp systemd/engram-serena-multiplex-kubernaut-family.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 
-systemctl --user enable --now engram-cocoindex-code-kubernaut-family.service
 systemctl --user enable --now engram-serena-kubernaut-family.service
 systemctl --user enable --now engram-serena-project-server.service
 systemctl --user enable --now engram-serena-multiplex-kubernaut-family.service
 ```
 
-The 4 unit files are named/scoped for this project's own repo family
+The 3 unit files are named/scoped for this project's own repo family
 (`kubernaut`, `kubernaut-operator`, `kubernaut-console`,
 `kubernaut-demo-scenarios`, `kubernaut-v1.6`) — for a
 different family, copy and rename them, and edit each unit's `--project`/
 `ExecStart` args plus the OpenCode plugin's project/branch routes to match. See each
 unit file's own header comments (and the direct-analog `launchd/*.plist`
 they mirror) for the full per-flag rationale.
-
-> **Postgres reachability gotcha specific to Linux (confirmed via a live
-> spike, 2026-08-13)**: the `cocoindex-code` daemon's `defaults.pg_dsn`
-> needs `localhost:5432` reachable from a **native** host process. On
-> macOS this works because Postgres either runs natively or its embedded
-> `pg0` is otherwise reachable on the host loopback; on Linux, step 5's
-> Podman Quadlet only publishes port 8888 by default, **not** 5432 — live
-> reproduced on a real RHEL 9 host: with only `PublishPort=8888:8888`, a
-> raw TCP connection attempt to `localhost:5432` got an immediate
-> connection-refused (not a hang), confirming it's genuinely unreachable,
-> not just slow. Fix, also confirmed live: adding `PublishPort=5432:5432`
-> to `~/.config/containers/systemd/hindsight.container` and restarting the
-> service made 5432 immediately reachable, and the `cocoindex-code` daemon
-> started and served `tools/list` correctly against it with no further
-> changes. (Running under that Quadlet's `Network=host` fallback instead
-> would also make 5432 reachable with no `PublishPort` needed, but this
-> wasn't separately re-tested this session — bridge + explicit
-> `PublishPort` was.) Verify with
-> `psql -h localhost -p 5432 -U hindsight -d hindsight -c 'select 1;'`
-> (or a plain `bash -c 'echo > /dev/tcp/localhost/5432'` reachability check
-> if `psql` isn't installed) before enabling the unit.
 
 Register each family repo's multiplex mount through the OpenCode plugin's
 project route and optional `branchRoutes`, as described in

@@ -116,6 +116,20 @@ def main() -> None:
                 return
             if MODE == "request-then-respond":
                 send({"jsonrpc": "2.0", "id": "server-request-1", "method": "roots/list"})
+                # Wait for the client's response before completing the call.
+                while True:
+                    reply_line = sys.stdin.readline()
+                    if not reply_line:
+                        return
+                    try:
+                        reply = json.loads(reply_line)
+                    except ValueError:
+                        continue
+                    if (
+                        reply.get("id") == "server-request-1"
+                        and "method" not in reply
+                    ):
+                        break
             if MODE == "slow":
                 time.sleep(1.0)
             send(
@@ -131,6 +145,9 @@ def main() -> None:
                     },
                 }
             )
+        elif method is None and message_id is not None:
+            # A response to a server-to-client request: nothing to dispatch.
+            continue
         elif message_id is not None:
             send(
                 {

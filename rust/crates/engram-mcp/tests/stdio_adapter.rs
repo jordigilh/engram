@@ -146,7 +146,8 @@ async fn a_cancelled_call_does_not_poison_the_session() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     first.abort();
-    let _ = first.await;
+    let joined = first.await;
+    assert!(joined.expect_err("aborted task").is_cancelled());
 
     let result = tokio::time::timeout(
         Duration::from_secs(5),
@@ -156,6 +157,16 @@ async fn a_cancelled_call_does_not_poison_the_session() {
     .expect("second call must not hang")
     .expect("second call");
     assert_eq!(result["content"][0]["text"], "echo");
+
+    let log = dir.read("log");
+    let starts = log
+        .lines()
+        .filter(|line| line.starts_with("start "))
+        .count();
+    assert_eq!(
+        starts, 2,
+        "cancelled call must retire the child; log {log:?}"
+    );
 }
 
 #[tokio::test]

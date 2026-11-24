@@ -1,6 +1,7 @@
 //! Long-lived stdio MCP backend adapter built on the official `rmcp` client.
 
 use std::collections::{BTreeMap, HashSet};
+use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
 use rmcp::model::{CallToolRequestParams, PaginatedRequestParams, Tool};
@@ -22,7 +23,49 @@ pub struct StdioSubprocessAdapter {
     command: String,
     args: Vec<String>,
     env: BTreeMap<String, String>,
-    service: Mutex<Option<ClientService>>,
+    // The child is leased out while a call is in flight. A dropped future
+    // leaves the slot empty, so the next caller spawns a fresh child instead
+    // of overlapping the cancelled request on the same one.
+    service: Arc<StdMutex<Option<ClientService>>>,
+    call_lock: Mutex<()>,
+}
+
+struct ServiceLease {
+    service: Option<ClientService>,
+    slot: Arc<StdMutex<Option<ClientService>>>,
+}
+
+impl ServiceLease {
+    fn service(&mut self) -> &mut ClientService {
+        self.service.as_mut().expect("leased service")
+    }
+
+    fn restore(mut self) {
+        if let Some(service) = self.service.take() {
+            *self
+                .slot
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(service);
+        }
+    }
+
+    async fn retire(mut self) {
+        if let Some(service) = self.service.take() {
+            let _ = service.cancel().await;
+        }
+    }
+}
+
+impl Drop for ServiceLease {
+    fn drop(&mut self) {
+        if let Some(service) = self.service.take() {
+            // The caller was cancelled: retire the child instead of letting a
+            // later call reuse it while the cancelled request may still run.
+            tokio::spawn(async move {
+                let _ = service.cancel().await;
+            });
+        }
+    }
 }
 
 impl StdioSubprocessAdapter {
@@ -31,7 +74,8 @@ impl StdioSubprocessAdapter {
             command,
             args,
             env,
-            service: Mutex::new(None),
+            service: Arc::new(StdMutex::new(None)),
+            call_lock: Mutex::new(()),
         }
     }
 
@@ -58,51 +102,78 @@ impl StdioSubprocessAdapter {
             .map_err(|error| BackendError::transient(format!("stdio initialize failed: {error}")))
     }
 
-    async fn restart(&self, service: &mut Option<ClientService>) -> Result<(), BackendError> {
-        if let Some(service) = service.take() {
-            // rmcp's documented graceful path: closes stdin, waits, then
-            // TERM/KILL. A bare drop is SIGKILL-only and can orphan children.
-            let _ = service.cancel().await;
+    async fn ensure_service(&self) -> Result<(), BackendError> {
+        if self
+            .service
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+        {
+            return Ok(());
         }
-        *service = Some(self.spawn().await?);
+        let service = self.spawn().await?;
+        *self
+            .service
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(service);
         Ok(())
     }
 
-    async fn ensure(&self, service: &mut Option<ClientService>) -> Result<(), BackendError> {
-        if service.is_none() {
-            *service = Some(self.spawn().await?);
+    fn take_lease(&self) -> ServiceLease {
+        let service = self
+            .service
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+            .expect("service ensured");
+        ServiceLease {
+            service: Some(service),
+            slot: Arc::clone(&self.service),
         }
-        Ok(())
     }
 }
 
 #[async_trait]
 impl BackendAdapter for StdioSubprocessAdapter {
     async fn list_tools(&self) -> Result<Vec<Value>, BackendError> {
-        let mut guard = self.service.lock().await;
-        self.ensure(&mut guard).await?;
-        let first = list_tools_pages(guard.as_ref().expect("service initialized")).await;
-        let tools = match first {
-            Ok(tools) => tools,
-            Err(error) if is_definitive(&error) => return Err(error),
+        let _call = self.call_lock.lock().await;
+        self.ensure_service().await?;
+        let mut lease = self.take_lease();
+        let first = list_tools_pages(lease.service()).await;
+        match first {
+            Ok(tools) => {
+                lease.restore();
+                Ok(normalize_tools(tools))
+            }
+            Err(error) if is_definitive(&error) => {
+                lease.restore();
+                Err(error)
+            }
             Err(error) => {
                 let first_error = error.message;
-                if let Err(restart) = self.restart(&mut guard).await {
+                lease.retire().await;
+                if let Err(restart) = self.ensure_service().await {
                     return Err(BackendError::transient(format!(
                         "stdio tools/list restart failed: {restart} (first: {first_error})"
                     )));
                 }
-                list_tools_pages(guard.as_ref().expect("restarted service"))
-                    .await
-                    .map_err(|error| {
-                        BackendError::permanent(format!(
+                let mut retry = self.take_lease();
+                let result = list_tools_pages(retry.service()).await;
+                match result {
+                    Ok(tools) => {
+                        retry.restore();
+                        Ok(normalize_tools(tools))
+                    }
+                    Err(error) => {
+                        retry.restore();
+                        Err(BackendError::permanent(format!(
                             "stdio tools/list failed after retry: {} (first: {first_error})",
                             error.message
-                        ))
-                    })?
+                        )))
+                    }
+                }
             }
-        };
-        Ok(normalize_tools(tools))
+        }
     }
 
     async fn call_tool(&self, name: &str, arguments: Value) -> Result<Value, BackendError> {
@@ -110,17 +181,17 @@ impl BackendAdapter for StdioSubprocessAdapter {
             json!({"name": name, "arguments": arguments}),
         )
         .map_err(|error| BackendError::permanent(format!("invalid stdio tool request: {error}")))?;
-        let mut guard = self.service.lock().await;
-        self.ensure(&mut guard).await?;
-        let first = guard
-            .as_ref()
-            .expect("service initialized")
-            .peer()
-            .call_tool(params.clone())
-            .await;
+        let _call = self.call_lock.lock().await;
+        self.ensure_service().await?;
+        let mut lease = self.take_lease();
+        let first = lease.service().peer().call_tool(params.clone()).await;
         let result = match first {
-            Ok(result) => result,
+            Ok(result) => {
+                lease.restore();
+                result
+            }
             Err(error) if service_error_is_definitive(&error) => {
+                lease.restore();
                 return Err(BackendError::permanent(format!(
                     "stdio tools/call rejected: {error}"
                 )));
@@ -128,8 +199,8 @@ impl BackendAdapter for StdioSubprocessAdapter {
             Err(error) if is_write_tool(name) => {
                 // Recover the child for later calls, but never replay the
                 // write itself; let the gateway surface outcome_unknown.
-                let restart = self.restart(&mut guard).await;
-                let recovery = match restart {
+                lease.retire().await;
+                let recovery = match self.ensure_service().await {
                     Ok(()) => String::new(),
                     Err(restart_error) => format!(" (restart failed: {restart_error})"),
                 };
@@ -140,22 +211,26 @@ impl BackendAdapter for StdioSubprocessAdapter {
             }
             Err(error) => {
                 let first_error = format!("{error}");
-                if let Err(restart) = self.restart(&mut guard).await {
+                lease.retire().await;
+                if let Err(restart) = self.ensure_service().await {
                     return Err(BackendError::transient(format!(
                         "stdio tools/call restart failed: {restart} (first: {first_error})"
                     )));
                 }
-                guard
-                    .as_ref()
-                    .expect("restarted service")
-                    .peer()
-                    .call_tool(params)
-                    .await
-                    .map_err(|error| {
-                        BackendError::permanent(format!(
+                let mut retry = self.take_lease();
+                let result = retry.service().peer().call_tool(params).await;
+                match result {
+                    Ok(result) => {
+                        retry.restore();
+                        result
+                    }
+                    Err(error) => {
+                        retry.restore();
+                        return Err(BackendError::permanent(format!(
                             "stdio tools/call failed after retry: {error} (first: {first_error})"
-                        ))
-                    })?
+                        )));
+                    }
+                }
             }
         };
         let value = serde_json::to_value(result).map_err(|error| {
@@ -173,7 +248,7 @@ fn service_error_is_definitive(error: &ServiceError) -> bool {
     matches!(error, ServiceError::McpError(_))
 }
 
-async fn list_tools_pages(service: &ClientService) -> Result<Vec<Tool>, BackendError> {
+async fn list_tools_pages(service: &mut ClientService) -> Result<Vec<Tool>, BackendError> {
     let mut tools = Vec::new();
     let mut cursor: Option<String> = None;
     let mut seen = HashSet::new();

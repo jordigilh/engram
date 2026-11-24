@@ -26,10 +26,14 @@ struct Args {
     #[arg(long, default_value_t = 8898)]
     port: u16,
 
-    /// Accept non-initialize requests without `Mcp-Session-Id`.
-    /// Off by default (MCP behavior); on for Python-gateway parity.
-    #[arg(long)]
-    allow_stateless: bool,
+    /// Require `Mcp-Session-Id` on non-initialize requests. Opt-in strict MCP
+    /// behavior; the default matches the Python gateway's stateless mode.
+    #[arg(long, conflicts_with = "_allow_stateless")]
+    require_session: bool,
+
+    /// Deprecated compatibility alias; stateless is already the default.
+    #[arg(long = "allow-stateless", hide = true)]
+    _allow_stateless: bool,
 
     /// Additional browser Origin allowed to call the gateway. Loopback
     /// origins are always allowed; requests without Origin are native clients.
@@ -80,11 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         projects
     };
 
-    let policy = if args.allow_stateless {
-        SessionPolicy::Optional
-    } else {
-        SessionPolicy::Required
-    };
+    let policy = session_policy(args.require_session);
     let address = SocketAddr::new(host, args.port);
     let listener = tokio::net::TcpListener::bind(address).await?;
 
@@ -110,8 +110,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn session_policy(require_session: bool) -> SessionPolicy {
+    if require_session {
+        SessionPolicy::Required
+    } else {
+        SessionPolicy::Optional
+    }
+}
+
 fn default_config_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     let path = PathBuf::from(home).join(".engram/runtime/native-instances.toml");
     path.is_file().then_some(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_policy_defaults_to_python_stateless_mode() {
+        assert_eq!(session_policy(false), SessionPolicy::Optional);
+        assert_eq!(session_policy(true), SessionPolicy::Required);
+    }
+
+    #[test]
+    fn args_accept_the_compatibility_alias_and_reject_conflicting_flags() {
+        assert!(Args::try_parse_from(["engram-mcp", "--allow-stateless"]).is_ok());
+        assert!(Args::try_parse_from(["engram-mcp", "--require-session"]).is_ok());
+        assert!(
+            Args::try_parse_from(["engram-mcp", "--require-session", "--allow-stateless"]).is_err()
+        );
+    }
 }

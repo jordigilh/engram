@@ -23,8 +23,9 @@ Implemented:
   automatic `docs_manual`/`issues_manual` synthesis.
 - Best-effort concurrent catalog prewarm after the listener binds; `tools/list`
   refreshes and replaces the cache, `tools/call` routes from it.
-- Typed `-32002` envelopes: `workspace_unbound` (409), `workspace_flushing`
-  (503 + `Retry-After`), and `outcome_unknown` (409, non-retryable) for
+- Typed `-32002` envelopes: upstream `workspace_unbound` (409) and
+  `workspace_flushing` (503 + `Retry-After`) are relayed unchanged;
+  `outcome_unknown` (409, non-retryable) is gateway-owned for
   transport-uncertain writes. `workspace_auth_timeout` is defined for future
   authorization paths.
 - Freshness envelope `_meta.engram_freshness` on `tools/list` and successful
@@ -37,8 +38,8 @@ Deliberately not implemented in this slice:
 
 - Stdio and `shadow_http` adapters. Registry parsing accepts them for config
   compatibility, but adapter construction rejects them with a startup error.
-- Response shaping (recall/Serena normalization, `max_answer_chars`
-  truncation).
+- Serena-specific `search_for_pattern` overflow normalization (the zvec alias
+  is implemented; no live config exposes raw Serena pattern search).
 - SCIP reads (#212), edit/diagnostics (#213), ingestion (#214), language
   adapters (#215).
 - Any change to the Python gateway. `src/engram/pipeline/engram_gateway.py`
@@ -135,10 +136,12 @@ cargo run -p engram-mcp -- --config ~/.engram/runtime/native-instances.toml --po
 
 Without `--config`, the server uses `~/.engram/runtime/native-instances.toml`
 when it exists, or named static routes from `--projects`. The server binds
-loopback only and refuses a non-loopback `--host`. Add
-`--allow-stateless` to accept non-`initialize` requests without a session.
-In that migration mode, `DELETE` and cancellation fencing apply only to
-requests that carry `Mcp-Session-Id`.
+loopback only and refuses a non-loopback `--host`. The default is stateless,
+matching the Python gateway: non-`initialize` requests work without a session.
+Add `--require-session` for strict MCP behavior (the hidden
+`--allow-stateless` flag remains accepted for installed units). In stateless
+mode, `DELETE` and cancellation fencing apply only to requests that carry
+`Mcp-Session-Id`.
 
 ## Python parity harness
 
@@ -148,7 +151,7 @@ gateway (`src/engram/pipeline/engram_gateway.py`) with
 Rust shaping functions against those files, and `tests/gateway_routing.rs`
 checks that the HTTP gateway applies them on the real request path.
 
-Current parity coverage (issue #224 Phase 0+1):
+Current parity coverage (issue #224 Phase 0+2):
 
 - Hindsight `recall` results are normalized to the bounded
   `engram-recall.v1` text + `structuredContent` shape (8 results, 800-char
@@ -157,10 +160,19 @@ Current parity coverage (issue #224 Phase 0+1):
 - `search_for_pattern` exposes `max_answer_chars` and truncates overlong
   results with the Python suffix and boundary behavior.
 
-Still deferred from #224: stdio/shadow adapters, workspace/refresh/session
-behavior parity, call metrics, the copy of the full Python gateway suite, and
-Serena's `search_for_pattern` overflow shaping (raw Serena backend; no live
-config exposes it, tracked with the Serena retirement slice).
+Phase 2 parity (transport): workspace-routed calls without `?workspace` are
+forwarded like Python; catalog refreshes never reject a `tools/call` with 503;
+freshness metadata reports `catalog_state: refreshing`; the runtime defaults to
+stateless sessions.
+
+Intentional divergences: Rust returns `{}` for `ping` and JSON-RPC `-32601` for
+unknown methods, while Python returns a minimal initialize-shaped success for
+any request id. Rust also refuses non-loopback binds and Host/Origin values.
+
+Still deferred from #224: stdio/shadow adapters, call metrics, the copy of the
+full Python gateway suite, and Serena's `search_for_pattern` overflow shaping
+(raw Serena backend; no live config exposes it, tracked with the Serena
+retirement slice).
 
 ## Contract tests
 

@@ -12,7 +12,10 @@ use axum::routing::post;
 use axum::{Json, Router};
 use engram_mcp::backend::{BackendAdapter, HttpRelayAdapter};
 use engram_mcp::server::tool_definition;
-use engram_mcp::{build_project_adapters, router, Project, Registry};
+use engram_mcp::{
+    build_project_adapters, router, router_with_options, OriginPolicy, Project, Registry,
+    SessionPolicy,
+};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -29,8 +32,12 @@ struct MockState {
     call_jsonrpc_error: bool,
     call_no_response: bool,
     call_typed_busy: bool,
+    call_typed_unbound: bool,
     init_jsonrpc_error: bool,
     call_delay_ms: u64,
+    list_pause_at: Option<usize>,
+    list_paused: Arc<tokio::sync::Semaphore>,
+    list_release: Arc<tokio::sync::Semaphore>,
     sse_notification_first: bool,
     list_attempts: Arc<AtomicUsize>,
     call_attempts: Arc<AtomicUsize>,
@@ -62,8 +69,10 @@ struct MockConfig {
     call_jsonrpc_error: bool,
     call_no_response: bool,
     call_typed_busy: bool,
+    call_typed_unbound: bool,
     init_jsonrpc_error: bool,
     call_delay_ms: u64,
+    list_pause_at: Option<usize>,
     sse_notification_first: bool,
 }
 
@@ -82,7 +91,11 @@ async fn spawn_mock(config: MockConfig) -> (String, MockState) {
         call_typed_busy: config.call_typed_busy,
         init_jsonrpc_error: config.init_jsonrpc_error,
         call_delay_ms: config.call_delay_ms,
+        list_pause_at: config.list_pause_at,
+        list_paused: Arc::new(tokio::sync::Semaphore::new(0)),
+        list_release: Arc::new(tokio::sync::Semaphore::new(0)),
         sse_notification_first: config.sse_notification_first,
+        call_typed_unbound: config.call_typed_unbound,
         list_attempts: Arc::new(AtomicUsize::new(0)),
         call_attempts: Arc::new(AtomicUsize::new(0)),
         records: Arc::new(Mutex::new(Vec::new())),
@@ -167,6 +180,10 @@ async fn mock_post(
         "notifications/initialized" => StatusCode::ACCEPTED.into_response(),
         "tools/list" => {
             let attempt = state.list_attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            if state.list_pause_at == Some(attempt) {
+                state.list_paused.add_permits(1);
+                let _permit = state.list_release.acquire().await;
+            }
             if state.list_always_fail.load(Ordering::SeqCst) || attempt <= state.list_fail_first {
                 return StatusCode::SERVICE_UNAVAILABLE.into_response();
             }
@@ -202,6 +219,25 @@ async fn mock_post(
                     "method": "notifications/progress"
                 }))
                 .into_response();
+            }
+            if state.call_typed_unbound {
+                return (
+                    StatusCode::CONFLICT,
+                    [("x-engram-error", "workspace_unbound")],
+                    Json(json!({
+                        "jsonrpc": "2.0",
+                        "id": body.get("id"),
+                        "error": {
+                            "code": -32002,
+                            "message": "workspace_unbound",
+                            "data": {
+                                "kind": "workspace_unbound",
+                                "retryable": false
+                            }
+                        }
+                    })),
+                )
+                    .into_response();
             }
             if state.call_typed_busy {
                 return (
@@ -588,6 +624,10 @@ async fn search_for_pattern_alias_translates_and_requires_workspace() {
     )
     .await;
     assert_eq!(sse_data(&body)["result"]["isError"], true);
+    assert!(sse_data(&body)["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("requires the request workspace"));
 }
 
 #[tokio::test]
@@ -1224,10 +1264,58 @@ fn json_body(body: &str) -> Value {
 }
 
 #[tokio::test]
-async fn typed_workspace_unbound_is_409_with_header() {
-    let (url, _mock) = spawn_mock(MockConfig {
+async fn workspace_routing_tool_forwards_without_workspace() {
+    let (url, mock) = spawn_mock(MockConfig {
         tools: vec![tool("find_symbol")],
         call_result: json!({"content": [], "isError": false}),
+        ..Default::default()
+    })
+    .await;
+    let registry = Registry::parse_str(&format!(
+        r#"
+[instances.editor.backends.editor]
+kind = "http"
+url = "{url}"
+workspace_routing = true
+"#
+    ))
+    .unwrap();
+    let adapters = build_project_adapters("editor", registry.get("editor").unwrap()).unwrap();
+    let project = Project::with_backends("editor", adapters);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "editor").await;
+
+    let (status, body) = call(
+        &app,
+        "/mcp/editor",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 40,
+            "method": "tools/call",
+            "params": {"name": "find_symbol", "arguments": {}}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(sse_data(&body)["result"]["isError"], false);
+
+    let records = mock.records.lock().unwrap();
+    let routed = records
+        .iter()
+        .rev()
+        .find(|record| record.method == "tools/call")
+        .expect("routed call");
+    assert_eq!(routed.workspace, None);
+    assert_eq!(routed.arguments, Some(json!({})));
+}
+
+#[tokio::test]
+async fn upstream_workspace_unbound_is_relayed() {
+    let (url, mock) = spawn_mock(MockConfig {
+        tools: vec![tool("find_symbol")],
+        call_typed_unbound: true,
         ..Default::default()
     })
     .await;
@@ -1256,7 +1344,7 @@ workspace_routing = true
                 .body(Body::from(
                     json!({
                         "jsonrpc": "2.0",
-                        "id": 40,
+                        "id": 41,
                         "method": "tools/call",
                         "params": {"name": "find_symbol", "arguments": {}}
                     })
@@ -1273,10 +1361,18 @@ workspace_routing = true
     assert_eq!(payload["error"]["code"], -32002);
     assert_eq!(payload["error"]["data"]["kind"], "workspace_unbound");
     assert_eq!(payload["error"]["data"]["retryable"], false);
+
+    let records = mock.records.lock().unwrap();
+    let routed = records
+        .iter()
+        .rev()
+        .find(|record| record.method == "tools/call")
+        .expect("upstream call happened");
+    assert_eq!(routed.workspace, None);
 }
 
 #[tokio::test]
-async fn typed_workspace_flushing_before_initial_catalog() {
+async fn call_before_initial_catalog_is_a_tool_error_not_flushing() {
     let (url, _mock) = spawn_mock(MockConfig {
         tools: vec![tool("recall")],
         call_result: json!({"content": [], "isError": false}),
@@ -1289,33 +1385,134 @@ async fn typed_workspace_flushing_before_initial_catalog() {
     let app = router([project]);
     let session = initialize(&app, "alpha").await;
 
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/mcp/alpha")
-                .header("mcp-session-id", &session)
-                .body(Body::from(
-                    json!({
-                        "jsonrpc": "2.0",
-                        "id": 41,
-                        "method": "tools/call",
-                        "params": {"name": "docs_recall", "arguments": {}}
-                    })
-                    .to_string(),
-                ))
-                .expect("request"),
-        )
+    let (status, body) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "tools/call",
+            "params": {"name": "docs_recall", "arguments": {}}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(sse_data(&body)["result"]["isError"], true);
+    assert!(sse_data(&body)["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("Unknown tool"));
+}
+
+#[tokio::test]
+async fn call_during_refresh_uses_the_published_catalog() {
+    let (url, mock) = spawn_mock(MockConfig {
+        tools: vec![tool("recall")],
+        call_result: json!({"content": [], "isError": false}),
+        list_pause_at: Some(2),
+        ..Default::default()
+    })
+    .await;
+    let adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
+    let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]);
+    project.prewarm().await;
+    let generation = project
+        .backends
+        .as_ref()
+        .expect("backends")
+        .freshness("alpha", None)
+        .generation;
+
+    let app = router([project.clone()]);
+    let session = initialize(&app, "alpha").await;
+    let refresh = tokio::spawn(async move { project.prewarm().await });
+
+    // Wait until the second tools/list is actually blocked inside the refresh.
+    mock.list_paused
+        .acquire()
         .await
-        .expect("router responds");
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(response.headers()["x-engram-error"], "workspace_flushing");
-    assert_eq!(response.headers()["retry-after"], "1");
-    let body = to_bytes(response.into_body(), 32 * 1024).await.unwrap();
-    let payload = json_body(&String::from_utf8_lossy(&body));
-    assert_eq!(payload["error"]["data"]["kind"], "workspace_flushing");
-    assert_eq!(payload["error"]["data"]["retryable"], true);
+        .expect("refresh entered tools/list")
+        .forget();
+
+    let (status, body) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 43,
+            "method": "tools/call",
+            "params": {"name": "docs_recall", "arguments": {}}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(sse_data(&body)["result"]["isError"], false);
+    let freshness = &sse_data(&body)["result"]["_meta"]["engram_freshness"];
+    assert_eq!(freshness["catalog_state"], "refreshing");
+    assert_eq!(freshness["catalog_generation"], generation);
+
+    mock.list_release.add_permits(1);
+    let (list_status, list_body) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({"jsonrpc": "2.0", "id": 44, "method": "tools/list"}),
+    )
+    .await;
+    assert_eq!(list_status, StatusCode::OK);
+    assert!(!sse_data(&list_body)["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    refresh.await.expect("refresh task");
+}
+
+#[tokio::test]
+async fn optional_policy_serves_headerless_calls_and_cancellation() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("recall")],
+        call_result: json!({"content": [], "isError": false}),
+        ..Default::default()
+    })
+    .await;
+    let adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
+    let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]);
+    project.prewarm().await;
+    let app = router_with_options([project], SessionPolicy::Optional, OriginPolicy::default());
+
+    // A headerless cancellation is a no-op: fencing only applies with a session.
+    let (status, body) = call(
+        &app,
+        "/mcp/alpha",
+        None,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": 77}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert!(body.is_empty());
+
+    let (status, body) = call(
+        &app,
+        "/mcp/alpha",
+        None,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 77,
+            "method": "tools/call",
+            "params": {"name": "docs_recall", "arguments": {}}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(sse_data(&body)["result"]["isError"], false);
 }
 
 #[tokio::test]

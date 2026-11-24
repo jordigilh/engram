@@ -36,7 +36,8 @@ pub const SESSION_HEADER: &str = "mcp-session-id";
 /// Whether a non-`initialize` request must carry a session header.
 ///
 /// MCP-compliant clients always use the header after `initialize`. `Optional`
-/// keeps the Python gateway's stateless behavior for migration and is opt-in.
+/// matches the Python gateway's stateless behavior and is the runtime default;
+/// `Required` is the opt-in strict policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionPolicy {
     Required,
@@ -148,6 +149,7 @@ impl BackendSet {
         FreshnessEnvelope::from_state(project, workspace, state)
     }
 
+    #[cfg(test)]
     pub fn needs_flushing(&self) -> bool {
         lock_freshness(&self.freshness).state == Some(CatalogState::Refreshing)
     }
@@ -402,16 +404,23 @@ async fn post_endpoint(
     };
     // Python parity: an explicit `"id": null` is a notification.
     let message_id = message.get("id").filter(|value| !value.is_null()).cloned();
-    let session_id = match session_header(&headers) {
+    let mut session_id = match session_header(&headers) {
         Ok(session_id) => session_id,
-        Err(()) => return StatusCode::BAD_REQUEST.into_response(),
+        Err(()) if state.policy == SessionPolicy::Required => {
+            return StatusCode::BAD_REQUEST.into_response()
+        }
+        Err(()) => None,
     };
 
-    // A session presented on a route must belong to that route, including on
-    // initialize. Unknown, deleted, or cross-project sessions are 404.
-    if let Some(session_id) = &session_id {
-        if !lock_sessions(&state).validate(session_id, &project) {
-            return StatusCode::NOT_FOUND.into_response();
+    // A session presented on a route must belong to that route. In strict mode
+    // unknown, deleted, or cross-project sessions are 404. In stateless parity
+    // mode an unusable header is ignored, exactly as Python ignores it.
+    if let Some(id) = &session_id {
+        if !lock_sessions(&state).validate(id, &project) {
+            if state.policy == SessionPolicy::Required {
+                return StatusCode::NOT_FOUND.into_response();
+            }
+            session_id = None;
         }
     }
 
@@ -518,17 +527,10 @@ async fn post_endpoint(
                 ));
             }
             let backends = configured.backends.clone().expect("checked above");
+            // Python has no refresh busy state: serve the last published
+            // catalog while a refresh runs. Freshness metadata reports the
+            // in-progress state instead of rejecting the call.
             let workspace = query.get("workspace").map(String::as_str);
-            if backends.needs_flushing() {
-                let freshness = backends.freshness(&project, workspace);
-                let mut error = TypedError::flushing()
-                    .with_epoch(freshness.generation)
-                    .with_retry_after_ms(1_000);
-                if let Some(workspace) = workspace {
-                    error = error.in_workspace(workspace);
-                }
-                return typed_response(id, error);
-            }
             let params = message.get("params");
             let tool_name = params
                 .and_then(|params| params.get("name"))
@@ -623,9 +625,8 @@ async fn handle_backend_call(
         );
     };
 
-    if adapter.supports_workspace() && workspace.is_none() {
-        return typed_response(id, TypedError::unbound().with_epoch(freshness.generation));
-    }
+    // Python forwards a workspace-routed call without `?workspace`; only an
+    // upstream typed `workspace_unbound` becomes a 409.
 
     let pattern_alias = tool_name == "search_for_pattern" && raw_name == "zvec_grep_rg";
     let outcome = if pattern_alias {

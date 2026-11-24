@@ -442,7 +442,7 @@ async fn transport_errors_are_explicit() {
 }
 
 #[tokio::test]
-async fn stateless_requests_are_rejected_by_default() {
+async fn stateless_requests_are_rejected_when_policy_is_required() {
     let app = app();
 
     let (status, _, body) = call(
@@ -459,7 +459,7 @@ async fn stateless_requests_are_rejected_by_default() {
 }
 
 #[tokio::test]
-async fn stateless_requests_can_be_enabled_for_python_parity() {
+async fn optional_policy_allows_static_project_stateless_requests() {
     let app = router_with_policy(
         [Project::with_tools(
             "alpha",
@@ -482,6 +482,61 @@ async fn stateless_requests_can_be_enabled_for_python_parity() {
         sse_data(&body)["result"]["tools"][0]["name"],
         "alpha_search"
     );
+}
+
+#[tokio::test]
+async fn optional_policy_ignores_unknown_session_headers() {
+    let app = router_with_policy(
+        [Project::with_tools(
+            "alpha",
+            vec![tool_definition("alpha_search", "Alpha search")],
+        )],
+        SessionPolicy::Optional,
+    );
+
+    for (id, method) in [(31, "initialize"), (32, "tools/list")] {
+        let (status, _, body) = call(
+            &app,
+            "POST",
+            "/mcp/alpha",
+            Some("persisted-but-unknown"),
+            Some(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": {}})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{method}");
+        assert!(sse_data(&body)["result"].is_object(), "{method}");
+    }
+}
+
+#[tokio::test]
+async fn optional_policy_ignores_non_utf8_session_headers() {
+    let app = router_with_policy(
+        [Project::with_tools(
+            "alpha",
+            vec![tool_definition("alpha_search", "Alpha search")],
+        )],
+        SessionPolicy::Optional,
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp/alpha")
+                .header(
+                    "mcp-session-id",
+                    axum::http::HeaderValue::from_bytes(b"\xff").expect("opaque header"),
+                )
+                .body(Body::from(
+                    json!({"jsonrpc": "2.0", "id": 33, "method": "tools/list"}).to_string(),
+                ))
+                .expect("valid request"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().get("mcp-session-id").is_none());
 }
 
 #[tokio::test]

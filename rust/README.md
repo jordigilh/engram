@@ -16,6 +16,12 @@ Implemented:
   full validation, insertion order preserved.
 - HTTP backend adapter: one-shot MCP sessions, JSON/SSE parsing, read-only
   retry policy, workspace query forwarding.
+- stdio backend adapter via the official `rmcp` client: one long-lived child
+  per adapter, a minimal child environment, serialized calls, one restart/retry
+  for read tools (writes surface `outcome_unknown` instead of replaying),
+  bounded tool pagination, `shared_key` reuse across projects, catalog prewarm,
+  and `rmcp`'s graceful stdio shutdown. `timeout_seconds` is parsed for config
+  compatibility but not enforced for stdio (Python parity).
 - Catalog aggregation and filtering: backend prefixes, collision
   qualification, per-backend allowlists, `search_for_pattern` alias, managed
   zvec freshness arguments.
@@ -36,8 +42,9 @@ Implemented:
 
 Deliberately not implemented in this slice:
 
-- Stdio and `shadow_http` adapters. Registry parsing accepts them for config
-  compatibility, but adapter construction rejects them with a startup error.
+- `shadow_http` adapter. Registry parsing accepts it for config compatibility,
+  but adapter construction rejects it with a startup error. `shadow_http` is a
+  CocoIndex-comparison-only path and is expected to retire with #214.
 - Serena-specific `search_for_pattern` overflow normalization (the zvec alias
   is implemented; no live config exposes raw Serena pattern search).
 - SCIP reads (#212), edit/diagnostics (#213), ingestion (#214), language
@@ -169,7 +176,7 @@ Intentional divergences: Rust returns `{}` for `ping` and JSON-RPC `-32601` for
 unknown methods, while Python returns a minimal initialize-shaped success for
 any request id. Rust also refuses non-loopback binds and Host/Origin values.
 
-Still deferred from #224: stdio/shadow adapters, call metrics, the copy of the
+Still deferred from #224: the shadow adapter, call metrics, the copy of the
 full Python gateway suite, and Serena's `search_for_pattern` overflow shaping
 (raw Serena backend; no live config exposes it, tracked with the Serena
 retirement slice).
@@ -178,6 +185,9 @@ retirement slice).
 
 - `tests/lifecycle.rs`: initialize, notifications, tools/list isolation,
   DELETE, cancellation, Origin/Host validation, transport errors.
+- `tests/stdio_adapter.rs`: real stdio child via `rmcp`, restart, pagination,
+  old-protocol negotiation, server-to-client requests, cancellation,
+  malformed output, and gateway routing.
 - `tests/gateway_routing.rs`: real HTTP adapter against a mock MCP server
   (session sequence, retry matrix, workspace), catalog aggregation, prefix
   routing, search alias, zvec freshness, Hindsight scope, manual writer,
@@ -187,7 +197,7 @@ retirement slice).
 
 ## Stacked follow-ups
 
-1. #211 follow-up: stdio and shadow adapters if still required.
+1. #211 follow-up: shadow adapter if still required.
 2. #212: Go SCIP read path with epoch admission.
 3. #213: edit/diagnostics layer and Serena retirement gate.
 4. #214: Rust ingestion and Cocoindex retirement.

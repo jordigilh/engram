@@ -21,6 +21,7 @@ clap = { workspace = true }
 futures = { workspace = true }
 getrandom = { workspace = true }
 reqwest = { workspace = true }
+rmcp = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

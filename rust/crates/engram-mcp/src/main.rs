@@ -3,7 +3,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use engram_mcp::{
-    build_project_adapters, router_with_options, OriginPolicy, Project, Registry, SessionPolicy,
+    build_project_adapters_with_cache, router_with_options, AdapterCache, OriginPolicy, Project,
+    Registry, SessionPolicy,
 };
 
 /// Native Engram MCP gateway (issue #211, slices 1-2).
@@ -64,8 +65,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let projects: Vec<Project> = if let Some(path) = config {
         let registry = Registry::load(&path)?;
         let mut projects = Vec::new();
+        let mut adapter_cache = AdapterCache::default();
         for (name, spec) in &registry.projects {
-            let adapters = build_project_adapters(name, spec)?;
+            let adapters = build_project_adapters_with_cache(name, spec, &mut adapter_cache)?;
             projects.push(Project::with_backends(name.clone(), adapters));
         }
         projects

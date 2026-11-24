@@ -156,11 +156,12 @@ const RECALL_ONLY_HINDSIGHT: [&str; 1] = ["recall"];
 const METHODOLOGY_HINDSIGHT: [&str; 2] = ["recall", "get_mental_model"];
 const MANUAL_TOOLS: [&str; 1] = ["manual_mental_model"];
 const RECALL_ONLY_CODE: [&str; 1] = ["kuadrant_code_search"];
-const ZVEC_MANAGEMENT: [&str; 4] = [
+const ZVEC_MANAGEMENT: [&str; 5] = [
     "zvec_grep_index",
     "zvec_grep_index_drop",
     "zvec_grep_index_status",
     "zvec_grep_server_status",
+    "zvec_grep_rg",
 ];
 const ZVEC_AGENT: [&str; 13] = [
     "zvec_grep_search",
@@ -177,12 +178,13 @@ const ZVEC_AGENT: [&str; 13] = [
     "zvec_grep_codegraph_explain",
     "zvec_grep_codegraph_capabilities",
 ];
-const SERENA_TOOLS: [&str; 16] = [
+const SERENA_TOOLS: [&str; 17] = [
     "replace_content",
     "replace_in_files",
     "replace_symbol_body",
     "insert_after_symbol",
     "insert_before_symbol",
+    "search_for_pattern",
     "get_symbols_overview",
     "find_symbol",
     "find_referencing_symbols",
@@ -561,10 +563,20 @@ mod tests {
         );
         assert!(filter_relevant_tools(
             "code",
-            vec![tool("zvec_grep_index"), tool("zvec_grep_search")]
+            vec![
+                tool("zvec_grep_index"),
+                tool("zvec_grep_rg"),
+                tool("zvec_grep_search")
+            ]
         )
         .iter()
         .all(|tool| tool["name"] == "zvec_grep_search"));
+        assert!(filter_relevant_tools(
+            "serena",
+            vec![tool("search_for_pattern"), tool("find_symbol")]
+        )
+        .iter()
+        .any(|tool| tool["name"] == "search_for_pattern"));
         assert_eq!(
             filter_relevant_tools("unknown", vec![tool("anything")]).len(),
             1

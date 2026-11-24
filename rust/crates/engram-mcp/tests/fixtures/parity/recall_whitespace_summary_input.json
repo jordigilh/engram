@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"results\": [{\"id\": \"memory-1\", \"summary\": \"   \", \"text\": \"fallback text\", \"metadata\": {\"key_sentences\": \"key sentence\"}}]}"
+    }
+  ],
+  "isError": false
+}

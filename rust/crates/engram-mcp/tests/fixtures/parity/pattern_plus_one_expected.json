@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "xxxxxxxxxxxxxxxxxxxx\n... truncated at max_answer_chars=20"
+    }
+  ],
+  "isError": false
+}

@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"results\": [{\"id\": \"memory-1\", \"text\": \"bools\", \"scores\": {\"x\": true, \"y\": false}}]}"
+    }
+  ],
+  "isError": false
+}

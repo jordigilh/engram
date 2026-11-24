@@ -13,6 +13,7 @@ pub mod protocol;
 pub mod registry;
 pub mod server;
 pub mod session;
+pub mod shaping;
 
 pub use aggregate::{aggregate_tools_list, Aggregation};
 pub use backend::{
@@ -29,3 +30,4 @@ pub use server::{
     SessionPolicy,
 };
 pub use session::SessionStore;
+pub use shaping::{coerce_max_answer_chars, normalize_recall_result, truncate_pattern_result};

@@ -1532,3 +1532,290 @@ async fn upstream_typed_busy_is_relayed_to_the_client() {
     assert_eq!(payload["error"]["data"]["epoch"], 4);
     assert_eq!(mock.call_attempts.load(Ordering::SeqCst), 1);
 }
+
+fn fixture(name: &str) -> Value {
+    match name {
+        "recall_bounded_input.json" => {
+            serde_json::from_str(include_str!("fixtures/parity/recall_bounded_input.json")).unwrap()
+        }
+        "recall_bounded_expected.json" => {
+            serde_json::from_str(include_str!("fixtures/parity/recall_bounded_expected.json"))
+                .unwrap()
+        }
+        "pattern_truncate_input.json" => {
+            serde_json::from_str(include_str!("fixtures/parity/pattern_truncate_input.json"))
+                .unwrap()
+        }
+        "pattern_truncate_expected.json" => serde_json::from_str(include_str!(
+            "fixtures/parity/pattern_truncate_expected.json"
+        ))
+        .unwrap(),
+        other => panic!("unknown fixture {other}"),
+    }
+}
+
+#[tokio::test]
+async fn recall_response_is_normalized_to_python_golden() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("recall")],
+        call_result: fixture("recall_bounded_input.json"),
+        ..Default::default()
+    })
+    .await;
+    let registry = Registry::parse_str(&format!(
+        r#"
+[instances.alpha.backends.docs]
+kind = "http"
+url = "{url}"
+"#
+    ))
+    .unwrap();
+    let adapters = build_project_adapters("alpha", registry.get("alpha").unwrap()).unwrap();
+    let project = Project::with_backends("alpha", adapters);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    let (_, body) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 70,
+            "method": "tools/call",
+            "params": {"name": "docs_recall", "arguments": {"query": "x"}}
+        }),
+    )
+    .await;
+    let result = &sse_data(&body)["result"];
+    let expected = fixture("recall_bounded_expected.json");
+
+    assert_eq!(result["structuredContent"], expected["structuredContent"]);
+    assert_eq!(result["content"], expected["content"]);
+    assert_eq!(result["isError"], false);
+    assert!(result["_meta"]["engram_freshness"].is_object());
+}
+
+#[tokio::test]
+async fn null_arguments_are_forwarded_as_an_empty_object() {
+    let (url, mock) = spawn_mock(MockConfig {
+        tools: vec![tool("recall")],
+        call_result: json!({"content": [], "isError": false}),
+        ..Default::default()
+    })
+    .await;
+    let registry = Registry::parse_str(&format!(
+        r#"
+[instances.alpha.backends.docs]
+kind = "http"
+url = "{url}"
+"#
+    ))
+    .unwrap();
+    let adapters = build_project_adapters("alpha", registry.get("alpha").unwrap()).unwrap();
+    let project = Project::with_backends("alpha", adapters);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    let (_, _) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 76,
+            "method": "tools/call",
+            "params": {"name": "docs_recall", "arguments": null}
+        }),
+    )
+    .await;
+
+    let records = mock.records.lock().unwrap();
+    let routed = records
+        .iter()
+        .rev()
+        .find(|record| record.method == "tools/call")
+        .expect("routed call");
+    assert_eq!(routed.arguments, Some(json!({})));
+}
+
+#[tokio::test]
+async fn legacy_prefixed_recall_is_normalized() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("docs_recall")],
+        call_result: fixture("recall_bounded_input.json"),
+        ..Default::default()
+    })
+    .await;
+    let registry = Registry::parse_str(&format!(
+        r#"
+[instances.legacy]
+endpoint = "{url}"
+"#
+    ))
+    .unwrap();
+    let adapters = build_project_adapters("legacy", registry.get("legacy").unwrap()).unwrap();
+    let project = Project::with_backends("legacy", adapters);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "legacy").await;
+
+    let (_, body) = call(
+        &app,
+        "/mcp/legacy",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 71,
+            "method": "tools/call",
+            "params": {"name": "docs_recall", "arguments": {}}
+        }),
+    )
+    .await;
+    let result = &sse_data(&body)["result"];
+    let expected = fixture("recall_bounded_expected.json");
+    assert_eq!(result["structuredContent"], expected["structuredContent"]);
+    assert_eq!(result["content"], expected["content"]);
+}
+
+#[tokio::test]
+async fn non_recall_results_payload_passes_through_unshaped() {
+    let raw = json!({
+        "content": [{"type": "text", "text": "raw write result"}],
+        "isError": false,
+        "structuredContent": {"results": [{"id": "not-a-recall", "text": "keep"}]}
+    });
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("retain")],
+        call_result: raw.clone(),
+        ..Default::default()
+    })
+    .await;
+    let registry = Registry::parse_str(&format!(
+        r#"
+[instances.alpha.backends.docs]
+kind = "http"
+url = "{url}"
+"#
+    ))
+    .unwrap();
+    let adapters = build_project_adapters("alpha", registry.get("alpha").unwrap()).unwrap();
+    let project = Project::with_backends("alpha", adapters);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    let (_, body) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 74,
+            "method": "tools/call",
+            "params": {"name": "docs_retain", "arguments": {"content": "x"}}
+        }),
+    )
+    .await;
+    let result = &sse_data(&body)["result"];
+    assert_eq!(result["content"], raw["content"]);
+    assert_eq!(result["structuredContent"], raw["structuredContent"]);
+    assert!(result["_meta"]["engram_freshness"].is_object());
+}
+
+#[tokio::test]
+async fn search_for_pattern_exposes_and_applies_max_answer_chars() {
+    let (url, mock) = spawn_mock(MockConfig {
+        tools: vec![tool("zvec_grep_search"), tool("zvec_grep_rg")],
+        call_result: fixture("pattern_truncate_input.json"),
+        ..Default::default()
+    })
+    .await;
+    let registry = Registry::parse_str(&format!(
+        r#"
+[instances.alpha.backends.code]
+kind = "http"
+url = "{url}"
+"#
+    ))
+    .unwrap();
+    let adapters = build_project_adapters("alpha", registry.get("alpha").unwrap()).unwrap();
+    let project = Project::with_backends("alpha", adapters);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    let (_, list_body) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({"jsonrpc": "2.0", "id": 72, "method": "tools/list"}),
+    )
+    .await;
+    let list_payload = sse_data(&list_body);
+    let tools = list_payload["result"]["tools"].as_array().unwrap();
+    let alias = tools
+        .iter()
+        .find(|tool| tool["name"] == "search_for_pattern")
+        .expect("alias injected");
+    assert_eq!(
+        alias["inputSchema"]["properties"]["max_answer_chars"]["default"],
+        -1
+    );
+
+    let (_, body) = call(
+        &app,
+        "/mcp/alpha?workspace=%2Fwork",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 73,
+            "method": "tools/call",
+            "params": {
+                "name": "search_for_pattern",
+                "arguments": {"substring_pattern": "0123456789", "max_answer_chars": 20}
+            }
+        }),
+    )
+    .await;
+    let result = &sse_data(&body)["result"];
+    let expected = fixture("pattern_truncate_expected.json");
+    assert_eq!(result["content"], expected["content"]);
+    assert_eq!(result["isError"], false);
+
+    {
+        let records = mock.records.lock().unwrap();
+        let routed_call = records
+            .iter()
+            .rev()
+            .find(|record| record.method == "tools/call")
+            .expect("routed call");
+        let command = routed_call.arguments.as_ref().unwrap()["command"]
+            .as_str()
+            .unwrap();
+        assert!(command.contains("0123456789"), "{command}");
+        assert!(command.contains("-e"), "{command}");
+    }
+
+    // Without max_answer_chars the backend text is returned intact.
+    let (_, untruncated) = call(
+        &app,
+        "/mcp/alpha?workspace=%2Fwork",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 75,
+            "method": "tools/call",
+            "params": {
+                "name": "search_for_pattern",
+                "arguments": {"substring_pattern": "0123456789"}
+            }
+        }),
+    )
+    .await;
+    let untruncated = &sse_data(&untruncated)["result"];
+    let input = fixture("pattern_truncate_input.json");
+    assert_eq!(untruncated["content"], input["content"]);
+}

@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"results\": [{\"id\": \"memory-1\", \"text\": \"scored\", \"scores\": {\"f\": 1, \"semantic\": 0.123456}}]}"
+    }
+  ],
+  "isError": false
+}

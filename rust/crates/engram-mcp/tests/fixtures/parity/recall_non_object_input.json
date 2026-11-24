@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"results\": [42, {\"id\": \"memory-1\", \"text\": \"kept\"}]}"
+    }
+  ],
+  "isError": false
+}

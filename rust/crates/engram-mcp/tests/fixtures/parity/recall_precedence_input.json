@@ -1,0 +1,17 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"results\": [{\"id\": \"from-text\", \"text\": \"text wins\"}]}"
+    }
+  ],
+  "isError": false,
+  "structuredContent": {
+    "results": [
+      {
+        "id": "from-structured",
+        "text": "structured wins"
+      }
+    ]
+  }
+}

@@ -2062,7 +2062,7 @@ async fn search_for_pattern_exposes_and_applies_max_answer_chars() {
     .await;
     let registry = Registry::parse_str(&format!(
         r#"
-[instances.alpha.backends.code]
+[instances.alpha.backends.zg]
 kind = "http"
 url = "{url}"
 "#

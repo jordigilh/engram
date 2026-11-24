@@ -582,8 +582,9 @@ must remain the single owner of the code embedding runtime for code search.
 - Port the gateway protocol adapter and route registry to Rust.
 - Preserve the client-facing MCP schemas and per-project tool filtering.
 - Route existing Hindsight and zvec/Serena HTTP/MCP backends through Rust.
-- Keep Python gateway as a shadow/rollback path until catalog and error tests
-  pass.
+- Gateway parity (#224) closed and cut over on 2026-11-24: Python is rollback
+  only. Keep it until the remaining runtime slices and proxy cutover land;
+  final code removal is #232.
 
 ### Stage 2B — native document and transcript ingestion
 

@@ -48,9 +48,12 @@ These have no Python test but pin behavior the migration must preserve:
 - Typed `workspace_unbound` / `outcome_unknown` envelopes.
 - Session lifecycle, cancellation fencing, Origin/Host policy.
 
-## Remaining before cutover
+## Post-cutover status (2026-11-24)
 
-1. Serena `search_for_pattern` overflow shaping (#213).
-2. Live shadow run on 8899: compare every project's `tools/list` and
-   representative `tools/call` results against Python.
-3. Cutover runbook and rollback rehearsal.
+1. Shadow run completed: 22/22 catalogs matched and representative calls were
+   byte-identical (`docs/RUST_GATEWAY_SHADOW_RUN.md`).
+2. Cutover executed: `engram-mcp` serves `:8898`; Python is rollback only
+   (`docs/RUST_GATEWAY_CUTOVER.md`).
+3. Serena `search_for_pattern` overflow shaping is deferred to #213.
+4. Deleting the Python code is blocked on #212, #213, #214, #215 and the
+   Hindsight proxy cutover; tracked in #232.

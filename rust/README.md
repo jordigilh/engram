@@ -3,7 +3,11 @@
 This Cargo workspace implements issue
 [#211](https://github.com/jordigilh/engram/issues/211) slices 1 and 2 in the
 `engram-mcp` crate: MCP lifecycle plus HTTP backend routing and catalog parity.
-The Python gateway remains runnable and authoritative during migration.
+Gateway parity (#224) is closed: `engram-mcp` serves `127.0.0.1:8898` under
+launchd, and the Python gateway is rollback-only. The rest of the Python
+runtime (Serena, CocoIndex/search, ingestion, the Hindsight proxy, and flows)
+is still in use; final code removal is tracked in
+[#232](https://github.com/jordigilh/engram/issues/232).
 Rust 1.88+ is required (the HTTP client stack's ICU dependencies).
 
 ## Scope
@@ -23,8 +27,10 @@ Implemented:
   and `rmcp`'s graceful stdio shutdown. `timeout_seconds` is parsed for config
   compatibility but not enforced for stdio (Python parity).
 - Catalog aggregation and filtering: backend prefixes, collision
-  qualification, per-backend allowlists, `search_for_pattern` alias, managed
-  zvec freshness arguments.
+  qualification, per-backend allowlists, Serena `search_for_pattern`
+  passthrough, and managed zvec freshness arguments. The internal `zg` test
+  backend still exercises the zvec-backed alias; live `code` routes hide
+  `zvec_grep_rg` exactly like Python.
 - Hindsight scope enforcement, gateway-owned manual mental-model writer, and
   automatic `docs_manual`/`issues_manual` synthesis.
 - Best-effort concurrent catalog prewarm after the listener binds; `tools/list`
@@ -183,9 +189,12 @@ Intentional divergences: Rust returns `{}` for `ping` and JSON-RPC `-32601` for
 unknown methods, while Python returns a minimal initialize-shaped success for
 any request id. Rust also refuses non-loopback binds and Host/Origin values.
 
-Still deferred from #224: the shadow adapter, the copy of the full Python
-gateway suite, and Serena's `search_for_pattern` overflow shaping (raw Serena
-backend; no live config exposes it, tracked with the Serena retirement slice).
+Cutover status: the Rust gateway is live on `:8898` and Python is the
+documented rollback (`docs/RUST_GATEWAY_CUTOVER.md`). Still deferred from the
+gateway work: `shadow_http` retires with CocoIndex (#214), and Serena's
+`search_for_pattern` overflow shaping moves to the Serena retirement slice
+(#213). Deleting the Python code is blocked on the remaining runtime slices
+(#212, #213, #214, #215) and the Hindsight proxy cutover; tracked in #232.
 
 ## Contract tests
 
@@ -203,8 +212,8 @@ backend; no live config exposes it, tracked with the Serena retirement slice).
 
 ## Stacked follow-ups
 
-1. #211 follow-up: shadow adapter if still required.
-2. #212: Go SCIP read path with epoch admission.
-3. #213: edit/diagnostics layer and Serena retirement gate.
-4. #214: Rust ingestion and Cocoindex retirement.
-5. #215: additional language adapters.
+1. #212: Go SCIP read path with epoch admission.
+2. #213: edit/diagnostics layer and Serena retirement gate.
+3. #214: Rust ingestion and Cocoindex retirement.
+4. #215: additional language adapters.
+5. #232: remove the Python codebase after the above and the proxy cutover.

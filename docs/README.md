@@ -3,6 +3,13 @@
 Detailed design documentation for Engram. For an overview of what this project
 does and why, see the [root README](../README.md).
 
+> **Migration status (2026-11-24):** only the client-facing gateway is Rust
+> (`engram-mcp`, `:8898`); Python remains the rollback. Serena,
+> CocoIndex/search, Python ingestion, the Hindsight proxy, and flows are still
+> Python. The runtime is not fully migrated; final code removal is tracked in
+> [#232](https://github.com/jordigilh/engram/issues/232). Port `:8896`
+> references below describe the pre-cutover topology.
+
 ## Contents
 
 - [How It Works](#how-it-works)
@@ -79,7 +86,7 @@ graph TB
         engram_mcp["one Engram MCP route"]
     end
 
-    subgraph gateway["Engram gateway (:8896 runtime / :8898 native)"]
+    subgraph gateway["Engram gateway (:8898 Rust; Python rollback only)"]
         relay["Route + backend aggregation"]
         serena["Serena backend"]
         code_mcp["zvec-grep code search"]

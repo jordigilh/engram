@@ -44,6 +44,7 @@ pub struct BackendSpec {
     pub command: Option<String>,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
+    pub shared_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -169,6 +170,24 @@ fn parse_backend(project: &str, backend: &str, settings: &Value) -> Result<Backe
             ))
         }
     };
+    let shared_key = if matches!(kind, BackendKind::Stdio | BackendKind::ShadowHttp) {
+        match settings.get("shared_key") {
+            Some(value) => Some(
+                value
+                    .as_str()
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        format!(
+                            "Backend {project:?}/{backend:?} shared_key must be a non-empty string"
+                        )
+                    })?
+                    .to_string(),
+            ),
+            None => None,
+        }
+    } else {
+        None
+    };
     let workspace_routing = match settings.get("workspace_routing") {
         Some(value) => value.as_bool().ok_or_else(|| {
             format!("Backend {project:?}/{backend:?} workspace_routing must be a boolean")
@@ -213,6 +232,7 @@ fn parse_backend(project: &str, backend: &str, settings: &Value) -> Result<Backe
                 validate_url(project, backend, shadow)?;
             }
             spec.headers = parse_headers(project, backend, settings.get("headers"))?;
+            spec.shared_key = shared_key.clone();
             if backend == "hindsight" {
                 spec.scope_tags = parse_scope_list(project, backend, settings.get("scope_tags"))?;
                 spec.allow_unscoped =
@@ -250,6 +270,7 @@ fn parse_backend(project: &str, backend: &str, settings: &Value) -> Result<Backe
                 command: Some(command.to_string()),
                 args,
                 env,
+                shared_key,
             })
         }
     }
@@ -298,6 +319,7 @@ fn validate_http(
         command: None,
         args: Vec::new(),
         env: BTreeMap::new(),
+        shared_key: None,
     })
 }
 
@@ -468,6 +490,41 @@ mod tests {
             serena.args.last().map(String::as_str),
             Some("/path/to/my-project")
         );
+    }
+
+    #[test]
+    fn stdio_shared_key_round_trips_and_rejects_empty_values() {
+        let registry = parse(
+            r#"
+[instances.demo.backends.serena]
+kind = "stdio"
+workspace_routing = false
+command = "/opt/serena"
+shared_key = "family"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            registry
+                .get("demo")
+                .unwrap()
+                .backend("serena")
+                .unwrap()
+                .shared_key,
+            Some("family".to_string())
+        );
+
+        let error = parse(
+            r#"
+[instances.demo.backends.serena]
+kind = "stdio"
+workspace_routing = false
+command = "/opt/serena"
+shared_key = ""
+"#,
+        )
+        .unwrap_err();
+        assert!(error.contains("shared_key must be a non-empty string"));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! Stdio and shadow-comparison adapters are deliberately rejected at build
 //! time; the Rust gateway is HTTP-only until their parity slice lands.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,7 +14,8 @@ use url::Url;
 
 use crate::catalog::{is_retryable_raw_tool, managed_zvec_arguments};
 use crate::error::{ErrorKind, TypedError};
-use crate::registry::{BackendKind, ProjectSpec};
+use crate::registry::{BackendKind, BackendSpec, ProjectSpec};
+use crate::stdio::StdioSubprocessAdapter;
 
 #[derive(Debug, Clone, Error)]
 #[error("{message}")]
@@ -891,19 +892,72 @@ pub fn manual_mental_model_tool() -> Value {
     })
 }
 
-/// Build ordered adapters for one project. Stdio/shadow specs are rejected
-/// explicitly; manual writers are appended for docs/issues banks.
+/// Per-runtime cache for stdio adapters shared by `shared_key`.
+#[derive(Default)]
+pub struct AdapterCache {
+    shared_stdio: HashMap<String, SharedStdio>,
+}
+
+struct SharedStdio {
+    fingerprint: String,
+    adapter: Arc<dyn BackendAdapter>,
+}
+
+/// Build ordered adapters for one project with a throwaway shared-key cache.
+/// Stdio is accepted; shadow_http is still rejected. Manual writers are
+/// appended for docs/issues banks.
 pub fn build_project_adapters(project: &str, spec: &ProjectSpec) -> Result<AdapterList, String> {
+    build_project_adapters_with_cache(project, spec, &mut AdapterCache::default())
+}
+
+/// Build ordered adapters for one project, reusing stdio children by
+/// `shared_key`. A mismatched command/args/env under one key is an error.
+pub fn build_project_adapters_with_cache(
+    project: &str,
+    spec: &ProjectSpec,
+    cache: &mut AdapterCache,
+) -> Result<AdapterList, String> {
     let mut adapters: AdapterList = Vec::new();
     for (key, backend) in &spec.backends {
-        match backend.kind {
-            BackendKind::Http => {}
-            BackendKind::Stdio | BackendKind::ShadowHttp => {
-                return Err(format!(
-                    "Backend {project:?}/{key:?} kind {:?} is not supported by the Rust HTTP gateway yet",
-                    backend.kind.as_str()
-                ));
+        if backend.kind == BackendKind::ShadowHttp {
+            return Err(format!(
+                "Backend {project:?}/{key:?} kind {:?} is not supported by the Rust gateway yet",
+                backend.kind.as_str()
+            ));
+        }
+        if backend.kind == BackendKind::Stdio {
+            let command = backend
+                .command
+                .clone()
+                .ok_or_else(|| format!("Backend {project:?}/{key:?} requires a command"))?;
+            let fingerprint = stdio_fingerprint(backend);
+            if let Some(shared_key) = &backend.shared_key {
+                if let Some(existing) = cache.shared_stdio.get(shared_key) {
+                    if existing.fingerprint != fingerprint {
+                        return Err(format!(
+                            "Backend {project:?}/{key:?} shared_key {shared_key:?} is already bound to a different command/args/env"
+                        ));
+                    }
+                    adapters.push((key.clone(), Arc::clone(&existing.adapter)));
+                    continue;
+                }
             }
+            let adapter: Arc<dyn BackendAdapter> = Arc::new(StdioSubprocessAdapter::new(
+                command,
+                backend.args.clone(),
+                backend.env.clone(),
+            ));
+            if let Some(shared_key) = &backend.shared_key {
+                cache.shared_stdio.insert(
+                    shared_key.clone(),
+                    SharedStdio {
+                        fingerprint,
+                        adapter: Arc::clone(&adapter),
+                    },
+                );
+            }
+            adapters.push((key.clone(), adapter));
+            continue;
         }
         let url = backend
             .url
@@ -947,6 +1001,13 @@ pub fn build_project_adapters(project: &str, spec: &ProjectSpec) -> Result<Adapt
         }
     }
     Ok(adapters)
+}
+
+fn stdio_fingerprint(backend: &BackendSpec) -> String {
+    format!(
+        "{:?}\u{0}{:?}\u{0}{:?}",
+        backend.command, backend.args, backend.env
+    )
 }
 
 /// Convenience for callers that need the routed-zvec rewrite in one place.
@@ -1167,6 +1228,7 @@ mod tests {
                         command: None,
                         args: vec![],
                         env: BTreeMap::new(),
+                        shared_key: None,
                     },
                 ),
                 (
@@ -1184,6 +1246,7 @@ mod tests {
                         command: None,
                         args: vec![],
                         env: BTreeMap::new(),
+                        shared_key: None,
                     },
                 ),
             ],
@@ -1207,8 +1270,36 @@ mod tests {
     }
 
     #[test]
-    fn rejects_stdio_and_shadow_at_build_time() {
+    fn rejects_shadow_http_at_build_time() {
         let spec = ProjectSpec {
+            backends: vec![(
+                "code".into(),
+                crate::registry::BackendSpec {
+                    kind: BackendKind::ShadowHttp,
+                    url: Some("http://127.0.0.1:1/mcp".into()),
+                    headers: BTreeMap::new(),
+                    timeout_seconds: 60.0,
+                    workspace_routing: false,
+                    allow_insecure_http: false,
+                    scope_tags: vec![],
+                    allow_unscoped: false,
+                    mental_model_ids: vec![],
+                    command: None,
+                    args: vec![],
+                    env: BTreeMap::new(),
+                    shared_key: None,
+                },
+            )],
+        };
+        let error = match build_project_adapters("demo", &spec) {
+            Ok(_) => panic!("shadow backend must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("not supported by the Rust gateway"));
+    }
+
+    fn stdio_spec(command: &str, shared_key: Option<&str>) -> ProjectSpec {
+        ProjectSpec {
             backends: vec![(
                 "serena".into(),
                 crate::registry::BackendSpec {
@@ -1221,16 +1312,82 @@ mod tests {
                     scope_tags: vec![],
                     allow_unscoped: false,
                     mental_model_ids: vec![],
-                    command: Some("/opt/serena".into()),
-                    args: vec![],
+                    command: Some(command.into()),
+                    args: vec!["--stdio".into()],
                     env: BTreeMap::new(),
+                    shared_key: shared_key.map(str::to_string),
                 },
             )],
-        };
-        let error = match build_project_adapters("demo", &spec) {
-            Ok(_) => panic!("stdio backend must be rejected"),
+        }
+    }
+
+    #[test]
+    fn shared_key_reuses_one_stdio_adapter_across_projects() {
+        let mut cache = AdapterCache::default();
+        let alpha = build_project_adapters_with_cache(
+            "alpha",
+            &stdio_spec("/opt/serena", Some("family")),
+            &mut cache,
+        )
+        .unwrap();
+        let beta = build_project_adapters_with_cache(
+            "beta",
+            &stdio_spec("/opt/serena", Some("family")),
+            &mut cache,
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(&alpha[0].1, &beta[0].1));
+    }
+
+    #[test]
+    fn stdio_adapters_without_matching_keys_are_distinct() {
+        let mut cache = AdapterCache::default();
+        let alpha = build_project_adapters_with_cache(
+            "alpha",
+            &stdio_spec("/opt/serena", Some("one")),
+            &mut cache,
+        )
+        .unwrap();
+        let beta = build_project_adapters_with_cache(
+            "beta",
+            &stdio_spec("/opt/serena", Some("two")),
+            &mut cache,
+        )
+        .unwrap();
+        assert!(!Arc::ptr_eq(&alpha[0].1, &beta[0].1));
+
+        let gamma = build_project_adapters_with_cache(
+            "gamma",
+            &stdio_spec("/opt/serena", None),
+            &mut cache,
+        )
+        .unwrap();
+        let delta = build_project_adapters_with_cache(
+            "delta",
+            &stdio_spec("/opt/serena", None),
+            &mut cache,
+        )
+        .unwrap();
+        assert!(!Arc::ptr_eq(&gamma[0].1, &delta[0].1));
+    }
+
+    #[test]
+    fn shared_key_rejects_a_mismatched_stdio_spec() {
+        let mut cache = AdapterCache::default();
+        build_project_adapters_with_cache(
+            "alpha",
+            &stdio_spec("/opt/serena", Some("family")),
+            &mut cache,
+        )
+        .unwrap();
+        let error = match build_project_adapters_with_cache(
+            "beta",
+            &stdio_spec("/opt/other-serena", Some("family")),
+            &mut cache,
+        ) {
+            Ok(_) => panic!("mismatched shared_key must fail"),
             Err(error) => error,
         };
-        assert!(error.contains("not supported by the Rust HTTP gateway"));
+        assert!(error.contains("already bound"), "{error}");
     }
 }

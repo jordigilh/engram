@@ -14,11 +14,12 @@ pub mod registry;
 pub mod server;
 pub mod session;
 pub mod shaping;
+pub mod stdio;
 
 pub use aggregate::{aggregate_tools_list, Aggregation};
 pub use backend::{
-    build_project_adapters, BackendAdapter, BackendError, HttpRelayAdapter,
-    ManualMentalModelAdapter, ScopedHindsightAdapter,
+    build_project_adapters, build_project_adapters_with_cache, AdapterCache, BackendAdapter,
+    BackendError, HttpRelayAdapter, ManualMentalModelAdapter, ScopedHindsightAdapter,
 };
 pub use catalog::{build_catalog, Catalog};
 pub use error::{ErrorKind, TypedError};
@@ -31,3 +32,4 @@ pub use server::{
 };
 pub use session::SessionStore;
 pub use shaping::{coerce_max_answer_chars, normalize_recall_result, truncate_pattern_result};
+pub use stdio::StdioSubprocessAdapter;

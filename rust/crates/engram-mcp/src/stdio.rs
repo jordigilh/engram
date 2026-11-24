@@ -23,6 +23,19 @@ struct Session {
     child: tokio::process::Child,
 }
 
+struct StartupChild {
+    child: Option<tokio::process::Child>,
+    queue: Arc<StdMutex<Vec<tokio::task::JoinHandle<()>>>>,
+}
+
+impl Drop for StartupChild {
+    fn drop(&mut self) {
+        if let Some(child) = self.child.take() {
+            queue_child_cleanup(child, &self.queue);
+        }
+    }
+}
+
 /// One long-lived stdio MCP child, serialized like the Python adapter.
 pub struct StdioSubprocessAdapter {
     command: String,
@@ -67,6 +80,29 @@ fn queue_cleanup(session: Session, queue: &Arc<StdMutex<Vec<tokio::task::JoinHan
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .push(handle);
+}
+
+fn queue_child_cleanup(
+    child: tokio::process::Child,
+    queue: &Arc<StdMutex<Vec<tokio::task::JoinHandle<()>>>>,
+) {
+    let handle = tokio::spawn(async move {
+        cleanup_child(child).await;
+    });
+    queue
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(handle);
+}
+
+async fn cleanup_child(mut child: tokio::process::Child) {
+    if tokio::time::timeout(std::time::Duration::from_secs(5), child.wait())
+        .await
+        .is_err()
+    {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+    }
 }
 
 impl ServiceLease {
@@ -123,12 +159,19 @@ impl StdioSubprocessAdapter {
         }
         command.envs(&self.env);
         command.stdin(Stdio::piped()).stdout(Stdio::piped());
-        let mut child = command.spawn().map_err(|error| {
+        let child = command.spawn().map_err(|error| {
             BackendError::transient(format!(
                 "cannot spawn stdio backend {:?}: {error}",
                 self.command
             ))
         })?;
+        // If initialization is cancelled or fails, the guard queues waitable
+        // cleanup; Tokio does not kill children on drop by default.
+        let mut startup = StartupChild {
+            child: Some(child),
+            queue: Arc::clone(&self.retiring),
+        };
+        let child = startup.child.as_mut().expect("startup child");
         let stdin = child
             .stdin
             .take()
@@ -141,7 +184,10 @@ impl StdioSubprocessAdapter {
         let service = ().serve(transport).await.map_err(|error| {
             BackendError::transient(format!("stdio initialize failed: {error}"))
         })?;
-        Ok(Session { service, child })
+        Ok(Session {
+            service,
+            child: startup.child.take().expect("startup child"),
+        })
     }
 
     async fn ensure_service(&self) -> Result<(), BackendError> {
@@ -316,15 +362,9 @@ impl BackendAdapter for StdioSubprocessAdapter {
     }
 }
 
-async fn cleanup_session(mut session: Session) {
+async fn cleanup_session(session: Session) {
     let _ = session.service.cancel().await;
-    if tokio::time::timeout(std::time::Duration::from_secs(5), session.child.wait())
-        .await
-        .is_err()
-    {
-        let _ = session.child.kill().await;
-        let _ = session.child.wait().await;
-    }
+    cleanup_child(session.child).await;
 }
 
 fn is_definitive(error: &BackendError) -> bool {

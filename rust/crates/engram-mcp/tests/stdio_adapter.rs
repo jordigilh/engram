@@ -182,6 +182,54 @@ async fn a_cancelled_call_does_not_poison_the_session() {
 }
 
 #[tokio::test]
+async fn cancellation_during_initialization_keeps_cleanup_waitable() {
+    let (adapter, dir) = adapter("slow-init");
+    let adapter = Arc::new(adapter);
+    let first = tokio::spawn({
+        let adapter = Arc::clone(&adapter);
+        async move { adapter.call_tool("alpha", json!({})).await }
+    });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !dir.read("log").contains("start ") {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "initialization never started"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    first.abort();
+    assert!(first.await.expect_err("aborted").is_cancelled());
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(8),
+        adapter.call_tool("alpha", json!({})),
+    )
+    .await
+    .expect("second call must not hang")
+    .expect("second call");
+    assert_eq!(result["content"][0]["text"], "echo");
+
+    let log = dir.read("log");
+    let lines: Vec<&str> = log.lines().collect();
+    let starts = lines
+        .iter()
+        .filter(|line| line.starts_with("start "))
+        .count();
+    assert_eq!(starts, 2, "one failed init + one success; log {log:?}");
+    let first_exit = lines.iter().position(|line| line.starts_with("exit "));
+    let second_start = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("start "))
+        .nth(1)
+        .map(|(index, _)| index);
+    assert!(
+        first_exit.is_some() && first_exit < second_start,
+        "replacement must wait for failed init child; log {log:?}"
+    );
+}
+
+#[tokio::test]
 async fn cancellation_during_retirement_keeps_the_cleanup_waitable() {
     let (adapter, dir) = adapter("slow-exit");
     let adapter = Arc::new(adapter);
@@ -202,11 +250,14 @@ async fn cancellation_during_retirement_keeps_the_cleanup_waitable() {
     assert!(first.await.expect_err("aborted").is_cancelled());
 
     // Abort a caller while it is awaiting the retired child's cleanup.
-    let second = tokio::spawn({
+    let mut second = tokio::spawn({
         let adapter = Arc::clone(&adapter);
         async move { adapter.call_tool("alpha", json!({})).await }
     });
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::select! {
+        _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+        result = &mut second => panic!("second caller did not wait for retirement: {result:?}"),
+    }
     second.abort();
     assert!(second.await.expect_err("aborted").is_cancelled());
 

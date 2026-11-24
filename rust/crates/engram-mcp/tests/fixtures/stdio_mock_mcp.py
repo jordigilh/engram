@@ -3,7 +3,8 @@
 
 Test-only fixture. Controlled by env vars:
   STDIO_MOCK_MODE: normal | old-protocol | paginate | request-then-respond |
-                   slow | slow-exit | die-once | malformed | jsonrpc-error |
+                   slow | slow-exit | slow-init | die-once | malformed |
+                   jsonrpc-error |
                    list-error
   STDIO_MOCK_LOG: optional path for flushed method/pid lines
   STDIO_MOCK_STATE: optional marker path for die-once
@@ -70,6 +71,8 @@ def main() -> None:
 
         if method == "initialize":
             log(f"start {os.getpid()}")
+            if MODE == "slow-init":
+                time.sleep(2.0)
             protocol = "2024-11-05" if MODE == "old-protocol" else "2025-06-18"
             send(
                 {

@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"results\": [{\"id\": \"memory-null\", \"text\": \"present\", \"occurred_start\": null, \"occurred_end\": null, \"mentioned_at\": null, \"document_id\": null, \"tags\": null, \"fact_type\": null}]}"
+    }
+  ],
+  "isError": false
+}

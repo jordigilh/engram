@@ -140,6 +140,28 @@ loopback only and refuses a non-loopback `--host`. Add
 In that migration mode, `DELETE` and cancellation fencing apply only to
 requests that carry `Mcp-Session-Id`.
 
+## Python parity harness
+
+`tests/fixtures/parity/` holds input/expected pairs generated from the Python
+gateway (`src/engram/pipeline/engram_gateway.py`) with
+`tests/fixtures/parity/generate.py`. `tests/parity_shaping.rs` compares the
+Rust shaping functions against those files, and `tests/gateway_routing.rs`
+checks that the HTTP gateway applies them on the real request path.
+
+Current parity coverage (issue #224 Phase 0+1):
+
+- Hindsight `recall` results are normalized to the bounded
+  `engram-recall.v1` text + `structuredContent` shape (8 results, 800-char
+  summaries, 240-char metadata values, keywords, rounded scores), including
+  legacy `*_recall` names.
+- `search_for_pattern` exposes `max_answer_chars` and truncates overlong
+  results with the Python suffix and boundary behavior.
+
+Still deferred from #224: stdio/shadow adapters, workspace/refresh/session
+behavior parity, call metrics, the copy of the full Python gateway suite, and
+Serena's `search_for_pattern` overflow shaping (raw Serena backend; no live
+config exposes it, tracked with the Serena retirement slice).
+
 ## Contract tests
 
 - `tests/lifecycle.rs`: initialize, notifications, tools/list isolation,

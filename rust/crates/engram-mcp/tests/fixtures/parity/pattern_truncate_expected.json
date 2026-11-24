@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "01234567890123456789\n... truncated at max_answer_chars=20"
+    }
+  ],
+  "isError": false
+}

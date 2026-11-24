@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"results\": [{\"id\": \"memory-1\", \"summary\": \"\\u001c\", \"text\": \"fallback\"}]}"
+    }
+  ],
+  "isError": false
+}

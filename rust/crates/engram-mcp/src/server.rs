@@ -29,6 +29,7 @@ use crate::protocol::{
     initialize_result, method_not_found_error, request_cancelled_error, tools_list_result,
 };
 use crate::session::{request_id_key, SessionStore, MAX_SESSIONS_PER_PROJECT};
+use crate::shaping::{coerce_max_answer_chars, normalize_recall_result, truncate_pattern_result};
 
 pub const SESSION_HEADER: &str = "mcp-session-id";
 
@@ -533,8 +534,10 @@ async fn post_endpoint(
                 .and_then(|params| params.get("name"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
+            // Python: `arguments = params.get("arguments") or {}`.
             let arguments = params
                 .and_then(|params| params.get("arguments"))
+                .filter(|value| !json_falsy(value))
                 .cloned()
                 .unwrap_or_else(|| json!({}));
             let request_key = request_id_key(&id);
@@ -624,11 +627,22 @@ async fn handle_backend_call(
         return typed_response(id, TypedError::unbound().with_epoch(freshness.generation));
     }
 
-    let outcome = if tool_name == "search_for_pattern" && raw_name == "zvec_grep_rg" {
+    let pattern_alias = tool_name == "search_for_pattern" && raw_name == "zvec_grep_rg";
+    let outcome = if pattern_alias {
+        let max_answer_chars = coerce_max_answer_chars(arguments.get("max_answer_chars"));
         let empty = Map::new();
         match zvec_rg_arguments(arguments.as_object().unwrap_or(&empty), workspace) {
-            Ok(arguments) => adapter.call_tool(&raw_name, arguments).await,
-            Err(error) => return tool_result(id, tool_error(error), &freshness),
+            Ok(arguments) => adapter
+                .call_tool(&raw_name, arguments)
+                .await
+                .map(|result| truncate_pattern_result(result, max_answer_chars)),
+            Err(error) => {
+                return tool_result(
+                    id,
+                    tool_error(format!("search_for_pattern failed: {error}")),
+                    &freshness,
+                )
+            }
         }
     } else {
         let arguments = prepare_arguments(&raw_name, arguments);
@@ -642,10 +656,20 @@ async fn handle_backend_call(
     };
 
     match outcome {
-        Ok(result) => tool_result(id, result, &freshness),
+        Ok(mut result) => {
+            if raw_name == "recall" || raw_name.ends_with("_recall") {
+                result = normalize_recall_result(result);
+            }
+            tool_result(id, result, &freshness)
+        }
         Err(error) if error.typed.is_some() => {
             typed_response(id, error.typed.expect("checked above"))
         }
+        Err(error) if pattern_alias => tool_result(
+            id,
+            tool_error(format!("search_for_pattern failed: {}", error.message)),
+            &freshness,
+        ),
         Err(error) if error.uncertain && is_write_tool(&raw_name) => typed_response(
             id,
             TypedError::outcome_unknown(workspace.map(str::to_string))
@@ -693,6 +717,17 @@ fn typed_response(id: Value, error: TypedError) -> Response {
         }
     }
     response
+}
+
+fn json_falsy(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::Bool(value) => !*value,
+        Value::Number(value) => value.as_f64().is_some_and(|value| value == 0.0),
+        Value::String(value) => value.is_empty(),
+        Value::Array(value) => value.is_empty(),
+        Value::Object(value) => value.is_empty(),
+    }
 }
 
 fn session_header(headers: &HeaderMap) -> Result<Option<String>, ()> {

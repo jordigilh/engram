@@ -6,6 +6,8 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Map, Value};
 
+use crate::shaping::{coerce_int_or, json_truthy};
+
 pub type Route = (String, String);
 
 #[derive(Debug, Clone, Default)]
@@ -55,34 +57,59 @@ pub fn build_catalog_reserved(
 ) -> (Catalog, BTreeMap<String, Route>) {
     let mut catalog = Catalog::default();
     let mut next_reservations = reservations.clone();
+    let mut reserved_by_identity: BTreeMap<Route, Vec<String>> = BTreeMap::new();
+    for (name, identity) in reservations {
+        reserved_by_identity
+            .entry(identity.clone())
+            .or_default()
+            .push(name.clone());
+    }
+
     for (backend_key, tools) in per_backend_tools {
         for tool in tools {
             let Some(raw_name) = tool.get("name").and_then(Value::as_str) else {
                 continue;
             };
             let identity = (backend_key.clone(), raw_name.to_string());
-            let existing = reservations
-                .iter()
-                .find(|(_, owner)| **owner == identity)
-                .map(|(name, _)| name.clone());
-            let mut final_name =
-                existing.unwrap_or_else(|| prefixed_tool_name(&backend_key, raw_name));
+            let preferred = prefixed_tool_name(&backend_key, raw_name);
+
+            // Reuse every name already reserved for this identity, in the
+            // preferred order, before allocating a new suffix. This keeps
+            // duplicate raw names stable across catalog refreshes.
+            let mut candidates = Vec::new();
             if next_reservations
-                .get(&final_name)
-                .is_some_and(|owner| owner != &identity)
+                .get(&preferred)
+                .is_none_or(|owner| owner == &identity)
             {
-                let base_name = format!("{backend_key}_{raw_name}");
-                final_name = base_name.clone();
-                let mut duplicate = 2;
-                while next_reservations
-                    .get(&final_name)
-                    .is_some_and(|owner| owner != &identity)
-                {
-                    final_name = format!("{base_name}_{duplicate}");
-                    duplicate += 1;
+                candidates.push(preferred.clone());
+            }
+            if let Some(names) = reserved_by_identity.get(&identity) {
+                for name in names {
+                    if !candidates.contains(name) {
+                        candidates.push(name.clone());
+                    }
                 }
             }
-            next_reservations.insert(final_name.clone(), identity);
+
+            let final_name = candidates
+                .into_iter()
+                .find(|name| {
+                    !catalog.routes.contains_key(name)
+                        && next_reservations
+                            .get(name)
+                            .is_none_or(|owner| owner == &identity)
+                })
+                .unwrap_or_else(|| {
+                    allocate_name(
+                        &backend_key,
+                        raw_name,
+                        &identity,
+                        &catalog,
+                        &next_reservations,
+                    )
+                });
+
+            next_reservations.insert(final_name.clone(), identity.clone());
             catalog.routes.insert(
                 final_name.clone(),
                 (backend_key.clone(), raw_name.to_string()),
@@ -95,6 +122,27 @@ pub fn build_catalog_reserved(
         }
     }
     (catalog, next_reservations)
+}
+
+fn allocate_name(
+    backend_key: &str,
+    raw_name: &str,
+    identity: &Route,
+    catalog: &Catalog,
+    reservations: &BTreeMap<String, Route>,
+) -> String {
+    let base_name = format!("{backend_key}_{raw_name}");
+    let mut candidate = base_name.clone();
+    let mut duplicate = 2;
+    while catalog.routes.contains_key(&candidate)
+        || reservations
+            .get(&candidate)
+            .is_some_and(|owner| owner != identity)
+    {
+        candidate = format!("{base_name}_{duplicate}");
+        duplicate += 1;
+    }
+    candidate
 }
 
 const RELEVANT_HINDSIGHT: [&str; 5] = [
@@ -203,7 +251,7 @@ pub fn filter_relevant_tools(backend_key: &str, tools: Vec<Value>) -> Vec<Value>
 pub fn search_for_pattern_tool() -> Value {
     json!({
         "name": "search_for_pattern",
-        "description": "Search project files with a regular expression across the workspace. Backed by zvec-grep's managed ripgrep (no LSP process). Accepts the same arguments as the historical Serena tool; returns file-grouped matches with line numbers. Prefer `find_symbol` for symbol definitions and `find_referencing_symbols` for callers/references. Use this tool for literal or regex text searches. `substring_pattern` is a regex; with multiline matching, `.` can cross lines and `|` needs grouping. Prefer anchored patterns and narrow path/context filters; split broad alternatives into focused searches and reduce scope or context.",
+        "description": "Search project files with a regular expression across the workspace. Backed by zvec-grep's managed ripgrep (no LSP process). Accepts the same arguments as the historical Serena tool; returns file-grouped matches with line numbers. Prefer `find_symbol` for symbol definitions and `find_referencing_symbols` for callers/references. Use this tool for literal or regex text searches. `substring_pattern` is a regex; with multiline matching, `.` can cross lines and `|` needs grouping. Prefer anchored patterns and narrow path/context filters; split broad alternatives into focused searches and reduce scope or context before raising `max_answer_chars`. If the answer limit is exceeded, Engram returns the available matches grouped by file and line.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -215,7 +263,8 @@ pub fn search_for_pattern_tool() -> Value {
                 "relative_path": {"type": "string", "default": ""},
                 "restrict_search_to_code_files": {"type": "boolean", "default": false},
                 "skip_ignored_files": {"type": "boolean", "default": true},
-                "multiline": {"type": "boolean", "default": true}
+                "multiline": {"type": "boolean", "default": true},
+                "max_answer_chars": {"type": "integer", "default": -1}
             },
             "required": ["substring_pattern"]
         },
@@ -251,21 +300,11 @@ pub fn zvec_rg_arguments(
         .ok_or_else(|| "substring_pattern is required".to_string())?;
 
     let mut parts = vec!["rg".to_string()];
-    if arguments
-        .get("multiline")
-        .and_then(Value::as_bool)
-        .unwrap_or(true)
-    {
+    if truthy_or(arguments, "multiline", true) {
         parts.push("-U".into());
     }
-    let before = arguments
-        .get("context_lines_before")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    let after = arguments
-        .get("context_lines_after")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
+    let before = coerce_int_or(arguments.get("context_lines_before"), 0);
+    let after = coerce_int_or(arguments.get("context_lines_after"), 0);
     if before != 0 {
         parts.push("-B".into());
         parts.push(before.to_string());
@@ -274,11 +313,7 @@ pub fn zvec_rg_arguments(
         parts.push("-A".into());
         parts.push(after.to_string());
     }
-    if !arguments
-        .get("skip_ignored_files")
-        .and_then(Value::as_bool)
-        .unwrap_or(true)
-    {
+    if !truthy_or(arguments, "skip_ignored_files", true) {
         parts.push("--no-ignore".into());
     }
 
@@ -311,11 +346,7 @@ pub fn zvec_rg_arguments(
             format!("{relative}/**"),
         ]);
     }
-    if arguments
-        .get("restrict_search_to_code_files")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
+    if truthy_or(arguments, "restrict_search_to_code_files", false) {
         for glob in CODE_FILE_GLOBS {
             parts.extend(["-g".into(), glob.to_string()]);
         }
@@ -326,6 +357,13 @@ pub fn zvec_rg_arguments(
         "root": workspace,
         "command": parts.iter().map(|part| shell_quote(part)).collect::<Vec<_>>().join(" ")
     }))
+}
+
+fn truthy_or(arguments: &Map<String, Value>, key: &str, default: bool) -> bool {
+    match arguments.get(key) {
+        None => default,
+        Some(value) => json_truthy(Some(value)),
+    }
 }
 
 fn shell_quote(value: &str) -> String {
@@ -463,6 +501,41 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_raw_names_inside_one_backend_are_qualified() {
+        let catalog = build_catalog(vec![("docs".into(), vec![tool("recall"), tool("recall")])]);
+        let names: Vec<&str> = catalog
+            .tools
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["docs_recall", "docs_recall_2"]);
+        assert_eq!(
+            catalog.routes["docs_recall_2"],
+            ("docs".into(), "recall".into())
+        );
+    }
+
+    #[test]
+    fn rg_arguments_follow_python_truthiness_and_int_coercion() {
+        let arguments = json!({
+            "substring_pattern": "x",
+            "multiline": null,
+            "skip_ignored_files": null,
+            "restrict_search_to_code_files": 1,
+            "context_lines_before": "2",
+            "context_lines_after": 2.9
+        });
+        let translated =
+            zvec_rg_arguments(arguments.as_object().unwrap(), Some("/w")).expect("translation");
+        let command = translated["command"].as_str().unwrap();
+        assert!(!command.contains("-U"), "{command}");
+        assert!(command.contains("--no-ignore"), "{command}");
+        assert!(command.contains("-B 2"), "{command}");
+        assert!(command.contains("-A 2"), "{command}");
+        assert!(command.contains("*.go"), "{command}");
+    }
+
+    #[test]
     fn filters_match_python_sets() {
         assert_eq!(
             filter_relevant_tools(
@@ -593,6 +666,47 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_raw_names_survive_a_refresh() {
+        let first = build_catalog_reserved(
+            vec![(
+                "code".into(),
+                vec![tool("shared_name"), tool("shared_name")],
+            )],
+            &BTreeMap::new(),
+        );
+        let first_names: Vec<&str> = first
+            .0
+            .tools
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(first_names, vec!["shared_name", "code_shared_name"]);
+
+        let second = build_catalog_reserved(
+            vec![(
+                "code".into(),
+                vec![tool("shared_name"), tool("shared_name")],
+            )],
+            &first.1,
+        );
+        let second_names: Vec<&str> = second
+            .0
+            .tools
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(second_names, first_names);
+        assert_eq!(
+            second.0.routes["shared_name"],
+            ("code".into(), "shared_name".into())
+        );
+        assert_eq!(
+            second.0.routes["code_shared_name"],
+            ("code".into(), "shared_name".into())
+        );
+    }
+
+    #[test]
     fn reservations_keep_public_names_bound_across_refresh() {
         let first = build_catalog_reserved(
             vec![
@@ -620,10 +734,15 @@ mod tests {
     }
 
     #[test]
-    fn alias_schema_does_not_promise_a_limit_it_does_not_apply() {
+    fn alias_schema_exposes_max_answer_chars() {
         let alias = search_for_pattern_tool();
-        assert!(alias["inputSchema"]["properties"]
-            .get("max_answer_chars")
-            .is_none());
+        assert_eq!(
+            alias["inputSchema"]["properties"]["max_answer_chars"]["default"],
+            -1
+        );
+        assert!(alias["description"]
+            .as_str()
+            .unwrap()
+            .contains("max_answer_chars"));
     }
 }

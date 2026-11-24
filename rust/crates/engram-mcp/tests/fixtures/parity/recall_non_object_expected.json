@@ -1,0 +1,21 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "Engram recall (1 of 2 results; schema engram-recall.v1)\n\n[1] memory\nkept\n\n... 1 lower-ranked results omitted; narrow the query for more detail."
+    }
+  ],
+  "isError": false,
+  "structuredContent": {
+    "schema_version": "engram-recall.v1",
+    "results": [
+      {
+        "id": "memory-1",
+        "summary": "kept"
+      }
+    ],
+    "total_results": 2,
+    "returned_results": 1,
+    "truncated": true
+  }
+}

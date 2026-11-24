@@ -1,5 +1,5 @@
 # systemd unit (native, Linux) -- long-running CocoIndex continuous sync
-# (docs, code, issues, transcripts). Direct analog of
+# (docs, issues). Direct analog of
 # launchd/io.vectorize.cocoindex.service.plist.
 #
 # Runs natively via the same `uv`-managed venv as the maintenance units -- see
@@ -13,14 +13,14 @@
 #   systemctl --user enable --now engram-cocoindex.service
 
 [Unit]
-Description=CocoIndex continuous sync (docs, code, issues, transcripts)
+Description=CocoIndex continuous sync (docs, issues)
 After=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=%h/.engram
 EnvironmentFile=%h/.engram/config.env
-ExecStart=%h/.engram/venv/bin/engram-flows-configured --project kubernaut --config %h/.engram/projects.toml --mode live --apps docs issues code
+ExecStart=%h/.engram/venv/bin/engram-flows-configured --project kubernaut --config %h/.engram/projects.toml --mode live --apps docs issues
 Restart=on-failure
 RestartSec=10
 StandardOutput=append:%h/.engram/logs/cocoindex-stdout.log

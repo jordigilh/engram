@@ -15,6 +15,9 @@
         <string>__HOME__/.engram/projects.toml</string>
         <string>--mode</string>
         <string>live</string>
+        <string>--apps</string>
+        <string>docs</string>
+        <string>issues</string>
     </array>
     <key>WorkingDirectory</key>
     <string>__HOME__/.engram</string>

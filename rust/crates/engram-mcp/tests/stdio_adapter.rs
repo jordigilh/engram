@@ -235,7 +235,7 @@ async fn cancellation_during_initialization_keeps_cleanup_waitable() {
 
 #[tokio::test]
 async fn cancellation_during_retirement_keeps_the_cleanup_waitable() {
-    let (adapter, dir) = adapter("slow-exit");
+    let (adapter, dir) = adapter("gated-exit");
     let adapter = Arc::new(adapter);
 
     let first = tokio::spawn({
@@ -253,25 +253,27 @@ async fn cancellation_during_retirement_keeps_the_cleanup_waitable() {
     first.abort();
     assert!(first.await.expect_err("aborted").is_cancelled());
 
-    // Abort a caller while it is awaiting the retired child's cleanup.
-    let waits_before = adapter.retirement_waits();
+    let handles_before = adapter.retirement_handle_waits();
     let second = tokio::spawn({
         let adapter = Arc::clone(&adapter);
         async move { adapter.call_tool("alpha", json!({})).await }
     });
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while adapter.retirement_waits() <= waits_before {
+    while adapter.retirement_handle_waits() <= handles_before {
         assert!(
             tokio::time::Instant::now() < deadline,
-            "second caller never entered retirement"
+            "second caller never took the cleanup handle"
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     second.abort();
     assert!(second.await.expect_err("aborted").is_cancelled());
 
+    // Release the gated child so the third call can finish retirement.
+    std::fs::write(dir.path("release"), b"1").expect("release gate");
+
     let result = tokio::time::timeout(
-        Duration::from_secs(6),
+        Duration::from_secs(8),
         adapter.call_tool("alpha", json!({})),
     )
     .await

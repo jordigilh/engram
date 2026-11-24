@@ -169,7 +169,10 @@ def main() -> None:
             )
     if MODE == "gated-exit":
         gate = os.environ.get("STDIO_MOCK_GATE")
-        while gate and not os.path.exists(gate):
+        # Bound the wait: a crashed test that removes its temp dir must not
+        # leave an immortal child holding the harness's stdout pipe open.
+        deadline = time.time() + 30
+        while gate and not os.path.exists(gate) and time.time() < deadline:
             time.sleep(0.05)
     if MODE == "slow-exit":
         time.sleep(1.5)

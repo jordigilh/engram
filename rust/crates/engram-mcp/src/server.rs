@@ -543,11 +543,16 @@ async fn post_endpoint(
                 .cloned()
                 .unwrap_or_else(|| json!({}));
             let request_key = request_id_key(&id);
-            let dispatched_write = backends
-                .catalog
-                .read()
-                .await
-                .route(tool_name)
+            // Resolve the route and freshness from one catalog snapshot so
+            // cancellation classification and dispatch cannot disagree.
+            let (route, freshness) = {
+                let catalog = backends.catalog.read().await;
+                let route = catalog.route(tool_name).cloned();
+                let freshness = backends.freshness(&project, workspace);
+                (route, freshness)
+            };
+            let dispatched_write = route
+                .as_ref()
                 .map(|(_, raw_name)| is_write_tool(raw_name))
                 .unwrap_or(false);
             if let Some(session_id) = session_id.clone() {
@@ -572,11 +577,12 @@ async fn post_endpoint(
                 tokio::select! {
                     result = handle_backend_call(
                         &backends,
-                        &project,
                         call_id,
                         tool_name,
                         arguments,
                         workspace,
+                        route,
+                        freshness,
                     ) => result,
                     _ = token.cancelled() => cancelled_response(
                         id.clone(),
@@ -585,7 +591,10 @@ async fn post_endpoint(
                     ),
                 }
             } else {
-                handle_backend_call(&backends, &project, id, tool_name, arguments, workspace).await
+                handle_backend_call(
+                    &backends, id, tool_name, arguments, workspace, route, freshness,
+                )
+                .await
             }
         }
         _ => sse(method_not_found_error(id, method)),
@@ -594,14 +603,13 @@ async fn post_endpoint(
 
 async fn handle_backend_call(
     backends: &BackendSet,
-    project: &str,
     id: Value,
     tool_name: &str,
     arguments: Value,
     workspace: Option<&str>,
+    route: Option<Route>,
+    freshness: FreshnessEnvelope,
 ) -> Response {
-    let freshness = backends.freshness(project, workspace);
-    let route = backends.catalog.read().await.route(tool_name).cloned();
     let Some((backend_key, raw_name)) = route else {
         return tool_result(
             id,

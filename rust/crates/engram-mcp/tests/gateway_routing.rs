@@ -13,8 +13,8 @@ use axum::{Json, Router};
 use engram_mcp::backend::{BackendAdapter, HttpRelayAdapter};
 use engram_mcp::server::tool_definition;
 use engram_mcp::{
-    build_project_adapters, router, router_with_options, OriginPolicy, Project, Registry,
-    SessionPolicy,
+    build_project_adapters, router, router_with_options, MetricsLog, OriginPolicy, Project,
+    Registry, SessionPolicy,
 };
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -513,6 +513,90 @@ url = "{docs_url}"
     assert!(records
         .iter()
         .any(|record| record.method == "tools/call" && record.tool.as_deref() == Some("recall")));
+}
+
+#[tokio::test]
+async fn tools_call_appends_a_gateway_metric_line() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("recall")],
+        call_result: json!({"content": [{"type": "text", "text": "héllo"}], "isError": false}),
+        ..Default::default()
+    })
+    .await;
+    let dir = std::env::temp_dir().join(format!("engram-metrics-ok-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let log = Arc::new(MetricsLog::new(dir.join("gateway-calls.jsonl")));
+    let adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
+    let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]).with_metrics(log);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    let (_, body) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {"name": "docs_recall", "arguments": {"query": "x"}}
+        }),
+    )
+    .await;
+    assert_eq!(sse_data(&body)["result"]["isError"], false);
+
+    let text = std::fs::read_to_string(dir.join("gateway-calls.jsonl")).expect("metrics log");
+    let entry: Value = serde_json::from_str(text.trim()).expect("metric json");
+    assert_eq!(entry["project"], "alpha");
+    assert_eq!(entry["backend"], "docs");
+    assert_eq!(entry["tool"], "docs_recall");
+    assert_eq!(entry["is_error"], false);
+    assert_eq!(entry["result_chars"], 5);
+    assert!(entry["est_tokens"].as_u64().unwrap() > 0);
+    assert_eq!(entry["ts"].as_str().unwrap().len(), 19);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn backend_failure_appends_a_zeroed_error_metric() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("recall")],
+        call_fail_first: 5,
+        call_fail_status: Some(500),
+        ..Default::default()
+    })
+    .await;
+    let dir = std::env::temp_dir().join(format!("engram-metrics-err-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let log = Arc::new(MetricsLog::new(dir.join("gateway-calls.jsonl")));
+    let adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
+    let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]).with_metrics(log);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": {"name": "docs_recall", "arguments": {"query": "x"}}
+        }),
+    )
+    .await;
+
+    let text = std::fs::read_to_string(dir.join("gateway-calls.jsonl")).expect("metrics log");
+    let entry: Value = serde_json::from_str(text.trim()).expect("metric json");
+    assert_eq!(entry["is_error"], true);
+    assert_eq!(entry["result_chars"], 0);
+    assert_eq!(entry["est_tokens"], 0);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]

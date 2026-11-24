@@ -9,6 +9,7 @@ pub mod backend;
 pub mod catalog;
 pub mod error;
 pub mod freshness;
+pub mod metrics;
 pub mod protocol;
 pub mod registry;
 pub mod server;
@@ -24,6 +25,7 @@ pub use backend::{
 pub use catalog::{build_catalog, Catalog};
 pub use error::{ErrorKind, TypedError};
 pub use freshness::{FreshnessEnvelope, FRESHNESS_SCHEMA_VERSION};
+pub use metrics::{estimate_tokens, extract_result_text, MetricsLog};
 pub use protocol::{initialize_result, tools_list_result};
 pub use registry::{BackendKind, BackendSpec, ProjectSpec, Registry};
 pub use server::{

@@ -40,7 +40,9 @@ them in this change; `code` is no longer passed by any flow plist.
 
 `launchd/io.vectorize.cocoindex.configured.plist` is the template for new
 projects and now passes `--apps docs issues`, so a new deployment does not
-start the legacy code flow by default.
+start the legacy code flow by default. A project with `git_sync = true` must
+add `git-sync` to that list; `main()` only auto-adds it when `--apps` is
+omitted, and omitting `--apps` would also start the legacy code app.
 
 Support jobs:
 

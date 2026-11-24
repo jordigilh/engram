@@ -19,13 +19,6 @@ FLOW_MODULES = (
     ROOT / "src" / "engram" / "flows" / "configured.py",
     ROOT / "src" / "engram" / "code_overlay_cocoindex.py",
 )
-FLOW_PLISTS = {
-    "io.vectorize.cocoindex.service.plist",
-    "io.vectorize.cocoindex.engram.plist",
-    "io.vectorize.cocoindex.kuadrant.plist",
-    "io.vectorize.cocoindex.praxis.plist",
-    "io.vectorize.cocoindex.project-lightpath.plist",
-}
 
 
 def _doc_text() -> str:
@@ -106,27 +99,41 @@ def test_code_search_retirement_is_explicit() -> None:
     assert "retired" in text.lower()
 
 
+def _flow_plists() -> dict[str, tuple[set[str], Path]]:
+    """Discover deployed flow plists from their ProgramArguments.
+
+    The generic `configured` template has a placeholder label and is handled
+    separately; every other plist that runs `engram-flows-configured` must
+    appear in the inventory table.
+    """
+    discovered: dict[str, tuple[set[str], Path]] = {}
+    for path in sorted((ROOT / "launchd").glob("io.vectorize.cocoindex*.plist")):
+        plist = plistlib.loads(path.read_bytes())
+        arguments = plist.get("ProgramArguments", [])
+        if "engram-flows-configured" not in " ".join(arguments):
+            continue
+        label = plist["Label"]
+        if "__PROJECT__" in label:
+            continue
+        assert "--apps" in arguments, f"{path.name} must select apps explicitly"
+        selected = set(arguments[arguments.index("--apps") + 1 :])
+        discovered[label] = (selected, path)
+    return discovered
+
+
 def test_flow_plists_match_the_documented_table_exactly() -> None:
     documented = _documented_flow_rows()
-    seen: set[str] = set()
-    for name in sorted(FLOW_PLISTS):
-        path = ROOT / "launchd" / name
-        assert path.exists(), f"{name} is missing"
-        plist = plistlib.loads(path.read_bytes())
-        label = plist["Label"]
-        arguments = plist["ProgramArguments"]
-        assert "--apps" in arguments, f"{name} must select apps explicitly"
-        selected = set(arguments[arguments.index("--apps") + 1 :])
-        assert "code" not in selected, f"{name} still selects --apps code"
+    discovered = _flow_plists()
+    for label, (selected, path) in discovered.items():
+        assert "code" not in selected, f"{path.name} still selects --apps code"
         assert documented.get(label) == selected, (
-            f"{name} apps {sorted(selected)} do not match the documented row "
+            f"{path.name} apps {sorted(selected)} do not match the documented row "
             f"{sorted(documented.get(label, set()))}"
         )
-        seen.add(label)
-    assert seen == set(documented), (
-        "documented flow rows and repository flow plists differ: "
-        f"documented-only={sorted(set(documented) - seen)}, "
-        f"plist-only={sorted(seen - set(documented))}"
+    assert set(discovered) == set(documented), (
+        "documented flow rows and discovered flow plists differ: "
+        f"documented-only={sorted(set(documented) - set(discovered))}, "
+        f"plist-only={sorted(set(discovered) - set(documented))}"
     )
 
 
@@ -142,3 +149,17 @@ def test_systemd_flow_template_does_not_select_the_code_app() -> None:
     argv = shlex.split(exec_start.removeprefix("ExecStart="))
     selected = set(argv[argv.index("--apps") + 1 :])
     assert selected == {"docs", "issues"}
+
+
+def test_configured_template_is_docs_issues_only() -> None:
+    path = ROOT / "launchd" / "io.vectorize.cocoindex.configured.plist"
+    arguments = plistlib.loads(path.read_bytes())["ProgramArguments"]
+    selected = set(arguments[arguments.index("--apps") + 1 :])
+    assert selected == {"docs", "issues"}
+
+
+def test_cursor_examples_use_zvec_code_search() -> None:
+    for path in sorted((ROOT / "cursor" / "examples").glob("*.mdc")):
+        text = path.read_text()
+        assert "cocoindex_search" not in text, f"{path.name} still names cocoindex_search"
+        assert "user-cocoindex-code" not in text, f"{path.name} still names the old server"

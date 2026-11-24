@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.vectorize.engram-mcp</string>
+    <!-- Rust replacement for io.vectorize.engram-gateway-native. Keep the
+         Python plist installed but unloaded until the rollout is accepted;
+         see docs/RUST_GATEWAY_CUTOVER.md for the switch and rollback. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.engram/bin/engram-mcp</string>
+        <string>--config</string>
+        <string>__HOME__/.engram/runtime/native-instances.toml</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>8898</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Same rationale as io.vectorize.engram-gateway-native: stdio
+             Serena needs gopls (GOPATH/bin) and rust-analyzer needs the
+             rustup shims in ~/.cargo/bin. -->
+        <key>PATH</key>
+        <string>__HOME__/.engram/bin:__HOME__/.local/bin:__HOME__/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:__HOME__/go/bin:/usr/bin:/bin</string>
+        <key>GOPATH</key>
+        <string>__HOME__/go</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.engram/logs/engram-mcp-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.engram/logs/engram-mcp-stderr.log</string>
+</dict>
+</plist>

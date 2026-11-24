@@ -250,12 +250,13 @@ async fn cancellation_during_retirement_keeps_the_cleanup_waitable() {
     assert!(first.await.expect_err("aborted").is_cancelled());
 
     // Abort a caller while it is awaiting the retired child's cleanup.
+    let waits_before = adapter.retirement_waits();
     let second = tokio::spawn({
         let adapter = Arc::clone(&adapter);
         async move { adapter.call_tool("alpha", json!({})).await }
     });
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while adapter.retirement_waits() == 0 {
+    while adapter.retirement_waits() <= waits_before {
         assert!(
             tokio::time::Instant::now() < deadline,
             "second caller never entered retirement"

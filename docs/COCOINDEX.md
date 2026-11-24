@@ -13,8 +13,9 @@
 CocoIndex is the incremental ingestion engine in the Engram stack. It replaces
 legacy batch importers with continuous, delta-aware sync for documentation,
 GitHub issues, and agent transcripts. Code search is no longer part of the live
-CocoIndex path; a deployment may still run the legacy code ingestion app until
-#214 replaces it, but no client route reads that pgvector table.
+CocoIndex path; the `engram-search-configured` code-search services and their
+launchd/systemd templates were retired in #214, and no client route reads the
+old pgvector table.
 
 For operational configuration of GitHub and Jira issue polling, including
 credentials, LaunchAgents, backfills, and verification, see
@@ -72,10 +73,9 @@ flowchart LR
 
 ## Flow Catalog
 
-CocoIndex's flow catalog is below. Code search is retired; the **code** flow may
-still run on deployments that have not disabled it, writing a pgvector table
-that no client route reads. The code row and sections below are retained for
-migration history.
+CocoIndex's flow catalog is below. Code search is retired and its services are
+disabled; the **code** row is retained for migration history. The live rows are
+docs, issues, and transcripts.
 
 | Flow | Source | Transforms | Sink | Frequency |
 |------|--------|-----------|------|-----------|

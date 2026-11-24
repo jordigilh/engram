@@ -14,8 +14,8 @@
 - [uv](https://docs.astral.sh/uv/) — fast Python package manager (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
 - [gh](https://cli.github.com/) — GitHub CLI for issues ingestion (`brew install gh && gh auth login`)
 - [jq](https://jqlang.github.io/jq/) — JSON processor for MCP hook (`brew install jq`)
-- `pip install cocoindex==1.0.23` (or `uv pip install cocoindex==1.0.23`) — incremental ingestion engine
-- For code indexing: no separate install needed — `cocoindex` bundles its own tree-sitter-backed AST chunking (`cocoindex.ops.text.RecursiveSplitter`) and hybrid search (dense + BM25) out of the box.
+- `pip install cocoindex==1.2.0` (or `uv pip install cocoindex==1.2.0`) — incremental ingestion engine for docs, issues, and transcripts
+- Code search runs on the zvec-grep daemon (`:7999`); CocoIndex is ingestion-only.
 - Google Cloud SDK (`gcloud`) with Application Default Credentials configured
 - Vertex AI API enabled on your GCP project
 - Claude models enabled on Vertex AI (Haiku 4.5 + Sonnet 4.6)
@@ -276,7 +276,7 @@ uv pip install --python ~/.engram/venv/bin/python 'google-cloud-aiplatform>=1.38
 ```
 
 This generates the console scripts used by the launchd templates:
-`engram-flows-configured`, `engram-search-configured`,
+`engram-flows-configured`,
 `engram-nightly-learn`, and the shared service entry points. Manual tools such
 as reports and backfills can be run as
 `python3 -m engram.<subpackage>.<module>`.
@@ -358,12 +358,12 @@ sed "s|__HOME__|$HOME|g" cursor/hooks.json > ~/.cursor/hooks.json
 ## 16. CocoIndex Setup (macOS launchd)
 
 CocoIndex replaces legacy batch importers with continuous, incremental sync for
-docs, issues, code, and transcripts.
+docs, issues, and transcripts. Code search is zvec-grep.
 
 ### Install CocoIndex into the Engram venv
 
 ```bash
-uv pip install --python ~/.engram/venv/bin/python cocoindex==1.0.23
+uv pip install --python ~/.engram/venv/bin/python cocoindex==1.2.0
 ```
 
 `pdfplumber` (PDF text extraction) rides along as a transitive dependency of
@@ -380,8 +380,8 @@ uv pip install --python ~/.engram/venv/bin/python pdfplumber
 ### Configure and backfill
 
 The launchd templates invoke the installed configuration-driven
-`engram-flows-configured` and `engram-search-configured` console scripts
-directly; no flow or search symlinks are needed. Configure source paths in
+`engram-flows-configured` console script directly; no flow symlinks are
+needed. Configure source paths in
 `~/.engram/projects.toml`, run a backfill, then install the matching
 continuous-sync plist. For a new project, use
 [`NEW_PROJECT_SETUP.md`](NEW_PROJECT_SETUP.md).
@@ -459,7 +459,7 @@ explicitly selectable on-demand app under the cost policy. See
 > `main`/`release-vX.Y` branch-scoping behavior.
 
 > **Onboarding additional projects**: use the configuration-driven
-> `engram-flows-configured` and `engram-search-configured` entrypoints with a
+> `engram-flows-configured` entrypoint with a
 > new table in `~/.engram/projects.toml`. Do not add project modules,
 > pyproject entrypoints, symlinks, or source-code registry branches. Render
 > the generic launchd template for the deployment service. See
@@ -690,10 +690,10 @@ the kubernaut project:
    summarization. Empirical data showed 61% of corrections occur in the second
    half of sessions, largely due to summarization silently dropping recalled
    conventions
-4. **Code search via CocoIndex** — directs the agent to use `cocoindex_search`
+4. **Code search via zvec-grep** — directs the agent to use `zvec_grep_search`
    for semantic code exploration (finding code by concept/meaning) instead of
-   relying on Grep/SemanticSearch. Requires the CocoIndex setup above.
-5. **Phase-based triggers** — recall the right bank or call `cocoindex_search`
+   relying on Grep/SemanticSearch. CocoIndex is ingestion-only.
+5. **Phase-based triggers** — recall the right bank or call `zvec_grep_search`
    when transitioning to a new phase (planning, testing, API design, debugging,
    code exploration, refactoring)
 6. **Skip criteria** — prevents recall spam on trivial follow-ups

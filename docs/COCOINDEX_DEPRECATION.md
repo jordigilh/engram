@@ -21,6 +21,10 @@ CocoIndex owns the incremental flow engine around them.
 
 ## Live footprint
 
+Deployment snapshot captured 2026-11-24 from `launchctl list` and the deployed
+`~/Library/LaunchAgents` plists, with `lsof` port checks and
+`psql`/`du` for state. Re-verify before acting on the retirement gates.
+
 ### Ingestion services (must stay until replaced)
 
 These are the deployed `--apps` values. The repository plists were aligned to
@@ -52,8 +56,10 @@ Entrypoint: `engram-flows-configured --project <project> --config
 
 The CLI still accepts `docs`, `issues`, `code`, `transcripts`, and `git-sync`.
 The `code` app is still built when a project sets `code_table`, so it remains a
-legacy backfill path even though no live service selects it. It must be deleted
-with the rest; until then, `--apps code` would still write `cocoindex.*`.
+legacy backfill path even though no live service selects it. Omitting `--apps`
+still selects every built app, including `code`, and auto-adds `git-sync` when
+configured; that is the remaining way to start code ingestion without editing a
+plist. It must be deleted with the rest.
 
 ### Code-search services (retired)
 
@@ -67,10 +73,11 @@ search, graph, and managed rg. It does **not** own structural pattern search:
 replacement, and its backend is disabled, so that capability is currently
 lost. Serena's `search_for_pattern` covers literal/regex searches only on
 routes that mount Serena. This is an explicit drop unless a Rust owner is
-chosen. The `engram-search-configured` entry point and `src/engram/search/*`
-are still registered in the legacy Python gateway, so they are
-broken-but-mounted, not dead; `code_overlay*` is dead code. All of it must be
-deleted or re-pointed with the rest.
+chosen. `src/engram/search/*` is shipped as the standalone
+`engram-search-configured` server and entry point; the Rust gateway does not
+mount it, but the legacy Python registry can. `code_overlay*` is not dead: it
+is a runnable branch-overlay writer (see below). Both must be deleted or
+re-pointed with the rest.
 
 ### Flow functions
 
@@ -81,6 +88,9 @@ deleted or re-pointed with the rest.
 - `process_issue`, `process_jira_issue`, `process_discussion`,
   `process_board`, `issues_main`
 - `process_transcript`, `transcript_main`
+- `process_overlay_file`, `overlay_main` (`src/engram/code_overlay_cocoindex.py`;
+  branch-overlay code writer into `cocoindex.*` and
+  `~/.engram/cocoindex-overlay.db` when a branch overlay is materialized)
 
 Startup waits for Hindsight (`_wait_for_hindsight`: 30 attempts, 1.5x backoff
 capped at 30s) and proceeds even if it never becomes ready.
@@ -126,8 +136,11 @@ Stable IDs differ per provider:
 
 `split_issue_sections` gives the header key `""`, comments `comment{i}`, and
 oversized parts `part{n}` / `comment{i}-part{n}`; the document ID appends the
-key as `-{key}`. Comment ordinals are positional, but appends only add keys at
-the end, so existing comments do not renumber.
+key as `-{key}`. Keys are stable for append-only, unfiltered prefixes. They are
+**not** stable when the filtered comment list changes (author becomes
+untrusted, body drops below 20 chars, or the 10-comment cap evicts an older
+comment), because later ordinals shift. The Rust owner should key by a stable
+comment id instead.
 
 Metadata and tags are provider-specific:
 
@@ -203,7 +216,8 @@ Live flow-state LMDB environments:
 | `~/.engram/engram-cocoindex.db` | engram flow state | 23 MB |
 
 On-demand/backfill-only state (no live service): `dcm-cocoindex.db` 388 MB,
-`koku-cocoindex.db` 42 MB, `rhdh-plugins-cocoindex.db` 216 KB.
+`koku-cocoindex.db` 42 MB, `rhdh-plugins-cocoindex.db` 216 KB. Optional
+branch-overlay state: `~/.engram/cocoindex-overlay.db` (currently absent).
 Transcript watermarks: `~/.engram/logs/cocoindex-transcript-watermarks.json`.
 
 Postgres `cocoindex.*` holds only legacy code embeddings and the call-graph

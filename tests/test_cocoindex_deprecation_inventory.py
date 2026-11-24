@@ -1,23 +1,40 @@
 """Guard the CocoIndex deprecation inventory against drift (#214).
 
 The inventory is the contract used to decide when CocoIndex can be removed.
-If a new ingestion app or memoized flow is added to the Python flow entrypoint,
-this test fails until the inventory documents it.
+If a new ingestion app, memoized flow, flow plist, or systemd app selection is
+added, this test fails until the inventory documents it.
 """
 
 from __future__ import annotations
 
 import ast
 import plistlib
+import re
+import shlex
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / "docs" / "COCOINDEX_DEPRECATION.md"
-FLOW = ROOT / "src" / "engram" / "flows" / "configured.py"
+FLOW_MODULES = (
+    ROOT / "src" / "engram" / "flows" / "configured.py",
+    ROOT / "src" / "engram" / "code_overlay_cocoindex.py",
+)
+FLOW_PLISTS = {
+    "io.vectorize.cocoindex.service.plist",
+    "io.vectorize.cocoindex.engram.plist",
+    "io.vectorize.cocoindex.kuadrant.plist",
+    "io.vectorize.cocoindex.praxis.plist",
+    "io.vectorize.cocoindex.project-lightpath.plist",
+}
+
+
+def _doc_text() -> str:
+    assert DOC.exists(), "docs/COCOINDEX_DEPRECATION.md is missing"
+    return DOC.read_text()
 
 
 def _flow_apps() -> set[str]:
-    tree = ast.parse(FLOW.read_text())
+    tree = ast.parse(FLOW_MODULES[0].read_text())
     apps: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -34,32 +51,42 @@ def _flow_apps() -> set[str]:
 
 
 def _memoized_flows() -> set[str]:
-    tree = ast.parse(FLOW.read_text())
     flows: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        decorators = {ast.unparse(item) for item in node.decorator_list}
-        if any("coco.fn" in decorator for decorator in decorators):
-            flows.add(node.name)
+    for module in FLOW_MODULES:
+        tree = ast.parse(module.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            decorators = {ast.unparse(item) for item in node.decorator_list}
+            if any("coco.fn" in decorator for decorator in decorators):
+                flows.add(node.name)
     return flows
 
 
+def _documented_flow_rows() -> dict[str, set[str]]:
+    rows: dict[str, set[str]] = {}
+    for line in _doc_text().splitlines():
+        match = re.match(r"^\|\s*`([^`]+)`\s*\|[^|]*\|([^|]*)\|$", line)
+        if not match or not match.group(1).startswith("io.vectorize.cocoindex."):
+            continue
+        rows[match.group(1)] = set(re.findall(r"`([^`]+)`", match.group(2)))
+    return rows
+
+
 def test_the_deprecation_inventory_exists_and_covers_every_app() -> None:
-    assert DOC.exists(), "docs/COCOINDEX_DEPRECATION.md is missing"
-    text = DOC.read_text()
+    text = _doc_text()
     for app in _flow_apps():
         assert f"`{app}`" in text, f"flow app {app!r} is not documented"
 
 
 def test_every_cocoindex_flow_function_is_documented() -> None:
-    text = DOC.read_text()
+    text = _doc_text()
     for flow in _memoized_flows():
         assert flow in text, f"memoized flow {flow!r} is not documented"
 
 
 def test_the_inventory_states_the_required_deprecation_sections() -> None:
-    text = DOC.read_text()
+    text = _doc_text()
     for heading in (
         "## What CocoIndex is",
         "## Live footprint",
@@ -73,20 +100,34 @@ def test_the_inventory_states_the_required_deprecation_sections() -> None:
 
 
 def test_code_search_retirement_is_explicit() -> None:
-    text = DOC.read_text()
+    text = _doc_text()
     assert "zvec-grep" in text
     assert "engram-search-configured" in text
     assert "retired" in text.lower()
 
 
-def test_flow_plists_do_not_select_the_legacy_code_app() -> None:
-    for path in sorted((ROOT / "launchd").glob("io.vectorize.cocoindex*.plist")):
-        if "cocoindex-code" in path.name or "watch" in path.name:
-            continue
-        arguments = plistlib.loads(path.read_bytes())["ProgramArguments"]
-        assert "--apps" in arguments, f"{path.name} must select apps explicitly"
-        selected = arguments[arguments.index("--apps") + 1 :]
-        assert "code" not in selected, f"{path.name} still selects --apps code"
+def test_flow_plists_match_the_documented_table_exactly() -> None:
+    documented = _documented_flow_rows()
+    seen: set[str] = set()
+    for name in sorted(FLOW_PLISTS):
+        path = ROOT / "launchd" / name
+        assert path.exists(), f"{name} is missing"
+        plist = plistlib.loads(path.read_bytes())
+        label = plist["Label"]
+        arguments = plist["ProgramArguments"]
+        assert "--apps" in arguments, f"{name} must select apps explicitly"
+        selected = set(arguments[arguments.index("--apps") + 1 :])
+        assert "code" not in selected, f"{name} still selects --apps code"
+        assert documented.get(label) == selected, (
+            f"{name} apps {sorted(selected)} do not match the documented row "
+            f"{sorted(documented.get(label, set()))}"
+        )
+        seen.add(label)
+    assert seen == set(documented), (
+        "documented flow rows and repository flow plists differ: "
+        f"documented-only={sorted(set(documented) - seen)}, "
+        f"plist-only={sorted(seen - set(documented))}"
+    )
 
 
 def test_the_old_code_search_search_template_is_gone() -> None:
@@ -98,5 +139,6 @@ def test_systemd_flow_template_does_not_select_the_code_app() -> None:
     exec_start = next(
         line for line in text.splitlines() if line.startswith("ExecStart=")
     )
-    assert "--apps docs issues" in exec_start
-    assert "code" not in exec_start
+    argv = shlex.split(exec_start.removeprefix("ExecStart="))
+    selected = set(argv[argv.index("--apps") + 1 :])
+    assert selected == {"docs", "issues"}

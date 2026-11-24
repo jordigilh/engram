@@ -250,13 +250,17 @@ async fn cancellation_during_retirement_keeps_the_cleanup_waitable() {
     assert!(first.await.expect_err("aborted").is_cancelled());
 
     // Abort a caller while it is awaiting the retired child's cleanup.
-    let mut second = tokio::spawn({
+    let second = tokio::spawn({
         let adapter = Arc::clone(&adapter);
         async move { adapter.call_tool("alpha", json!({})).await }
     });
-    tokio::select! {
-        _ = tokio::time::sleep(Duration::from_millis(200)) => {}
-        result = &mut second => panic!("second caller did not wait for retirement: {result:?}"),
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while adapter.retirement_waits() == 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "second caller never entered retirement"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
     second.abort();
     assert!(second.await.expect_err("aborted").is_cancelled());

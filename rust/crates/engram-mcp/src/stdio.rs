@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
@@ -46,6 +47,7 @@ pub struct StdioSubprocessAdapter {
     // of overlapping the cancelled request on the same one.
     service: Arc<StdMutex<Option<Session>>>,
     retiring: Arc<StdMutex<Vec<tokio::task::JoinHandle<()>>>>,
+    retirement_waits: AtomicUsize,
     call_lock: Mutex<()>,
 }
 
@@ -142,6 +144,7 @@ impl StdioSubprocessAdapter {
             env,
             service: Arc::new(StdMutex::new(None)),
             retiring: Arc::new(StdMutex::new(Vec::new())),
+            retirement_waits: AtomicUsize::new(0),
             call_lock: Mutex::new(()),
         }
     }
@@ -221,7 +224,13 @@ impl StdioSubprocessAdapter {
         }
     }
 
+    #[doc(hidden)]
+    pub fn retirement_waits(&self) -> usize {
+        self.retirement_waits.load(Ordering::SeqCst)
+    }
+
     async fn wait_for_retired(&self) {
+        self.retirement_waits.fetch_add(1, Ordering::SeqCst);
         loop {
             let handle = self
                 .retiring

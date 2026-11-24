@@ -23,9 +23,12 @@ STATE = os.environ.get("STDIO_MOCK_STATE")
 def log(message: str) -> None:
     if not LOG:
         return
-    with open(LOG, "a", encoding="utf-8") as handle:
-        handle.write(f"{message}\n")
-        handle.flush()
+    try:
+        with open(LOG, "a", encoding="utf-8") as handle:
+            handle.write(f"{message}\n")
+            handle.flush()
+    except OSError:
+        pass
 
 
 def send(payload: dict) -> None:
@@ -156,6 +159,7 @@ def main() -> None:
                     "error": {"code": -32601, "message": "method not found"},
                 }
             )
+    log(f"exit {os.getpid()}")
 
 
 if __name__ == "__main__":

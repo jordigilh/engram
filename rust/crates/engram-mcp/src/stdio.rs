@@ -27,12 +27,14 @@ pub struct StdioSubprocessAdapter {
     // leaves the slot empty, so the next caller spawns a fresh child instead
     // of overlapping the cancelled request on the same one.
     service: Arc<StdMutex<Option<ClientService>>>,
+    retiring: Arc<StdMutex<Vec<ClientService>>>,
     call_lock: Mutex<()>,
 }
 
 struct ServiceLease {
     service: Option<ClientService>,
     slot: Arc<StdMutex<Option<ClientService>>>,
+    retiring: Arc<StdMutex<Vec<ClientService>>>,
 }
 
 impl ServiceLease {
@@ -59,11 +61,13 @@ impl ServiceLease {
 impl Drop for ServiceLease {
     fn drop(&mut self) {
         if let Some(service) = self.service.take() {
-            // The caller was cancelled: retire the child instead of letting a
-            // later call reuse it while the cancelled request may still run.
-            tokio::spawn(async move {
-                let _ = service.cancel().await;
-            });
+            // The caller was cancelled. Queue the child for the next call to
+            // shut down before it starts a replacement; a bare background
+            // cancel could still overlap the in-flight operation.
+            self.retiring
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(service);
         }
     }
 }
@@ -75,6 +79,7 @@ impl StdioSubprocessAdapter {
             args,
             env,
             service: Arc::new(StdMutex::new(None)),
+            retiring: Arc::new(StdMutex::new(Vec::new())),
             call_lock: Mutex::new(()),
         }
     }
@@ -129,6 +134,19 @@ impl StdioSubprocessAdapter {
         ServiceLease {
             service: Some(service),
             slot: Arc::clone(&self.service),
+            retiring: Arc::clone(&self.retiring),
+        }
+    }
+
+    async fn wait_for_retired(&self) {
+        let retired: Vec<ClientService> = self
+            .retiring
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .drain(..)
+            .collect();
+        for service in retired {
+            let _ = service.cancel().await;
         }
     }
 }
@@ -137,6 +155,7 @@ impl StdioSubprocessAdapter {
 impl BackendAdapter for StdioSubprocessAdapter {
     async fn list_tools(&self) -> Result<Vec<Value>, BackendError> {
         let _call = self.call_lock.lock().await;
+        self.wait_for_retired().await;
         self.ensure_service().await?;
         let mut lease = self.take_lease();
         let first = list_tools_pages(lease.service()).await;
@@ -182,6 +201,7 @@ impl BackendAdapter for StdioSubprocessAdapter {
         )
         .map_err(|error| BackendError::permanent(format!("invalid stdio tool request: {error}")))?;
         let _call = self.call_lock.lock().await;
+        self.wait_for_retired().await;
         self.ensure_service().await?;
         let mut lease = self.take_lease();
         let first = lease.service().peer().call_tool(params.clone()).await;

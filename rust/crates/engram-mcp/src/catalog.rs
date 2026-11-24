@@ -57,36 +57,59 @@ pub fn build_catalog_reserved(
 ) -> (Catalog, BTreeMap<String, Route>) {
     let mut catalog = Catalog::default();
     let mut next_reservations = reservations.clone();
+    let mut reserved_by_identity: BTreeMap<Route, Vec<String>> = BTreeMap::new();
+    for (name, identity) in reservations {
+        reserved_by_identity
+            .entry(identity.clone())
+            .or_default()
+            .push(name.clone());
+    }
+
     for (backend_key, tools) in per_backend_tools {
         for tool in tools {
             let Some(raw_name) = tool.get("name").and_then(Value::as_str) else {
                 continue;
             };
             let identity = (backend_key.clone(), raw_name.to_string());
-            let existing = reservations
-                .iter()
-                .find(|(_, owner)| **owner == identity)
-                .map(|(name, _)| name.clone());
-            let mut final_name =
-                existing.unwrap_or_else(|| prefixed_tool_name(&backend_key, raw_name));
-            if catalog.routes.contains_key(&final_name)
-                || next_reservations
-                    .get(&final_name)
-                    .is_some_and(|owner| owner != &identity)
+            let preferred = prefixed_tool_name(&backend_key, raw_name);
+
+            // Reuse every name already reserved for this identity, in the
+            // preferred order, before allocating a new suffix. This keeps
+            // duplicate raw names stable across catalog refreshes.
+            let mut candidates = Vec::new();
+            if next_reservations
+                .get(&preferred)
+                .is_none_or(|owner| owner == &identity)
             {
-                let base_name = format!("{backend_key}_{raw_name}");
-                final_name = base_name.clone();
-                let mut duplicate = 2;
-                while catalog.routes.contains_key(&final_name)
-                    || next_reservations
-                        .get(&final_name)
-                        .is_some_and(|owner| owner != &identity)
-                {
-                    final_name = format!("{base_name}_{duplicate}");
-                    duplicate += 1;
+                candidates.push(preferred.clone());
+            }
+            if let Some(names) = reserved_by_identity.get(&identity) {
+                for name in names {
+                    if !candidates.contains(name) {
+                        candidates.push(name.clone());
+                    }
                 }
             }
-            next_reservations.insert(final_name.clone(), identity);
+
+            let final_name = candidates
+                .into_iter()
+                .find(|name| {
+                    !catalog.routes.contains_key(name)
+                        && next_reservations
+                            .get(name)
+                            .is_none_or(|owner| owner == &identity)
+                })
+                .unwrap_or_else(|| {
+                    allocate_name(
+                        &backend_key,
+                        raw_name,
+                        &identity,
+                        &catalog,
+                        &next_reservations,
+                    )
+                });
+
+            next_reservations.insert(final_name.clone(), identity.clone());
             catalog.routes.insert(
                 final_name.clone(),
                 (backend_key.clone(), raw_name.to_string()),
@@ -99,6 +122,27 @@ pub fn build_catalog_reserved(
         }
     }
     (catalog, next_reservations)
+}
+
+fn allocate_name(
+    backend_key: &str,
+    raw_name: &str,
+    identity: &Route,
+    catalog: &Catalog,
+    reservations: &BTreeMap<String, Route>,
+) -> String {
+    let base_name = format!("{backend_key}_{raw_name}");
+    let mut candidate = base_name.clone();
+    let mut duplicate = 2;
+    while catalog.routes.contains_key(&candidate)
+        || reservations
+            .get(&candidate)
+            .is_some_and(|owner| owner != identity)
+    {
+        candidate = format!("{base_name}_{duplicate}");
+        duplicate += 1;
+    }
+    candidate
 }
 
 const RELEVANT_HINDSIGHT: [&str; 5] = [
@@ -618,6 +662,47 @@ mod tests {
         assert_eq!(
             catalog.routes["search_for_pattern"],
             ("zg".into(), "zvec_grep_rg".into())
+        );
+    }
+
+    #[test]
+    fn duplicate_raw_names_survive_a_refresh() {
+        let first = build_catalog_reserved(
+            vec![(
+                "code".into(),
+                vec![tool("shared_name"), tool("shared_name")],
+            )],
+            &BTreeMap::new(),
+        );
+        let first_names: Vec<&str> = first
+            .0
+            .tools
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(first_names, vec!["shared_name", "code_shared_name"]);
+
+        let second = build_catalog_reserved(
+            vec![(
+                "code".into(),
+                vec![tool("shared_name"), tool("shared_name")],
+            )],
+            &first.1,
+        );
+        let second_names: Vec<&str> = second
+            .0
+            .tools
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(second_names, first_names);
+        assert_eq!(
+            second.0.routes["shared_name"],
+            ("code".into(), "shared_name".into())
+        );
+        assert_eq!(
+            second.0.routes["code_shared_name"],
+            ("code".into(), "shared_name".into())
         );
     }
 

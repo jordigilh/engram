@@ -578,7 +578,7 @@ async fn backend_failure_appends_a_zeroed_error_metric() {
     let app = router([project]);
     let session = initialize(&app, "alpha").await;
 
-    call(
+    let (_, body) = call(
         &app,
         "/mcp/alpha",
         Some(&session),
@@ -590,12 +590,58 @@ async fn backend_failure_appends_a_zeroed_error_metric() {
         }),
     )
     .await;
+    let value = sse_data(&body);
+    let text = value["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        text.contains("backend 'docs' failed:"),
+        "client-visible error text: {text:?}"
+    );
 
     let text = std::fs::read_to_string(dir.join("gateway-calls.jsonl")).expect("metrics log");
     let entry: Value = serde_json::from_str(text.trim()).expect("metric json");
     assert_eq!(entry["is_error"], true);
     assert_eq!(entry["result_chars"], 0);
     assert_eq!(entry["est_tokens"], 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn unknown_tool_does_not_write_a_metric_line() {
+    let (url, _mock) = spawn_mock(MockConfig {
+        tools: vec![tool("recall")],
+        call_result: json!({"content": [], "isError": false}),
+        ..Default::default()
+    })
+    .await;
+    let dir = std::env::temp_dir().join(format!("engram-metrics-unknown-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let log = Arc::new(MetricsLog::new(dir.join("gateway-calls.jsonl")));
+    let adapter: Arc<dyn BackendAdapter> =
+        Arc::new(HttpRelayAdapter::new(&url, BTreeMap::new(), 5.0, false).unwrap());
+    let project = Project::with_backends("alpha", vec![("docs".into(), adapter)]).with_metrics(log);
+    project.prewarm().await;
+    let app = router([project]);
+    let session = initialize(&app, "alpha").await;
+
+    let (_, body) = call(
+        &app,
+        "/mcp/alpha",
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "tools/call",
+            "params": {"name": "never_existed", "arguments": {}}
+        }),
+    )
+    .await;
+    assert_eq!(sse_data(&body)["result"]["isError"], true);
+    assert!(
+        !dir.join("gateway-calls.jsonl").exists(),
+        "an unknown tool never reached a backend and must not be logged"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

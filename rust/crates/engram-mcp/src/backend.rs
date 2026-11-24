@@ -590,7 +590,11 @@ fn sse_events(text: &str) -> Vec<String> {
                 current.clear();
             }
         } else if let Some(data) = line.strip_prefix("data:") {
-            current.push(data.trim_start().to_string());
+            let data = data.trim_start();
+            // An empty `data:` prelude is not a JSON payload; Python skips it.
+            if !data.trim().is_empty() {
+                current.push(data.to_string());
+            }
         }
     }
     if !current.is_empty() {
@@ -1046,6 +1050,9 @@ mod tests {
     fn sse_and_plain_json_parse() {
         let sse = parse_sse_json(b"event: message\ndata: {\"result\":{\"ok\":true}}\n\n").unwrap();
         assert_eq!(sse["result"]["ok"], true);
+        // Python skips an empty `data:` prelude emitted before the payload.
+        let prelude = parse_sse_json(b"data:\n\ndata: {\"result\":{\"ok\":true}}\n\n").unwrap();
+        assert_eq!(prelude["result"]["ok"], true);
         let plain = parse_sse_json(b"{\"result\":{}}").unwrap();
         assert_eq!(plain["result"], json!({}));
     }

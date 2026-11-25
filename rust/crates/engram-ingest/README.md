@@ -30,8 +30,8 @@ the docs-parity half of slice 3).
 - Supervisor-level respawn/restart isolation. The worker exposes per-slot health
   (`WorkerHandle::health`) but restart policy lands with the service switch.
 
-PR map: the merged ledger/docs PR, then this Hindsight sink, then shadow run,
-worker loop/concurrency/metrics, issues/transcripts, service switch, and
+PR map: the merged ledger/docs PR, the merged Hindsight sink, then this worker
+loop/concurrency/metrics slice, issues/transcripts, service switch, and
 Python/CocoIndex removal (#232).
 
 ## Parity and deliberate behavior
@@ -76,9 +76,11 @@ Python/CocoIndex removal (#232).
   guard stops `migrate()`/worker startup with an actionable message, and changing
   an existing source's bank is rejected (`BankChanged`) rather than silently
   orphaning old-bank memories.
-- **Jobs are bank-scoped.** Each job snapshots its source bank. Claims, recovery,
-  and per-bank metrics never cross that boundary; a multi-bank ledger is safe
-  with one supervisor over all banks.
+- **Jobs are bank-scoped and serialized per bank document.** Each job snapshots
+  its source bank. Claims, recovery, and per-bank metrics never cross that
+  boundary, and two sources in one bank that share a Hindsight document id
+  cannot hold it concurrently. A multi-bank ledger is safe with one supervisor
+  over all banks.
 - **Worker concurrency is bounded per bank.** Each slot owns one Postgres
   connection and shares one HTTP client. Defaults are intentionally small; the
   hard cap is 8 slots/bank and 32 total.
@@ -113,8 +115,10 @@ Python/CocoIndex removal (#232).
 migration version once in order under an advisory lock, and then verifies the
 columns, constraints, and partial index the code depends on. It refuses a
 database that records a version the binary does not embed. Migration `0002`
-adds `jobs.last_error_class`; the v1→v2 upgrade is exercised by the sink
-harness.
+adds `jobs.last_error_class`; migration `0004` replaces the per-source lease
+index with `jobs_one_leased_per_bank_document_idx` and requeues surplus leased
+jobs before building it. The v1→v2 and v2→v4 upgrades are exercised by the
+Postgres harnesses.
 
 Source identity is the unique `(project, tag, root)`. Chunks are scoped by
 `source_id` with unique `(source_id, hindsight_document_id)` and

@@ -7,6 +7,7 @@
 
 mod support;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration as StdDuration, Instant};
 
@@ -294,6 +295,71 @@ fn banks_drain_independently_with_bounded_concurrency() {
 }
 
 #[test]
+fn startup_recovery_paginates_a_large_stranded_backlog() {
+    let Some((url, mut client)) = setup() else {
+        eprintln!("ENGRAM_INGEST_TEST_DATABASE_URL is not set; skipping worker harness");
+        return;
+    };
+    let mut server = support::TestServer::start(200, StdDuration::ZERO);
+    let orphan = seed_source(&mut client, "orphan", "orphan-docs", "/tmp/orphan", &[]);
+    client
+        .execute(
+            "INSERT INTO engram_ingest.jobs
+                 (source_id, bank_id, kind, hindsight_document_id, dedupe_key,
+                  generation, payload, state, run_after)
+             SELECT $1, 'orphan-docs', 'retain', 'orphan--' || g, 'orphan-' || g,
+                    1, '{}'::jsonb, 'leased', now()
+               FROM generate_series(1, 501) AS g",
+            &[&orphan],
+        )
+        .expect("seed stranded jobs");
+    client
+        .batch_execute(
+            "INSERT INTO engram_ingest.leases
+                 (job_id, owner, token, expires_at, heartbeat_at)
+             SELECT id, 'dead-worker', 'token-' || id,
+                    now() - interval '1 hour', now()
+               FROM engram_ingest.jobs
+              WHERE bank_id = 'orphan-docs'",
+        )
+        .expect("seed stranded leases");
+
+    let config = worker_config(
+        &url,
+        server.url(),
+        vec![BankConfig {
+            bank_id: "project-a-docs".to_string(),
+            concurrency: 1,
+        }],
+    );
+    let worker = RunningWorker::new(WorkerSupervisor::start(config).expect("start"));
+    assert_eq!(worker.handle().startup_recovery().stranded, 501);
+    assert_eq!(worker.handle().stranded_remaining(), 0);
+    assert!(!worker.handle().startup_recovery_failed());
+    let (leased, pending, attempts): (i64, i64, i64) = {
+        let row = client
+            .query_one(
+                "SELECT
+                     count(*) FILTER (WHERE state = 'leased'),
+                     count(*) FILTER (WHERE state = 'pending'),
+                     COALESCE(sum(attempts), 0)
+                   FROM engram_ingest.jobs
+                  WHERE bank_id = 'orphan-docs'",
+                &[],
+            )
+            .expect("backlog counts");
+        (row.get(0), row.get(1), row.get(2))
+    };
+    assert_eq!(leased, 0);
+    assert_eq!(pending, 501);
+    assert_eq!(attempts, 0);
+
+    worker.stop();
+    server.shutdown();
+    truncate(&mut client);
+}
+
+#[test]
 fn startup_recovery_handles_configured_and_deconfigured_banks() {
     let Some((url, mut client)) = setup() else {
         eprintln!("ENGRAM_INGEST_TEST_DATABASE_URL is not set; skipping worker harness");
@@ -352,6 +418,12 @@ fn startup_recovery_handles_configured_and_deconfigured_banks() {
     let worker = RunningWorker::new(WorkerSupervisor::start(config).expect("start"));
     assert_eq!(worker.handle().startup_recovery().requeued, 1);
     assert_eq!(worker.handle().startup_recovery().stranded, 1);
+    let startup_snapshot = worker.handle().snapshot();
+    let startup_a = startup_snapshot
+        .iter()
+        .find(|snapshot| snapshot.bank_id == "project-a-docs")
+        .expect("startup metrics");
+    assert_eq!(startup_a.recovered, 1);
 
     wait_until(&mut client, StdDuration::from_secs(10), |client| {
         let state: String = client
@@ -426,9 +498,9 @@ fn runtime_recovery_wakes_an_idle_bank() {
     client
         .execute(
             "UPDATE engram_ingest.leases
-                SET expires_at = now() - interval '1 second'
-              WHERE job_id = $1",
-            &[&claimed.job_id],
+                SET expires_at = $1
+              WHERE job_id = $2",
+            &[&(Utc::now() - LedgerDuration::seconds(10)), &claimed.job_id],
         )
         .expect("expire lease after startup");
 
@@ -463,13 +535,16 @@ fn lost_ack_is_observable_and_consumes_one_attempt() {
         return;
     };
     let hook_client = Arc::new(Mutex::new(connect(&url).expect("hook db")));
+    let expired = Arc::new(AtomicBool::new(false));
     let hook = Arc::new(move || {
+        if expired.swap(true, Ordering::SeqCst) {
+            return;
+        }
         let mut hook_client = hook_client.lock().expect("hook db lock");
         hook_client
             .execute(
-                "UPDATE engram_ingest.leases
-                    SET expires_at = now() - interval '1 second'",
-                &[],
+                "UPDATE engram_ingest.leases SET expires_at = $1",
+                &[&(Utc::now() - LedgerDuration::seconds(10))],
             )
             .expect("expire lease during HTTP");
     });

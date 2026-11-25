@@ -44,19 +44,32 @@ pub enum StoreError {
     StaleReconciliation,
 }
 
+/// Recovery selection window. Startup and runtime passes use the same value so
+/// the pagination loop and SQL limits cannot drift apart.
+pub const RECOVERY_BATCH: usize = 500;
+
 /// Counts from one recovery pass. `stranded` leases belong to a bank that is
 /// not configured in the running worker; they are requeued without consuming an
 /// attempt so repeated restarts cannot exhaust their retry budget.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RecoveryReport {
     pub requeued: usize,
     pub dead: usize,
     pub stranded: usize,
+    pub scanned: usize,
 }
 
 impl RecoveryReport {
     pub fn is_empty(self) -> bool {
         self.requeued == 0 && self.dead == 0 && self.stranded == 0
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        self.requeued += other.requeued;
+        self.dead += other.dead;
+        self.stranded += other.stranded;
+        self.scanned += other.scanned;
     }
 }
 
@@ -94,16 +107,16 @@ pub fn migrate(client: &mut Client) -> Result<(), StoreError> {
     // The v3 DDL and the NOT NULL guard take ACCESS EXCLUSIVE locks. A live
     // writer may briefly block them, so migrations get a generous lock and
     // statement budget separate from the worker statement timeouts.
-    client.batch_execute("SET lock_timeout = '60s'; SET statement_timeout = '120s'")?;
-    client.batch_execute(
+    client.batch_execute("SET lock_timeout = '60s'; SET statement_timeout = 0")?;
+    let mut transaction = client.transaction()?;
+    transaction.execute("SELECT pg_advisory_xact_lock($1)", &[&918_274_i64])?;
+    transaction.batch_execute(
         "CREATE SCHEMA IF NOT EXISTS engram_ingest;
          CREATE TABLE IF NOT EXISTS engram_ingest.schema_migrations (
              version bigint PRIMARY KEY,
              applied_at timestamptz NOT NULL DEFAULT now()
          );",
     )?;
-    let mut transaction = client.transaction()?;
-    transaction.execute("SELECT pg_advisory_xact_lock($1)", &[&918_274_i64])?;
     let applied: Vec<i64> = transaction
         .query("SELECT version FROM engram_ingest.schema_migrations", &[])?
         .into_iter()
@@ -213,18 +226,41 @@ pub fn migrate(client: &mut Client) -> Result<(), StoreError> {
             )));
         }
     }
-    let lease_index: bool = client
+    for index in [
+        "jobs_bank_pending_idx",
+        "jobs_one_leased_per_bank_document_idx",
+    ] {
+        let exists: bool = client
+            .query_one(
+                "SELECT EXISTS (
+                     SELECT 1 FROM pg_indexes
+                      WHERE schemaname = 'engram_ingest'
+                        AND indexname = $1)",
+                &[&index],
+            )?
+            .get(0);
+        if !exists {
+            return Err(StoreError::MigrationMismatch(index.to_string()));
+        }
+    }
+    let lease_index_shape: bool = client
         .query_one(
-            "SELECT EXISTS (
-                 SELECT 1 FROM pg_indexes
-                  WHERE schemaname = 'engram_ingest'
-                    AND indexname = 'jobs_bank_pending_idx')",
+            "SELECT COALESCE(bool_and(
+                        i.indisunique
+                        AND pg_get_indexdef(i.indexrelid) LIKE '%bank_id, hindsight_document_id%'
+                        AND pg_get_indexdef(i.indexrelid) LIKE '%state = ''leased''%'
+                    ), false)
+               FROM pg_index i
+               JOIN pg_class c ON c.oid = i.indexrelid
+               JOIN pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = 'engram_ingest'
+                AND c.relname = 'jobs_one_leased_per_bank_document_idx'",
             &[],
         )?
         .get(0);
-    if !lease_index {
+    if !lease_index_shape {
         return Err(StoreError::MigrationMismatch(
-            "jobs_bank_pending_idx".to_string(),
+            "jobs_one_leased_per_bank_document_idx shape".to_string(),
         ));
     }
     Ok(())
@@ -271,14 +307,29 @@ fn enforce_bank_columns(client: &mut Client) -> Result<(), StoreError> {
         )));
     }
 
-    transaction.execute(
+    // The bank-wide unique index may block the bank backfill if two sources
+    // produce the same bank document. Drop it, backfill, dedupe, then rebuild.
+    transaction.batch_execute(
+        "DROP INDEX IF EXISTS engram_ingest.jobs_one_leased_per_bank_document_idx",
+    )?;
+    let backfill = transaction.execute(
         "UPDATE engram_ingest.jobs j
             SET bank_id = s.bank_id
            FROM engram_ingest.sources s
           WHERE j.source_id = s.id
             AND j.bank_id IS NULL",
         &[],
-    )?;
+    );
+    if let Err(error) = backfill {
+        if error.code() == Some(&postgres::error::SqlState::UNIQUE_VIOLATION) {
+            transaction.rollback()?;
+            return Err(StoreError::MigrationGuard(
+                "duplicate leased jobs for one bank document; rerun migrate() to requeue the surplus"
+                    .to_string(),
+            ));
+        }
+        return Err(StoreError::Postgres(error));
+    }
     let null_jobs: i64 = transaction
         .query_one(
             "SELECT count(*) FROM engram_ingest.jobs WHERE bank_id IS NULL",
@@ -291,6 +342,37 @@ fn enforce_bank_columns(client: &mut Client) -> Result<(), StoreError> {
             "jobs.bank_id is unset for {null_jobs} job(s); rerun migrate() after sources.bank_id is set"
         )));
     }
+
+    // v4 could not build the bank-wide lease index while bank ids were NULL.
+    // Now that the backfill is complete, dedupe and build it before NOT NULL.
+    transaction.batch_execute(
+        "WITH ranked AS (
+             SELECT id, row_number() OVER (
+                        PARTITION BY bank_id, hindsight_document_id ORDER BY id
+                    ) AS rank
+               FROM engram_ingest.jobs
+              WHERE state = 'leased'
+         )
+         DELETE FROM engram_ingest.leases l
+          USING ranked r
+          WHERE l.job_id = r.id AND r.rank > 1;
+         WITH ranked AS (
+             SELECT id, row_number() OVER (
+                        PARTITION BY bank_id, hindsight_document_id ORDER BY id
+                    ) AS rank
+               FROM engram_ingest.jobs
+              WHERE state = 'leased'
+         )
+         UPDATE engram_ingest.jobs j
+            SET state = 'pending', run_after = now(),
+                last_error = 'duplicate lease requeued by bank-document migration',
+                last_error_class = 'transient', updated_at = now()
+           FROM ranked r
+          WHERE j.id = r.id AND r.rank > 1;
+         CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_leased_per_bank_document_idx
+             ON engram_ingest.jobs (bank_id, hindsight_document_id)
+             WHERE state = 'leased';",
+    )?;
 
     let error = transaction
         .batch_execute(
@@ -732,7 +814,7 @@ fn try_claim_job(
                 SELECT 1
                   FROM engram_ingest.jobs leased
                   JOIN engram_ingest.leases l ON l.job_id = leased.id
-                 WHERE leased.source_id = j.source_id
+                 WHERE leased.bank_id = j.bank_id
                    AND leased.hindsight_document_id = j.hindsight_document_id
                    AND leased.state = 'leased'
                    AND l.expires_at > $1
@@ -740,7 +822,7 @@ fn try_claim_job(
             AND NOT EXISTS (
                 SELECT 1
                   FROM engram_ingest.jobs earlier
-                 WHERE earlier.source_id = j.source_id
+                 WHERE earlier.bank_id = j.bank_id
                    AND earlier.hindsight_document_id = j.hindsight_document_id
                    AND earlier.id < j.id
                    AND earlier.state IN ('pending', 'leased')
@@ -867,7 +949,7 @@ pub fn recover_expired_leases(
     client: &mut Client,
     now: DateTime<Utc>,
 ) -> Result<RecoveryReport, StoreError> {
-    recover_expired_leases_filtered(client, now, None, None)
+    recover_expired_leases_filtered(client, now, None, None, None)
 }
 
 /// Recovery used by a running worker: only this bank's leases, with normal
@@ -877,7 +959,7 @@ pub fn recover_expired_leases_in_bank(
     bank_id: &str,
     now: DateTime<Utc>,
 ) -> Result<RecoveryReport, StoreError> {
-    recover_expired_leases_filtered(client, now, Some(bank_id), None)
+    recover_expired_leases_filtered(client, now, Some(bank_id), None, None)
 }
 
 /// Startup recovery for a multi-bank worker. Leases for banks that are not in
@@ -890,7 +972,39 @@ pub fn recover_expired_leases_for_banks(
     now: DateTime<Utc>,
 ) -> Result<RecoveryReport, StoreError> {
     let configured: BTreeSet<&str> = configured_banks.iter().map(String::as_str).collect();
-    recover_expired_leases_filtered(client, now, None, Some(&configured))
+    recover_expired_leases_filtered(client, now, None, Some(&configured), None)
+}
+
+/// Startup recovery restricted to banks that are not configured in this worker.
+/// Those leases are stranded: requeue them without consuming an attempt.
+pub fn recover_expired_leases_outside_banks(
+    client: &mut Client,
+    configured_banks: &[String],
+    now: DateTime<Utc>,
+) -> Result<RecoveryReport, StoreError> {
+    let configured: BTreeSet<&str> = configured_banks.iter().map(String::as_str).collect();
+    let excluded = configured_banks.to_vec();
+    recover_expired_leases_filtered(client, now, None, Some(&configured), Some(&excluded))
+}
+
+/// Expired leases still held by banks outside the worker config. Used for the
+/// startup stranded gauge after the bounded recovery loop finishes.
+pub fn count_stranded_expired_leases(
+    client: &mut Client,
+    configured_banks: &[String],
+    now: DateTime<Utc>,
+) -> Result<i64, StoreError> {
+    let configured = configured_banks.to_vec();
+    let row = client.query_one(
+        "SELECT count(*)
+           FROM engram_ingest.jobs j
+           JOIN engram_ingest.leases l ON l.job_id = j.id
+          WHERE j.state = 'leased'
+            AND l.expires_at <= $1
+            AND j.bank_id <> ALL($2)",
+        &[&now, &configured],
+    )?;
+    Ok(row.get(0))
 }
 
 fn recover_expired_leases_filtered(
@@ -898,27 +1012,51 @@ fn recover_expired_leases_filtered(
     now: DateTime<Utc>,
     bank_filter: Option<&str>,
     configured_banks: Option<&BTreeSet<&str>>,
+    excluded_banks: Option<&Vec<String>>,
 ) -> Result<RecoveryReport, StoreError> {
     let mut transaction = client.transaction()?;
     let sql = if bank_filter.is_some() {
-        "SELECT j.id, j.attempts, j.max_attempts, j.bank_id
-           FROM engram_ingest.jobs j
-           JOIN engram_ingest.leases l ON l.job_id = j.id
-          WHERE j.state = 'leased' AND l.expires_at <= $1 AND j.bank_id = $2
-          FOR UPDATE OF j SKIP LOCKED"
+        format!(
+            "SELECT j.id, j.attempts, j.max_attempts, j.bank_id
+               FROM engram_ingest.jobs j
+               JOIN engram_ingest.leases l ON l.job_id = j.id
+              WHERE j.state = 'leased' AND l.expires_at <= $1 AND j.bank_id = $2
+              ORDER BY j.id
+              LIMIT {RECOVERY_BATCH}
+              FOR UPDATE OF j SKIP LOCKED"
+        )
+    } else if excluded_banks.is_some() {
+        format!(
+            "SELECT j.id, j.attempts, j.max_attempts, j.bank_id
+               FROM engram_ingest.jobs j
+               JOIN engram_ingest.leases l ON l.job_id = j.id
+              WHERE j.state = 'leased' AND l.expires_at <= $1
+                AND j.bank_id <> ALL($2)
+              ORDER BY j.id
+              LIMIT {RECOVERY_BATCH}
+              FOR UPDATE OF j SKIP LOCKED"
+        )
     } else {
-        "SELECT j.id, j.attempts, j.max_attempts, j.bank_id
-           FROM engram_ingest.jobs j
-           JOIN engram_ingest.leases l ON l.job_id = j.id
-          WHERE j.state = 'leased' AND l.expires_at <= $1
-          FOR UPDATE OF j SKIP LOCKED"
+        format!(
+            "SELECT j.id, j.attempts, j.max_attempts, j.bank_id
+               FROM engram_ingest.jobs j
+               JOIN engram_ingest.leases l ON l.job_id = j.id
+              WHERE j.state = 'leased' AND l.expires_at <= $1
+              ORDER BY j.id
+              LIMIT {RECOVERY_BATCH}
+              FOR UPDATE OF j SKIP LOCKED"
+        )
     };
-    let rows = match bank_filter {
-        Some(bank_id) => transaction.query(sql, &[&now, &bank_id])?,
-        None => transaction.query(sql, &[&now])?,
+    let rows = if let Some(bank_id) = bank_filter {
+        transaction.query(&sql, &[&now, &bank_id])?
+    } else if let Some(excluded) = excluded_banks {
+        transaction.query(&sql, &[&now, &excluded])?
+    } else {
+        transaction.query(&sql, &[&now])?
     };
     let mut report = RecoveryReport::default();
     for row in rows {
+        report.scanned += 1;
         let job_id: i64 = row.get(0);
         let attempts: i32 = row.get(1);
         let max_attempts: i32 = row.get(2);
@@ -951,7 +1089,8 @@ fn recover_expired_leases_filtered(
 
         let next_attempts = attempts + 1;
         let dead = next_attempts >= max_attempts;
-        let run_after = now + Duration::milliseconds(RETRY_BASE_MS * (1_i64 << attempts));
+        let shift = attempts.clamp(0, 31);
+        let run_after = now + Duration::milliseconds(RETRY_BASE_MS.saturating_mul(1_i64 << shift));
         transaction.execute(
             "UPDATE engram_ingest.jobs
                 SET state = $2, attempts = $3, run_after = $4,
@@ -1002,7 +1141,8 @@ pub fn fail_job(
     let max_attempts: i32 = row.get(1);
     let next_attempts = attempts + 1;
     let dead = next_attempts >= max_attempts;
-    let run_after = now + Duration::milliseconds(RETRY_BASE_MS * (1_i64 << attempts));
+    let shift = attempts.clamp(0, 31);
+    let run_after = now + Duration::milliseconds(RETRY_BASE_MS.saturating_mul(1_i64 << shift));
     transaction.execute(
         "UPDATE engram_ingest.jobs
             SET state = $2, attempts = $3, run_after = $4,
@@ -1061,7 +1201,7 @@ mod tests {
             .all(|pair| pair[0].version < pair[1].version));
         assert_eq!(
             MIGRATIONS.last().map(|migration| migration.version),
-            Some(3)
+            Some(4)
         );
     }
 

@@ -20,7 +20,10 @@ use crate::ledger::is_valid_bank_id;
 use crate::sink::{
     process_one_reporting, DeleteOutcome, HindsightSink, ProcessStep, SinkError, SinkOutcome,
 };
-use crate::store::{migrate, recover_expired_leases_for_banks, RecoveryReport, StoreError};
+use crate::store::{
+    count_stranded_expired_leases, migrate, recover_expired_leases_in_bank,
+    recover_expired_leases_outside_banks, RecoveryReport, StoreError, RECOVERY_BATCH,
+};
 
 /// Injected claim clock. Only `claim_job` uses it; acks, failures, and recovery
 /// use the wall clock so a lost ack remains detectable in tests.
@@ -29,6 +32,8 @@ pub type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
 const MAX_SLOTS_PER_BANK: usize = 8;
 const MAX_TOTAL_SLOTS: usize = 32;
 const MAX_LEASE_SECONDS: i64 = 3_600;
+/// Bound startup recovery so a huge backlog cannot block the listener forever.
+const MAX_STARTUP_RECOVERY_BATCHES: usize = 20;
 
 fn system_clock() -> Clock {
     Arc::new(Utc::now)
@@ -233,6 +238,13 @@ impl WorkerMetrics {
             .fetch_add(step.recovery.dead as u64, Ordering::Relaxed);
     }
 
+    pub fn record_startup_recovery(&self, report: RecoveryReport) {
+        self.recovered
+            .fetch_add(report.requeued as u64, Ordering::Relaxed);
+        self.recovery_dead
+            .fetch_add(report.dead as u64, Ordering::Relaxed);
+    }
+
     fn record_idle_poll(&self) {
         self.idle_polls.fetch_add(1, Ordering::Relaxed);
     }
@@ -409,9 +421,8 @@ fn run_loop(
                 metrics.record_step(&step);
                 if step.recovery_error.is_some() {
                     metrics.record_ledger_error();
-                    if !shutdown.is_cancelled() {
-                        let _ = driver.reconnect();
-                    }
+                    // The recovery transaction rolled back; keep the cadence and
+                    // do not churn a new connection for a failed recovery.
                 }
                 error_attempt = 0;
                 if step.job.is_some() {
@@ -668,6 +679,8 @@ pub struct WorkerHandle {
     threads: Option<ThreadSet>,
     metrics: Vec<Arc<WorkerMetrics>>,
     startup_recovery: RecoveryReport,
+    stranded_remaining: u64,
+    startup_recovery_failed: bool,
     default_join_timeout: StdDuration,
 }
 
@@ -683,8 +696,10 @@ impl WorkerHandle {
         self.shutdown.cancel();
     }
 
-    /// Cancel and wait for all slots using the bound derived at startup
-    /// (longest sink request + statement timeout + 5 s).
+    /// Cancel and wait for all slots using the startup bound: the longest sink
+    /// request plus four statement timeouts and a 5 s margin. This is a
+    /// best-effort bound; callers with unusually large recovery batches should
+    /// use [`join_timeout`](Self::join_timeout) with their own deadline.
     pub fn join(self) -> Result<(), WorkerError> {
         let timeout = self.default_join_timeout;
         self.join_timeout(timeout)
@@ -705,14 +720,52 @@ impl WorkerHandle {
     }
 
     pub fn prometheus(&self) -> String {
-        self.metrics
-            .iter()
-            .map(|metric| metric.render_prometheus())
-            .collect()
+        const TYPES: &str = "\
+# TYPE engram_ingest_jobs_claimed_total counter
+# TYPE engram_ingest_jobs_retained_total counter
+# TYPE engram_ingest_jobs_deleted_total counter
+# TYPE engram_ingest_jobs_already_absent_total counter
+# TYPE engram_ingest_jobs_retried_total counter
+# TYPE engram_ingest_jobs_dead_total counter
+# TYPE engram_ingest_jobs_lease_lost_total counter
+# TYPE engram_ingest_leases_recovered_total counter
+# TYPE engram_ingest_recovery_dead_total counter
+# TYPE engram_ingest_worker_dead_total counter
+# TYPE engram_ingest_idle_polls_total counter
+# TYPE engram_ingest_ledger_errors_total counter
+# TYPE engram_ingest_recovery_stranded_at_startup gauge
+# TYPE engram_ingest_recovery_stranded_requeued gauge
+# TYPE engram_ingest_startup_recovery_failed gauge
+";
+        let mut output = String::from(TYPES);
+        for metric in &self.metrics {
+            output.push_str(&metric.render_prometheus());
+        }
+        output.push_str(&format!(
+            "engram_ingest_recovery_stranded_at_startup {}\n",
+            self.stranded_remaining
+        ));
+        output.push_str(&format!(
+            "engram_ingest_recovery_stranded_requeued {}\n",
+            self.startup_recovery.stranded
+        ));
+        output.push_str(&format!(
+            "engram_ingest_startup_recovery_failed {}\n",
+            u8::from(self.startup_recovery_failed)
+        ));
+        output
     }
 
     pub fn startup_recovery(&self) -> RecoveryReport {
         self.startup_recovery
+    }
+
+    pub fn stranded_remaining(&self) -> u64 {
+        self.stranded_remaining
+    }
+
+    pub fn startup_recovery_failed(&self) -> bool {
+        self.startup_recovery_failed
     }
 
     pub fn health(&self) -> Vec<SlotHealth> {
@@ -730,20 +783,27 @@ impl WorkerSupervisor {
         config.validate()?;
         let timeouts = config.timeouts();
         let join_timeout = config.sink.max_request_timeout()
-            + config.statement_timeout.saturating_mul(3)
+            + config.statement_timeout.saturating_mul(4)
             + StdDuration::from_secs(5);
 
         // Schema readiness is fail-loud: a v2 ledger with no explicit bank must
         // stop startup, not silently strand jobs with a NULL bank_id.
         let mut admin = connect_worker(&config.database_url, timeouts)?;
         migrate(&mut admin)?;
+        // migrate() disables statement_timeout for DDL; restore the worker's
+        // bounds before startup recovery runs on the same connection.
+        admin
+            .batch_execute(&format!(
+                "SET statement_timeout = '{}ms'; SET lock_timeout = '{}ms'",
+                timeouts.statement.as_millis(),
+                timeouts.lock.as_millis()
+            ))
+            .map_err(StoreError::Postgres)?;
         let bank_ids: Vec<String> = config
             .banks
             .iter()
             .map(|bank| bank.bank_id.clone())
             .collect();
-        let startup_recovery = recover_expired_leases_for_banks(&mut admin, &bank_ids, Utc::now())?;
-        drop(admin);
 
         let mut metrics_by_bank = BTreeMap::new();
         for bank in &config.banks {
@@ -752,6 +812,62 @@ impl WorkerSupervisor {
                 Arc::new(WorkerMetrics::new(&bank.bank_id)),
             );
         }
+
+        // Attribute configured-bank recovery to its own metrics, then catch
+        // leases for banks that are no longer configured (stranded). Each pass
+        // is bounded so an extreme backlog cannot block worker startup. A
+        // recovery error is recorded but does not prevent serving banks.
+        let mut startup_recovery = RecoveryReport::default();
+        let mut startup_recovery_failed = false;
+        let mut startup_batches = 0usize;
+        'configured: for bank_id in &bank_ids {
+            while startup_batches < MAX_STARTUP_RECOVERY_BATCHES {
+                startup_batches += 1;
+                let report = match recover_expired_leases_in_bank(&mut admin, bank_id, Utc::now()) {
+                    Ok(report) => report,
+                    Err(_) => {
+                        startup_recovery_failed = true;
+                        if let Some(metrics) = metrics_by_bank.get(bank_id) {
+                            metrics.record_ledger_error();
+                        }
+                        break 'configured;
+                    }
+                };
+                let done = report.scanned < RECOVERY_BATCH;
+                if let Some(metrics) = metrics_by_bank.get(bank_id) {
+                    metrics.record_startup_recovery(report);
+                }
+                startup_recovery.merge(report);
+                if done {
+                    break;
+                }
+            }
+        }
+        while startup_batches < MAX_STARTUP_RECOVERY_BATCHES {
+            startup_batches += 1;
+            let report =
+                match recover_expired_leases_outside_banks(&mut admin, &bank_ids, Utc::now()) {
+                    Ok(report) => report,
+                    Err(_) => {
+                        startup_recovery_failed = true;
+                        break;
+                    }
+                };
+            let done = report.scanned < RECOVERY_BATCH;
+            startup_recovery.merge(report);
+            if done {
+                break;
+            }
+        }
+        let stranded_remaining =
+            match count_stranded_expired_leases(&mut admin, &bank_ids, Utc::now()) {
+                Ok(count) => count as u64,
+                Err(_) => {
+                    startup_recovery_failed = true;
+                    0
+                }
+            };
+        drop(admin);
 
         // Connect every slot before spawning so a connection failure cannot
         // leave a partially started worker set behind.
@@ -848,6 +964,8 @@ impl WorkerSupervisor {
             threads: Some(ThreadSet { handles }),
             metrics,
             startup_recovery,
+            stranded_remaining,
+            startup_recovery_failed,
             default_join_timeout: join_timeout,
         })
     }
@@ -928,6 +1046,7 @@ mod tests {
                 requeued: 1,
                 dead: 2,
                 stranded: 3,
+                scanned: 4,
             },
             recovery_error: None,
         });

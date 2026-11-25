@@ -823,6 +823,168 @@ fn banks_scope_claims_and_recovery() {
 }
 
 #[test]
+fn one_bank_serializes_the_same_document_across_sources() {
+    let Some(url) = test_url() else {
+        eprintln!("ENGRAM_INGEST_TEST_DATABASE_URL is not set; skipping Postgres harness");
+        return;
+    };
+    let mut client = connect(&url).expect("connect");
+    let database: String = client
+        .query_one("SELECT current_database()", &[])
+        .expect("database name")
+        .get(0);
+    assert_eq!(database, "engram_ingest_test");
+    client
+        .execute("SELECT pg_advisory_lock($1)", &[&918_273_i64])
+        .expect("harness lock");
+    migrate(&mut client).expect("migrate");
+    truncate(&mut client);
+
+    // Two roots in the same project/tag share a Hindsight document id. They
+    // must not be leased concurrently just because their source rows differ.
+    for root in ["/tmp/shared-a", "/tmp/shared-b"] {
+        let source = upsert_source(
+            &mut client,
+            &SourceRecord::markdown("project-a", "repo", root, "project-a-docs", &["**/*.md"]),
+        )
+        .expect("source");
+        let scan = vec![scanned("shared.md", "# Shared\n\nShared body long enough.")];
+        let manifest = load_manifest(&mut client, source).expect("manifest");
+        let plan = reconcile(&manifest, &scan, LAYOUT_VERSION);
+        apply_reconciliation(&mut client, source, &plan, Utc::now()).expect("apply");
+    }
+
+    let now = Utc::now();
+    let first = claim_job(
+        &mut client,
+        "project-a-docs",
+        "worker-1",
+        Duration::seconds(60),
+        now,
+    )
+    .expect("first claim")
+    .expect("first job");
+    assert_eq!(first.payload["document_id"], "repo--shared");
+    assert!(
+        claim_job(
+            &mut client,
+            "project-a-docs",
+            "worker-2",
+            Duration::seconds(60),
+            now,
+        )
+        .expect("second claim")
+        .is_none(),
+        "a bank document must not be claimed while another source holds it"
+    );
+    complete_job(&mut client, first.job_id, &first.token, now).expect("complete first");
+    let second = claim_job(
+        &mut client,
+        "project-a-docs",
+        "worker-2",
+        Duration::seconds(60),
+        now,
+    )
+    .expect("third claim")
+    .expect("second job");
+    assert_eq!(second.payload["document_id"], "repo--shared");
+    assert_ne!(second.job_id, first.job_id);
+
+    truncate(&mut client);
+}
+
+#[test]
+fn v4_migration_requeues_duplicate_bank_document_leases() {
+    let Some(url) = test_url() else {
+        eprintln!("ENGRAM_INGEST_TEST_DATABASE_URL is not set; skipping Postgres harness");
+        return;
+    };
+    let mut client = connect(&url).expect("connect");
+    let database: String = client
+        .query_one("SELECT current_database()", &[])
+        .expect("database name")
+        .get(0);
+    assert_eq!(database, "engram_ingest_test");
+    client
+        .execute("SELECT pg_advisory_lock($1)", &[&918_273_i64])
+        .expect("harness lock");
+    migrate(&mut client).expect("migrate");
+    truncate(&mut client);
+
+    for root in ["/tmp/v4-a", "/tmp/v4-b"] {
+        let source = upsert_source(
+            &mut client,
+            &SourceRecord::markdown("project-a", "repo", root, "project-a-docs", &["**/*.md"]),
+        )
+        .expect("source");
+        let scan = vec![scanned("v4.md", "# V4\n\nV4 body long enough.")];
+        let manifest = load_manifest(&mut client, source).expect("manifest");
+        let plan = reconcile(&manifest, &scan, LAYOUT_VERSION);
+        apply_reconciliation(&mut client, source, &plan, Utc::now()).expect("apply");
+    }
+
+    // Recreate the pre-v4 state: the bank-wide index and migration are absent,
+    // and both source jobs hold leases for the same bank document.
+    client
+        .batch_execute(
+            "DROP INDEX engram_ingest.jobs_one_leased_per_bank_document_idx;
+             DELETE FROM engram_ingest.schema_migrations WHERE version = 4;
+             UPDATE engram_ingest.jobs SET state = 'leased';
+             INSERT INTO engram_ingest.leases
+                 (job_id, owner, token, expires_at, heartbeat_at)
+             SELECT id, 'old-worker', 'token-' || id, now() + interval '1 hour', now()
+               FROM engram_ingest.jobs;",
+        )
+        .expect("simulate pre-v4 duplicate leases");
+
+    migrate(&mut client).expect("v4 upgrade");
+    let (leased, pending, leases): (i64, i64, i64) = {
+        let row = client
+            .query_one(
+                "SELECT
+                     count(*) FILTER (WHERE j.state = 'leased'),
+                     count(*) FILTER (WHERE j.state = 'pending'),
+                     (SELECT count(*) FROM engram_ingest.leases)
+                   FROM engram_ingest.jobs j
+                  WHERE j.hindsight_document_id = 'repo--v4'",
+                &[],
+            )
+            .expect("counts");
+        (row.get(0), row.get(1), row.get(2))
+    };
+    assert_eq!(leased, 1);
+    assert_eq!(pending, 1);
+    assert_eq!(
+        leases, 1,
+        "surplus lease rows must be deleted, not orphaned"
+    );
+
+    let (kept_job, kept_token): (i64, String) = {
+        let row = client
+            .query_one(
+                "SELECT job_id, token FROM engram_ingest.leases LIMIT 1",
+                &[],
+            )
+            .expect("kept lease");
+        (row.get(0), row.get(1))
+    };
+    complete_job(&mut client, kept_job, &kept_token, Utc::now()).expect("complete kept lease");
+
+    let claimed = claim_job(
+        &mut client,
+        "project-a-docs",
+        "worker-1",
+        Duration::seconds(60),
+        Utc::now(),
+    )
+    .expect("claim pending")
+    .expect("pending job");
+    assert_eq!(claimed.payload["document_id"], "repo--v4");
+
+    truncate(&mut client);
+}
+
+#[test]
 fn migration_guard_requires_an_explicit_bank_and_is_rerun_safe() {
     let Some(url) = test_url() else {
         eprintln!("ENGRAM_INGEST_TEST_DATABASE_URL is not set; skipping Postgres harness");

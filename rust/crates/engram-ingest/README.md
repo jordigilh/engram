@@ -83,10 +83,12 @@ Python/CocoIndex removal (#232).
 | `ingest_jobs` | `engram_ingest.jobs` + `engram_ingest.leases` |
 | `transcript_watermarks`, `gateway_events` | deferred to those slices |
 
-`migrate()` applies the single unreleased v1 schema and then verifies the
-columns the code needs; a schema created by an earlier shape of `0001` fails
-with `MigrationMismatch` instead of breaking later. Recreate the schema while
-this slice is unreleased; versioned upgrade steps start with the first release.
+`migrate()` bootstraps `engram_ingest.schema_migrations`, applies every embedded
+migration version once in order under an advisory lock, and then verifies the
+columns, constraints, and partial index the code depends on. It refuses a
+database that records a version the binary does not embed. Migration `0002`
+adds `jobs.last_error_class`; the v1→v2 upgrade is exercised by the sink
+harness.
 
 Source identity is the unique `(project, tag, root)`. Chunks are scoped by
 `source_id` with unique `(source_id, hindsight_document_id)` and
@@ -106,7 +108,9 @@ ENGRAM_INGEST_TEST_DATABASE_URL='postgresql://hindsight@/engram_ingest_test?host
 
 It truncates the `engram_ingest` tables and refuses any database whose name is
 not exactly `engram_ingest_test`. CI runs it against a `pgvector/pgvector:pg16`
-service.
+service. Without the URL the Postgres harnesses skip by design (integration
+tier); the 90% coverage CI gate fails in that state, so a local skip cannot
+masquerade as coverage.
 
 ## Local gates
 

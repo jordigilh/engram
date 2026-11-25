@@ -49,6 +49,18 @@ fn document_id_path_segments_are_percent_encoded() {
 }
 
 #[test]
+fn base_url_path_prefix_is_preserved() {
+    let (url, log) = support::one_shot(200, "{}");
+    let sink = HindsightSink::new(format!("{url}/hindsight")).unwrap();
+    sink.retain(&retain_request()).unwrap();
+    let request = log.lock().unwrap()[0].clone();
+    assert!(
+        request.starts_with("POST /hindsight/v1/default/banks/repo-docs/memories "),
+        "{request}"
+    );
+}
+
+#[test]
 fn base_url_credentials_are_rejected() {
     let error = HindsightSink::new("http://user:secret@127.0.0.1:1").unwrap_err();
     assert!(error.to_string().contains("credentials"), "{error}");

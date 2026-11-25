@@ -269,6 +269,10 @@ fn classify_status(status: StatusCode, operation: &str) -> SinkError {
 /// Returns `None` when no job is claimable. Sink and payload errors are
 /// recorded via `fail_job`; a lease lost to recovery returns `Failed` without
 /// aborting the worker loop. Only ledger failures abort the call.
+///
+/// `now` is the claim instant. Acknowledgement uses a fresh clock after the
+/// HTTP call; the two-window TTL guard keeps that safe, so callers should pass
+/// an instant consistent with the ledger clock.
 pub fn process_one(
     db: &mut Client,
     sink: &HindsightSink,

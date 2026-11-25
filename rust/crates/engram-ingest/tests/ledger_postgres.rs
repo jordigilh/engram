@@ -66,6 +66,9 @@ fn one_root_convergence_and_lease_exclusivity() {
         database, "engram_ingest_test",
         "refusing to truncate a database that is not the dedicated engram_ingest_test database"
     );
+    client
+        .execute("SELECT pg_advisory_lock($1)", &[&918_273_i64])
+        .expect("harness lock");
     migrate(&mut client).expect("migrate");
     truncate(&mut client);
 

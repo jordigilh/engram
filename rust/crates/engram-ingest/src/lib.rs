@@ -14,6 +14,7 @@ pub mod jobs;
 pub mod ledger;
 pub mod python_text;
 pub mod reconcile;
+pub mod sink;
 pub mod stopwords;
 pub mod store;
 pub mod synthesis;
@@ -27,6 +28,9 @@ pub use ledger::{
     Manifest, ManifestChunk, ManifestDocument, RecordState, SourceRecord, LAYOUT_VERSION,
 };
 pub use reconcile::{reconcile, DeleteReason, Reconciliation, ScannedFile};
+pub use sink::{
+    process_one, DeleteOutcome, HindsightSink, ProcessedJob, RetainRequest, SinkError, SinkOutcome,
+};
 pub use store::{
     apply_reconciliation, claim_job, complete_job, connect, fail_job, heartbeat_job, load_manifest,
     migrate, recover_expired_leases, upsert_source, ApplySummary, ClaimedJob, StoreError,

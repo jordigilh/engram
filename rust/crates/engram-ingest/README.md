@@ -14,13 +14,15 @@ the docs-parity half of slice 3).
   implementation, using sparse TF-IDF rows for sentence similarity.
 - Lease/retry/recovery state machine and a convergence harness against a real
   Postgres.
+- Hindsight sink: retain POSTs, document DELETEs for tombstones, ledger-owned
+  retries, and `sink_deleted_at` acknowledgement.
 
 ## Not in this slice
 
-- Hindsight HTTP retain/delete. Jobs store the retain payload; the sink worker
-  lands with the Hindsight parity slice.
 - Filesystem watcher hints. `reconcile` consumes a scan snapshot; the watcher
   adapter is a later ingestion slice.
+- Sink concurrency limits and per-bank metrics. `process_one` drives one job at
+  a time; the worker loop and metrics land with the service switch.
 - Native-vs-CocoIndex shadow comparison of emitted operations (the remaining
   part of issue #214 slice 3).
 - Issues, transcripts, PDF extraction, git sync, CocoIndex/Python removal.
@@ -54,6 +56,11 @@ shadow run, issues/transcripts, service switch, then Python/CocoIndex removal
   one in retry backoff) blocks later jobs for the same document; a stale delete
   can never run after a newer restore. Claims carry an opaque token, so a
   delayed completion from a reaped worker cannot touch the replacement lease.
+- **One HTTP attempt per ledger job.** The durable job ledger owns retries
+  (1s/2s, three attempts) so a crash between Hindsight and the acknowledgement
+  cannot multiply attempts. Retain uses the 60s timeout; delete uses 10s and
+  treats 404 as already-absent success, matching the Python delete contract.
+  A successful delete acknowledges matching tombstones via `sink_deleted_at`.
 - **Renames that keep a base id transfer ownership.** The old path's delete is
   dropped when the same document id is retained by a live path; two live paths
   producing one id are rejected as a scan conflict.
@@ -94,7 +101,7 @@ The harness needs a disposable database whose name contains `test`:
 ```bash
 createdb -h /tmp -U hindsight engram_ingest_test
 ENGRAM_INGEST_TEST_DATABASE_URL='postgresql://hindsight@/engram_ingest_test?host=/tmp' \
-  cargo test -p engram-ingest --test ledger_postgres
+  cargo test -p engram-ingest --test ledger_postgres --test sink_postgres
 ```
 
 It truncates the `engram_ingest` tables and refuses any database whose name is

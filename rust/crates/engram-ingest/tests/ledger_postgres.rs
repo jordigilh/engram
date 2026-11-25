@@ -1,0 +1,483 @@
+//! One-root Postgres convergence harness for the ingestion ledger.
+//!
+//! Requires `ENGRAM_INGEST_TEST_DATABASE_URL` pointing at a **disposable**
+//! database whose name contains `test` (CI provides one). The test truncates the
+//! `engram_ingest` tables by design; it refuses to run against any other name.
+
+use chrono::{Duration, Utc};
+use engram_ingest::{
+    apply_reconciliation, claim_job, complete_job, connect, fail_job, heartbeat_job, load_manifest,
+    migrate, plan_document, reconcile, recover_expired_leases, upsert_source, ContentHash,
+    ScannedFile, SourceRecord, StoreError, LAYOUT_VERSION,
+};
+use postgres::Client;
+
+fn test_url() -> Option<String> {
+    std::env::var("ENGRAM_INGEST_TEST_DATABASE_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn scanned(path: &str, content: &str) -> ScannedFile {
+    let calls = plan_document("repo", path, content, None).expect("plan");
+    ScannedFile {
+        relative_path: path.to_string(),
+        content_sha256: ContentHash::of(content.as_bytes()),
+        size_bytes: content.len() as i64,
+        calls,
+    }
+}
+
+fn truncate(client: &mut Client) {
+    client
+        .batch_execute(
+            "TRUNCATE engram_ingest.leases, engram_ingest.jobs,
+                      engram_ingest.tombstones, engram_ingest.chunks,
+                      engram_ingest.documents, engram_ingest.sources
+             RESTART IDENTITY CASCADE",
+        )
+        .expect("truncate");
+}
+
+fn assert_converged(client: &mut Client, source_id: i64, scan: &[ScannedFile]) {
+    let manifest = load_manifest(client, source_id).expect("load manifest");
+    let replay = reconcile(&manifest, scan, LAYOUT_VERSION);
+    assert!(
+        replay.is_empty(),
+        "expected a zero-op replay, got {replay:?}"
+    );
+    let summary =
+        apply_reconciliation(client, source_id, &replay, Utc::now()).expect("apply empty");
+    assert_eq!(summary.jobs_created, 0, "empty replay created jobs");
+}
+
+#[test]
+fn one_root_convergence_and_lease_exclusivity() {
+    let Some(url) = test_url() else {
+        eprintln!("ENGRAM_INGEST_TEST_DATABASE_URL is not set; skipping Postgres harness");
+        return;
+    };
+    let mut client = connect(&url).expect("connect");
+    let database: String = client
+        .query_one("SELECT current_database()", &[])
+        .expect("database name")
+        .get(0);
+    assert!(
+        database.contains("test"),
+        "refusing to truncate non-test database {database}"
+    );
+    migrate(&mut client).expect("migrate");
+    truncate(&mut client);
+
+    // --- Lease exclusivity -------------------------------------------------
+    let lease_source = upsert_source(
+        &mut client,
+        &SourceRecord::markdown("engram-test", "lease", "/tmp/lease-root", &["**/*.md"]),
+    )
+    .expect("source");
+    let lease_scan = vec![scanned(
+        "lease.md",
+        "# Lease\n\nA single section long enough for one retain job.",
+    )];
+    let lease_manifest = load_manifest(&mut client, lease_source).expect("manifest");
+    let lease_plan = reconcile(&lease_manifest, &lease_scan, LAYOUT_VERSION);
+    let lease_summary =
+        apply_reconciliation(&mut client, lease_source, &lease_plan, Utc::now()).expect("apply");
+    assert_eq!(lease_summary.jobs_created, 1);
+
+    let now = Utc::now();
+    let claimed = claim_job(&mut client, "worker-a", Duration::seconds(3_600), now)
+        .expect("claim")
+        .expect("one pending job");
+    assert_eq!(claimed.kind, "retain");
+    assert_eq!(claimed.payload["document_id"], "repo--lease");
+    let second =
+        claim_job(&mut client, "worker-b", Duration::seconds(3_600), now).expect("second claim");
+    assert!(
+        second.is_none(),
+        "a leased job must not be claimable by another owner"
+    );
+    let owner: String = client
+        .query_one(
+            "SELECT owner FROM engram_ingest.leases WHERE job_id = $1",
+            &[&claimed.job_id],
+        )
+        .expect("lease row")
+        .get(0);
+    assert_eq!(owner, "worker-a");
+    assert!(matches!(
+        heartbeat_job(
+            &mut client,
+            claimed.job_id,
+            "worker-b",
+            Duration::seconds(30),
+            now
+        ),
+        Err(StoreError::LeaseNotHeld)
+    ));
+    let extended = heartbeat_job(
+        &mut client,
+        claimed.job_id,
+        "worker-a",
+        Duration::seconds(7_200),
+        now + Duration::seconds(1),
+    )
+    .expect("heartbeat");
+    assert!(extended > claimed.expires_at);
+
+    // Simulate a dead worker: the lease expires and startup recovery requeues
+    // the job for another owner.
+    let recovered = recover_expired_leases(&mut client, now + Duration::seconds(7_201))
+        .expect("recover expired");
+    assert_eq!(recovered, 1);
+    let state: String = client
+        .query_one(
+            "SELECT state FROM engram_ingest.jobs WHERE id = $1",
+            &[&claimed.job_id],
+        )
+        .expect("job row")
+        .get(0);
+    assert_eq!(state, "pending");
+    let reclaimed = claim_job(
+        &mut client,
+        "worker-b",
+        Duration::seconds(3_600),
+        now + Duration::seconds(7_202),
+    )
+    .expect("reclaim")
+    .expect("requeued job");
+    assert_eq!(reclaimed.job_id, claimed.job_id);
+    complete_job(
+        &mut client,
+        reclaimed.job_id,
+        "worker-b",
+        now + Duration::seconds(7_203),
+    )
+    .expect("complete");
+    let state: String = client
+        .query_one(
+            "SELECT state FROM engram_ingest.jobs WHERE id = $1",
+            &[&claimed.job_id],
+        )
+        .expect("job row")
+        .get(0);
+    assert_eq!(state, "succeeded");
+
+    // --- One-root convergence ---------------------------------------------
+    truncate(&mut client);
+    let source_id = upsert_source(
+        &mut client,
+        &SourceRecord::markdown("engram-test", "docs", "/tmp/docs-root", &["**/*.md"]),
+    )
+    .expect("source");
+
+    let original = "# A\n\nAlpha body long enough for this section.\n\n## B\n\nBeta body long enough for this section.";
+    let initial_scan = vec![scanned("docs/a.md", original)];
+    let manifest = load_manifest(&mut client, source_id).expect("manifest");
+    let plan = reconcile(&manifest, &initial_scan, LAYOUT_VERSION);
+    assert_eq!(plan.retain.len(), 1);
+    assert_eq!(plan.retain[0].calls.len(), 2);
+    let summary =
+        apply_reconciliation(&mut client, source_id, &plan, Utc::now()).expect("initial apply");
+    assert_eq!(summary.retained_files, 1);
+    assert_eq!(summary.retained_chunks, 2);
+    assert_eq!(summary.jobs_created, 2);
+    assert_converged(&mut client, source_id, &initial_scan);
+
+    // Re-applying the same reconciliation (lost commit acknowledgement) must
+    // not duplicate jobs or tombstones.
+    let repeated =
+        apply_reconciliation(&mut client, source_id, &plan, Utc::now()).expect("reapply");
+    assert_eq!(repeated.jobs_created, 0);
+    let jobs: i64 = client
+        .query_one(
+            "SELECT count(*) FROM engram_ingest.jobs WHERE source_id = $1",
+            &[&source_id],
+        )
+        .expect("job count")
+        .get(0);
+    assert_eq!(jobs, 2);
+
+    // Edit one section: the Python flow re-emits every chunk of the file.
+    let edited = "# A\n\nAlpha body edited but still long enough.\n\n## B\n\nBeta body long enough for this section.";
+    let edited_scan = vec![scanned("docs/a.md", edited)];
+    let manifest = load_manifest(&mut client, source_id).expect("manifest");
+    let plan = reconcile(&manifest, &edited_scan, LAYOUT_VERSION);
+    assert_eq!(plan.retain.len(), 1);
+    assert_eq!(plan.retain[0].calls.len(), 2);
+    assert!(plan.deletes.is_empty());
+    apply_reconciliation(&mut client, source_id, &plan, Utc::now()).expect("edit apply");
+    assert_converged(&mut client, source_id, &edited_scan);
+
+    // Remove section B: retain the remaining chunk and tombstone the orphan.
+    let trimmed = "# A\n\nAlpha body edited but still long enough.";
+    let trimmed_scan = vec![scanned("docs/a.md", trimmed)];
+    let manifest = load_manifest(&mut client, source_id).expect("manifest");
+    let plan = reconcile(&manifest, &trimmed_scan, LAYOUT_VERSION);
+    assert_eq!(plan.retain.len(), 1);
+    assert_eq!(plan.deletes.len(), 1);
+    let summary =
+        apply_reconciliation(&mut client, source_id, &plan, Utc::now()).expect("trim apply");
+    assert_eq!(summary.deleted_chunks, 1);
+    let tombstone_reasons: Vec<String> = client
+        .query(
+            "SELECT reason FROM engram_ingest.tombstones WHERE source_id = $1",
+            &[&source_id],
+        )
+        .expect("tombstones")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(tombstone_reasons, vec!["chunk_removed"]);
+    assert_converged(&mut client, source_id, &trimmed_scan);
+
+    // Remove the file: every remaining chunk and the document are tombstoned.
+    // Drain earlier test jobs so the delete job is the only claimable one.
+    client
+        .execute(
+            "UPDATE engram_ingest.jobs SET state = 'succeeded' WHERE state = 'pending'",
+            &[],
+        )
+        .expect("drain jobs");
+    let manifest = load_manifest(&mut client, source_id).expect("manifest");
+    let plan = reconcile(&manifest, &[], LAYOUT_VERSION);
+    assert_eq!(plan.removed_files, vec!["docs/a.md"]);
+    assert_eq!(plan.deletes.len(), 1);
+    let summary =
+        apply_reconciliation(&mut client, source_id, &plan, Utc::now()).expect("delete apply");
+    assert_eq!(summary.tombstoned_files, 1);
+    let state: String = client
+        .query_one(
+            "SELECT state FROM engram_ingest.documents WHERE source_id = $1 AND relative_path = 'docs/a.md'",
+            &[&source_id],
+        )
+        .expect("document")
+        .get(0);
+    assert_eq!(state, "tombstoned");
+    let delete_job = claim_job(
+        &mut client,
+        "worker-delete",
+        Duration::seconds(60),
+        Utc::now(),
+    )
+    .expect("claim delete")
+    .expect("delete job");
+    assert_eq!(delete_job.kind, "delete");
+    complete_job(&mut client, delete_job.job_id, "worker-delete", Utc::now())
+        .expect("complete delete");
+    let deleted_document_id = delete_job.payload["document_id"]
+        .as_str()
+        .expect("delete payload document id")
+        .to_string();
+    let sink_deleted: Option<chrono::DateTime<Utc>> = client
+        .query_one(
+            "SELECT sink_deleted_at FROM engram_ingest.tombstones
+              WHERE source_id = $1 AND hindsight_document_id = $2",
+            &[&source_id, &deleted_document_id],
+        )
+        .expect("tombstone row")
+        .get(0);
+    assert!(sink_deleted.is_some());
+    assert_converged(&mut client, source_id, &[]);
+
+    // --- Duplicate headings and cross-project isolation --------------------
+    truncate(&mut client);
+    let duplicate_source = upsert_source(
+        &mut client,
+        &SourceRecord::markdown("engram-test", "dup", "/tmp/dup-root", &["**/*.md"]),
+    )
+    .expect("source");
+    let duplicate_scan = vec![scanned(
+        "dup.md",
+        "Preamble long enough.\n\n## Notes\n\nFirst notes body.\n\n## Notes\n\nSecond notes body.",
+    )];
+    let manifest = load_manifest(&mut client, duplicate_source).expect("manifest");
+    let plan = reconcile(&manifest, &duplicate_scan, LAYOUT_VERSION);
+    assert_eq!(plan.retain[0].calls.len(), 2);
+    apply_reconciliation(&mut client, duplicate_source, &plan, Utc::now()).expect("dup apply");
+    assert_converged(&mut client, duplicate_source, &duplicate_scan);
+
+    let source_a = upsert_source(
+        &mut client,
+        &SourceRecord::markdown("project-a", "repo", "/tmp/a", &["**/*.md"]),
+    )
+    .expect("source a");
+    let source_b = upsert_source(
+        &mut client,
+        &SourceRecord::markdown("project-b", "repo", "/tmp/b", &["**/*.md"]),
+    )
+    .expect("source b");
+    let shared = vec![scanned("a.md", "# A\n\nShared path body long enough.")];
+    for source in [source_a, source_b] {
+        let manifest = load_manifest(&mut client, source).expect("manifest");
+        let plan = reconcile(&manifest, &shared, LAYOUT_VERSION);
+        apply_reconciliation(&mut client, source, &plan, Utc::now()).expect("apply");
+        assert_converged(&mut client, source, &shared);
+    }
+    let rows: i64 = client
+        .query_one(
+            "SELECT count(*) FROM engram_ingest.chunks
+              WHERE hindsight_document_id = 'repo--a'",
+            &[],
+        )
+        .expect("chunk count")
+        .get(0);
+    assert_eq!(rows, 2, "chunk rows must stay source-scoped");
+
+    let manifest = load_manifest(&mut client, source_a).expect("manifest a");
+    let plan = reconcile(&manifest, &[], LAYOUT_VERSION);
+    apply_reconciliation(&mut client, source_a, &plan, Utc::now()).expect("delete a");
+    assert_converged(&mut client, source_a, &[]);
+    assert_converged(&mut client, source_b, &shared);
+
+    // --- Delete, restore, delete again ------------------------------------
+    truncate(&mut client);
+    let restore_source = upsert_source(
+        &mut client,
+        &SourceRecord::markdown("engram-test", "restore", "/tmp/restore", &["**/*.md"]),
+    )
+    .expect("source");
+    let both = "# A\n\nAlpha body long enough.\n\n## B\n\nBeta body long enough.";
+    let only_a = "# A\n\nAlpha body long enough.";
+    let scan_both = vec![scanned("restore.md", both)];
+    let manifest = load_manifest(&mut client, restore_source).expect("manifest");
+    let plan = reconcile(&manifest, &scan_both, LAYOUT_VERSION);
+    apply_reconciliation(&mut client, restore_source, &plan, Utc::now()).expect("both");
+    assert_converged(&mut client, restore_source, &scan_both);
+
+    let scan_only_a = vec![scanned("restore.md", only_a)];
+    let manifest = load_manifest(&mut client, restore_source).expect("manifest");
+    let plan = reconcile(&manifest, &scan_only_a, LAYOUT_VERSION);
+    assert_eq!(plan.deletes.len(), 1);
+    apply_reconciliation(&mut client, restore_source, &plan, Utc::now()).expect("only a");
+    assert_converged(&mut client, restore_source, &scan_only_a);
+
+    let manifest = load_manifest(&mut client, restore_source).expect("manifest");
+    let plan = reconcile(&manifest, &scan_both, LAYOUT_VERSION);
+    assert_eq!(plan.retain[0].calls.len(), 2);
+    let summary =
+        apply_reconciliation(&mut client, restore_source, &plan, Utc::now()).expect("restore");
+    // Both chunks are re-emitted (file-scoped, and section A's trailing text
+    // changed when B was removed); the restored chunk also needs a new job.
+    assert_eq!(summary.jobs_created, 2);
+    let generation: i32 = client
+        .query_one(
+            "SELECT generation FROM engram_ingest.chunks
+              WHERE source_id = $1 AND chunk_key <> ''",
+            &[&restore_source],
+        )
+        .expect("restored chunk")
+        .get(0);
+    assert_eq!(generation, 2);
+    let retain_jobs: i64 = client
+        .query_one(
+            "SELECT count(*)
+               FROM engram_ingest.jobs j
+               JOIN engram_ingest.chunks c
+                 ON c.source_id = j.source_id
+                AND c.hindsight_document_id = j.hindsight_document_id
+              WHERE c.source_id = $1
+                AND c.chunk_key <> ''
+                AND j.kind = 'retain'
+                AND j.generation = c.generation",
+            &[&restore_source],
+        )
+        .expect("retain jobs")
+        .get(0);
+    assert_eq!(retain_jobs, 1);
+    assert_converged(&mut client, restore_source, &scan_both);
+
+    let manifest = load_manifest(&mut client, restore_source).expect("manifest");
+    let plan = reconcile(&manifest, &scan_only_a, LAYOUT_VERSION);
+    apply_reconciliation(&mut client, restore_source, &plan, Utc::now()).expect("delete again");
+    let tombstone_generations: Vec<i32> = client
+        .query(
+            "SELECT generation FROM engram_ingest.tombstones
+              WHERE source_id = $1 ORDER BY generation",
+            &[&restore_source],
+        )
+        .expect("tombstones")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(tombstone_generations, vec![1, 2]);
+
+    // --- Per-document sink ordering across retry backoff -------------------
+    truncate(&mut client);
+    let order_source = upsert_source(
+        &mut client,
+        &SourceRecord::markdown("engram-test", "order", "/tmp/order", &["**/*.md"]),
+    )
+    .expect("source");
+    let order_scan = vec![scanned("order.md", "# A\n\nAlpha body long enough.")];
+    let manifest = load_manifest(&mut client, order_source).expect("manifest");
+    let plan = reconcile(&manifest, &order_scan, LAYOUT_VERSION);
+    apply_reconciliation(&mut client, order_source, &plan, Utc::now()).expect("initial");
+    client
+        .execute(
+            "UPDATE engram_ingest.jobs SET state = 'succeeded' WHERE source_id = $1",
+            &[&order_source],
+        )
+        .expect("drain initial jobs");
+
+    let manifest = load_manifest(&mut client, order_source).expect("manifest");
+    let plan = reconcile(&manifest, &[], LAYOUT_VERSION);
+    apply_reconciliation(&mut client, order_source, &plan, Utc::now()).expect("remove file");
+    let now = Utc::now();
+    let delete_job = claim_job(&mut client, "worker-order", Duration::seconds(60), now)
+        .expect("claim delete")
+        .expect("delete job");
+    assert_eq!(delete_job.kind, "delete");
+    fail_job(
+        &mut client,
+        delete_job.job_id,
+        "worker-order",
+        now,
+        "temporary sink failure",
+    )
+    .expect("fail delete into backoff");
+
+    // Restore while the delete is in backoff. The restore must not jump ahead.
+    let manifest = load_manifest(&mut client, order_source).expect("manifest");
+    let plan = reconcile(&manifest, &order_scan, LAYOUT_VERSION);
+    apply_reconciliation(&mut client, order_source, &plan, Utc::now()).expect("restore");
+    let blocked = claim_job(
+        &mut client,
+        "worker-order",
+        Duration::seconds(60),
+        now + Duration::milliseconds(500),
+    )
+    .expect("claim blocked");
+    assert!(
+        blocked.is_none(),
+        "a newer retain must not run while an earlier delete is in backoff"
+    );
+    let ordered = claim_job(
+        &mut client,
+        "worker-order",
+        Duration::seconds(60),
+        now + Duration::seconds(2),
+    )
+    .expect("claim ordered")
+    .expect("delete should be claimable after backoff");
+    assert_eq!(ordered.job_id, delete_job.job_id);
+    assert_eq!(ordered.kind, "delete");
+    complete_job(
+        &mut client,
+        ordered.job_id,
+        "worker-order",
+        now + Duration::seconds(3),
+    )
+    .expect("complete ordered delete");
+    let next = claim_job(
+        &mut client,
+        "worker-order",
+        Duration::seconds(60),
+        now + Duration::seconds(3),
+    )
+    .expect("claim retain")
+    .expect("retain after delete");
+    assert_eq!(next.kind, "retain");
+
+    truncate(&mut client);
+}

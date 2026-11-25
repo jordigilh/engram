@@ -73,9 +73,9 @@ pub enum SinkOutcome {
     Retried(String),
     /// The sink call failed and exhausted the ledger retry budget.
     Dead(String),
-    /// The sink call succeeded but the ledger lease was lost before the ack.
-    /// At-least-once delivery may send the document again; the stable
-    /// `document_id` makes the repeat converge.
+    /// Lease ownership was lost before the job could be acknowledged. The
+    /// Hindsight mutation may or may not have been sent; this outcome says
+    /// nothing about upstream success.
     LeaseLost,
 }
 
@@ -309,7 +309,8 @@ pub fn process_one(
     ttl: LedgerDuration,
     now: DateTime<Utc>,
 ) -> Result<Option<ProcessedJob>, SinkError> {
-    Ok(process_one_reporting(db, sink, bank_id, owner, ttl, now, true)?.job)
+    recover_expired_leases_in_bank(db, bank_id, Utc::now())?;
+    Ok(process_one_reporting(db, sink, bank_id, owner, ttl, now, false)?.job)
 }
 
 /// Worker-facing variant that reports recovery done during this step.

@@ -1045,12 +1045,18 @@ fn migration_guard_dedupes_expired_null_bank_duplicates() {
                     now() - interval '1 hour', now()
                FROM engram_ingest.jobs;
              UPDATE engram_ingest.sources SET bank_id = NULL;
-             UPDATE engram_ingest.jobs SET bank_id = NULL;
-             DELETE FROM engram_ingest.schema_migrations WHERE version IN (3, 4);
-             UPDATE engram_ingest.sources SET bank_id = 'project-a-docs';",
+             UPDATE engram_ingest.jobs SET bank_id = NULL;",
         )
         .expect("simulate v2 null-bank duplicates");
 
+    let error = migrate(&mut client).expect_err("unset source bank must fail the guard");
+    assert!(matches!(error, StoreError::MigrationGuard(_)), "{error:?}");
+    client
+        .execute(
+            "UPDATE engram_ingest.sources SET bank_id = 'project-a-docs'",
+            &[],
+        )
+        .expect("explicit bank");
     migrate(&mut client).expect("guard upgrade");
     let (leased, pending): (i64, i64) = {
         let row = client

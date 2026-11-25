@@ -376,7 +376,7 @@ impl JobDriver for LedgerDriver {
         let recovery_due = self
             .last_recovery
             .is_none_or(|last| last.elapsed() >= self.recovery_interval);
-        let step = process_one_reporting(
+        let mut step = process_one_reporting(
             &mut self.db,
             &self.sink,
             &self.bank_id,
@@ -387,6 +387,24 @@ impl JobDriver for LedgerDriver {
         )?;
         if recovery_due {
             self.last_recovery = Some(Instant::now());
+            // Recovery may have dead-lettered the FIFO blocker that made the
+            // first claim empty. Try one more claim before reporting idle.
+            if step.job.is_none() && !step.recovery.is_empty() {
+                let second = process_one_reporting(
+                    &mut self.db,
+                    &self.sink,
+                    &self.bank_id,
+                    &self.owner,
+                    self.ttl,
+                    now,
+                    false,
+                )?;
+                step.recovery.merge(second.recovery);
+                if second.job.is_some() {
+                    step.job = second.job;
+                    step.recovery_error = second.recovery_error;
+                }
+            }
         }
         Ok(step)
     }
@@ -679,7 +697,8 @@ pub struct WorkerHandle {
     threads: Option<ThreadSet>,
     metrics: Vec<Arc<WorkerMetrics>>,
     startup_recovery: RecoveryReport,
-    stranded_remaining: u64,
+    stranded_remaining: Arc<AtomicU64>,
+    stranded_requeued: Arc<AtomicU64>,
     startup_recovery_failed: bool,
     default_join_timeout: StdDuration,
 }
@@ -757,12 +776,12 @@ impl WorkerHandle {
         output.push_str("# TYPE engram_ingest_recovery_stranded_at_startup gauge\n");
         output.push_str(&format!(
             "engram_ingest_recovery_stranded_at_startup {}\n",
-            self.stranded_remaining
+            self.stranded_remaining.load(Ordering::Relaxed)
         ));
         output.push_str("# TYPE engram_ingest_recovery_stranded_requeued gauge\n");
         output.push_str(&format!(
             "engram_ingest_recovery_stranded_requeued {}\n",
-            self.startup_recovery.stranded
+            self.stranded_requeued.load(Ordering::Relaxed)
         ));
         output.push_str("# TYPE engram_ingest_startup_recovery_failed gauge\n");
         output.push_str(&format!(
@@ -777,7 +796,7 @@ impl WorkerHandle {
     }
 
     pub fn stranded_remaining(&self) -> u64 {
-        self.stranded_remaining
+        self.stranded_remaining.load(Ordering::Relaxed)
     }
 
     pub fn startup_recovery_failed(&self) -> bool {
@@ -878,14 +897,16 @@ impl WorkerSupervisor {
                 break;
             }
         }
-        let stranded_remaining =
+        let stranded_remaining = Arc::new(AtomicU64::new(
             match count_stranded_expired_leases(&mut admin, &bank_ids, Utc::now()) {
                 Ok(count) => count as u64,
                 Err(_) => {
                     startup_recovery_failed = true;
                     0
                 }
-            };
+            },
+        ));
+        let stranded_requeued = Arc::new(AtomicU64::new(startup_recovery.stranded as u64));
         drop(admin);
 
         // Connect every slot before spawning so a connection failure cannot
@@ -967,6 +988,65 @@ impl WorkerSupervisor {
             }
         }
 
+        // A dedicated monitor drains leases that expire after startup for banks
+        // that are no longer configured. Configured banks are handled by slots.
+        let mut monitor_client = match connect_worker(&config.database_url, timeouts) {
+            Ok(client) => client,
+            Err(error) => {
+                shutdown.cancel();
+                let started = ThreadSet { handles };
+                let _ = started.join_timeout(StdDuration::from_secs(5));
+                return Err(WorkerError::Ledger(error));
+            }
+        };
+        let monitor_status = SlotStatus::new();
+        let monitor_shutdown = shutdown.clone();
+        let monitor_banks = bank_ids.clone();
+        let monitor_remaining = Arc::clone(&stranded_remaining);
+        let monitor_requeued = Arc::clone(&stranded_requeued);
+        let monitor_url = config.database_url.clone();
+        let monitor_interval = config.recovery_interval;
+        let monitor_status_for_thread = monitor_status.clone();
+        let monitor = thread::Builder::new()
+            .name("engram-ingest-stranded".to_string())
+            .spawn(move || {
+                while monitor_shutdown.sleep(monitor_interval) {
+                    if let Ok(report) = recover_expired_leases_outside_banks(
+                        &mut monitor_client,
+                        &monitor_banks,
+                        Utc::now(),
+                    ) {
+                        if report.stranded > 0 {
+                            monitor_requeued.fetch_add(report.stranded as u64, Ordering::Relaxed);
+                        }
+                    }
+                    match count_stranded_expired_leases(
+                        &mut monitor_client,
+                        &monitor_banks,
+                        Utc::now(),
+                    ) {
+                        Ok(count) => {
+                            monitor_remaining.store(count as u64, Ordering::Relaxed);
+                        }
+                        Err(_) => {
+                            if let Ok(client) = connect_worker(&monitor_url, timeouts) {
+                                monitor_client = client;
+                            }
+                        }
+                    }
+                }
+                monitor_status_for_thread.set(SlotState::Cancelled);
+            });
+        match monitor {
+            Ok(handle) => handles.push(("$stranded".to_string(), 0, monitor_status, handle)),
+            Err(error) => {
+                shutdown.cancel();
+                let started = ThreadSet { handles };
+                let _ = started.join_timeout(StdDuration::from_secs(5));
+                return Err(WorkerError::Thread(error.to_string()));
+            }
+        }
+
         let metrics = config
             .banks
             .iter()
@@ -984,6 +1064,7 @@ impl WorkerSupervisor {
             metrics,
             startup_recovery,
             stranded_remaining,
+            stranded_requeued,
             startup_recovery_failed,
             default_join_timeout: join_timeout,
         })

@@ -451,7 +451,8 @@ fn startup_recovery_handles_configured_and_deconfigured_banks() {
             .requests()
             .iter()
             .all(|request| request.contains("project-a-docs")),
-        "only the configured bank may call Hindsight"
+        "only the configured bank may call Hindsight: {:?}",
+        server.requests()
     );
 
     worker.stop();

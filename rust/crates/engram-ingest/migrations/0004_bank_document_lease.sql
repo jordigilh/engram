@@ -11,20 +11,20 @@
 
 WITH ranked AS (
     SELECT j.id,
+           l.expires_at,
            row_number() OVER (
                PARTITION BY j.bank_id, j.hindsight_document_id
-               ORDER BY j.id
+               ORDER BY (l.expires_at > now()) DESC, j.id ASC
            ) AS rank
       FROM engram_ingest.jobs j
       JOIN engram_ingest.leases l ON l.job_id = j.id
      WHERE j.state = 'leased'
        AND j.bank_id IS NOT NULL
-       AND l.expires_at <= now()
 ),
 deleted AS (
     DELETE FROM engram_ingest.leases l
      USING ranked r
-     WHERE l.job_id = r.id AND r.rank > 1
+     WHERE l.job_id = r.id AND r.rank > 1 AND r.expires_at <= now()
     RETURNING l.job_id
 )
 UPDATE engram_ingest.jobs j

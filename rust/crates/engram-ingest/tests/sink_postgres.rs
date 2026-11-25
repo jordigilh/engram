@@ -368,7 +368,7 @@ fn sink_retains_deletes_and_schedules_retries() {
         "repo-docs",
         "live-worker",
         LedgerDuration::seconds(180),
-        t0 + LedgerDuration::seconds(2),
+        Utc::now(),
     )
     .expect("recover")
     .is_none());

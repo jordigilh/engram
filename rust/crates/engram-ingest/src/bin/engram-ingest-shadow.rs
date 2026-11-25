@@ -17,9 +17,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--root" => root = args.next().map(PathBuf::from),
-            "--source-tag" => source_tag = args.next(),
-            "--out" => out = args.next().map(PathBuf::from),
+            "--root" => root = Some(PathBuf::from(args.next().ok_or("--root requires a value")?)),
+            "--source-tag" => {
+                source_tag = Some(args.next().ok_or("--source-tag requires a value")?)
+            }
+            "--out" => out = Some(PathBuf::from(args.next().ok_or("--out requires a value")?)),
             "--no-timestamps" => timestamps = false,
             "-h" | "--help" => {
                 eprintln!(

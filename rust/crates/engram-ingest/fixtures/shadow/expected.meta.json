@@ -1,8 +1,8 @@
 {
   "cocoindex": "1.0.26",
-  "operations": 11,
+  "operations": 14,
   "python": "3.14.6",
-  "source_commit": "54dd54929563aa9d2ce9fad3b358a45627875e8c",
+  "source_commit": "5acf8c5c030734e7130a1c9139ec77f42ef607d5",
   "source_tag": "repo",
   "timestamps": false,
   "tree": "tree"

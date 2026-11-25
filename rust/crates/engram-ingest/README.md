@@ -106,7 +106,7 @@ Hindsight document id without touching each other's rows. That is the design's
 ## Shadow run
 
 ```bash
-cargo run -p engram-ingest --bin engram-ingest-shadow -- \
+cargo run --manifest-path rust/Cargo.toml -p engram-ingest --bin engram-ingest-shadow -- \
   --root rust/crates/engram-ingest/fixtures/shadow/tree \
   --source-tag repo --no-timestamps
 ```

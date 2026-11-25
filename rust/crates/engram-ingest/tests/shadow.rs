@@ -23,7 +23,13 @@ fn options() -> ShadowOptions {
 #[test]
 fn rust_plan_matches_python_expected_operations() {
     let operations = plan_tree(&fixture_root(), &options()).unwrap();
-    assert_eq!(operations.len(), 11);
+    assert_eq!(operations.len(), 14);
+    assert!(operations.iter().any(|op| op.path == "utf16.md"));
+    assert_eq!(
+        operations.iter().filter(|op| op.path == "root.md").count(),
+        4,
+        "root.md plus its symlink resolve to the same source path"
+    );
     assert_eq!(to_jsonl(&operations).unwrap(), expected());
 }
 
@@ -42,11 +48,25 @@ fn binary_emits_the_same_operations() {
 }
 
 #[test]
+fn binary_rejects_out_without_a_value() {
+    let output = Command::new(env!("CARGO_BIN_EXE_engram-ingest-shadow"))
+        .arg("--root")
+        .arg(fixture_root())
+        .arg("--source-tag")
+        .arg("repo")
+        .arg("--out")
+        .output()
+        .expect("run shadow binary");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--out requires a value"));
+}
+
+#[test]
 fn fixture_provenance_records_the_python_walker() {
     let meta: serde_json::Value =
         serde_json::from_str(include_str!("../fixtures/shadow/expected.meta.json")).unwrap();
     assert_eq!(meta["timestamps"], false);
-    assert_eq!(meta["operations"], 11);
+    assert_eq!(meta["operations"], 14);
     assert_eq!(meta["source_tag"], "repo");
     assert_eq!(meta["tree"], "tree");
 }

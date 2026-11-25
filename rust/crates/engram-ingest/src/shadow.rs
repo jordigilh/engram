@@ -38,8 +38,6 @@ pub enum ShadowError {
         #[source]
         source: std::io::Error,
     },
-    #[error("file is not valid UTF-8: {0}")]
-    Utf8(PathBuf),
     #[error(transparent)]
     Synthesis(#[from] crate::synthesis::SynthesisError),
     #[error(transparent)]
@@ -65,7 +63,7 @@ pub fn plan_tree(
             path: file.clone(),
             source,
         })?;
-        let content = String::from_utf8(bytes).map_err(|_| ShadowError::Utf8(file.clone()))?;
+        let content = decode_text(&bytes);
         if content.trim().is_empty() {
             continue;
         }
@@ -87,6 +85,7 @@ pub fn plan_tree(
             });
         }
     }
+    operations.sort_by_key(|operation| (operation.path.clone(), operation.ordinal));
     Ok(operations)
 }
 
@@ -107,11 +106,40 @@ fn collect_markdown(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), ShadowE
         })?;
         if file_type.is_dir() {
             collect_markdown(&path, files)?;
-        } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "md") {
+        } else if path.is_file() && path.extension().is_some_and(|ext| ext == "md") {
+            // `Path::is_file` follows file symlinks like CocoIndex; symlinked
+            // directories are not recursed, so cycles stay impossible.
             files.push(path);
         }
     }
     Ok(())
+}
+
+/// Match CocoIndex 1.0.26 `read_text`: BOM-detected UTF-16 and replacement
+/// decoding instead of failing the whole run. The BOM is preserved as
+/// U+FEFF (the deployed Python decoder does not strip it).
+fn decode_text(bytes: &[u8]) -> String {
+    if bytes.starts_with(&[0xff, 0xfe]) {
+        return decode_utf16(bytes, true);
+    }
+    if bytes.starts_with(&[0xfe, 0xff]) {
+        return decode_utf16(bytes, false);
+    }
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+fn decode_utf16(bytes: &[u8], little_endian: bool) -> String {
+    let units = (0..bytes.len() / 2).map(|index| {
+        let pair = [bytes[index * 2], bytes[index * 2 + 1]];
+        if little_endian {
+            u16::from_le_bytes(pair)
+        } else {
+            u16::from_be_bytes(pair)
+        }
+    });
+    char::decode_utf16(units)
+        .map(|result| result.unwrap_or(char::REPLACEMENT_CHARACTER))
+        .collect()
 }
 
 /// Canonical JSONL: sorted keys (serde_json maps are `BTreeMap`), compact, one
@@ -163,6 +191,17 @@ mod tests {
         assert!(first.starts_with("{\"content\":"));
         assert!(!first.contains(": "));
         assert_eq!(jsonl.lines().count(), operations.len());
+    }
+
+    #[test]
+    fn bom_text_decoding_matches_read_text() {
+        assert_eq!(decode_text(b"\xef\xbb\xbfhello"), "\u{feff}hello");
+        let mut utf16 = vec![0xff, 0xfe];
+        for unit in "hé".encode_utf16() {
+            utf16.extend_from_slice(&unit.to_le_bytes());
+        }
+        assert_eq!(decode_text(&utf16), "\u{feff}hé");
+        assert_eq!(decode_text(b"bad\xffbyte"), "bad\u{fffd}byte");
     }
 
     #[test]

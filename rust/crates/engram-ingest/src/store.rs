@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::hashing::{ContentHash, HashError};
 use crate::jobs::RETRY_BASE_MS;
 use crate::ledger::{
-    Manifest, ManifestChunk, ManifestDocument, RecordState, SourceRecord, LEDGER_MIGRATION,
+    Manifest, ManifestChunk, ManifestDocument, RecordState, SourceRecord, MIGRATIONS,
 };
 use crate::reconcile::Reconciliation;
 
@@ -59,7 +59,41 @@ pub fn connect(url: &str) -> Result<Client, StoreError> {
 }
 
 pub fn migrate(client: &mut Client) -> Result<(), StoreError> {
-    client.batch_execute(LEDGER_MIGRATION)?;
+    client.batch_execute(
+        "CREATE SCHEMA IF NOT EXISTS engram_ingest;
+         CREATE TABLE IF NOT EXISTS engram_ingest.schema_migrations (
+             version bigint PRIMARY KEY,
+             applied_at timestamptz NOT NULL DEFAULT now()
+         );",
+    )?;
+    let mut transaction = client.transaction()?;
+    transaction.execute("SELECT pg_advisory_xact_lock($1)", &[&918_274_i64])?;
+    let applied: Vec<i64> = transaction
+        .query("SELECT version FROM engram_ingest.schema_migrations", &[])?
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    let known: std::collections::BTreeSet<i64> = MIGRATIONS
+        .iter()
+        .map(|migration| migration.version)
+        .collect();
+    if let Some(unknown) = applied.iter().find(|version| !known.contains(version)) {
+        return Err(StoreError::MigrationMismatch(format!(
+            "database records unembedded migration version {unknown}"
+        )));
+    }
+    for migration in MIGRATIONS {
+        if applied.contains(&migration.version) {
+            continue;
+        }
+        transaction.batch_execute(migration.sql)?;
+        transaction.execute(
+            "INSERT INTO engram_ingest.schema_migrations (version) VALUES ($1)",
+            &[&migration.version],
+        )?;
+    }
+    transaction.commit()?;
+
     // `CREATE TABLE IF NOT EXISTS` cannot upgrade a table created by an
     // earlier, unreleased shape of this migration. Fail loudly instead of
     // failing later in `load_manifest`.
@@ -70,6 +104,7 @@ pub fn migrate(client: &mut Client) -> Result<(), StoreError> {
         ("chunks", "last_retain_sha256"),
         ("jobs", "dedupe_key"),
         ("jobs", "generation"),
+        ("jobs", "last_error_class"),
         ("leases", "token"),
         ("sources", "revision"),
         ("sources", "last_plan_fingerprint"),
@@ -663,7 +698,8 @@ pub fn recover_expired_leases(
         transaction.execute(
             "UPDATE engram_ingest.jobs
                 SET state = $2, attempts = $3, run_after = $4,
-                    last_error = 'lease expired', updated_at = $5
+                    last_error = 'lease expired', last_error_class = 'transient',
+                    updated_at = $5
               WHERE id = $1",
             &[
                 &job_id,
@@ -684,6 +720,7 @@ pub fn fail_job(
     job_id: i64,
     token: &str,
     now: DateTime<Utc>,
+    error_class: &str,
     error: &str,
 ) -> Result<(), StoreError> {
     let mut transaction = client.transaction()?;
@@ -707,7 +744,8 @@ pub fn fail_job(
     let run_after = now + Duration::milliseconds(RETRY_BASE_MS * (1_i64 << attempts));
     transaction.execute(
         "UPDATE engram_ingest.jobs
-            SET state = $2, attempts = $3, run_after = $4, last_error = $5, updated_at = $6
+            SET state = $2, attempts = $3, run_after = $4,
+                last_error = $5, last_error_class = $6, updated_at = $7
           WHERE id = $1",
         &[
             &job_id,
@@ -715,6 +753,7 @@ pub fn fail_job(
             &next_attempts,
             &run_after,
             &error,
+            &error_class,
             &now,
         ],
     )?;
@@ -742,9 +781,22 @@ mod tests {
             "tombstones",
         ] {
             assert!(
-                LEDGER_MIGRATION.contains(&format!("engram_ingest.{table}")),
+                MIGRATIONS
+                    .iter()
+                    .any(|migration| migration.sql.contains(&format!("engram_ingest.{table}"))),
                 "missing {table}"
             );
         }
+    }
+
+    #[test]
+    fn every_migration_version_is_ordered_and_unique() {
+        assert!(MIGRATIONS
+            .windows(2)
+            .all(|pair| pair[0].version < pair[1].version));
+        assert_eq!(
+            MIGRATIONS.last().map(|migration| migration.version),
+            Some(2)
+        );
     }
 }

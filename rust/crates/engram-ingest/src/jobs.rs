@@ -73,6 +73,7 @@ pub struct Job {
     pub run_after_ms: i64,
     pub lease: Option<Lease>,
     pub last_error: Option<String>,
+    pub last_error_class: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -101,6 +102,7 @@ impl Job {
             run_after_ms: 0,
             lease: None,
             last_error: None,
+            last_error_class: None,
         }
     }
 
@@ -142,9 +144,16 @@ impl Job {
         Ok(())
     }
 
-    pub fn fail(&mut self, token: &str, now_ms: i64, error: &str) -> Result<(), JobError> {
+    pub fn fail(
+        &mut self,
+        token: &str,
+        now_ms: i64,
+        error_class: &str,
+        error: &str,
+    ) -> Result<(), JobError> {
         self.active_lease(token, now_ms)?;
         self.last_error = Some(error.to_string());
+        self.last_error_class = Some(error_class.to_string());
         self.retry_or_die(now_ms);
         Ok(())
     }
@@ -160,6 +169,7 @@ impl Job {
             return false;
         }
         self.last_error = Some("lease expired".to_string());
+        self.last_error_class = Some("transient".to_string());
         self.retry_or_die(now_ms);
         true
     }
@@ -239,13 +249,15 @@ mod tests {
     fn explicit_failures_use_one_then_two_second_backoff() {
         let mut job = Job::pending(1);
         let lease = job.claim("worker-a", 0, 10_000).unwrap();
-        job.fail(&lease.token, 0, "timeout").unwrap();
+        job.fail(&lease.token, 0, "transient", "timeout").unwrap();
         assert_eq!(job.run_after_ms, 1_000);
         let lease = job.claim("worker-a", 1_000, 10_000).unwrap();
-        job.fail(&lease.token, 1_000, "timeout").unwrap();
+        job.fail(&lease.token, 1_000, "transient", "timeout")
+            .unwrap();
         assert_eq!(job.run_after_ms, 3_000);
         let lease = job.claim("worker-a", 3_000, 10_000).unwrap();
-        job.fail(&lease.token, 3_000, "timeout").unwrap();
+        job.fail(&lease.token, 3_000, "transient", "timeout")
+            .unwrap();
         assert_eq!(job.state, JobState::Dead);
     }
 

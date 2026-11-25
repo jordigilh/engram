@@ -27,9 +27,9 @@ the docs-parity half of slice 3).
   part of issue #214 slice 3).
 - Issues, transcripts, PDF extraction, git sync, CocoIndex/Python removal.
 
-PR map: this PR is ledger + docs parity. Later PRs: Hindsight sink parity,
-shadow run, issues/transcripts, service switch, then Python/CocoIndex removal
-(#232).
+PR map: the merged ledger/docs PR, then this Hindsight sink, then shadow run,
+worker loop/concurrency/metrics, issues/transcripts, service switch, and
+Python/CocoIndex removal (#232).
 
 ## Parity and deliberate behavior
 

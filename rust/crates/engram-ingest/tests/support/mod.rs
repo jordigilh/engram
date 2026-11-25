@@ -8,6 +8,15 @@ use std::time::Duration;
 
 /// Start a one-request server. Returns its base URL and a shared request log.
 pub fn one_shot(status: u16, body: &'static str) -> (String, Arc<Mutex<Vec<String>>>) {
+    one_shot_delayed(status, body, Duration::ZERO)
+}
+
+/// Like [`one_shot`], but waits before responding (for timeout tests).
+pub fn one_shot_delayed(
+    status: u16,
+    body: &'static str,
+    delay: Duration,
+) -> (String, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
     let address = listener.local_addr().expect("mock address");
     let log = Arc::new(Mutex::new(Vec::new()));
@@ -38,6 +47,9 @@ pub fn one_shot(status: u16, body: &'static str) -> (String, Arc<Mutex<Vec<Strin
             .lock()
             .expect("request log")
             .push(String::from_utf8_lossy(&buffer).to_string());
+        if !delay.is_zero() {
+            thread::sleep(delay);
+        }
         let response = format!(
             "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}",
             body.len()

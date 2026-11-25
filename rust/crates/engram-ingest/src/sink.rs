@@ -20,7 +20,7 @@ use crate::store::{claim_job, complete_job, fail_job, ClaimedJob, StoreError};
 
 #[derive(Debug, Clone)]
 pub struct HindsightSink {
-    base_url: String,
+    base_url: reqwest::Url,
     http: HttpClient,
     retain_timeout: Duration,
     delete_timeout: Duration,
@@ -50,6 +50,8 @@ pub enum SinkError {
     Permanent(String),
     #[error("ledger job payload is invalid: {0}")]
     Payload(String),
+    #[error("lease TTL is too short for the sink request timeout: {0}")]
+    InvalidLease(String),
     #[error(transparent)]
     Ledger(#[from] StoreError),
 }
@@ -94,15 +96,51 @@ struct DeletePayload {
 
 impl HindsightSink {
     pub fn new(base_url: impl Into<String>) -> Result<Self, SinkError> {
+        let base_url = reqwest::Url::parse(&base_url.into())
+            .map_err(|error| SinkError::Permanent(error.to_string()))?;
+        if !matches!(base_url.scheme(), "http" | "https") {
+            return Err(SinkError::Permanent(format!(
+                "unsupported base URL scheme {}",
+                base_url.scheme()
+            )));
+        }
+        if !base_url.username().is_empty() || base_url.password().is_some() {
+            return Err(SinkError::Permanent(
+                "base URL must not contain credentials".to_string(),
+            ));
+        }
         let http = HttpClient::builder()
             .build()
             .map_err(|error| SinkError::Permanent(format!("build HTTP client: {error}")))?;
         Ok(Self {
-            base_url: base_url.into().trim_end_matches('/').to_string(),
+            base_url,
             http,
             retain_timeout: Duration::from_secs(60),
             delete_timeout: Duration::from_secs(10),
         })
+    }
+
+    pub fn max_request_timeout(&self) -> Duration {
+        self.retain_timeout.max(self.delete_timeout)
+    }
+
+    /// Minimum safe lease: two request windows, so claim, HTTP, and ack fit.
+    pub fn minimum_ttl(&self) -> LedgerDuration {
+        LedgerDuration::milliseconds(self.max_request_timeout().as_millis() as i64 * 2)
+    }
+
+    fn endpoint(&self, segments: &[&str]) -> Result<reqwest::Url, SinkError> {
+        let mut url = self.base_url.clone();
+        {
+            let mut path = url.path_segments_mut().map_err(|_| {
+                SinkError::Permanent("base URL cannot be a cannot-be-a-base URL".into())
+            })?;
+            path.pop_if_empty();
+            for segment in segments {
+                path.push(segment);
+            }
+        }
+        Ok(url)
     }
 
     pub fn with_timeouts(mut self, retain_timeout: Duration, delete_timeout: Duration) -> Self {
@@ -114,7 +152,7 @@ impl HindsightSink {
     pub fn health(&self) -> Result<(), SinkError> {
         let response = self
             .http
-            .get(format!("{}/health", self.base_url))
+            .get(self.endpoint(&["health"])?)
             .timeout(Duration::from_secs(5))
             .send()
             .map_err(|error| classify_transport(&error))?;
@@ -143,10 +181,7 @@ impl HindsightSink {
         }
         let response = self
             .http
-            .post(format!(
-                "{}/v1/default/banks/{}/memories",
-                self.base_url, request.bank_id
-            ))
+            .post(self.endpoint(&["v1", "default", "banks", &request.bank_id, "memories"])?)
             .json(&serde_json::json!({ "items": [item] }))
             .timeout(self.retain_timeout)
             .send()
@@ -165,10 +200,14 @@ impl HindsightSink {
     ) -> Result<DeleteOutcome, SinkError> {
         let response = self
             .http
-            .delete(format!(
-                "{}/v1/default/banks/{}/documents/{}",
-                self.base_url, bank_id, document_id
-            ))
+            .delete(self.endpoint(&[
+                "v1",
+                "default",
+                "banks",
+                bank_id,
+                "documents",
+                document_id,
+            ])?)
             .timeout(self.delete_timeout)
             .send()
             .map_err(|error| classify_transport(&error))?;
@@ -227,8 +266,9 @@ fn classify_status(status: StatusCode, operation: &str) -> SinkError {
 
 /// Claim one job, call Hindsight, and acknowledge or schedule a ledger retry.
 ///
-/// Returns `None` when no job is claimable. Ledger errors (including a lost
-/// lease token) abort the loop; sink errors are recorded via `fail_job`.
+/// Returns `None` when no job is claimable. Sink and payload errors are
+/// recorded via `fail_job`; a lease lost to recovery returns `Failed` without
+/// aborting the worker loop. Only ledger failures abort the call.
 pub fn process_one(
     db: &mut Client,
     sink: &HindsightSink,
@@ -237,28 +277,56 @@ pub fn process_one(
     ttl: LedgerDuration,
     now: DateTime<Utc>,
 ) -> Result<Option<ProcessedJob>, SinkError> {
+    if ttl < sink.minimum_ttl() {
+        return Err(SinkError::InvalidLease(format!(
+            "ttl {ttl} must be at least {} (twice the request timeout)",
+            sink.minimum_ttl()
+        )));
+    }
+
     let Some(job) = claim_job(db, owner, ttl, now)? else {
         return Ok(None);
     };
     match sink.dispatch(bank_id, &job) {
-        Ok(outcome) => {
-            complete_job(db, job.job_id, &job.token, Utc::now())?;
-            Ok(Some(ProcessedJob {
+        Ok(outcome) => match complete_job(db, job.job_id, &job.token, Utc::now()) {
+            Ok(()) => Ok(Some(ProcessedJob {
                 job_id: job.job_id,
                 kind: job.kind,
                 outcome,
-            }))
-        }
-        Err(error @ (SinkError::Transient(_) | SinkError::Permanent(_))) => {
-            let message = error.to_string();
-            fail_job(db, job.job_id, &job.token, Utc::now(), &message)?;
-            Ok(Some(ProcessedJob {
+            })),
+            Err(StoreError::LeaseNotHeld) => Ok(Some(ProcessedJob {
                 job_id: job.job_id,
                 kind: job.kind,
-                outcome: SinkOutcome::Failed(message),
-            }))
+                outcome: SinkOutcome::Failed(
+                    "lease lost; job recovered by another worker".to_string(),
+                ),
+            })),
+            Err(error) => Err(SinkError::Ledger(error)),
+        },
+        Err(error) => {
+            let (class, message) = match &error {
+                SinkError::Transient(message) => ("transient", message.clone()),
+                SinkError::Permanent(message) => ("permanent", message.clone()),
+                SinkError::Payload(message) => ("permanent", message.clone()),
+                SinkError::InvalidLease(message) => ("permanent", message.clone()),
+                SinkError::Ledger(_) => return Err(error),
+            };
+            match fail_job(db, job.job_id, &job.token, Utc::now(), class, &message) {
+                Ok(()) => Ok(Some(ProcessedJob {
+                    job_id: job.job_id,
+                    kind: job.kind,
+                    outcome: SinkOutcome::Failed(message),
+                })),
+                Err(StoreError::LeaseNotHeld) => Ok(Some(ProcessedJob {
+                    job_id: job.job_id,
+                    kind: job.kind,
+                    outcome: SinkOutcome::Failed(
+                        "lease lost; job recovered by another worker".to_string(),
+                    ),
+                })),
+                Err(error) => Err(SinkError::Ledger(error)),
+            }
         }
-        Err(error) => Err(error),
     }
 }
 

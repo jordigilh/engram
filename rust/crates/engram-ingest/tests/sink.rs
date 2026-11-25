@@ -32,6 +32,76 @@ fn retain_posts_one_item_and_accepts_2xx() {
     assert!(request.contains("\"items\""));
     assert!(request.contains("\"document_id\":\"repo--a\""));
     assert!(request.contains("\"source\":\"cocoindex\""));
+    assert!(request.contains("\"timestamp\":\"2026-11-24T10:15:30\""));
+    assert!(request.contains("\"tags\":[\"root\",\"repo\"]"));
+}
+
+#[test]
+fn document_id_path_segments_are_percent_encoded() {
+    let (url, log) = support::one_shot(204, "");
+    let sink = HindsightSink::new(url).unwrap();
+    sink.delete_document("repo-docs", "a/b?x=1").unwrap();
+    let request = log.lock().unwrap()[0].clone();
+    assert!(
+        request.starts_with("DELETE /v1/default/banks/repo-docs/documents/a%2Fb%3Fx=1 "),
+        "{request}"
+    );
+}
+
+#[test]
+fn base_url_credentials_are_rejected() {
+    let error = HindsightSink::new("http://user:secret@127.0.0.1:1").unwrap_err();
+    assert!(error.to_string().contains("credentials"), "{error}");
+}
+
+#[test]
+fn timeout_is_transient() {
+    let (url, _) = support::one_shot_delayed(200, "{}", Duration::from_millis(300));
+    let sink = HindsightSink::new(url)
+        .unwrap()
+        .with_timeouts(Duration::from_millis(50), Duration::from_millis(50));
+    let error = sink.retain(&retain_request()).unwrap_err();
+    assert!(error.is_transient(), "{error}");
+}
+
+#[test]
+fn health_and_delete_permanent_failure() {
+    let (url, _) = support::one_shot(200, "{}");
+    HindsightSink::new(url).unwrap().health().unwrap();
+
+    let (url, _) = support::one_shot(400, "{}");
+    let sink = HindsightSink::new(url).unwrap();
+    let error = sink.delete_document("repo-docs", "repo--a").unwrap_err();
+    assert!(!error.is_transient(), "{error}");
+}
+
+#[test]
+fn malformed_and_unknown_payloads_fail_closed() {
+    use chrono::Utc;
+    use engram_ingest::ClaimedJob;
+
+    let sink = HindsightSink::new("http://127.0.0.1:1").unwrap();
+    let base = ClaimedJob {
+        job_id: 1,
+        owner: "test".into(),
+        token: "token".into(),
+        kind: "retain".into(),
+        payload: serde_json::json!({"document_id": "repo--a"}),
+        expires_at: Utc::now(),
+    };
+    assert!(matches!(
+        sink.dispatch("repo-docs", &base).unwrap_err(),
+        engram_ingest::SinkError::Payload(_)
+    ));
+    let unknown = ClaimedJob {
+        kind: "scan".into(),
+        ..base
+    };
+    assert!(matches!(
+        sink.dispatch("repo-docs", &unknown).unwrap_err(),
+        engram_ingest::SinkError::Payload(_)
+    ));
+    assert!(sink.minimum_ttl().num_seconds() >= 120);
 }
 
 #[test]

@@ -123,6 +123,3 @@ CREATE TABLE IF NOT EXISTS engram_ingest.tombstones (
 CREATE INDEX IF NOT EXISTS tombstones_source_idx
     ON engram_ingest.tombstones (source_id, created_at);
 
-INSERT INTO engram_ingest.schema_migrations (version)
-VALUES (1)
-ON CONFLICT (version) DO NOTHING;

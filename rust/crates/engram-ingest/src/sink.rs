@@ -17,8 +17,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::store::{
-    claim_job, complete_job, fail_job, recover_expired_leases_in_bank, ClaimedJob, FailDisposition,
-    RecoveryReport, StoreError,
+    claim_job, complete_job, fail_job, lease_is_active, recover_expired_leases_in_bank, ClaimedJob,
+    FailDisposition, RecoveryReport, StoreError,
 };
 
 #[derive(Debug, Clone)]
@@ -86,11 +86,13 @@ pub struct ProcessedJob {
     pub outcome: SinkOutcome,
 }
 
-/// One worker step: the processed job (if any) and any recovery it performed.
+/// One worker step: the processed job (if any), any recovery it performed, and
+/// a recovery error that arrived after a job outcome was already committed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProcessStep {
     pub job: Option<ProcessedJob>,
     pub recovery: RecoveryReport,
+    pub recovery_error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -325,27 +327,41 @@ pub fn process_one_reporting(
 
     let mut recovery = RecoveryReport::default();
     let mut recovered = false;
-    // Recovery must never run behind the claim clock, but a backdated claim
-    // must not delay reclaiming its own expired lease either.
-    let recovery_now = || now.max(Utc::now());
     let Some(job) = claim_job(db, bank_id, owner, ttl, now)? else {
         // An expired lease can block a document's FIFO queue even when no
         // unleased job is claimable. Recover on the caller's cadence.
         if recovery_due {
-            recovery = recover_expired_leases_in_bank(db, bank_id, recovery_now())?;
+            recovery = recover_expired_leases_in_bank(db, bank_id, Utc::now())?;
         }
         return Ok(ProcessStep {
             job: None,
             recovery,
+            recovery_error: None,
         });
     };
 
     debug_assert_eq!(job.bank_id, bank_id);
+    // A worker paused between claim and dispatch must not mutate Hindsight
+    // after another worker recovered the job. The TTL guard keeps normal
+    // in-flight requests safe; this check closes the claim-to-dispatch window.
+    if !lease_is_active(db, job.job_id, &job.token, Utc::now())? {
+        recovery = recover_expired_leases_in_bank(db, bank_id, Utc::now())?;
+        return Ok(ProcessStep {
+            job: Some(ProcessedJob {
+                job_id: job.job_id,
+                kind: job.kind,
+                outcome: SinkOutcome::LeaseLost,
+            }),
+            recovery,
+            recovery_error: None,
+        });
+    }
+
     let outcome = match sink.dispatch(&job.bank_id, &job) {
         Ok(outcome) => match complete_job(db, job.job_id, &job.token, Utc::now()) {
             Ok(()) => outcome,
             Err(StoreError::LeaseNotHeld) => {
-                recovery = recover_expired_leases_in_bank(db, bank_id, recovery_now())?;
+                recovery = recover_expired_leases_in_bank(db, bank_id, Utc::now())?;
                 recovered = true;
                 SinkOutcome::LeaseLost
             }
@@ -363,7 +379,7 @@ pub fn process_one_reporting(
                 Ok(FailDisposition::RetryScheduled) => SinkOutcome::Retried(message),
                 Ok(FailDisposition::Dead) => SinkOutcome::Dead(message),
                 Err(StoreError::LeaseNotHeld) => {
-                    recovery = recover_expired_leases_in_bank(db, bank_id, recovery_now())?;
+                    recovery = recover_expired_leases_in_bank(db, bank_id, Utc::now())?;
                     recovered = true;
                     SinkOutcome::LeaseLost
                 }
@@ -372,16 +388,24 @@ pub fn process_one_reporting(
         }
     };
 
+    let processed = ProcessedJob {
+        job_id: job.job_id,
+        kind: job.kind,
+        outcome,
+    };
+    let mut recovery_error = None;
     if recovery_due && !recovered {
-        recovery = recover_expired_leases_in_bank(db, bank_id, recovery_now())?;
+        match recover_expired_leases_in_bank(db, bank_id, Utc::now()) {
+            Ok(report) => recovery = report,
+            // The job outcome is already committed. Keep it observable and let
+            // the worker record/reconnect for the unfinished recovery.
+            Err(error) => recovery_error = Some(error.to_string()),
+        }
     }
     Ok(ProcessStep {
-        job: Some(ProcessedJob {
-            job_id: job.job_id,
-            kind: job.kind,
-            outcome,
-        }),
+        job: Some(processed),
         recovery,
+        recovery_error,
     })
 }
 

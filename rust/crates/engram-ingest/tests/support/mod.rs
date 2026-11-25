@@ -114,6 +114,14 @@ pub struct TestServer {
 #[allow(dead_code)]
 impl TestServer {
     pub fn start(status: u16, delay: Duration) -> Self {
+        Self::start_with_hook(status, delay, None)
+    }
+
+    pub fn start_with_hook(
+        status: u16,
+        delay: Duration,
+        hook: Option<Arc<dyn Fn() + Send + Sync>>,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind worker server");
         listener
             .set_nonblocking(true)
@@ -135,6 +143,7 @@ impl TestServer {
                         let requests = Arc::clone(&shared_requests);
                         let max = Arc::clone(&shared_max);
                         let in_flight = Arc::clone(&shared_in_flight);
+                        let hook = hook.clone();
                         thread::spawn(move || {
                             let request = read_http_request(&mut stream);
                             let bank = request_bank(&request);
@@ -147,14 +156,20 @@ impl TestServer {
                                 *peak = (*peak).max(*count);
                             }
                             requests.lock().expect("request log").push(request);
+                            if let Some(hook) = &hook {
+                                hook();
+                            }
                             if !delay.is_zero() {
                                 thread::sleep(delay);
                             }
                             let response = format!(
                                 "HTTP/1.1 {status} X\r\nContent-Length: 2\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{{}}"
                             );
-                            let _ = stream.write_all(response.as_bytes());
+                            // Hold the same lock used by the next request's
+                            // increment until the response is written and this
+                            // request is no longer in flight.
                             let mut active = in_flight.lock().expect("in-flight map");
+                            let _ = stream.write_all(response.as_bytes());
                             if let Some(count) = active.get_mut(&bank) {
                                 *count = (*count).saturating_sub(1);
                             }

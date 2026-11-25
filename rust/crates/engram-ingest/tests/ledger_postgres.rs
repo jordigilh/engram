@@ -829,6 +829,14 @@ fn migration_guard_requires_an_explicit_bank_and_is_rerun_safe() {
         return;
     };
     let mut client = connect(&url).expect("connect");
+    let database: String = client
+        .query_one("SELECT current_database()", &[])
+        .expect("database name")
+        .get(0);
+    assert_eq!(
+        database, "engram_ingest_test",
+        "refusing to migrate a database that is not engram_ingest_test"
+    );
     client
         .execute("SELECT pg_advisory_lock($1)", &[&918_273_i64])
         .expect("harness lock");

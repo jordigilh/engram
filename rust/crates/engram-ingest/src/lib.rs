@@ -35,10 +35,10 @@ pub use sink::{
     RetainRequest, SinkError, SinkOutcome,
 };
 pub use store::{
-    apply_reconciliation, claim_job, complete_job, connect, fail_job, heartbeat_job, load_manifest,
-    migrate, recover_expired_leases, recover_expired_leases_for_banks,
-    recover_expired_leases_in_bank, upsert_source, ApplySummary, ClaimedJob, FailDisposition,
-    RecoveryReport, StoreError,
+    apply_reconciliation, claim_job, complete_job, connect, fail_job, heartbeat_job,
+    lease_is_active, load_manifest, migrate, recover_expired_leases,
+    recover_expired_leases_for_banks, recover_expired_leases_in_bank, upsert_source, ApplySummary,
+    ClaimedJob, FailDisposition, RecoveryReport, StoreError,
 };
 pub use synthesis::{
     analyze, split_sentences, synthesize_document, Analysis, Stats, Synthesis, SynthesisError,

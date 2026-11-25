@@ -844,6 +844,23 @@ pub fn heartbeat_job(
     Ok(expires_at)
 }
 
+/// True while the claim's opaque token still owns an unexpired lease. Used
+/// immediately before a Hindsight mutation so a paused worker cannot dispatch a
+/// stale operation after another worker recovered the job.
+pub fn lease_is_active(
+    client: &mut Client,
+    job_id: i64,
+    token: &str,
+    now: DateTime<Utc>,
+) -> Result<bool, StoreError> {
+    let row = client.query_opt(
+        "SELECT 1 FROM engram_ingest.leases
+          WHERE job_id = $1 AND token = $2 AND expires_at > $3",
+        &[&job_id, &token, &now],
+    )?;
+    Ok(row.is_some())
+}
+
 /// Startup recovery across every bank. Configured-bank accounting includes the
 /// attempt increment that eventually marks a permanently crashing job `dead`.
 pub fn recover_expired_leases(

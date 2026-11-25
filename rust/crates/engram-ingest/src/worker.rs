@@ -133,6 +133,19 @@ impl Shutdown {
 /// Per-bank counters. Every counter has exactly one producer: slot outcomes
 /// update job/outcome counters, runtime recovery folds in through `ProcessStep`,
 /// and the supervisor records startup recovery on the handle.
+fn escape_prometheus_label(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
 #[derive(Debug)]
 pub struct WorkerMetrics {
     bank_id: String,
@@ -252,7 +265,7 @@ impl WorkerMetrics {
 
     pub fn render_prometheus(&self) -> String {
         let snapshot = self.snapshot();
-        let bank = &snapshot.bank_id;
+        let bank = escape_prometheus_label(&snapshot.bank_id);
         let mut output = String::new();
         for (name, value) in [
             ("engram_ingest_jobs_claimed_total", snapshot.claimed),
@@ -394,6 +407,12 @@ fn run_loop(
         let sleep = match driver.step() {
             Ok(step) => {
                 metrics.record_step(&step);
+                if step.recovery_error.is_some() {
+                    metrics.record_ledger_error();
+                    if !shutdown.is_cancelled() {
+                        let _ = driver.reconnect();
+                    }
+                }
                 error_attempt = 0;
                 if step.job.is_some() {
                     // The ledger already owns retry backoff; a retried job must
@@ -404,19 +423,28 @@ fn run_loop(
                 metrics.record_idle_poll();
                 let delay = idle_backoff.delay(idle_attempt, jitter_sample());
                 idle_attempt = idle_attempt.saturating_add(1);
-                delay
+                (delay, true)
             }
             Err(_) => {
                 metrics.record_ledger_error();
-                let _ = driver.reconnect();
+                if !shutdown.is_cancelled() {
+                    let _ = driver.reconnect();
+                }
                 let delay = error_backoff.delay(error_attempt, jitter_sample());
                 error_attempt = error_attempt.saturating_add(1);
-                delay
+                // Do not cap an error backoff with the recovery timer: a broken
+                // database would otherwise be retried every few milliseconds.
+                (delay, false)
             }
         };
-        let sleep = match driver.next_recovery_in() {
-            Some(remaining) => sleep.min(remaining.max(StdDuration::from_millis(1))),
-            None => sleep,
+        let (sleep, cap_recovery) = sleep;
+        let sleep = if cap_recovery {
+            match driver.next_recovery_in() {
+                Some(remaining) => sleep.min(remaining.max(StdDuration::from_millis(1))),
+                None => sleep,
+            }
+        } else {
+            sleep
         };
         if !shutdown.sleep(sleep) {
             break;
@@ -532,11 +560,18 @@ impl WorkerConfig {
             )));
         }
         if self.connect_timeout.is_zero()
-            || self.statement_timeout.is_zero()
-            || self.lock_timeout.is_zero()
+            || self.statement_timeout.as_millis() == 0
+            || self.lock_timeout.as_millis() == 0
         {
             return Err(WorkerError::InvalidConfig(
-                "database timeouts must be positive".to_string(),
+                "database timeouts must be at least 1ms".to_string(),
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.idle_backoff.jitter_fraction)
+            || !(0.0..=1.0).contains(&self.error_backoff.jitter_fraction)
+        {
+            return Err(WorkerError::InvalidConfig(
+                "backoff jitter fractions must be within 0.0..=1.0".to_string(),
             ));
         }
         if self.recovery_interval.is_zero()
@@ -695,7 +730,7 @@ impl WorkerSupervisor {
         config.validate()?;
         let timeouts = config.timeouts();
         let join_timeout = config.sink.max_request_timeout()
-            + config.statement_timeout
+            + config.statement_timeout.saturating_mul(3)
             + StdDuration::from_secs(5);
 
         // Schema readiness is fail-loud: a v2 ledger with no explicit bank must
@@ -833,6 +868,7 @@ mod tests {
                 outcome: SinkOutcome::Retained,
             }),
             recovery: RecoveryReport::default(),
+            recovery_error: None,
         }
     }
 
@@ -844,6 +880,7 @@ mod tests {
                 outcome: SinkOutcome::Retried("temporary".to_string()),
             }),
             recovery: RecoveryReport::default(),
+            recovery_error: None,
         }
     }
 
@@ -892,6 +929,7 @@ mod tests {
                 dead: 2,
                 stranded: 3,
             },
+            recovery_error: None,
         });
         metrics.record_idle_poll();
         metrics.record_ledger_error();
@@ -1102,6 +1140,41 @@ mod tests {
         assert!(short_ttl.validate().is_err());
         let _ = zero.banks.len();
         let _ = unsafe_bank.banks.len();
+    }
+
+    #[test]
+    fn config_validation_rejects_nan_jitter_and_submillisecond_timeouts() {
+        let mut config = WorkerConfig::new(
+            "postgresql://example/db",
+            test_sink(),
+            vec![BankConfig {
+                bank_id: "repo-docs".to_string(),
+                concurrency: 1,
+            }],
+        );
+        config.idle_backoff.jitter_fraction = f64::NAN;
+        assert!(config.validate().is_err());
+
+        let mut config = WorkerConfig::new(
+            "postgresql://example/db",
+            test_sink(),
+            vec![BankConfig {
+                bank_id: "repo-docs".to_string(),
+                concurrency: 1,
+            }],
+        );
+        config.statement_timeout = StdDuration::from_micros(500);
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn prometheus_escapes_the_bank_label() {
+        let metrics = WorkerMetrics::new("repo\"docs\n\\");
+        let rendered = metrics.render_prometheus();
+        assert!(
+            rendered.contains("bank=\"repo\\\"docs\\n\\\\\""),
+            "{rendered}"
+        );
     }
 
     #[test]

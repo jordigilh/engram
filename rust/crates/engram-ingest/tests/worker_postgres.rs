@@ -7,7 +7,7 @@
 
 mod support;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration as StdDuration, Instant};
 
 use chrono::{Duration as LedgerDuration, Utc};
@@ -405,7 +405,7 @@ fn runtime_recovery_wakes_an_idle_bank() {
         &mut client,
         "project-a-docs",
         "about-to-die",
-        LedgerDuration::seconds(2),
+        LedgerDuration::seconds(3_600),
         Utc::now(),
     )
     .expect("claim")
@@ -421,6 +421,16 @@ fn runtime_recovery_wakes_an_idle_bank() {
     );
     let worker = RunningWorker::new(WorkerSupervisor::start(config).expect("start"));
     assert_eq!(worker.handle().startup_recovery().requeued, 0);
+    // Expire only after startup so this exercises runtime recovery, not the
+    // startup pass.
+    client
+        .execute(
+            "UPDATE engram_ingest.leases
+                SET expires_at = now() - interval '1 second'
+              WHERE job_id = $1",
+            &[&claimed.job_id],
+        )
+        .expect("expire lease after startup");
 
     wait_until(&mut client, StdDuration::from_secs(10), |client| {
         let state: String = client
@@ -452,7 +462,18 @@ fn lost_ack_is_observable_and_consumes_one_attempt() {
         eprintln!("ENGRAM_INGEST_TEST_DATABASE_URL is not set; skipping worker harness");
         return;
     };
-    let mut server = support::TestServer::start(200, StdDuration::ZERO);
+    let hook_client = Arc::new(Mutex::new(connect(&url).expect("hook db")));
+    let hook = Arc::new(move || {
+        let mut hook_client = hook_client.lock().expect("hook db lock");
+        hook_client
+            .execute(
+                "UPDATE engram_ingest.leases
+                    SET expires_at = now() - interval '1 second'",
+                &[],
+            )
+            .expect("expire lease during HTTP");
+    });
+    let mut server = support::TestServer::start_with_hook(200, StdDuration::ZERO, Some(hook));
     seed_source(
         &mut client,
         "project-a",
@@ -460,15 +481,8 @@ fn lost_ack_is_observable_and_consumes_one_attempt() {
         "/tmp/lost",
         &[("lost.md", "# Lost\n\nLost body long enough.")],
     );
-    let backdated = Utc::now() - LedgerDuration::seconds(200);
-    client
-        .execute(
-            "UPDATE engram_ingest.jobs SET run_after = $1 WHERE state = 'pending'",
-            &[&backdated],
-        )
-        .expect("backdate run_after");
 
-    let mut config = worker_config(
+    let config = worker_config(
         &url,
         server.url(),
         vec![BankConfig {
@@ -476,8 +490,6 @@ fn lost_ack_is_observable_and_consumes_one_attempt() {
             concurrency: 1,
         }],
     );
-    let clock = Arc::new(move || backdated);
-    config.clock = clock;
     let worker = RunningWorker::new(WorkerSupervisor::start(config).expect("start"));
 
     wait_until(&mut client, StdDuration::from_secs(5), |client| {

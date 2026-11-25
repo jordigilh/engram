@@ -88,10 +88,12 @@ Python/CocoIndex removal (#232).
   requeued without consuming an attempt (`stranded`), so a deconfigured bank
   cannot burn its retry budget while no worker serves it.
 - **Delivery is at-least-once.** A lost ack is reported as `LeaseLost` and
-  counted separately; a re-send of the same stable `document_id` converges. An
-  expired/lost lease consumes one durable attempt, so a job that repeatedly
-  crashes a worker is bounded and eventually reaches `dead`. The `changed`
-  counter belongs to reconciliation (`jobs_created`), not the sink.
+  counted separately; a re-send of the same stable `document_id` converges. The
+  worker re-checks its lease immediately before the Hindsight mutation, and the
+  lease TTL is at least twice the request timeout, so a normal in-flight call is
+  fenced. An expired/lost lease consumes one durable attempt, so a job that
+  repeatedly crashes a worker is bounded and eventually reaches `dead`. The
+  `changed` counter belongs to reconciliation (`jobs_created`), not the sink.
 - **Python 3.14 is authoritative** for `pathlib` suffix semantics; Python 3.13
   differs only for trailing-dot filenames. See `fixtures/README.md`.
 - **No Python tests were added.** The fixture generator is developer tooling

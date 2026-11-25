@@ -344,11 +344,21 @@ fn sink_retains_deletes_and_schedules_retries() {
         &mut client,
         "repo-docs",
         "crashed-worker",
-        LedgerDuration::seconds(1),
+        LedgerDuration::seconds(3_600),
         t0,
     )
     .expect("claim")
     .expect("job");
+    // Simulate a worker that died: the lease is already expired on the wall
+    // clock even though the claim itself succeeded.
+    client
+        .execute(
+            "UPDATE engram_ingest.leases
+                SET expires_at = $1
+              WHERE job_id = $2",
+            &[&(t0 - LedgerDuration::seconds(1)), &abandoned.job_id],
+        )
+        .expect("expire lease");
     let (url, _) = support::one_shot(200, "{}");
     let sink = HindsightSink::new(url).expect("sink");
     // Recovery requeues with its 1s backoff, so the first pass reclaims only.

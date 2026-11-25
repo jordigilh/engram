@@ -285,6 +285,13 @@ fn classify_status(status: StatusCode, operation: &str) -> SinkError {
     }
 }
 
+fn recover_after_lease_loss(db: &mut Client, bank_id: &str) -> (RecoveryReport, Option<String>) {
+    match recover_expired_leases_in_bank(db, bank_id, Utc::now()) {
+        Ok(report) => (report, None),
+        Err(error) => (RecoveryReport::default(), Some(error.to_string())),
+    }
+}
+
 /// Claim one job, call Hindsight, and acknowledge or schedule a ledger retry.
 ///
 /// Returns `None` when no job is claimable. Sink and payload errors are
@@ -345,7 +352,7 @@ pub fn process_one_reporting(
     // after another worker recovered the job. The TTL guard keeps normal
     // in-flight requests safe; this check closes the claim-to-dispatch window.
     if !lease_is_active(db, job.job_id, &job.token, Utc::now())? {
-        recovery = recover_expired_leases_in_bank(db, bank_id, Utc::now())?;
+        let (recovery, recovery_error) = recover_after_lease_loss(db, bank_id);
         return Ok(ProcessStep {
             job: Some(ProcessedJob {
                 job_id: job.job_id,
@@ -353,15 +360,18 @@ pub fn process_one_reporting(
                 outcome: SinkOutcome::LeaseLost,
             }),
             recovery,
-            recovery_error: None,
+            recovery_error,
         });
     }
 
+    let mut recovery_error = None;
     let outcome = match sink.dispatch(&job.bank_id, &job) {
         Ok(outcome) => match complete_job(db, job.job_id, &job.token, Utc::now()) {
             Ok(()) => outcome,
             Err(StoreError::LeaseNotHeld) => {
-                recovery = recover_expired_leases_in_bank(db, bank_id, Utc::now())?;
+                let (report, error) = recover_after_lease_loss(db, bank_id);
+                recovery = report;
+                recovery_error = error;
                 recovered = true;
                 SinkOutcome::LeaseLost
             }
@@ -379,7 +389,9 @@ pub fn process_one_reporting(
                 Ok(FailDisposition::RetryScheduled) => SinkOutcome::Retried(message),
                 Ok(FailDisposition::Dead) => SinkOutcome::Dead(message),
                 Err(StoreError::LeaseNotHeld) => {
-                    recovery = recover_expired_leases_in_bank(db, bank_id, Utc::now())?;
+                    let (report, error) = recover_after_lease_loss(db, bank_id);
+                    recovery = report;
+                    recovery_error = error;
                     recovered = true;
                     SinkOutcome::LeaseLost
                 }
@@ -393,7 +405,6 @@ pub fn process_one_reporting(
         kind: job.kind,
         outcome,
     };
-    let mut recovery_error = None;
     if recovery_due && !recovered {
         match recover_expired_leases_in_bank(db, bank_id, Utc::now()) {
             Ok(report) => recovery = report,

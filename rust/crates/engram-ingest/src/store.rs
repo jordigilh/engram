@@ -245,16 +245,25 @@ pub fn migrate(client: &mut Client) -> Result<(), StoreError> {
     }
     let lease_index_shape: bool = client
         .query_one(
-            "SELECT COALESCE(bool_and(
-                        i.indisunique
-                        AND pg_get_indexdef(i.indexrelid) LIKE '%bank_id, hindsight_document_id%'
-                        AND pg_get_indexdef(i.indexrelid) LIKE '%state = ''leased''%'
-                    ), false)
-               FROM pg_index i
-               JOIN pg_class c ON c.oid = i.indexrelid
-               JOIN pg_namespace n ON n.oid = c.relnamespace
-              WHERE n.nspname = 'engram_ingest'
-                AND c.relname = 'jobs_one_leased_per_bank_document_idx'",
+            r#"SELECT COALESCE((
+                   SELECT i.indisunique
+                      AND i.indisvalid
+                      AND i.indnkeyatts = 2
+                      AND i.indrelid = 'engram_ingest.jobs'::regclass
+                      AND pg_get_expr(i.indpred, i.indrelid) = '(state = ''leased''::text)'
+                      AND (
+                          SELECT array_agg(a.attname ORDER BY k.ord)
+                            FROM unnest(i.indkey) WITH ORDINALITY k(attnum, ord)
+                            JOIN pg_attribute a
+                              ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+                           WHERE k.ord <= i.indnkeyatts
+                      ) = ARRAY['bank_id', 'hindsight_document_id']::name[]
+                     FROM pg_index i
+                     JOIN pg_class c ON c.oid = i.indexrelid
+                     JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'engram_ingest'
+                      AND c.relname = 'jobs_one_leased_per_bank_document_idx'
+               ), false)"#,
             &[],
         )?
         .get(0);
@@ -344,34 +353,54 @@ fn enforce_bank_columns(client: &mut Client) -> Result<(), StoreError> {
     }
 
     // v4 could not build the bank-wide lease index while bank ids were NULL.
-    // Now that the backfill is complete, dedupe and build it before NOT NULL.
+    // Now that the backfill is complete, refuse to revoke live duplicate
+    // leases (that would let a stale in-flight write overtake a requeued job).
+    let live_duplicates: i64 = transaction
+        .query_one(
+            "SELECT count(*) FROM (
+                 SELECT 1
+                   FROM engram_ingest.jobs j
+                   JOIN engram_ingest.leases l ON l.job_id = j.id
+                  WHERE j.state = 'leased'
+                  GROUP BY j.bank_id, j.hindsight_document_id
+                 HAVING count(*) > 1
+             ) duplicates",
+            &[],
+        )?
+        .get(0);
+    if live_duplicates > 0 {
+        transaction.rollback()?;
+        return Err(StoreError::MigrationGuard(format!(
+            "live duplicate leases exist for {live_duplicates} bank document(s); stop ingest workers, let leases expire or drain them, then rerun migrate()"
+        )));
+    }
+
     transaction.batch_execute(
         "WITH ranked AS (
-             SELECT id, row_number() OVER (
-                        PARTITION BY bank_id, hindsight_document_id ORDER BY id
+             SELECT j.id, row_number() OVER (
+                        PARTITION BY j.bank_id, j.hindsight_document_id ORDER BY j.id
                     ) AS rank
-               FROM engram_ingest.jobs
-              WHERE state = 'leased'
-         )
-         DELETE FROM engram_ingest.leases l
-          USING ranked r
-          WHERE l.job_id = r.id AND r.rank > 1;
-         WITH ranked AS (
-             SELECT id, row_number() OVER (
-                        PARTITION BY bank_id, hindsight_document_id ORDER BY id
-                    ) AS rank
-               FROM engram_ingest.jobs
-              WHERE state = 'leased'
+               FROM engram_ingest.jobs j
+               JOIN engram_ingest.leases l ON l.job_id = j.id
+              WHERE j.state = 'leased'
+                AND l.expires_at <= now()
+         ),
+         deleted AS (
+             DELETE FROM engram_ingest.leases l
+              USING ranked r
+              WHERE l.job_id = r.id AND r.rank > 1
+             RETURNING l.job_id
          )
          UPDATE engram_ingest.jobs j
             SET state = 'pending', run_after = now(),
                 last_error = 'duplicate lease requeued by bank-document migration',
                 last_error_class = 'transient', updated_at = now()
-           FROM ranked r
-          WHERE j.id = r.id AND r.rank > 1;
+           FROM deleted d
+          WHERE j.id = d.job_id;
          CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_leased_per_bank_document_idx
              ON engram_ingest.jobs (bank_id, hindsight_document_id)
-             WHERE state = 'leased';",
+             WHERE state = 'leased';
+         DROP INDEX IF EXISTS engram_ingest.jobs_one_leased_per_document_idx;",
     )?;
 
     let error = transaction
@@ -813,11 +842,9 @@ fn try_claim_job(
             AND NOT EXISTS (
                 SELECT 1
                   FROM engram_ingest.jobs leased
-                  JOIN engram_ingest.leases l ON l.job_id = leased.id
                  WHERE leased.bank_id = j.bank_id
                    AND leased.hindsight_document_id = j.hindsight_document_id
                    AND leased.state = 'leased'
-                   AND l.expires_at > $1
             )
             AND NOT EXISTS (
                 SELECT 1

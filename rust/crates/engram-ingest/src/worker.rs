@@ -691,6 +691,8 @@ impl Drop for WorkerHandle {
     }
 }
 
+type CounterGetter = fn(&WorkerMetricsSnapshot) -> u64;
+
 impl WorkerHandle {
     pub fn shutdown(&self) {
         self.shutdown.cancel();
@@ -720,35 +722,49 @@ impl WorkerHandle {
     }
 
     pub fn prometheus(&self) -> String {
-        const TYPES: &str = "\
-# TYPE engram_ingest_jobs_claimed_total counter
-# TYPE engram_ingest_jobs_retained_total counter
-# TYPE engram_ingest_jobs_deleted_total counter
-# TYPE engram_ingest_jobs_already_absent_total counter
-# TYPE engram_ingest_jobs_retried_total counter
-# TYPE engram_ingest_jobs_dead_total counter
-# TYPE engram_ingest_jobs_lease_lost_total counter
-# TYPE engram_ingest_leases_recovered_total counter
-# TYPE engram_ingest_recovery_dead_total counter
-# TYPE engram_ingest_worker_dead_total counter
-# TYPE engram_ingest_idle_polls_total counter
-# TYPE engram_ingest_ledger_errors_total counter
-# TYPE engram_ingest_recovery_stranded_at_startup gauge
-# TYPE engram_ingest_recovery_stranded_requeued gauge
-# TYPE engram_ingest_startup_recovery_failed gauge
-";
-        let mut output = String::from(TYPES);
-        for metric in &self.metrics {
-            output.push_str(&metric.render_prometheus());
+        let snapshots: Vec<WorkerMetricsSnapshot> = self
+            .metrics
+            .iter()
+            .map(|metric| metric.snapshot())
+            .collect();
+        let counters: [(&str, CounterGetter); 12] = [
+            ("engram_ingest_jobs_claimed_total", |s| s.claimed),
+            ("engram_ingest_jobs_retained_total", |s| s.retained),
+            ("engram_ingest_jobs_deleted_total", |s| s.deleted),
+            ("engram_ingest_jobs_already_absent_total", |s| {
+                s.already_absent
+            }),
+            ("engram_ingest_jobs_retried_total", |s| s.retried),
+            ("engram_ingest_jobs_dead_total", |s| s.dead),
+            ("engram_ingest_jobs_lease_lost_total", |s| s.lease_lost),
+            ("engram_ingest_leases_recovered_total", |s| s.recovered),
+            ("engram_ingest_recovery_dead_total", |s| s.recovery_dead),
+            ("engram_ingest_worker_dead_total", |s| s.worker_dead),
+            ("engram_ingest_idle_polls_total", |s| s.idle_polls),
+            ("engram_ingest_ledger_errors_total", |s| s.ledger_errors),
+        ];
+        let mut output = String::new();
+        for (name, getter) in counters {
+            output.push_str(&format!("# TYPE {name} counter\n"));
+            for snapshot in &snapshots {
+                output.push_str(&format!(
+                    "{name}{{bank=\"{}\"}} {}\n",
+                    escape_prometheus_label(&snapshot.bank_id),
+                    getter(snapshot)
+                ));
+            }
         }
+        output.push_str("# TYPE engram_ingest_recovery_stranded_at_startup gauge\n");
         output.push_str(&format!(
             "engram_ingest_recovery_stranded_at_startup {}\n",
             self.stranded_remaining
         ));
+        output.push_str("# TYPE engram_ingest_recovery_stranded_requeued gauge\n");
         output.push_str(&format!(
             "engram_ingest_recovery_stranded_requeued {}\n",
             self.startup_recovery.stranded
         ));
+        output.push_str("# TYPE engram_ingest_startup_recovery_failed gauge\n");
         output.push_str(&format!(
             "engram_ingest_startup_recovery_failed {}\n",
             u8::from(self.startup_recovery_failed)
@@ -820,8 +836,11 @@ impl WorkerSupervisor {
         let mut startup_recovery = RecoveryReport::default();
         let mut startup_recovery_failed = false;
         let mut startup_batches = 0usize;
+        // Reserve at least one batch for deconfigured banks so a wide set of
+        // configured banks cannot consume the whole startup budget on empties.
+        let configured_budget = MAX_STARTUP_RECOVERY_BATCHES.saturating_sub(1).max(1);
         'configured: for bank_id in &bank_ids {
-            while startup_batches < MAX_STARTUP_RECOVERY_BATCHES {
+            while startup_batches < configured_budget {
                 startup_batches += 1;
                 let report = match recover_expired_leases_in_bank(&mut admin, bank_id, Utc::now()) {
                     Ok(report) => report,

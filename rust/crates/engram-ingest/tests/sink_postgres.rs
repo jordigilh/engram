@@ -372,13 +372,20 @@ fn sink_retains_deletes_and_schedules_retries() {
     )
     .expect("recover")
     .is_none());
+    let run_after: chrono::DateTime<Utc> = client
+        .query_one(
+            "SELECT run_after FROM engram_ingest.jobs WHERE id = $1",
+            &[&abandoned.job_id],
+        )
+        .expect("run_after")
+        .get(0);
     let recovered = process_one(
         &mut client,
         &sink,
         "repo-docs",
         "live-worker",
         LedgerDuration::seconds(180),
-        t0 + LedgerDuration::seconds(5),
+        run_after + LedgerDuration::milliseconds(1),
     )
     .expect("process")
     .expect("reclaimed job");

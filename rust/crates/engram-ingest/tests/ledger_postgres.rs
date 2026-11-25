@@ -923,8 +923,8 @@ fn v4_migration_requeues_duplicate_bank_document_leases() {
         apply_reconciliation(&mut client, source, &plan, Utc::now()).expect("apply");
     }
 
-    // Recreate the pre-v4 state: the bank-wide index and migration are absent,
-    // and both source jobs hold leases for the same bank document.
+    // Simulate the pre-v4 state: the bank-wide index and migration are absent,
+    // and both source jobs hold live leases for the same bank document.
     client
         .batch_execute(
             "DROP INDEX engram_ingest.jobs_one_leased_per_bank_document_idx;
@@ -936,6 +936,18 @@ fn v4_migration_requeues_duplicate_bank_document_leases() {
                FROM engram_ingest.jobs;",
         )
         .expect("simulate pre-v4 duplicate leases");
+
+    let error = migrate(&mut client).expect_err("live duplicates must fail closed");
+    assert!(
+        format!("{error:?}").contains("stop ingest workers"),
+        "unexpected error: {error:?}"
+    );
+    client
+        .batch_execute(
+            "UPDATE engram_ingest.leases
+                SET expires_at = now() - interval '1 hour'",
+        )
+        .expect("expire duplicate leases");
 
     migrate(&mut client).expect("v4 upgrade");
     let (leased, pending, leases): (i64, i64, i64) = {
@@ -968,6 +980,14 @@ fn v4_migration_requeues_duplicate_bank_document_leases() {
             .expect("kept lease");
         (row.get(0), row.get(1))
     };
+    client
+        .execute(
+            "UPDATE engram_ingest.leases
+                SET expires_at = now() + interval '1 hour'
+              WHERE job_id = $1",
+            &[&kept_job],
+        )
+        .expect("extend kept lease");
     complete_job(&mut client, kept_job, &kept_token, Utc::now()).expect("complete kept lease");
 
     let claimed = claim_job(

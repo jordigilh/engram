@@ -196,7 +196,8 @@ impl Job {
             return;
         }
         self.state = JobState::Pending;
-        self.run_after_ms = now_ms + RETRY_BASE_MS * (1_i64 << (self.attempts - 1));
+        let shift = (self.attempts - 1).min(31);
+        self.run_after_ms = now_ms + RETRY_BASE_MS.saturating_mul(1_i64 << shift);
     }
 }
 

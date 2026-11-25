@@ -103,7 +103,13 @@ fn sink_retains_deletes_and_schedules_retries() {
 
     let source = upsert_source(
         &mut client,
-        &SourceRecord::markdown("engram-test", "sink", "/tmp/sink", &["**/*.md"]),
+        &SourceRecord::markdown(
+            "engram-test",
+            "sink",
+            "/tmp/sink",
+            "repo-docs",
+            &["**/*.md"],
+        ),
     )
     .expect("source");
     let original = "# A\n\nAlpha body long enough.";
@@ -163,7 +169,7 @@ fn sink_retains_deletes_and_schedules_retries() {
     )
     .expect("process")
     .expect("one job");
-    assert!(matches!(failed.outcome, SinkOutcome::Failed(_)));
+    assert!(matches!(failed.outcome, SinkOutcome::Retried(_)));
     let (state, attempts) = state_of(&mut client, failed.job_id);
     assert_eq!(state, "pending");
     assert_eq!(attempts, 1);
@@ -273,15 +279,15 @@ fn sink_retains_deletes_and_schedules_retries() {
     truncate(&mut client);
     let source = upsert_source(
         &mut client,
-        &SourceRecord::markdown("engram-test", "bad", "/tmp/bad", &["**/*.md"]),
+        &SourceRecord::markdown("engram-test", "bad", "/tmp/bad", "repo-docs", &["**/*.md"]),
     )
     .expect("source");
     let job_id: i64 = client
         .query_one(
             "INSERT INTO engram_ingest.jobs
-                 (source_id, kind, hindsight_document_id, dedupe_key, generation,
+                 (source_id, bank_id, kind, hindsight_document_id, dedupe_key, generation,
                   payload, state, run_after)
-             VALUES ($1, 'retain', 'bad--doc', 'bad', 1, '{}'::jsonb, 'pending', now())
+             VALUES ($1, 'repo-docs', 'retain', 'bad--doc', 'bad', 1, '{}'::jsonb, 'pending', now())
              RETURNING id",
             &[&source],
         )
@@ -320,7 +326,13 @@ fn sink_retains_deletes_and_schedules_retries() {
     truncate(&mut client);
     let source = upsert_source(
         &mut client,
-        &SourceRecord::markdown("engram-test", "lease", "/tmp/lease", &["**/*.md"]),
+        &SourceRecord::markdown(
+            "engram-test",
+            "lease",
+            "/tmp/lease",
+            "repo-docs",
+            &["**/*.md"],
+        ),
     )
     .expect("source");
     let scan = vec![scanned("lease.md", "# A\n\nLease body long enough.")];
@@ -330,12 +342,23 @@ fn sink_retains_deletes_and_schedules_retries() {
     let t0 = Utc::now();
     let abandoned = claim_job(
         &mut client,
+        "repo-docs",
         "crashed-worker",
-        LedgerDuration::seconds(1),
+        LedgerDuration::seconds(3_600),
         t0,
     )
     .expect("claim")
     .expect("job");
+    // Simulate a worker that died: the lease is already expired on the wall
+    // clock even though the claim itself succeeded.
+    client
+        .execute(
+            "UPDATE engram_ingest.leases
+                SET expires_at = $1
+              WHERE job_id = $2",
+            &[&(t0 - LedgerDuration::seconds(1)), &abandoned.job_id],
+        )
+        .expect("expire lease");
     let (url, _) = support::one_shot(200, "{}");
     let sink = HindsightSink::new(url).expect("sink");
     // Recovery requeues with its 1s backoff, so the first pass reclaims only.
@@ -345,17 +368,24 @@ fn sink_retains_deletes_and_schedules_retries() {
         "repo-docs",
         "live-worker",
         LedgerDuration::seconds(180),
-        t0 + LedgerDuration::seconds(2),
+        Utc::now(),
     )
     .expect("recover")
     .is_none());
+    let run_after: chrono::DateTime<Utc> = client
+        .query_one(
+            "SELECT run_after FROM engram_ingest.jobs WHERE id = $1",
+            &[&abandoned.job_id],
+        )
+        .expect("run_after")
+        .get(0);
     let recovered = process_one(
         &mut client,
         &sink,
         "repo-docs",
         "live-worker",
         LedgerDuration::seconds(180),
-        t0 + LedgerDuration::seconds(5),
+        run_after + LedgerDuration::milliseconds(1),
     )
     .expect("process")
     .expect("reclaimed job");

@@ -4,6 +4,8 @@
 //! call these functions from their worker thread. All multi-row mutations run
 //! in one transaction, and job claims use `FOR UPDATE SKIP LOCKED`.
 
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Duration, Utc};
 use postgres::{Client, NoTls};
 use serde_json::Value;
@@ -11,7 +13,8 @@ use serde_json::Value;
 use crate::hashing::{ContentHash, HashError};
 use crate::jobs::RETRY_BASE_MS;
 use crate::ledger::{
-    Manifest, ManifestChunk, ManifestDocument, RecordState, SourceRecord, MIGRATIONS,
+    is_valid_bank_id, Manifest, ManifestChunk, ManifestDocument, RecordState, SourceRecord,
+    MIGRATIONS,
 };
 use crate::reconcile::Reconciliation;
 
@@ -29,10 +32,51 @@ pub enum StoreError {
     InvalidState(String),
     #[error("ledger schema is missing {0}; recreate the unreleased engram_ingest schema")]
     MigrationMismatch(String),
+    #[error("ledger schema guard: {0}")]
+    MigrationGuard(String),
+    #[error("source bank id {0:?} is not a valid Hindsight bank id")]
+    InvalidBank(String),
+    #[error("source bank id cannot change from {0:?} to another bank")]
+    BankChanged(String),
     #[error("scan has conflicting live paths for document id {0}")]
     ScanConflict(String),
     #[error("reconciliation is based on an obsolete source revision; reload the manifest")]
     StaleReconciliation,
+}
+
+/// Recovery selection window. Startup and runtime passes use the same value so
+/// the pagination loop and SQL limits cannot drift apart.
+pub const RECOVERY_BATCH: usize = 500;
+
+/// Counts from one recovery pass. `stranded` leases belong to a bank that is
+/// not configured in the running worker; they are requeued without consuming an
+/// attempt so repeated restarts cannot exhaust their retry budget.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RecoveryReport {
+    pub requeued: usize,
+    pub dead: usize,
+    pub stranded: usize,
+    pub scanned: usize,
+}
+
+impl RecoveryReport {
+    pub fn is_empty(self) -> bool {
+        self.requeued == 0 && self.dead == 0 && self.stranded == 0
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        self.requeued += other.requeued;
+        self.dead += other.dead;
+        self.stranded += other.stranded;
+        self.scanned += other.scanned;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailDisposition {
+    RetryScheduled,
+    Dead,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -49,6 +93,7 @@ pub struct ClaimedJob {
     pub job_id: i64,
     pub owner: String,
     pub token: String,
+    pub bank_id: String,
     pub kind: String,
     pub payload: Value,
     pub expires_at: DateTime<Utc>,
@@ -59,15 +104,19 @@ pub fn connect(url: &str) -> Result<Client, StoreError> {
 }
 
 pub fn migrate(client: &mut Client) -> Result<(), StoreError> {
-    client.batch_execute(
+    // The v3 DDL and the NOT NULL guard take ACCESS EXCLUSIVE locks. A live
+    // writer may briefly block them, so migrations get a generous lock and
+    // statement budget separate from the worker statement timeouts.
+    client.batch_execute("SET lock_timeout = '60s'; SET statement_timeout = 0")?;
+    let mut transaction = client.transaction()?;
+    transaction.execute("SELECT pg_advisory_xact_lock($1)", &[&918_274_i64])?;
+    transaction.batch_execute(
         "CREATE SCHEMA IF NOT EXISTS engram_ingest;
          CREATE TABLE IF NOT EXISTS engram_ingest.schema_migrations (
              version bigint PRIMARY KEY,
              applied_at timestamptz NOT NULL DEFAULT now()
          );",
     )?;
-    let mut transaction = client.transaction()?;
-    transaction.execute("SELECT pg_advisory_xact_lock($1)", &[&918_274_i64])?;
     let applied: Vec<i64> = transaction
         .query("SELECT version FROM engram_ingest.schema_migrations", &[])?
         .into_iter()
@@ -94,6 +143,11 @@ pub fn migrate(client: &mut Client) -> Result<(), StoreError> {
     }
     transaction.commit()?;
 
+    // v3 deliberately adds the bank columns as nullable so this guard can fail
+    // cleanly when an existing source has no explicit bank. The operator sets
+    // it in their own connection and reruns migrate().
+    enforce_bank_columns(client)?;
+
     // `CREATE TABLE IF NOT EXISTS` cannot upgrade a table created by an
     // earlier, unreleased shape of this migration. Fail loudly instead of
     // failing later in `load_manifest`.
@@ -105,9 +159,11 @@ pub fn migrate(client: &mut Client) -> Result<(), StoreError> {
         ("jobs", "dedupe_key"),
         ("jobs", "generation"),
         ("jobs", "last_error_class"),
+        ("jobs", "bank_id"),
         ("leases", "token"),
         ("sources", "revision"),
         ("sources", "last_plan_fingerprint"),
+        ("sources", "bank_id"),
         ("tombstones", "generation"),
     ] {
         let exists: bool = client
@@ -131,6 +187,8 @@ pub fn migrate(client: &mut Client) -> Result<(), StoreError> {
         ("chunks", "chunks_source_document_key"),
         ("chunks", "chunks_document_chunk_key"),
         ("jobs", "jobs_source_dedupe_key"),
+        ("sources", "sources_bank_id_format"),
+        ("jobs", "jobs_bank_id_format"),
         ("tombstones", "tombstones_generation_key"),
     ] {
         let exists: bool = client
@@ -150,44 +208,264 @@ pub fn migrate(client: &mut Client) -> Result<(), StoreError> {
             )));
         }
     }
-    let lease_index: bool = client
+    for table in ["sources", "jobs"] {
+        let not_null: bool = client
+            .query_one(
+                "SELECT a.attnotnull
+                   FROM pg_attribute a
+                   JOIN pg_class t ON t.oid = a.attrelid
+                   JOIN pg_namespace n ON n.oid = t.relnamespace
+                  WHERE n.nspname = 'engram_ingest'
+                    AND t.relname = $1 AND a.attname = 'bank_id'",
+                &[&table],
+            )?
+            .get(0);
+        if !not_null {
+            return Err(StoreError::MigrationMismatch(format!(
+                "{table}.bank_id must be NOT NULL"
+            )));
+        }
+    }
+    for index in [
+        "jobs_bank_pending_idx",
+        "jobs_one_leased_per_bank_document_idx",
+    ] {
+        let exists: bool = client
+            .query_one(
+                "SELECT EXISTS (
+                     SELECT 1 FROM pg_indexes
+                      WHERE schemaname = 'engram_ingest'
+                        AND indexname = $1)",
+                &[&index],
+            )?
+            .get(0);
+        if !exists {
+            return Err(StoreError::MigrationMismatch(index.to_string()));
+        }
+    }
+    let lease_index_shape: bool = client
         .query_one(
-            "SELECT EXISTS (
-                 SELECT 1 FROM pg_indexes
-                  WHERE schemaname = 'engram_ingest'
-                    AND indexname = 'jobs_one_leased_per_document_idx')",
+            r#"SELECT COALESCE((
+                   SELECT i.indisunique
+                      AND i.indisvalid
+                      AND i.indnkeyatts = 2
+                      AND i.indrelid = 'engram_ingest.jobs'::regclass
+                      AND pg_get_expr(i.indpred, i.indrelid) = '(state = ''leased''::text)'
+                      AND (
+                          SELECT array_agg(a.attname ORDER BY k.ord)
+                            FROM unnest(i.indkey) WITH ORDINALITY k(attnum, ord)
+                            JOIN pg_attribute a
+                              ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+                           WHERE k.ord <= i.indnkeyatts
+                      ) = ARRAY['bank_id', 'hindsight_document_id']::name[]
+                     FROM pg_index i
+                     JOIN pg_class c ON c.oid = i.indexrelid
+                     JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'engram_ingest'
+                      AND c.relname = 'jobs_one_leased_per_bank_document_idx'
+               ), false)"#,
             &[],
         )?
         .get(0);
-    if !lease_index {
+    if !lease_index_shape {
         return Err(StoreError::MigrationMismatch(
-            "jobs_one_leased_per_document_idx".to_string(),
+            "jobs_one_leased_per_bank_document_idx shape".to_string(),
         ));
     }
     Ok(())
 }
 
+/// Add the v3 bank columns as nullable, then make them NOT NULL once every
+/// existing row has an explicit value. The fast path skips the table locks on
+/// every later startup.
+fn enforce_bank_columns(client: &mut Client) -> Result<(), StoreError> {
+    let ready: bool = client
+        .query_one(
+            "SELECT COALESCE(bool_and(a.attnotnull), false)
+               FROM pg_attribute a
+               JOIN pg_class t ON t.oid = a.attrelid
+               JOIN pg_namespace n ON n.oid = t.relnamespace
+              WHERE n.nspname = 'engram_ingest'
+                AND t.relname IN ('sources', 'jobs')
+                AND a.attname = 'bank_id'
+                AND NOT a.attisdropped",
+            &[],
+        )?
+        .get(0);
+    if ready {
+        return Ok(());
+    }
+
+    let mut transaction = client.transaction()?;
+    transaction.batch_execute("SET LOCAL lock_timeout = '60s'")?;
+    transaction.execute("SELECT pg_advisory_xact_lock($1)", &[&918_274_i64])?;
+    transaction.batch_execute(
+        "LOCK TABLE engram_ingest.sources, engram_ingest.jobs IN ACCESS EXCLUSIVE MODE",
+    )?;
+
+    let null_sources: i64 = transaction
+        .query_one(
+            "SELECT count(*) FROM engram_ingest.sources WHERE bank_id IS NULL",
+            &[],
+        )?
+        .get(0);
+    if null_sources > 0 {
+        transaction.rollback()?;
+        return Err(StoreError::MigrationGuard(format!(
+            "sources.bank_id is unset for {null_sources} source(s); set it explicitly, then rerun migrate()"
+        )));
+    }
+
+    // The bank-wide unique index may block the bank backfill if two sources
+    // produce the same bank document. Drop it, backfill, dedupe, then rebuild.
+    transaction.batch_execute(
+        "DROP INDEX IF EXISTS engram_ingest.jobs_one_leased_per_bank_document_idx",
+    )?;
+    let backfill = transaction.execute(
+        "UPDATE engram_ingest.jobs j
+            SET bank_id = s.bank_id
+           FROM engram_ingest.sources s
+          WHERE j.source_id = s.id
+            AND j.bank_id IS NULL",
+        &[],
+    );
+    if let Err(error) = backfill {
+        if error.code() == Some(&postgres::error::SqlState::UNIQUE_VIOLATION) {
+            transaction.rollback()?;
+            return Err(StoreError::MigrationGuard(
+                "duplicate leased jobs for one bank document; rerun migrate() to requeue the surplus"
+                    .to_string(),
+            ));
+        }
+        return Err(StoreError::Postgres(error));
+    }
+    let null_jobs: i64 = transaction
+        .query_one(
+            "SELECT count(*) FROM engram_ingest.jobs WHERE bank_id IS NULL",
+            &[],
+        )?
+        .get(0);
+    if null_jobs > 0 {
+        transaction.rollback()?;
+        return Err(StoreError::MigrationGuard(format!(
+            "jobs.bank_id is unset for {null_jobs} job(s); rerun migrate() after sources.bank_id is set"
+        )));
+    }
+
+    // v4 could not build the bank-wide lease index while bank ids were NULL.
+    // Now that the backfill is complete, refuse to revoke live duplicate
+    // leases (that would let a stale in-flight write overtake a requeued job).
+    let live_duplicates: i64 = transaction
+        .query_one(
+            "SELECT count(*) FROM (
+                 SELECT 1
+                   FROM engram_ingest.jobs j
+                   JOIN engram_ingest.leases l ON l.job_id = j.id
+                  WHERE j.state = 'leased'
+                    AND l.expires_at > now()
+                  GROUP BY j.bank_id, j.hindsight_document_id
+                 HAVING count(*) > 1
+             ) duplicates",
+            &[],
+        )?
+        .get(0);
+    if live_duplicates > 0 {
+        transaction.rollback()?;
+        return Err(StoreError::MigrationGuard(format!(
+            "live duplicate leases exist for {live_duplicates} bank document(s); stop ingest workers, let leases expire or drain them, then rerun migrate()"
+        )));
+    }
+
+    transaction.batch_execute(
+        "WITH ranked AS (
+             SELECT j.id, l.expires_at,
+                    row_number() OVER (
+                        PARTITION BY j.bank_id, j.hindsight_document_id
+                        ORDER BY (l.expires_at > now()) DESC, j.id ASC
+                    ) AS rank
+               FROM engram_ingest.jobs j
+               JOIN engram_ingest.leases l ON l.job_id = j.id
+              WHERE j.state = 'leased'
+         ),
+         deleted AS (
+             DELETE FROM engram_ingest.leases l
+              USING ranked r
+              WHERE l.job_id = r.id AND r.rank > 1 AND r.expires_at <= now()
+             RETURNING l.job_id
+         )
+         UPDATE engram_ingest.jobs j
+            SET state = 'pending', run_after = now(),
+                last_error = 'duplicate lease requeued by bank-document migration',
+                last_error_class = 'transient', updated_at = now()
+           FROM deleted d
+          WHERE j.id = d.job_id;
+         CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_leased_per_bank_document_idx
+             ON engram_ingest.jobs (bank_id, hindsight_document_id)
+             WHERE state = 'leased';
+         DROP INDEX IF EXISTS engram_ingest.jobs_one_leased_per_document_idx;",
+    )?;
+
+    let error = transaction
+        .batch_execute(
+            "ALTER TABLE engram_ingest.sources ALTER COLUMN bank_id SET NOT NULL;
+             ALTER TABLE engram_ingest.jobs ALTER COLUMN bank_id SET NOT NULL;",
+        )
+        .err();
+    if let Some(error) = error {
+        if error.code() == Some(&postgres::error::SqlState::NOT_NULL_VIOLATION) {
+            transaction.rollback()?;
+            return Err(StoreError::MigrationGuard(
+                "a concurrent writer inserted a null bank id; rerun migrate()".to_string(),
+            ));
+        }
+        return Err(StoreError::Postgres(error));
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
 pub fn upsert_source(client: &mut Client, source: &SourceRecord) -> Result<i64, StoreError> {
-    let row = client.query_one(
+    if !is_valid_bank_id(&source.bank_id) {
+        return Err(StoreError::InvalidBank(source.bank_id.clone()));
+    }
+    let mut transaction = client.transaction()?;
+    let row = transaction.query_opt(
         "INSERT INTO engram_ingest.sources
-             (project, tag, root, docs_include, docs_exclude, document_format)
-         VALUES ($1, $2, $3, $4, $5, $6)
+             (project, tag, root, bank_id, docs_include, docs_exclude, document_format)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (project, tag, root) DO UPDATE SET
              docs_include = EXCLUDED.docs_include,
              docs_exclude = EXCLUDED.docs_exclude,
              document_format = EXCLUDED.document_format,
              updated_at = now()
+         WHERE engram_ingest.sources.bank_id = EXCLUDED.bank_id
          RETURNING id",
         &[
             &source.project,
             &source.tag,
             &source.root,
+            &source.bank_id,
             &source.docs_include,
             &source.docs_exclude,
             &source.document_format,
         ],
     )?;
-    Ok(row.get(0))
+    let Some(row) = row else {
+        let existing: Option<String> = transaction
+            .query_opt(
+                "SELECT bank_id FROM engram_ingest.sources
+                  WHERE project = $1 AND tag = $2 AND root = $3",
+                &[&source.project, &source.tag, &source.root],
+            )?
+            .map(|row| row.get(0));
+        transaction.rollback()?;
+        return Err(StoreError::BankChanged(
+            existing.unwrap_or_else(|| "<unknown>".to_string()),
+        ));
+    };
+    let id = row.get(0);
+    transaction.commit()?;
+    Ok(id)
 }
 
 pub fn load_manifest(client: &mut Client, source_id: i64) -> Result<Manifest, StoreError> {
@@ -274,12 +552,13 @@ pub fn apply_reconciliation(
     }
     let mut transaction = client.transaction()?;
     let revision_row = transaction.query_one(
-        "SELECT revision, last_plan_fingerprint
+        "SELECT revision, last_plan_fingerprint, bank_id
            FROM engram_ingest.sources WHERE id = $1 FOR UPDATE",
         &[&source_id],
     )?;
     let revision: i64 = revision_row.get(0);
     let last_fingerprint: Option<Vec<u8>> = revision_row.get(1);
+    let bank_id: String = revision_row.get(2);
     let fingerprint = plan_fingerprint(reconciliation)?;
     if revision != reconciliation.base_revision {
         let is_immediate_replay = revision == reconciliation.base_revision + 1
@@ -381,11 +660,12 @@ pub fn apply_reconciliation(
             );
             let inserted = transaction.execute(
                 "INSERT INTO engram_ingest.jobs
-                     (source_id, kind, hindsight_document_id, dedupe_key, generation, payload, state, run_after)
-                 VALUES ($1, 'retain', $2, $3, $4, $5, 'pending', $6)
+                     (source_id, bank_id, kind, hindsight_document_id, dedupe_key, generation, payload, state, run_after)
+                 VALUES ($1, $2, 'retain', $3, $4, $5, $6, 'pending', $7)
                  ON CONFLICT (source_id, dedupe_key) DO NOTHING",
                 &[
                     &source_id,
+                    &bank_id,
                     &call.document_id,
                     &dedupe_key,
                     &generation,
@@ -441,11 +721,12 @@ pub fn apply_reconciliation(
         );
         let inserted = transaction.execute(
             "INSERT INTO engram_ingest.jobs
-                 (source_id, kind, hindsight_document_id, dedupe_key, generation, payload, state, run_after)
-             VALUES ($1, 'delete', $2, $3, $4, $5, 'pending', $6)
+                 (source_id, bank_id, kind, hindsight_document_id, dedupe_key, generation, payload, state, run_after)
+             VALUES ($1, $2, 'delete', $3, $4, $5, $6, 'pending', $7)
              ON CONFLICT (source_id, dedupe_key) DO NOTHING",
             &[
                 &source_id,
+                &bank_id,
                 &delete.hindsight_document_id,
                 &dedupe_key,
                 &delete.generation,
@@ -520,47 +801,57 @@ fn plan_fingerprint(reconciliation: &Reconciliation) -> Result<ContentHash, Stor
 
 pub fn claim_job(
     client: &mut Client,
+    bank_id: &str,
     owner: &str,
     ttl: Duration,
     now: DateTime<Utc>,
 ) -> Result<Option<ClaimedJob>, StoreError> {
     // A concurrent claim for the same document can lose the partial unique
     // index race; retry so the caller transparently picks another job.
+    let mut contention = None;
     for _ in 0..3 {
-        match try_claim_job(client, owner, ttl, now) {
+        match try_claim_job(client, bank_id, owner, ttl, now) {
             Ok(result) => return Ok(result),
             Err(StoreError::Postgres(error))
-                if error.code() == Some(&postgres::error::SqlState::UNIQUE_VIOLATION) => {}
+                if error.code() == Some(&postgres::error::SqlState::UNIQUE_VIOLATION) =>
+            {
+                contention = Some(StoreError::Postgres(error));
+            }
             Err(error) => return Err(error),
         }
     }
-    Ok(None)
+    // Persistent contention is a ledger problem, not an empty queue. Surface it
+    // so the slot backs off and records a ledger error.
+    match contention {
+        Some(error) => Err(error),
+        None => Ok(None),
+    }
 }
 
 fn try_claim_job(
     client: &mut Client,
+    bank_id: &str,
     owner: &str,
     ttl: Duration,
     now: DateTime<Utc>,
 ) -> Result<Option<ClaimedJob>, StoreError> {
     let mut transaction = client.transaction()?;
     let row = transaction.query_opt(
-        "SELECT j.id, j.kind, j.payload
+        "SELECT j.id, j.kind, j.payload, j.bank_id
            FROM engram_ingest.jobs j
-          WHERE j.state = 'pending' AND j.run_after <= $1
+          WHERE j.bank_id = $2
+            AND j.state = 'pending' AND j.run_after <= $1
             AND NOT EXISTS (
                 SELECT 1
                   FROM engram_ingest.jobs leased
-                  JOIN engram_ingest.leases l ON l.job_id = leased.id
-                 WHERE leased.source_id = j.source_id
+                 WHERE leased.bank_id = j.bank_id
                    AND leased.hindsight_document_id = j.hindsight_document_id
                    AND leased.state = 'leased'
-                   AND l.expires_at > $1
             )
             AND NOT EXISTS (
                 SELECT 1
                   FROM engram_ingest.jobs earlier
-                 WHERE earlier.source_id = j.source_id
+                 WHERE earlier.bank_id = j.bank_id
                    AND earlier.hindsight_document_id = j.hindsight_document_id
                    AND earlier.id < j.id
                    AND earlier.state IN ('pending', 'leased')
@@ -568,7 +859,7 @@ fn try_claim_job(
           ORDER BY j.id
           FOR UPDATE SKIP LOCKED
           LIMIT 1",
-        &[&now],
+        &[&now, &bank_id],
     )?;
     let Some(row) = row else {
         transaction.commit()?;
@@ -577,6 +868,7 @@ fn try_claim_job(
     let job_id: i64 = row.get(0);
     let kind: String = row.get(1);
     let payload: Value = row.get(2);
+    let job_bank_id: String = row.get(3);
     let expires_at = now + ttl;
     let token = crate::jobs::new_claim_token();
     transaction.execute(
@@ -595,6 +887,7 @@ fn try_claim_job(
         job_id,
         owner: owner.to_string(),
         token,
+        bank_id: job_bank_id,
         kind,
         payload,
         expires_at,
@@ -662,26 +955,141 @@ pub fn heartbeat_job(
     Ok(expires_at)
 }
 
-/// Startup recovery: reclaim leases whose owner died, incrementing attempts so
-/// a permanently crashing sink eventually reaches `dead`.
+/// True while the claim's opaque token still owns an unexpired lease. Used
+/// immediately before a Hindsight mutation so a paused worker cannot dispatch a
+/// stale operation after another worker recovered the job.
+pub fn lease_is_active(
+    client: &mut Client,
+    job_id: i64,
+    token: &str,
+    now: DateTime<Utc>,
+) -> Result<bool, StoreError> {
+    let row = client.query_opt(
+        "SELECT 1 FROM engram_ingest.leases
+          WHERE job_id = $1 AND token = $2 AND expires_at > $3",
+        &[&job_id, &token, &now],
+    )?;
+    Ok(row.is_some())
+}
+
+/// Startup recovery across every bank. Configured-bank accounting includes the
+/// attempt increment that eventually marks a permanently crashing job `dead`.
 pub fn recover_expired_leases(
     client: &mut Client,
     now: DateTime<Utc>,
-) -> Result<usize, StoreError> {
-    let mut transaction = client.transaction()?;
-    let rows = transaction.query(
-        "SELECT j.id, j.attempts, j.max_attempts
+) -> Result<RecoveryReport, StoreError> {
+    recover_expired_leases_filtered(client, now, None, None, None)
+}
+
+/// Recovery used by a running worker: only this bank's leases, with normal
+/// attempt accounting.
+pub fn recover_expired_leases_in_bank(
+    client: &mut Client,
+    bank_id: &str,
+    now: DateTime<Utc>,
+) -> Result<RecoveryReport, StoreError> {
+    recover_expired_leases_filtered(client, now, Some(bank_id), None, None)
+}
+
+/// Startup recovery for a multi-bank worker. Leases for banks that are not in
+/// `configured_banks` are requeued without consuming an attempt, so a bank that
+/// was temporarily removed from config cannot exhaust its retry budget while no
+/// worker is serving it.
+pub fn recover_expired_leases_for_banks(
+    client: &mut Client,
+    configured_banks: &[String],
+    now: DateTime<Utc>,
+) -> Result<RecoveryReport, StoreError> {
+    let configured: BTreeSet<&str> = configured_banks.iter().map(String::as_str).collect();
+    recover_expired_leases_filtered(client, now, None, Some(&configured), None)
+}
+
+/// Startup recovery restricted to banks that are not configured in this worker.
+/// Those leases are stranded: requeue them without consuming an attempt.
+pub fn recover_expired_leases_outside_banks(
+    client: &mut Client,
+    configured_banks: &[String],
+    now: DateTime<Utc>,
+) -> Result<RecoveryReport, StoreError> {
+    let configured: BTreeSet<&str> = configured_banks.iter().map(String::as_str).collect();
+    let excluded = configured_banks.to_vec();
+    recover_expired_leases_filtered(client, now, None, Some(&configured), Some(&excluded))
+}
+
+/// Expired leases still held by banks outside the worker config. Used for the
+/// startup stranded gauge after the bounded recovery loop finishes.
+pub fn count_stranded_expired_leases(
+    client: &mut Client,
+    configured_banks: &[String],
+    now: DateTime<Utc>,
+) -> Result<i64, StoreError> {
+    let configured = configured_banks.to_vec();
+    let row = client.query_one(
+        "SELECT count(*)
            FROM engram_ingest.jobs j
            JOIN engram_ingest.leases l ON l.job_id = j.id
-          WHERE j.state = 'leased' AND l.expires_at <= $1
-          FOR UPDATE OF j SKIP LOCKED",
-        &[&now],
+          WHERE j.state = 'leased'
+            AND l.expires_at <= $1
+            AND j.bank_id <> ALL($2)",
+        &[&now, &configured],
     )?;
-    let mut count = 0usize;
+    Ok(row.get(0))
+}
+
+fn recover_expired_leases_filtered(
+    client: &mut Client,
+    now: DateTime<Utc>,
+    bank_filter: Option<&str>,
+    configured_banks: Option<&BTreeSet<&str>>,
+    excluded_banks: Option<&Vec<String>>,
+) -> Result<RecoveryReport, StoreError> {
+    let mut transaction = client.transaction()?;
+    let sql = if bank_filter.is_some() {
+        format!(
+            "SELECT j.id, j.attempts, j.max_attempts, j.bank_id
+               FROM engram_ingest.jobs j
+               JOIN engram_ingest.leases l ON l.job_id = j.id
+              WHERE j.state = 'leased' AND l.expires_at <= $1 AND j.bank_id = $2
+              ORDER BY j.id
+              LIMIT {RECOVERY_BATCH}
+              FOR UPDATE OF j SKIP LOCKED"
+        )
+    } else if excluded_banks.is_some() {
+        format!(
+            "SELECT j.id, j.attempts, j.max_attempts, j.bank_id
+               FROM engram_ingest.jobs j
+               JOIN engram_ingest.leases l ON l.job_id = j.id
+              WHERE j.state = 'leased' AND l.expires_at <= $1
+                AND j.bank_id <> ALL($2)
+              ORDER BY j.id
+              LIMIT {RECOVERY_BATCH}
+              FOR UPDATE OF j SKIP LOCKED"
+        )
+    } else {
+        format!(
+            "SELECT j.id, j.attempts, j.max_attempts, j.bank_id
+               FROM engram_ingest.jobs j
+               JOIN engram_ingest.leases l ON l.job_id = j.id
+              WHERE j.state = 'leased' AND l.expires_at <= $1
+              ORDER BY j.id
+              LIMIT {RECOVERY_BATCH}
+              FOR UPDATE OF j SKIP LOCKED"
+        )
+    };
+    let rows = if let Some(bank_id) = bank_filter {
+        transaction.query(&sql, &[&now, &bank_id])?
+    } else if let Some(excluded) = excluded_banks {
+        transaction.query(&sql, &[&now, &excluded])?
+    } else {
+        transaction.query(&sql, &[&now])?
+    };
+    let mut report = RecoveryReport::default();
     for row in rows {
+        report.scanned += 1;
         let job_id: i64 = row.get(0);
         let attempts: i32 = row.get(1);
         let max_attempts: i32 = row.get(2);
+        let bank_id: String = row.get(3);
         // A heartbeat may have extended the lease after the SELECT. Only the
         // transaction that actually removes the still-expired lease may requeue
         // the job; otherwise a live worker would lose its lease.
@@ -693,9 +1101,25 @@ pub fn recover_expired_leases(
         if deleted == 0 {
             continue;
         }
+
+        let stranded = configured_banks.is_some_and(|banks| !banks.contains(bank_id.as_str()));
+        if stranded {
+            transaction.execute(
+                "UPDATE engram_ingest.jobs
+                    SET state = 'pending', run_after = $2,
+                        last_error = 'lease expired (bank not configured)',
+                        last_error_class = 'transient', updated_at = $2
+                  WHERE id = $1",
+                &[&job_id, &now],
+            )?;
+            report.stranded += 1;
+            continue;
+        }
+
         let next_attempts = attempts + 1;
         let dead = next_attempts >= max_attempts;
-        let run_after = now + Duration::milliseconds(RETRY_BASE_MS * (1_i64 << attempts));
+        let shift = attempts.clamp(0, 31);
+        let run_after = now + Duration::milliseconds(RETRY_BASE_MS.saturating_mul(1_i64 << shift));
         transaction.execute(
             "UPDATE engram_ingest.jobs
                 SET state = $2, attempts = $3, run_after = $4,
@@ -710,10 +1134,14 @@ pub fn recover_expired_leases(
                 &now,
             ],
         )?;
-        count += 1;
+        if dead {
+            report.dead += 1;
+        } else {
+            report.requeued += 1;
+        }
     }
     transaction.commit()?;
-    Ok(count)
+    Ok(report)
 }
 
 pub fn fail_job(
@@ -723,7 +1151,7 @@ pub fn fail_job(
     now: DateTime<Utc>,
     error_class: &str,
     error: &str,
-) -> Result<(), StoreError> {
+) -> Result<FailDisposition, StoreError> {
     let mut transaction = client.transaction()?;
     let row = transaction.query_opt(
         "SELECT j.attempts, j.max_attempts
@@ -742,7 +1170,8 @@ pub fn fail_job(
     let max_attempts: i32 = row.get(1);
     let next_attempts = attempts + 1;
     let dead = next_attempts >= max_attempts;
-    let run_after = now + Duration::milliseconds(RETRY_BASE_MS * (1_i64 << attempts));
+    let shift = attempts.clamp(0, 31);
+    let run_after = now + Duration::milliseconds(RETRY_BASE_MS.saturating_mul(1_i64 << shift));
     transaction.execute(
         "UPDATE engram_ingest.jobs
             SET state = $2, attempts = $3, run_after = $4,
@@ -763,7 +1192,11 @@ pub fn fail_job(
         &[&job_id, &token],
     )?;
     transaction.commit()?;
-    Ok(())
+    Ok(if dead {
+        FailDisposition::Dead
+    } else {
+        FailDisposition::RetryScheduled
+    })
 }
 
 #[cfg(test)]
@@ -797,7 +1230,19 @@ mod tests {
             .all(|pair| pair[0].version < pair[1].version));
         assert_eq!(
             MIGRATIONS.last().map(|migration| migration.version),
-            Some(2)
+            Some(4)
         );
+    }
+
+    #[test]
+    fn bank_ids_are_path_segment_safe() {
+        assert!(is_valid_bank_id("kubernaut-docs"));
+        assert!(is_valid_bank_id("hindsight_docs.v2"));
+        assert!(!is_valid_bank_id(""));
+        assert!(!is_valid_bank_id("with space"));
+        assert!(!is_valid_bank_id("slash/inside"));
+        assert!(!is_valid_bank_id("."));
+        assert!(!is_valid_bank_id(".."));
+        assert!(!is_valid_bank_id(&"a".repeat(129)));
     }
 }

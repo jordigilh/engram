@@ -110,6 +110,7 @@ fn malformed_and_unknown_payloads_fail_closed() {
         job_id: 1,
         owner: "test".into(),
         token: "token".into(),
+        bank_id: "repo-docs".into(),
         kind: "retain".into(),
         payload: serde_json::json!({"document_id": "repo--a"}),
         expires_at: Utc::now(),

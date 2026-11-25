@@ -217,9 +217,26 @@ fn synthesis_intermediates_match_python() {
         );
         assert_eq!(actual.tfidf.len(), expected.tfidf.len(), "rows: {context}");
         for (row, (actual, expected)) in actual.tfidf.iter().zip(&expected.tfidf).enumerate() {
+            let expected_sparse: Vec<(usize, f64)> = expected
+                .iter()
+                .enumerate()
+                .filter(|(_, value)| **value != 0.0)
+                .map(|(index, value)| (index, *value))
+                .collect();
+            assert_eq!(
+                actual.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+                expected_sparse
+                    .iter()
+                    .map(|(index, _)| *index)
+                    .collect::<Vec<_>>(),
+                "{context} tfidf columns row {row}"
+            );
             assert_close(
-                actual,
-                expected,
+                &actual.iter().map(|(_, value)| *value).collect::<Vec<_>>(),
+                &expected_sparse
+                    .iter()
+                    .map(|(_, value)| *value)
+                    .collect::<Vec<_>>(),
                 1.0e-9,
                 &format!("{context} tfidf row {row}"),
             );

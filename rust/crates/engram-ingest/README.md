@@ -11,7 +11,7 @@ the docs-parity half of slice 3).
 - Stable docs base IDs and heading-hash chunk keys, including the heading-less
   `chunk{i}` fallback.
 - Deterministic synthesis (`key_sentences`, `keywords`) matching the Python
-  implementation.
+  implementation, using sparse TF-IDF rows for sentence similarity.
 - Lease/retry/recovery state machine and a convergence harness against a real
   Postgres.
 
@@ -43,13 +43,20 @@ shadow run, issues/transcripts, service switch, then Python/CocoIndex removal
 - **Duplicate heading lines collapse to the last section.** Python emits two
   retains with the same document id; Hindsight's final state is the later one,
   so the ledger keeps one chunk per id (last occurrence) and replay converges.
-- **Apply is retry-idempotent.** Jobs carry a deterministic dedupe key (retain:
-  payload hash + generation; delete: chunk generation + hash) and tombstones a
-  unique `(source, document id, reason, generation)`, so re-applying the same
-  reconciliation after a lost commit acknowledgement adds no jobs or tombstones.
+- **Apply is retry-idempotent and revision-fenced.** Sources carry a monotonic
+  revision. A matching immediate replay is a no-op; an older plan is rejected
+  with `StaleReconciliation`, and deletes re-check the planned generation.
+  Jobs carry a deterministic dedupe key (retain: retain revision + payload hash;
+  delete: chunk generation + hash) and tombstones a unique
+  `(source, document id, reason, generation)`. A retried retain and an
+  A→B→A payload return both enqueue exactly one new sink job.
 - **Per-document jobs run in ledger order.** A pending earlier job (including
   one in retry backoff) blocks later jobs for the same document; a stale delete
-  can never run after a newer restore.
+  can never run after a newer restore. Claims carry an opaque token, so a
+  delayed completion from a reaped worker cannot touch the replacement lease.
+- **Renames that keep a base id transfer ownership.** The old path's delete is
+  dropped when the same document id is retained by a live path; two live paths
+  producing one id are rejected as a scan conflict.
 - **Whitespace-only files emit nothing**, matching `process_doc_file`'s early
   return. Previously retained chunks are not deleted.
 - **`source=cocoindex` metadata is preserved** by contract
@@ -90,8 +97,9 @@ ENGRAM_INGEST_TEST_DATABASE_URL='postgresql://hindsight@/engram_ingest_test?host
   cargo test -p engram-ingest --test ledger_postgres
 ```
 
-It truncates the `engram_ingest` tables and refuses any database name without
-`test`. CI runs it against a `pgvector/pgvector:pg16` service.
+It truncates the `engram_ingest` tables and refuses any database whose name is
+not exactly `engram_ingest_test`. CI runs it against a `pgvector/pgvector:pg16`
+service.
 
 ## Local gates
 

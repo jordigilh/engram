@@ -39,7 +39,9 @@ pub struct Synthesis {
 pub struct Analysis {
     pub sentences: Vec<String>,
     pub vocabulary: Vec<String>,
-    pub tfidf: Vec<Vec<f64>>,
+    /// Sparse `(term index, weight)` rows; dense matrices are quadratic in
+    /// sentences and terms and are not needed for selection.
+    pub tfidf: Vec<Vec<(usize, f64)>>,
     pub row_sums: Vec<f64>,
     pub ranks: Vec<f64>,
     pub keyword_scores: Vec<f64>,
@@ -181,25 +183,33 @@ pub fn analyze(text: &str) -> Result<Analysis, SynthesisError> {
         .map(|df| ((1.0 + n as f64) / (1.0 + df)).ln() + 1.0)
         .collect();
 
-    let mut tfidf = vec![vec![0.0; vocabulary.len()]; n];
-    for (row, map) in counts.iter().enumerate() {
-        for (term, count) in map {
-            let column = vocabulary_index[term.as_str()];
-            tfidf[row][column] = f64::from(*count) * idf[column];
-        }
-        let norm = tfidf[row]
+    let mut tfidf: Vec<Vec<(usize, f64)>> = Vec::with_capacity(n);
+    for map in &counts {
+        let mut row: Vec<(usize, f64)> = map
             .iter()
-            .map(|value| value * value)
+            .map(|(term, count)| {
+                let column = vocabulary_index[term.as_str()];
+                (column, f64::from(*count) * idf[column])
+            })
+            .collect();
+        row.sort_unstable_by_key(|(column, _)| *column);
+        let norm = row
+            .iter()
+            .map(|(_, value)| value * value)
             .sum::<f64>()
             .sqrt();
         if norm != 0.0 {
-            for value in &mut tfidf[row] {
+            for (_, value) in &mut row {
                 *value /= norm;
             }
         }
+        tfidf.push(row);
     }
 
-    let row_sums: Vec<f64> = tfidf.iter().map(|row| row.iter().sum()).collect();
+    let row_sums: Vec<f64> = tfidf
+        .iter()
+        .map(|row| row.iter().map(|(_, value)| value).sum())
+        .collect();
     let weights = similarity_weights(&tfidf);
     let edge_count = weights
         .iter()
@@ -229,9 +239,12 @@ pub fn analyze(text: &str) -> Result<Analysis, SynthesisError> {
     let mut key_indices = order[..n_keep.min(n)].to_vec();
     key_indices.sort_unstable();
 
-    let keyword_scores: Vec<f64> = (0..vocabulary.len())
-        .map(|column| tfidf.iter().map(|row| row[column]).sum())
-        .collect();
+    let mut keyword_scores = vec![0.0; vocabulary.len()];
+    for row in &tfidf {
+        for (column, value) in row {
+            keyword_scores[*column] += value;
+        }
+    }
     let mut keyword_order: Vec<usize> = (0..vocabulary.len()).collect();
     keyword_order.sort_by(|&left, &right| {
         keyword_scores[right]
@@ -282,17 +295,13 @@ pub fn synthesize_document(doc_id: &str, text: &str) -> Result<Synthesis, Synthe
     })
 }
 
-/// sklearn `cosine_similarity` on L2-normalised rows, with the diagonal zeroed.
-fn similarity_weights(tfidf: &[Vec<f64>]) -> Vec<Vec<f64>> {
+/// sklearn `cosine_similarity` on L2-normalised sparse rows, diagonal zeroed.
+fn similarity_weights(tfidf: &[Vec<(usize, f64)>]) -> Vec<Vec<f64>> {
     let n = tfidf.len();
     let mut weights = vec![vec![0.0; n]; n];
     for left in 0..n {
         for right in (left + 1)..n {
-            let similarity: f64 = tfidf[left]
-                .iter()
-                .zip(&tfidf[right])
-                .map(|(a, b)| a * b)
-                .sum();
+            let similarity = sparse_dot(&tfidf[left], &tfidf[right]);
             if similarity > SIMILARITY_THRESHOLD {
                 weights[left][right] = similarity;
                 weights[right][left] = similarity;
@@ -300,6 +309,22 @@ fn similarity_weights(tfidf: &[Vec<f64>]) -> Vec<Vec<f64>> {
         }
     }
     weights
+}
+
+fn sparse_dot(left: &[(usize, f64)], right: &[(usize, f64)]) -> f64 {
+    let (mut i, mut j, mut sum) = (0usize, 0usize, 0.0);
+    while i < left.len() && j < right.len() {
+        match left[i].0.cmp(&right[j].0) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                sum += left[i].1 * right[j].1;
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    sum
 }
 
 /// networkx 3.x `_pagerank_scipy` for an undirected weighted graph.

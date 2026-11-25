@@ -29,6 +29,10 @@ pub enum StoreError {
     InvalidState(String),
     #[error("ledger schema is missing {0}; recreate the unreleased engram_ingest schema")]
     MigrationMismatch(String),
+    #[error("scan has conflicting live paths for document id {0}")]
+    ScanConflict(String),
+    #[error("reconciliation is based on an obsolete source revision; reload the manifest")]
+    StaleReconciliation,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -44,6 +48,7 @@ pub struct ApplySummary {
 pub struct ClaimedJob {
     pub job_id: i64,
     pub owner: String,
+    pub token: String,
     pub kind: String,
     pub payload: Value,
     pub expires_at: DateTime<Utc>,
@@ -61,8 +66,13 @@ pub fn migrate(client: &mut Client) -> Result<(), StoreError> {
     for (table, column) in [
         ("chunks", "source_id"),
         ("chunks", "generation"),
+        ("chunks", "retain_revision"),
+        ("chunks", "last_retain_sha256"),
         ("jobs", "dedupe_key"),
         ("jobs", "generation"),
+        ("leases", "token"),
+        ("sources", "revision"),
+        ("sources", "last_plan_fingerprint"),
         ("tombstones", "generation"),
     ] {
         let exists: bool = client
@@ -147,7 +157,17 @@ pub fn upsert_source(client: &mut Client, source: &SourceRecord) -> Result<i64, 
 
 pub fn load_manifest(client: &mut Client, source_id: i64) -> Result<Manifest, StoreError> {
     let mut manifest = Manifest::default();
-    let document_rows = client.query(
+    // Documents and chunks must come from one committed snapshot; the default
+    // READ COMMITTED would let a concurrent apply split them across two states.
+    let mut transaction = client.transaction()?;
+    transaction.batch_execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")?;
+    manifest.revision = transaction
+        .query_one(
+            "SELECT revision FROM engram_ingest.sources WHERE id = $1",
+            &[&source_id],
+        )?
+        .get(0);
+    let document_rows = transaction.query(
         "SELECT relative_path, content_sha256, size_bytes, layout_version, state
            FROM engram_ingest.documents
           WHERE source_id = $1
@@ -171,7 +191,7 @@ pub fn load_manifest(client: &mut Client, source_id: i64) -> Result<Manifest, St
         );
     }
 
-    let chunk_rows = client.query(
+    let chunk_rows = transaction.query(
         "SELECT d.relative_path, c.hindsight_document_id, c.chunk_key,
                 c.content_sha256, c.ordinal, c.state, c.generation
            FROM engram_ingest.chunks c
@@ -199,6 +219,7 @@ pub fn load_manifest(client: &mut Client, source_id: i64) -> Result<Manifest, St
             },
         );
     }
+    transaction.commit()?;
     Ok(manifest)
 }
 
@@ -208,7 +229,32 @@ pub fn apply_reconciliation(
     reconciliation: &Reconciliation,
     now: DateTime<Utc>,
 ) -> Result<ApplySummary, StoreError> {
+    if reconciliation.is_empty() {
+        return Ok(ApplySummary::default());
+    }
+    if let Some(conflict) = reconciliation.conflicts.first() {
+        return Err(StoreError::ScanConflict(
+            conflict.hindsight_document_id.clone(),
+        ));
+    }
     let mut transaction = client.transaction()?;
+    let revision_row = transaction.query_one(
+        "SELECT revision, last_plan_fingerprint
+           FROM engram_ingest.sources WHERE id = $1 FOR UPDATE",
+        &[&source_id],
+    )?;
+    let revision: i64 = revision_row.get(0);
+    let last_fingerprint: Option<Vec<u8>> = revision_row.get(1);
+    let fingerprint = plan_fingerprint(reconciliation)?;
+    if revision != reconciliation.base_revision {
+        let is_immediate_replay = revision == reconciliation.base_revision + 1
+            && last_fingerprint.as_deref() == Some(fingerprint.as_bytes());
+        transaction.rollback()?;
+        if is_immediate_replay {
+            return Ok(ApplySummary::default());
+        }
+        return Err(StoreError::StaleReconciliation);
+    }
     let mut summary = ApplySummary {
         retained_files: reconciliation.retain.len(),
         retained_chunks: 0,
@@ -243,39 +289,6 @@ pub fn apply_reconciliation(
             .get(0);
 
         for (ordinal, call) in file.calls.iter().enumerate() {
-            // A re-add of byte-identical content keeps its generation; a new
-            // content or a resurrected chunk gets a fresh one so a later
-            // delete is not suppressed by the old delete job's dedupe key.
-            let generation: i32 = transaction
-                .query_one(
-                    "INSERT INTO engram_ingest.chunks
-                         (source_id, document_id, hindsight_document_id, chunk_key,
-                          content_sha256, ordinal, generation, state)
-                     VALUES ($1, $2, $3, $4, $5, $6, 1, 'active')
-                     ON CONFLICT (source_id, hindsight_document_id) DO UPDATE SET
-                         document_id = EXCLUDED.document_id,
-                         chunk_key = EXCLUDED.chunk_key,
-                         content_sha256 = EXCLUDED.content_sha256,
-                         ordinal = EXCLUDED.ordinal,
-                         generation = CASE
-                             WHEN chunks.content_sha256 = EXCLUDED.content_sha256
-                                  AND chunks.state = 'active'
-                             THEN chunks.generation
-                             ELSE chunks.generation + 1
-                         END,
-                         state = 'active',
-                         tombstoned_at = NULL
-                     RETURNING generation",
-                    &[
-                        &source_id,
-                        &document_id,
-                        &call.document_id,
-                        &call.chunk_key,
-                        &call.content_sha256.as_bytes().to_vec(),
-                        &(ordinal as i32),
-                    ],
-                )?
-                .get(0);
             let payload = serde_json::json!({
                 "document_id": call.document_id,
                 "content": call.content,
@@ -283,11 +296,53 @@ pub fn apply_reconciliation(
                 "tags": call.tags,
                 "timestamp": call.timestamp,
             });
+            let payload_hash = ContentHash::of(&serde_json::to_vec(&payload)?);
+            // Generation changes on content/resurrection (delete ordering);
+            // retain_revision changes whenever the payload differs from the
+            // last applied payload, so A->B->A enqueues the final A while a
+            // replay of the same reconciliation stays a no-op.
+            let row = transaction.query_one(
+                "INSERT INTO engram_ingest.chunks
+                     (source_id, document_id, hindsight_document_id, chunk_key,
+                      content_sha256, ordinal, generation, retain_revision,
+                      last_retain_sha256, state)
+                 VALUES ($1, $2, $3, $4, $5, $6, 1, 1, $7, 'active')
+                 ON CONFLICT (source_id, hindsight_document_id) DO UPDATE SET
+                     document_id = EXCLUDED.document_id,
+                     chunk_key = EXCLUDED.chunk_key,
+                     content_sha256 = EXCLUDED.content_sha256,
+                     ordinal = EXCLUDED.ordinal,
+                     generation = CASE
+                         WHEN chunks.content_sha256 = EXCLUDED.content_sha256
+                              AND chunks.state = 'active'
+                         THEN chunks.generation
+                         ELSE chunks.generation + 1
+                     END,
+                     retain_revision = CASE
+                         WHEN chunks.last_retain_sha256 IS NOT DISTINCT FROM EXCLUDED.last_retain_sha256
+                              AND chunks.state = 'active'
+                         THEN chunks.retain_revision
+                         ELSE chunks.retain_revision + 1
+                     END,
+                     last_retain_sha256 = EXCLUDED.last_retain_sha256,
+                     state = 'active',
+                     tombstoned_at = NULL
+                 RETURNING generation, retain_revision",
+                &[
+                    &source_id,
+                    &document_id,
+                    &call.document_id,
+                    &call.chunk_key,
+                    &call.content_sha256.as_bytes().to_vec(),
+                    &(ordinal as i32),
+                    &payload_hash.as_bytes().to_vec(),
+                ],
+            )?;
+            let generation: i32 = row.get(0);
+            let retain_revision: i32 = row.get(1);
             let dedupe_key = format!(
                 "retain:{}:{}:{}",
-                call.document_id,
-                generation,
-                ContentHash::of(&serde_json::to_vec(&payload)?)
+                call.document_id, retain_revision, payload_hash
             );
             let inserted = transaction.execute(
                 "INSERT INTO engram_ingest.jobs
@@ -309,12 +364,23 @@ pub fn apply_reconciliation(
     }
 
     for delete in &reconciliation.deletes {
-        transaction.execute(
+        // A stale plan (loaded before a concurrent retain changed the chunk)
+        // must not tombstone the newer generation or queue a sink delete.
+        let updated = transaction.execute(
             "UPDATE engram_ingest.chunks
                 SET state = 'tombstoned', tombstoned_at = $3
-              WHERE source_id = $1 AND hindsight_document_id = $2",
-            &[&source_id, &delete.hindsight_document_id, &now],
+              WHERE source_id = $1 AND hindsight_document_id = $2
+                AND generation = $4 AND state = 'active'",
+            &[
+                &source_id,
+                &delete.hindsight_document_id,
+                &now,
+                &delete.generation,
+            ],
         )?;
+        if updated == 0 {
+            continue;
+        }
         transaction.execute(
             "INSERT INTO engram_ingest.tombstones
                  (source_id, document_id, hindsight_document_id, relative_path, reason, generation)
@@ -355,6 +421,13 @@ pub fn apply_reconciliation(
         summary.jobs_created += inserted as usize;
     }
 
+    transaction.execute(
+        "UPDATE engram_ingest.sources
+            SET revision = revision + 1, last_plan_fingerprint = $2, updated_at = $3
+          WHERE id = $1",
+        &[&source_id, &fingerprint.as_bytes().to_vec(), &now],
+    )?;
+
     for path in &reconciliation.removed_files {
         transaction.execute(
             "UPDATE engram_ingest.documents
@@ -366,6 +439,48 @@ pub fn apply_reconciliation(
 
     transaction.commit()?;
     Ok(summary)
+}
+
+fn plan_fingerprint(reconciliation: &Reconciliation) -> Result<ContentHash, StoreError> {
+    let retain: Vec<Value> = reconciliation
+        .retain
+        .iter()
+        .map(|file| {
+            serde_json::json!({
+                "path": file.relative_path,
+                "sha": file.content_sha256.to_string(),
+                "calls": file.calls.iter().map(|call| serde_json::json!({
+                    "document_id": call.document_id,
+                    "chunk_key": call.chunk_key,
+                    "sha": call.content_sha256.to_string(),
+                    "metadata": call.metadata,
+                    "tags": call.tags,
+                    "timestamp": call.timestamp,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    let deletes: Vec<Value> = reconciliation
+        .deletes
+        .iter()
+        .map(|delete| {
+            serde_json::json!({
+                "document_id": delete.hindsight_document_id,
+                "chunk_key": delete.chunk_key,
+                "generation": delete.generation,
+                "sha": delete.content_sha256.to_string(),
+                "reason": delete.reason.as_str(),
+            })
+        })
+        .collect();
+    let value = serde_json::json!({
+        "base_revision": reconciliation.base_revision,
+        "layout_version": reconciliation.layout_version,
+        "retain": retain,
+        "deletes": deletes,
+        "removed_files": reconciliation.removed_files,
+    });
+    Ok(ContentHash::of(&serde_json::to_vec(&value)?))
 }
 
 pub fn claim_job(
@@ -427,6 +542,7 @@ fn try_claim_job(
     let kind: String = row.get(1);
     let payload: Value = row.get(2);
     let expires_at = now + ttl;
+    let token = crate::jobs::new_claim_token();
     transaction.execute(
         "UPDATE engram_ingest.jobs
             SET state = 'leased', updated_at = $2
@@ -434,14 +550,15 @@ fn try_claim_job(
         &[&job_id, &now],
     )?;
     transaction.execute(
-        "INSERT INTO engram_ingest.leases (job_id, owner, expires_at, heartbeat_at)
-         VALUES ($1, $2, $3, $4)",
-        &[&job_id, &owner, &expires_at, &now],
+        "INSERT INTO engram_ingest.leases (job_id, owner, token, expires_at, heartbeat_at)
+         VALUES ($1, $2, $3, $4, $5)",
+        &[&job_id, &owner, &token, &expires_at, &now],
     )?;
     transaction.commit()?;
     Ok(Some(ClaimedJob {
         job_id,
         owner: owner.to_string(),
+        token,
         kind,
         payload,
         expires_at,
@@ -451,7 +568,7 @@ fn try_claim_job(
 pub fn complete_job(
     client: &mut Client,
     job_id: i64,
-    owner: &str,
+    token: &str,
     now: DateTime<Utc>,
 ) -> Result<(), StoreError> {
     let mut transaction = client.transaction()?;
@@ -461,8 +578,9 @@ pub fn complete_job(
                 updated_at = $3,
                 last_sink_operation = CASE WHEN j.kind = 'delete' THEN 'delete' ELSE 'retain' END
            FROM engram_ingest.leases l
-          WHERE l.job_id = j.id AND j.id = $1 AND j.state = 'leased' AND l.owner = $2",
-        &[&job_id, &owner, &now],
+          WHERE l.job_id = j.id AND j.id = $1 AND j.state = 'leased' AND l.token = $2
+            AND l.expires_at > $3",
+        &[&job_id, &token, &now],
     )?;
     if updated == 0 {
         transaction.rollback()?;
@@ -481,8 +599,8 @@ pub fn complete_job(
         &[&job_id, &now],
     )?;
     transaction.execute(
-        "DELETE FROM engram_ingest.leases WHERE job_id = $1 AND owner = $2",
-        &[&job_id, &owner],
+        "DELETE FROM engram_ingest.leases WHERE job_id = $1 AND token = $2",
+        &[&job_id, &token],
     )?;
     transaction.commit()?;
     Ok(())
@@ -491,7 +609,7 @@ pub fn complete_job(
 pub fn heartbeat_job(
     client: &mut Client,
     job_id: i64,
-    owner: &str,
+    token: &str,
     ttl: Duration,
     now: DateTime<Utc>,
 ) -> Result<DateTime<Utc>, StoreError> {
@@ -499,8 +617,8 @@ pub fn heartbeat_job(
     let updated = client.execute(
         "UPDATE engram_ingest.leases
             SET expires_at = $3, heartbeat_at = $4
-          WHERE job_id = $1 AND owner = $2",
-        &[&job_id, &owner, &expires_at, &now],
+          WHERE job_id = $1 AND token = $2 AND expires_at > $4",
+        &[&job_id, &token, &expires_at, &now],
     )?;
     if updated == 0 {
         return Err(StoreError::LeaseNotHeld);
@@ -564,7 +682,7 @@ pub fn recover_expired_leases(
 pub fn fail_job(
     client: &mut Client,
     job_id: i64,
-    owner: &str,
+    token: &str,
     now: DateTime<Utc>,
     error: &str,
 ) -> Result<(), StoreError> {
@@ -573,9 +691,10 @@ pub fn fail_job(
         "SELECT j.attempts, j.max_attempts
            FROM engram_ingest.jobs j
            JOIN engram_ingest.leases l ON l.job_id = j.id
-          WHERE j.id = $1 AND j.state = 'leased' AND l.owner = $2
+          WHERE j.id = $1 AND j.state = 'leased' AND l.token = $2
+            AND l.expires_at > $3
           FOR UPDATE",
-        &[&job_id, &owner],
+        &[&job_id, &token, &now],
     )?;
     let Some(row) = row else {
         transaction.rollback()?;
@@ -600,8 +719,8 @@ pub fn fail_job(
         ],
     )?;
     transaction.execute(
-        "DELETE FROM engram_ingest.leases WHERE job_id = $1 AND owner = $2",
-        &[&job_id, &owner],
+        "DELETE FROM engram_ingest.leases WHERE job_id = $1 AND token = $2",
+        &[&job_id, &token],
     )?;
     transaction.commit()?;
     Ok(())

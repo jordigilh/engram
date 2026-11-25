@@ -62,9 +62,9 @@ fn one_root_convergence_and_lease_exclusivity() {
         .query_one("SELECT current_database()", &[])
         .expect("database name")
         .get(0);
-    assert!(
-        database.contains("test"),
-        "refusing to truncate non-test database {database}"
+    assert_eq!(
+        database, "engram_ingest_test",
+        "refusing to truncate a database that is not the dedicated engram_ingest_test database"
     );
     migrate(&mut client).expect("migrate");
     truncate(&mut client);
@@ -109,7 +109,7 @@ fn one_root_convergence_and_lease_exclusivity() {
         heartbeat_job(
             &mut client,
             claimed.job_id,
-            "worker-b",
+            "stale-token",
             Duration::seconds(30),
             now
         ),
@@ -118,7 +118,7 @@ fn one_root_convergence_and_lease_exclusivity() {
     let extended = heartbeat_job(
         &mut client,
         claimed.job_id,
-        "worker-a",
+        &claimed.token,
         Duration::seconds(7_200),
         now + Duration::seconds(1),
     )
@@ -150,7 +150,7 @@ fn one_root_convergence_and_lease_exclusivity() {
     complete_job(
         &mut client,
         reclaimed.job_id,
-        "worker-b",
+        &reclaimed.token,
         now + Duration::seconds(7_203),
     )
     .expect("complete");
@@ -263,8 +263,13 @@ fn one_root_convergence_and_lease_exclusivity() {
     .expect("claim delete")
     .expect("delete job");
     assert_eq!(delete_job.kind, "delete");
-    complete_job(&mut client, delete_job.job_id, "worker-delete", Utc::now())
-        .expect("complete delete");
+    complete_job(
+        &mut client,
+        delete_job.job_id,
+        &delete_job.token,
+        Utc::now(),
+    )
+    .expect("complete delete");
     let deleted_document_id = delete_job.payload["document_id"]
         .as_str()
         .expect("delete payload document id")
@@ -431,7 +436,7 @@ fn one_root_convergence_and_lease_exclusivity() {
     fail_job(
         &mut client,
         delete_job.job_id,
-        "worker-order",
+        &delete_job.token,
         now,
         "temporary sink failure",
     )
@@ -440,7 +445,8 @@ fn one_root_convergence_and_lease_exclusivity() {
     // Restore while the delete is in backoff. The restore must not jump ahead.
     let manifest = load_manifest(&mut client, order_source).expect("manifest");
     let plan = reconcile(&manifest, &order_scan, LAYOUT_VERSION);
-    apply_reconciliation(&mut client, order_source, &plan, Utc::now()).expect("restore");
+    // Same clock as the claims: only the earlier delete's backoff may block.
+    apply_reconciliation(&mut client, order_source, &plan, now).expect("restore");
     let blocked = claim_job(
         &mut client,
         "worker-order",
@@ -465,7 +471,7 @@ fn one_root_convergence_and_lease_exclusivity() {
     complete_job(
         &mut client,
         ordered.job_id,
-        "worker-order",
+        &ordered.token,
         now + Duration::seconds(3),
     )
     .expect("complete ordered delete");
@@ -478,6 +484,81 @@ fn one_root_convergence_and_lease_exclusivity() {
     .expect("claim retain")
     .expect("retain after delete");
     assert_eq!(next.kind, "retain");
+
+    // --- A -> B -> A payload return, and stale delete rejection -----------
+    truncate(&mut client);
+    let edit_source = upsert_source(
+        &mut client,
+        &SourceRecord::markdown("engram-test", "edit", "/tmp/edit", &["**/*.md"]),
+    )
+    .expect("source");
+    let edited = "# A\n\nAlpha body long enough.\n\n## B\n\nBeta body edited and long enough.";
+    let edit_both = vec![scanned("edit.md", both)];
+    let edit_only_a = vec![scanned("edit.md", only_a)];
+    let scan_edited = vec![scanned("edit.md", edited)];
+    let manifest = load_manifest(&mut client, edit_source).expect("manifest");
+    let plan = reconcile(&manifest, &edit_both, LAYOUT_VERSION);
+    apply_reconciliation(&mut client, edit_source, &plan, Utc::now()).expect("initial");
+    client
+        .execute(
+            "UPDATE engram_ingest.jobs SET state = 'succeeded' WHERE source_id = $1",
+            &[&edit_source],
+        )
+        .expect("drain");
+
+    // Snapshot for a removal that becomes stale after the edit below.
+    let stale_manifest = load_manifest(&mut client, edit_source).expect("manifest");
+    let stale_delete = reconcile(&stale_manifest, &edit_only_a, LAYOUT_VERSION);
+    assert_eq!(stale_delete.deletes.len(), 1);
+
+    let manifest = load_manifest(&mut client, edit_source).expect("manifest");
+    let edit_plan = reconcile(&manifest, &scan_edited, LAYOUT_VERSION);
+    apply_reconciliation(&mut client, edit_source, &edit_plan, Utc::now()).expect("edit");
+    client
+        .execute(
+            "UPDATE engram_ingest.jobs SET state = 'succeeded' WHERE source_id = $1",
+            &[&edit_source],
+        )
+        .expect("drain edit");
+
+    let manifest = load_manifest(&mut client, edit_source).expect("manifest");
+    let revert_plan = reconcile(&manifest, &edit_both, LAYOUT_VERSION);
+    let revert =
+        apply_reconciliation(&mut client, edit_source, &revert_plan, Utc::now()).expect("revert");
+    assert!(
+        revert.jobs_created >= 1,
+        "returning to an earlier payload must enqueue a retain"
+    );
+    let repeated =
+        apply_reconciliation(&mut client, edit_source, &revert_plan, Utc::now()).expect("replay");
+    assert_eq!(repeated.jobs_created, 0);
+
+    // The stale removal was planned at generation 1; the edit moved B to 2.
+    assert!(matches!(
+        apply_reconciliation(&mut client, edit_source, &stale_delete, Utc::now()),
+        Err(StoreError::StaleReconciliation)
+    ));
+    let delete_jobs: i64 = client
+        .query_one(
+            "SELECT count(*) FROM engram_ingest.jobs
+              WHERE source_id = $1 AND kind = 'delete'",
+            &[&edit_source],
+        )
+        .expect("delete jobs")
+        .get(0);
+    assert_eq!(
+        delete_jobs, 0,
+        "a stale delete must not enqueue a sink delete"
+    );
+    let b_state: String = client
+        .query_one(
+            "SELECT state FROM engram_ingest.chunks
+              WHERE source_id = $1 AND chunk_key <> ''",
+            &[&edit_source],
+        )
+        .expect("chunk b")
+        .get(0);
+    assert_eq!(b_state, "active");
 
     truncate(&mut client);
 }

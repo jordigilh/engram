@@ -81,8 +81,10 @@ pub struct ManifestChunk {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Manifest {
     pub documents: BTreeMap<String, ManifestDocument>,
-    /// Keyed by the Hindsight document id, which is globally unique.
+    /// Keyed by the Hindsight document id.
     pub chunks: BTreeMap<String, ManifestChunk>,
+    /// Monotonic source revision this snapshot was read at.
+    pub revision: i64,
 }
 
 impl Manifest {

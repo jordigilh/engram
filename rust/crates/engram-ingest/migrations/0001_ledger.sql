@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS engram_ingest.sources (
     docs_exclude     text[] NOT NULL DEFAULT '{}',
     document_format  text NOT NULL DEFAULT 'markdown',
     enabled          boolean NOT NULL DEFAULT true,
+    revision         bigint NOT NULL DEFAULT 0,
+    last_plan_fingerprint bytea,
     created_at       timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now(),
     UNIQUE (project, tag, root)
@@ -50,6 +52,8 @@ CREATE TABLE IF NOT EXISTS engram_ingest.chunks (
     content_sha256         bytea NOT NULL CHECK (octet_length(content_sha256) = 32),
     ordinal                integer NOT NULL,
     generation             integer NOT NULL DEFAULT 1 CHECK (generation > 0),
+    retain_revision        integer NOT NULL DEFAULT 1 CHECK (retain_revision > 0),
+    last_retain_sha256     bytea CHECK (last_retain_sha256 IS NULL OR octet_length(last_retain_sha256) = 32),
     state                  text NOT NULL DEFAULT 'active'
                                CHECK (state IN ('active', 'tombstoned')),
     tombstoned_at          timestamptz,
@@ -93,6 +97,7 @@ CREATE TABLE IF NOT EXISTS engram_ingest.leases (
     id            bigserial PRIMARY KEY,
     job_id        bigint NOT NULL UNIQUE REFERENCES engram_ingest.jobs(id) ON DELETE CASCADE,
     owner         text NOT NULL,
+    token         text NOT NULL,
     expires_at    timestamptz NOT NULL,
     heartbeat_at  timestamptz NOT NULL,
     created_at    timestamptz NOT NULL DEFAULT now()

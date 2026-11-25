@@ -11,6 +11,9 @@ use crate::ids::stable_section_key;
 /// overshoot guard that prevents the almost-empty trailing chunk described in
 /// the Python docstring.
 pub fn split_fixed_window(text: &str, chunk_size: usize, chunk_overlap: usize) -> Vec<String> {
+    if chunk_size == 0 {
+        return Vec::new();
+    }
     let chars: Vec<char> = text.chars().collect();
     if chars.len() <= chunk_size {
         return vec![text.to_string()];
@@ -18,7 +21,7 @@ pub fn split_fixed_window(text: &str, chunk_size: usize, chunk_overlap: usize) -
     let mut chunks = Vec::new();
     let mut start = 0usize;
     while start < chars.len() {
-        let mut end = start + chunk_size;
+        let mut end = start.saturating_add(chunk_size);
         if end < chars.len() {
             let break_point = (start..end).rev().find(|&index| chars[index] == '\n');
             if let Some(break_point) = break_point {
@@ -32,7 +35,10 @@ pub fn split_fixed_window(text: &str, chunk_size: usize, chunk_overlap: usize) -
         if end >= chars.len() {
             break;
         }
-        start = end - chunk_overlap;
+        // Degenerate overlap (>= end, or duplicated by newline adjustment)
+        // must still advance; Python's 800/200 path is unaffected.
+        let next = end.saturating_sub(chunk_overlap);
+        start = if next <= start { start + 1 } else { next };
     }
     chunks
 }
@@ -230,6 +236,15 @@ mod tests {
         let result = split_markdown_sections(content, 800, 200);
         assert_eq!(result.len(), 2);
         assert_eq!(result[1].0, stable_section_key("#\tTabbed"));
+    }
+
+    #[test]
+    fn degenerate_window_parameters_still_terminate() {
+        let a = split_fixed_window("aaaaa\nbbbbbbbb", 8, 6);
+        assert!(!a.is_empty());
+        let b = split_fixed_window("abcdefgh", 4, 4);
+        assert_eq!(b.len(), 5);
+        assert!(split_fixed_window("abcdefgh", 0, 0).is_empty());
     }
 
     #[test]

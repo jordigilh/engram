@@ -3,7 +3,7 @@
     "python": "3.14.6",
     "sklearn": "1.9.1",
     "networkx": "3.7",
-    "source_commit": "e06203cba8497e390445030b975e7055e6d06987",
+    "source_commit": "a754620762fcbd160d4380d5d5e503271dc7f205",
     "sources": {
       "src/engram/chunking.py": "e920fcd9c339dc4399b24abb1b44d9cc96db29413fd4dc00710b37a1a6ba1ec5",
       "src/engram/synthesis.py": "9d322a88e66bc9517033b68fca09b94c3e97e86c4b0b60e1a41d40c8a6d38309",

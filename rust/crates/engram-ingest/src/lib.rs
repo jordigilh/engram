@@ -14,6 +14,7 @@ pub mod jobs;
 pub mod ledger;
 pub mod python_text;
 pub mod reconcile;
+pub mod shadow;
 pub mod sink;
 pub mod stopwords;
 pub mod store;

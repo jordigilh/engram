@@ -1,0 +1,1 @@
+Ignored text file; it must never produce a shadow operation.

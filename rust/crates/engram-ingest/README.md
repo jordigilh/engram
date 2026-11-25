@@ -16,6 +16,8 @@ the docs-parity half of slice 3).
   Postgres.
 - Hindsight sink: retain POSTs, document DELETEs for tombstones, ledger-owned
   retries, and `sink_deleted_at` acknowledgement.
+- Tree-level shadow planner (`engram-ingest-shadow`) emitting canonical JSONL
+  operations that match the real Python walker/retain path on a frozen tree.
 
 ## Not in this slice
 
@@ -23,6 +25,8 @@ the docs-parity half of slice 3).
   adapter is a later ingestion slice.
 - Sink concurrency limits and per-bank metrics. `process_one` drives one job at
   a time; the worker loop and metrics land with the service switch.
+- Delete/edit shadow replay. The shadow slice compares a retain-only tree
+  snapshot; change/delete operations are covered by the ledger harness.
 - Bank-scoped job claims. Jobs do not yet carry a bank id, so `process_one`
   trusts its configured bank. Until the worker slice adds bank-scoped claims,
   run one worker per bank/ledger, not one worker over a multi-bank ledger.
@@ -98,6 +102,17 @@ Source identity is the unique `(project, tag, root)`. Chunks are scoped by
 `(document_id, chunk_key)`, so two projects with the same tag/path can share a
 Hindsight document id without touching each other's rows. That is the design's
 `(project, source identity, unit key)` constraint.
+
+## Shadow run
+
+```bash
+cargo run -p engram-ingest --bin engram-ingest-shadow -- \
+  --root rust/crates/engram-ingest/fixtures/shadow/tree \
+  --source-tag repo --no-timestamps
+```
+
+Compare against `fixtures/shadow/expected.jsonl`; regeneration is documented in
+`fixtures/shadow/README.md`.
 
 ## Running the Postgres harness
 

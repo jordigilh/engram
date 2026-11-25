@@ -362,6 +362,7 @@ fn enforce_bank_columns(client: &mut Client) -> Result<(), StoreError> {
                    FROM engram_ingest.jobs j
                    JOIN engram_ingest.leases l ON l.job_id = j.id
                   WHERE j.state = 'leased'
+                    AND l.expires_at > now()
                   GROUP BY j.bank_id, j.hindsight_document_id
                  HAVING count(*) > 1
              ) duplicates",

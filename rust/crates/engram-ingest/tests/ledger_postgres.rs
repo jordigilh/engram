@@ -1005,6 +1005,73 @@ fn v4_migration_requeues_duplicate_bank_document_leases() {
 }
 
 #[test]
+fn migration_guard_dedupes_expired_null_bank_duplicates() {
+    let Some(url) = test_url() else {
+        eprintln!("ENGRAM_INGEST_TEST_DATABASE_URL is not set; skipping Postgres harness");
+        return;
+    };
+    let mut client = connect(&url).expect("connect");
+    let database: String = client
+        .query_one("SELECT current_database()", &[])
+        .expect("database name")
+        .get(0);
+    assert_eq!(database, "engram_ingest_test");
+    client
+        .execute("SELECT pg_advisory_lock($1)", &[&918_273_i64])
+        .expect("harness lock");
+    migrate(&mut client).expect("migrate");
+    truncate(&mut client);
+
+    for root in ["/tmp/guard-a", "/tmp/guard-b"] {
+        let source = upsert_source(
+            &mut client,
+            &SourceRecord::markdown("project-a", "repo", root, "project-a-docs", &["**/*.md"]),
+        )
+        .expect("source");
+        let scan = vec![scanned("guard.md", "# Guard\n\nGuard body long enough.")];
+        let manifest = load_manifest(&mut client, source).expect("manifest");
+        let plan = reconcile(&manifest, &scan, LAYOUT_VERSION);
+        apply_reconciliation(&mut client, source, &plan, Utc::now()).expect("apply");
+    }
+    client
+        .batch_execute(
+            "ALTER TABLE engram_ingest.sources ALTER COLUMN bank_id DROP NOT NULL;
+             ALTER TABLE engram_ingest.jobs ALTER COLUMN bank_id DROP NOT NULL;
+             DROP INDEX engram_ingest.jobs_one_leased_per_bank_document_idx;
+             UPDATE engram_ingest.jobs SET state = 'leased';
+             INSERT INTO engram_ingest.leases
+                 (job_id, owner, token, expires_at, heartbeat_at)
+             SELECT id, 'dead', 'guard-' || id,
+                    now() - interval '1 hour', now()
+               FROM engram_ingest.jobs;
+             UPDATE engram_ingest.sources SET bank_id = NULL;
+             UPDATE engram_ingest.jobs SET bank_id = NULL;
+             DELETE FROM engram_ingest.schema_migrations WHERE version IN (3, 4);
+             UPDATE engram_ingest.sources SET bank_id = 'project-a-docs';",
+        )
+        .expect("simulate v2 null-bank duplicates");
+
+    migrate(&mut client).expect("guard upgrade");
+    let (leased, pending): (i64, i64) = {
+        let row = client
+            .query_one(
+                "SELECT
+                     count(*) FILTER (WHERE state = 'leased'),
+                     count(*) FILTER (WHERE state = 'pending')
+                   FROM engram_ingest.jobs
+                  WHERE hindsight_document_id = 'repo--guard'",
+                &[],
+            )
+            .expect("counts");
+        (row.get(0), row.get(1))
+    };
+    assert_eq!(leased, 1);
+    assert_eq!(pending, 1);
+
+    truncate(&mut client);
+}
+
+#[test]
 fn migration_guard_requires_an_explicit_bank_and_is_rerun_safe() {
     let Some(url) = test_url() else {
         eprintln!("ENGRAM_INGEST_TEST_DATABASE_URL is not set; skipping Postgres harness");

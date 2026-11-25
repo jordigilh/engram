@@ -17,7 +17,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::store::{
-    claim_job, complete_job, fail_job, recover_expired_leases, ClaimedJob, StoreError,
+    claim_job, complete_job, fail_job, recover_expired_leases_in_bank, ClaimedJob, FailDisposition,
+    RecoveryReport, StoreError,
 };
 
 #[derive(Debug, Clone)]
@@ -68,8 +69,14 @@ impl SinkError {
 pub enum SinkOutcome {
     Retained,
     Deleted(DeleteOutcome),
-    /// The sink call failed and `fail_job` scheduled a ledger retry (or death).
-    Failed(String),
+    /// The sink call failed and `fail_job` scheduled a ledger retry.
+    Retried(String),
+    /// The sink call failed and exhausted the ledger retry budget.
+    Dead(String),
+    /// The sink call succeeded but the ledger lease was lost before the ack.
+    /// At-least-once delivery may send the document again; the stable
+    /// `document_id` makes the repeat converge.
+    LeaseLost,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +84,13 @@ pub struct ProcessedJob {
     pub job_id: i64,
     pub kind: String,
     pub outcome: SinkOutcome,
+}
+
+/// One worker step: the processed job (if any) and any recovery it performed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProcessStep {
+    pub job: Option<ProcessedJob>,
+    pub recovery: RecoveryReport,
 }
 
 #[derive(Debug, Deserialize)]
@@ -272,12 +286,12 @@ fn classify_status(status: StatusCode, operation: &str) -> SinkError {
 /// Claim one job, call Hindsight, and acknowledge or schedule a ledger retry.
 ///
 /// Returns `None` when no job is claimable. Sink and payload errors are
-/// recorded via `fail_job`; a lease lost to recovery returns `Failed` without
-/// aborting the worker loop. Only ledger failures abort the call.
+/// recorded via `fail_job`; a lease lost to recovery returns `LeaseLost`
+/// without aborting the worker loop. Only ledger failures abort the call.
 ///
-/// `now` is the claim instant. Acknowledgement uses a fresh clock after the
-/// HTTP call; the two-window TTL guard keeps that safe, so callers should pass
-/// an instant consistent with the ledger clock.
+/// `now` is the claim instant. Acknowledgement and recovery use a fresh clock
+/// after the HTTP call; the two-window TTL guard keeps that safe, so callers
+/// should pass an instant consistent with the ledger clock.
 pub fn process_one(
     db: &mut Client,
     sink: &HindsightSink,
@@ -286,6 +300,22 @@ pub fn process_one(
     ttl: LedgerDuration,
     now: DateTime<Utc>,
 ) -> Result<Option<ProcessedJob>, SinkError> {
+    Ok(process_one_reporting(db, sink, bank_id, owner, ttl, now, true)?.job)
+}
+
+/// Worker-facing variant that reports recovery done during this step.
+///
+/// `recovery_due` lets the worker gate recovery to a periodic cadence instead
+/// of opening a write transaction on every poll.
+pub fn process_one_reporting(
+    db: &mut Client,
+    sink: &HindsightSink,
+    bank_id: &str,
+    owner: &str,
+    ttl: LedgerDuration,
+    now: DateTime<Utc>,
+    recovery_due: bool,
+) -> Result<ProcessStep, SinkError> {
     if ttl < sink.minimum_ttl() {
         return Err(SinkError::InvalidLease(format!(
             "ttl {ttl} must be at least {} (twice the request timeout)",
@@ -293,30 +323,33 @@ pub fn process_one(
         )));
     }
 
-    // Reclaim crashed-worker leases before claiming; otherwise an expired
-    // lease blocks every later job for the same document.
-    recover_expired_leases(db, now)?;
-    let Some(job) = claim_job(db, owner, ttl, now)? else {
-        return Ok(None);
+    let mut recovery = RecoveryReport::default();
+    let mut recovered = false;
+    // Recovery must never run behind the claim clock, but a backdated claim
+    // must not delay reclaiming its own expired lease either.
+    let recovery_now = || now.max(Utc::now());
+    let Some(job) = claim_job(db, bank_id, owner, ttl, now)? else {
+        // An expired lease can block a document's FIFO queue even when no
+        // unleased job is claimable. Recover on the caller's cadence.
+        if recovery_due {
+            recovery = recover_expired_leases_in_bank(db, bank_id, recovery_now())?;
+        }
+        return Ok(ProcessStep {
+            job: None,
+            recovery,
+        });
     };
-    match sink.dispatch(bank_id, &job) {
+
+    debug_assert_eq!(job.bank_id, bank_id);
+    let outcome = match sink.dispatch(&job.bank_id, &job) {
         Ok(outcome) => match complete_job(db, job.job_id, &job.token, Utc::now()) {
-            Ok(()) => Ok(Some(ProcessedJob {
-                job_id: job.job_id,
-                kind: job.kind,
-                outcome,
-            })),
+            Ok(()) => outcome,
             Err(StoreError::LeaseNotHeld) => {
-                recover_expired_leases(db, Utc::now())?;
-                Ok(Some(ProcessedJob {
-                    job_id: job.job_id,
-                    kind: job.kind,
-                    outcome: SinkOutcome::Failed(
-                        "lease lost; job recovered by another worker".to_string(),
-                    ),
-                }))
+                recovery = recover_expired_leases_in_bank(db, bank_id, recovery_now())?;
+                recovered = true;
+                SinkOutcome::LeaseLost
             }
-            Err(error) => Err(SinkError::Ledger(error)),
+            Err(error) => return Err(SinkError::Ledger(error)),
         },
         Err(error) => {
             let (class, message) = match &error {
@@ -327,25 +360,29 @@ pub fn process_one(
                 SinkError::Ledger(_) => return Err(error),
             };
             match fail_job(db, job.job_id, &job.token, Utc::now(), class, &message) {
-                Ok(()) => Ok(Some(ProcessedJob {
-                    job_id: job.job_id,
-                    kind: job.kind,
-                    outcome: SinkOutcome::Failed(message),
-                })),
+                Ok(FailDisposition::RetryScheduled) => SinkOutcome::Retried(message),
+                Ok(FailDisposition::Dead) => SinkOutcome::Dead(message),
                 Err(StoreError::LeaseNotHeld) => {
-                    recover_expired_leases(db, Utc::now())?;
-                    Ok(Some(ProcessedJob {
-                        job_id: job.job_id,
-                        kind: job.kind,
-                        outcome: SinkOutcome::Failed(
-                            "lease lost; job recovered by another worker".to_string(),
-                        ),
-                    }))
+                    recovery = recover_expired_leases_in_bank(db, bank_id, recovery_now())?;
+                    recovered = true;
+                    SinkOutcome::LeaseLost
                 }
-                Err(error) => Err(SinkError::Ledger(error)),
+                Err(error) => return Err(SinkError::Ledger(error)),
             }
         }
+    };
+
+    if recovery_due && !recovered {
+        recovery = recover_expired_leases_in_bank(db, bank_id, recovery_now())?;
     }
+    Ok(ProcessStep {
+        job: Some(ProcessedJob {
+            job_id: job.job_id,
+            kind: job.kind,
+            outcome,
+        }),
+        recovery,
+    })
 }
 
 #[cfg(test)]

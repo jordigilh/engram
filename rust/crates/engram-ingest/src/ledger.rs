@@ -28,24 +28,48 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 2,
         sql: include_str!("../migrations/0002_job_error_class.sql"),
     },
+    Migration {
+        version: 3,
+        sql: include_str!("../migrations/0003_bank_ids.sql"),
+    },
 ];
+
+/// Hindsight bank ids become one URL path segment, so keep the accepted shape
+/// explicit instead of relying on percent-encoding at the HTTP boundary.
+pub fn is_valid_bank_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value != "."
+        && value != ".."
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceRecord {
     pub project: String,
     pub tag: String,
     pub root: String,
+    pub bank_id: String,
     pub docs_include: Vec<String>,
     pub docs_exclude: Vec<String>,
     pub document_format: String,
 }
 
 impl SourceRecord {
-    pub fn markdown(project: &str, tag: &str, root: &str, includes: &[&str]) -> Self {
+    pub fn markdown(
+        project: &str,
+        tag: &str,
+        root: &str,
+        bank_id: &str,
+        includes: &[&str],
+    ) -> Self {
         Self {
             project: project.to_string(),
             tag: tag.to_string(),
             root: root.to_string(),
+            bank_id: bank_id.to_string(),
             docs_include: includes.iter().map(|value| value.to_string()).collect(),
             docs_exclude: Vec::new(),
             document_format: DEFAULT_DOCUMENT_FORMAT.to_string(),

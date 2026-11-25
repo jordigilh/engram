@@ -16,19 +16,19 @@ the docs-parity half of slice 3).
   Postgres.
 - Hindsight sink: retain POSTs, document DELETEs for tombstones, ledger-owned
   retries, and `sink_deleted_at` acknowledgement.
+- Bank-scoped worker loop: bounded per-bank slot concurrency, jittered idle and
+  error backoff, periodic expired-lease recovery, startup recovery, per-bank
+  counters, and graceful cancellation.
 
 ## Not in this slice
 
 - Filesystem watcher hints. `reconcile` consumes a scan snapshot; the watcher
   adapter is a later ingestion slice.
-- Sink concurrency limits and per-bank metrics. `process_one` drives one job at
-  a time; the worker loop and metrics land with the service switch.
-- Bank-scoped job claims. Jobs do not yet carry a bank id, so `process_one`
-  trusts its configured bank. Until the worker slice adds bank-scoped claims,
-  run one worker per bank/ledger, not one worker over a multi-bank ledger.
 - Native-vs-CocoIndex shadow comparison of emitted operations (the remaining
   part of issue #214 slice 3).
 - Issues, transcripts, PDF extraction, git sync, CocoIndex/Python removal.
+- Supervisor-level respawn/restart isolation. The worker exposes per-slot health
+  (`WorkerHandle::health`) but restart policy lands with the service switch.
 
 PR map: the merged ledger/docs PR, then this Hindsight sink, then shadow run,
 worker loop/concurrency/metrics, issues/transcripts, service switch, and
@@ -71,6 +71,27 @@ Python/CocoIndex removal (#232).
   return. Previously retained chunks are not deleted.
 - **`source=cocoindex` metadata is preserved** by contract
   (`docs/COCOINDEX_DEPRECATION.md:98`) until a bank reindex changes the value.
+- **Banks are explicit and immutable per source.** `sources.bank_id` comes from
+  the configured docs bank; the v3 migration never guesses one. A failed bank
+  guard stops `migrate()`/worker startup with an actionable message, and changing
+  an existing source's bank is rejected (`BankChanged`) rather than silently
+  orphaning old-bank memories.
+- **Jobs are bank-scoped.** Each job snapshots its source bank. Claims, recovery,
+  and per-bank metrics never cross that boundary; a multi-bank ledger is safe
+  with one supervisor over all banks.
+- **Worker concurrency is bounded per bank.** Each slot owns one Postgres
+  connection and shares one HTTP client. Defaults are intentionally small; the
+  hard cap is 8 slots/bank and 32 total.
+- **Recovery is periodic, not tied to claims.** Startup runs configured-set
+  recovery; runtime recovery runs on an interval even while other jobs are
+  claimable. Expired leases for a bank absent from the worker config are
+  requeued without consuming an attempt (`stranded`), so a deconfigured bank
+  cannot burn its retry budget while no worker serves it.
+- **Delivery is at-least-once.** A lost ack is reported as `LeaseLost` and
+  counted separately; a re-send of the same stable `document_id` converges. An
+  expired/lost lease consumes one durable attempt, so a job that repeatedly
+  crashes a worker is bounded and eventually reaches `dead`. The `changed`
+  counter belongs to reconciliation (`jobs_created`), not the sink.
 - **Python 3.14 is authoritative** for `pathlib` suffix semantics; Python 3.13
   differs only for trailing-dot filenames. See `fixtures/README.md`.
 - **No Python tests were added.** The fixture generator is developer tooling
@@ -99,6 +120,13 @@ Source identity is the unique `(project, tag, root)`. Chunks are scoped by
 Hindsight document id without touching each other's rows. That is the design's
 `(project, source identity, unit key)` constraint.
 
+`migrate()` also runs an unversioned bank guard on every call. Migration `0003`
+adds nullable `sources.bank_id` / `jobs.bank_id` and the partial
+`jobs_bank_pending_idx`. If an existing source has no bank, migration fails with
+`MigrationGuard` telling the operator to set `sources.bank_id` explicitly in
+their own connection; rerunning then backfills jobs, enforces `NOT NULL`, and
+verifies the CHECK constraints and index.
+
 ## Running the Postgres harness
 
 The harness needs a disposable database whose name contains `test`:
@@ -106,7 +134,8 @@ The harness needs a disposable database whose name contains `test`:
 ```bash
 createdb -h /tmp -U hindsight engram_ingest_test
 ENGRAM_INGEST_TEST_DATABASE_URL='postgresql://hindsight@/engram_ingest_test?host=/tmp' \
-  cargo test -p engram-ingest --test ledger_postgres --test sink_postgres
+  cargo test -p engram-ingest --test ledger_postgres --test sink_postgres \
+             --test worker_postgres
 ```
 
 It truncates the `engram_ingest` tables and refuses any database whose name is

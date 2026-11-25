@@ -103,7 +103,13 @@ fn sink_retains_deletes_and_schedules_retries() {
 
     let source = upsert_source(
         &mut client,
-        &SourceRecord::markdown("engram-test", "sink", "/tmp/sink", &["**/*.md"]),
+        &SourceRecord::markdown(
+            "engram-test",
+            "sink",
+            "/tmp/sink",
+            "repo-docs",
+            &["**/*.md"],
+        ),
     )
     .expect("source");
     let original = "# A\n\nAlpha body long enough.";
@@ -163,7 +169,7 @@ fn sink_retains_deletes_and_schedules_retries() {
     )
     .expect("process")
     .expect("one job");
-    assert!(matches!(failed.outcome, SinkOutcome::Failed(_)));
+    assert!(matches!(failed.outcome, SinkOutcome::Retried(_)));
     let (state, attempts) = state_of(&mut client, failed.job_id);
     assert_eq!(state, "pending");
     assert_eq!(attempts, 1);
@@ -273,15 +279,15 @@ fn sink_retains_deletes_and_schedules_retries() {
     truncate(&mut client);
     let source = upsert_source(
         &mut client,
-        &SourceRecord::markdown("engram-test", "bad", "/tmp/bad", &["**/*.md"]),
+        &SourceRecord::markdown("engram-test", "bad", "/tmp/bad", "repo-docs", &["**/*.md"]),
     )
     .expect("source");
     let job_id: i64 = client
         .query_one(
             "INSERT INTO engram_ingest.jobs
-                 (source_id, kind, hindsight_document_id, dedupe_key, generation,
+                 (source_id, bank_id, kind, hindsight_document_id, dedupe_key, generation,
                   payload, state, run_after)
-             VALUES ($1, 'retain', 'bad--doc', 'bad', 1, '{}'::jsonb, 'pending', now())
+             VALUES ($1, 'repo-docs', 'retain', 'bad--doc', 'bad', 1, '{}'::jsonb, 'pending', now())
              RETURNING id",
             &[&source],
         )
@@ -320,7 +326,13 @@ fn sink_retains_deletes_and_schedules_retries() {
     truncate(&mut client);
     let source = upsert_source(
         &mut client,
-        &SourceRecord::markdown("engram-test", "lease", "/tmp/lease", &["**/*.md"]),
+        &SourceRecord::markdown(
+            "engram-test",
+            "lease",
+            "/tmp/lease",
+            "repo-docs",
+            &["**/*.md"],
+        ),
     )
     .expect("source");
     let scan = vec![scanned("lease.md", "# A\n\nLease body long enough.")];
@@ -330,6 +342,7 @@ fn sink_retains_deletes_and_schedules_retries() {
     let t0 = Utc::now();
     let abandoned = claim_job(
         &mut client,
+        "repo-docs",
         "crashed-worker",
         LedgerDuration::seconds(1),
         t0,

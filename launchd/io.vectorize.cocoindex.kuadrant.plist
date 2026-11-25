@@ -15,7 +15,7 @@
         <string>--mode</string>
         <string>live</string>
         <!-- Ingestion-only onboarding (2026-08-27, extended to 9 repos
-             2026-08-28 with mcp-gateway): docs/issues/code apps plus
+             2026-08-28 with mcp-gateway): docs/issues apps plus
              git-sync (periodic `git pull` across all 9 read-only
               checkouts - see the deployment-local project configuration for why this
              exists: nobody opens these repos as a Cursor workspace, so
@@ -25,7 +25,6 @@
         <string>--apps</string>
         <string>docs</string>
         <string>issues</string>
-        <string>code</string>
         <string>git-sync</string>
     </array>
     <key>EnvironmentVariables</key>

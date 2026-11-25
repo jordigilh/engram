@@ -28,18 +28,18 @@ In sessions longer than ~20 agent turns, or whenever a conversation summary
 has been applied, **re-recall `hindsight`** with:
 - "project methodology, workflow, conventions"
 
-## Code search: use `cocoindex_search` tool
+## Code search: use `zvec_grep_search` tool
 
-The MCP server **user-cocoindex-code** provides a tool named **`cocoindex_search`**.
+The MCP server **zvec-grep** provides a tool named **`zvec_grep_search`**.
 Call it with `{"query": "your search terms", "limit": 10}`.
 
-Use `cocoindex_search` when:
+Use `zvec_grep_search` when:
 - You need to find code by concept or meaning
 - You need to locate a symbol, function, or class
 - You want to understand a module before modifying it
 - You need to find callers or dependents of a function/type
 
-Prefer `cocoindex_search` over Grep/SemanticSearch when searching by meaning.
+Prefer `zvec_grep_search` over Grep/SemanticSearch when searching by meaning.
 Use Grep only when you need exact regex matching.
 
 ## When to recall again (mid-session)

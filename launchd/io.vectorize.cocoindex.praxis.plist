@@ -19,7 +19,6 @@
         <string>--apps</string>
         <string>docs</string>
         <string>issues</string>
-        <string>code</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>

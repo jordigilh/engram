@@ -15,6 +15,13 @@
         <string>__HOME__/.engram/projects.toml</string>
         <string>--mode</string>
         <string>live</string>
+        <!-- Generic flow template: docs/issues only. A project with
+             git_sync = true must add git-sync to this list; main() only
+             auto-adds git-sync when the apps list is omitted, and omitting
+             it would also start the legacy code app. -->
+        <string>--apps</string>
+        <string>docs</string>
+        <string>issues</string>
     </array>
     <key>WorkingDirectory</key>
     <string>__HOME__/.engram</string>

@@ -10,7 +10,25 @@ pub const LAYOUT_VERSION: i32 = 1;
 
 pub const DEFAULT_DOCUMENT_FORMAT: &str = "markdown";
 
-pub const LEDGER_MIGRATION: &str = include_str!("../migrations/0001_ledger.sql");
+#[derive(Debug, Clone, Copy)]
+pub struct Migration {
+    pub version: i64,
+    pub sql: &'static str,
+}
+
+/// Ordered, embedded migrations. The runner applies each version once and
+/// records it in `schema_migrations`; migration files must not insert their
+/// own version.
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: include_str!("../migrations/0001_ledger.sql"),
+    },
+    Migration {
+        version: 2,
+        sql: include_str!("../migrations/0002_job_error_class.sql"),
+    },
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceRecord {

@@ -66,6 +66,9 @@ fn one_root_convergence_and_lease_exclusivity() {
         database, "engram_ingest_test",
         "refusing to truncate a database that is not the dedicated engram_ingest_test database"
     );
+    client
+        .execute("SELECT pg_advisory_lock($1)", &[&918_273_i64])
+        .expect("harness lock");
     migrate(&mut client).expect("migrate");
     truncate(&mut client);
 
@@ -130,14 +133,17 @@ fn one_root_convergence_and_lease_exclusivity() {
     let recovered = recover_expired_leases(&mut client, now + Duration::seconds(7_201))
         .expect("recover expired");
     assert_eq!(recovered, 1);
-    let state: String = client
-        .query_one(
-            "SELECT state FROM engram_ingest.jobs WHERE id = $1",
-            &[&claimed.job_id],
-        )
-        .expect("job row")
-        .get(0);
+    let (state, class): (String, Option<String>) = {
+        let row = client
+            .query_one(
+                "SELECT state, last_error_class FROM engram_ingest.jobs WHERE id = $1",
+                &[&claimed.job_id],
+            )
+            .expect("job row");
+        (row.get(0), row.get(1))
+    };
     assert_eq!(state, "pending");
+    assert_eq!(class.as_deref(), Some("transient"));
     let reclaimed = claim_job(
         &mut client,
         "worker-b",
@@ -438,6 +444,7 @@ fn one_root_convergence_and_lease_exclusivity() {
         delete_job.job_id,
         &delete_job.token,
         now,
+        "transient",
         "temporary sink failure",
     )
     .expect("fail delete into backoff");

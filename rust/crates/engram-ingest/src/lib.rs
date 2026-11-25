@@ -1,10 +1,10 @@
-//! Native Engram ingestion core (issue #214, slice 2).
+//! Native Engram ingestion core (issue #214).
 //!
 //! This crate owns the docs half of the CocoIndex replacement: the Postgres
 //! ledger, SHA-256 reconciliation, stable document/chunk IDs, heading-aware
-//! Markdown chunking, and the deterministic synthesis metadata. It does not
-//! call Hindsight yet; retain/delete jobs are persisted for the sink worker in
-//! the next slice.
+//! Markdown chunking, deterministic synthesis metadata, and the Hindsight sink
+//! that turns ledger jobs into retain/delete calls. Worker loops, per-bank
+//! concurrency, metrics, and the shadow run are later #214 slices.
 
 pub mod chunking;
 pub mod document;
@@ -14,6 +14,7 @@ pub mod jobs;
 pub mod ledger;
 pub mod python_text;
 pub mod reconcile;
+pub mod sink;
 pub mod stopwords;
 pub mod store;
 pub mod synthesis;
@@ -27,6 +28,9 @@ pub use ledger::{
     Manifest, ManifestChunk, ManifestDocument, RecordState, SourceRecord, LAYOUT_VERSION,
 };
 pub use reconcile::{reconcile, DeleteReason, Reconciliation, ScannedFile};
+pub use sink::{
+    process_one, DeleteOutcome, HindsightSink, ProcessedJob, RetainRequest, SinkError, SinkOutcome,
+};
 pub use store::{
     apply_reconciliation, claim_job, complete_job, connect, fail_job, heartbeat_job, load_manifest,
     migrate, recover_expired_leases, upsert_source, ApplySummary, ClaimedJob, StoreError,

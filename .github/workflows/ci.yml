@@ -122,6 +122,45 @@ jobs:
       - name: cargo check at MSRV
         run: cargo check --all-targets --locked
 
+  rust-coverage:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: engram_ingest_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ENGRAM_INGEST_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/engram_ingest_test
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Rust with llvm tools
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Unit-tier coverage gate
+        run: cargo llvm-cov -p engram-ingest --all-targets --fail-under-lines 90
+
   integration-tests:
     runs-on: ubuntu-latest
     services:

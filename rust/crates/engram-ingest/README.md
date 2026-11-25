@@ -23,6 +23,9 @@ the docs-parity half of slice 3).
   adapter is a later ingestion slice.
 - Sink concurrency limits and per-bank metrics. `process_one` drives one job at
   a time; the worker loop and metrics land with the service switch.
+- Bank-scoped job claims. Jobs do not yet carry a bank id, so `process_one`
+  trusts its configured bank. Until the worker slice adds bank-scoped claims,
+  run one worker per bank/ledger, not one worker over a multi-bank ledger.
 - Native-vs-CocoIndex shadow comparison of emitted operations (the remaining
   part of issue #214 slice 3).
 - Issues, transcripts, PDF extraction, git sync, CocoIndex/Python removal.

@@ -555,6 +555,7 @@ fn try_claim_job(
                  WHERE leased.source_id = j.source_id
                    AND leased.hindsight_document_id = j.hindsight_document_id
                    AND leased.state = 'leased'
+                   AND l.expires_at > $1
             )
             AND NOT EXISTS (
                 SELECT 1

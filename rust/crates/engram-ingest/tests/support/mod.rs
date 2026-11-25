@@ -17,6 +17,21 @@ pub fn one_shot_delayed(
     body: &'static str,
     delay: Duration,
 ) -> (String, Arc<Mutex<Vec<String>>>) {
+    one_shot_with_location(status, body, delay, None)
+}
+
+/// One-shot server that sends a `Location` header (redirect regression tests).
+#[allow(dead_code)] // not every test binary uses the redirect helper
+pub fn one_shot_redirect(status: u16, location: &'static str) -> (String, Arc<Mutex<Vec<String>>>) {
+    one_shot_with_location(status, "", Duration::ZERO, Some(location))
+}
+
+fn one_shot_with_location(
+    status: u16,
+    body: &'static str,
+    delay: Duration,
+    location: Option<&'static str>,
+) -> (String, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
     let address = listener.local_addr().expect("mock address");
     let log = Arc::new(Mutex::new(Vec::new()));
@@ -50,8 +65,11 @@ pub fn one_shot_delayed(
         if !delay.is_zero() {
             thread::sleep(delay);
         }
+        let location = location
+            .map(|value| format!("Location: {value}\r\n"))
+            .unwrap_or_default();
         let response = format!(
-            "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}",
+            "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nContent-Type: application/json\r\n{location}Connection: close\r\n\r\n{body}",
             body.len()
         );
         let _ = stream.write_all(response.as_bytes());

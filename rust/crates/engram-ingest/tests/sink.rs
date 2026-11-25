@@ -49,6 +49,19 @@ fn document_id_path_segments_are_percent_encoded() {
 }
 
 #[test]
+fn redirects_are_not_followed() {
+    let (url, log) = support::one_shot_redirect(302, "/login");
+    let sink = HindsightSink::new(url).unwrap();
+    let error = sink.retain(&retain_request()).unwrap_err();
+    assert!(!error.is_transient(), "{error}");
+    assert_eq!(
+        log.lock().unwrap().len(),
+        1,
+        "redirect must not be followed"
+    );
+}
+
+#[test]
 fn base_url_path_prefix_is_preserved() {
     let (url, log) = support::one_shot(200, "{}");
     let sink = HindsightSink::new(format!("{url}/hindsight")).unwrap();

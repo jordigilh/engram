@@ -4,9 +4,9 @@ mod support;
 
 use chrono::{Duration as LedgerDuration, Utc};
 use engram_ingest::{
-    apply_reconciliation, connect, load_manifest, migrate, plan_document, process_one, reconcile,
-    upsert_source, ContentHash, DeleteOutcome, HindsightSink, ScannedFile, SinkError, SinkOutcome,
-    SourceRecord, StoreError, LAYOUT_VERSION,
+    apply_reconciliation, claim_job, connect, load_manifest, migrate, plan_document, process_one,
+    reconcile, upsert_source, ContentHash, DeleteOutcome, HindsightSink, ScannedFile, SinkError,
+    SinkOutcome, SourceRecord, StoreError, LAYOUT_VERSION,
 };
 use postgres::Client;
 
@@ -314,6 +314,56 @@ fn sink_retains_deletes_and_schedules_retries() {
     assert_eq!(state, "dead");
     assert_eq!(attempts, 3);
     assert_eq!(class.as_deref(), Some("permanent"));
+
+    // A crashed worker's expired lease is reclaimed before the next claim, so
+    // it does not block the document queue while a worker is running.
+    truncate(&mut client);
+    let source = upsert_source(
+        &mut client,
+        &SourceRecord::markdown("engram-test", "lease", "/tmp/lease", &["**/*.md"]),
+    )
+    .expect("source");
+    let scan = vec![scanned("lease.md", "# A\n\nLease body long enough.")];
+    let manifest = load_manifest(&mut client, source).expect("manifest");
+    let plan = reconcile(&manifest, &scan, LAYOUT_VERSION);
+    apply_reconciliation(&mut client, source, &plan, Utc::now()).expect("apply");
+    let t0 = Utc::now();
+    let abandoned = claim_job(
+        &mut client,
+        "crashed-worker",
+        LedgerDuration::seconds(1),
+        t0,
+    )
+    .expect("claim")
+    .expect("job");
+    let (url, _) = support::one_shot(200, "{}");
+    let sink = HindsightSink::new(url).expect("sink");
+    // Recovery requeues with its 1s backoff, so the first pass reclaims only.
+    assert!(process_one(
+        &mut client,
+        &sink,
+        "repo-docs",
+        "live-worker",
+        LedgerDuration::seconds(180),
+        t0 + LedgerDuration::seconds(2),
+    )
+    .expect("recover")
+    .is_none());
+    let recovered = process_one(
+        &mut client,
+        &sink,
+        "repo-docs",
+        "live-worker",
+        LedgerDuration::seconds(180),
+        t0 + LedgerDuration::seconds(5),
+    )
+    .expect("process")
+    .expect("reclaimed job");
+    assert_eq!(recovered.job_id, abandoned.job_id);
+    assert_eq!(recovered.outcome, SinkOutcome::Retained);
+    let (state, attempts) = state_of(&mut client, recovered.job_id);
+    assert_eq!(state, "succeeded");
+    assert_eq!(attempts, 1);
 
     truncate(&mut client);
 }

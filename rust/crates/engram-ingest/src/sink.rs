@@ -16,7 +16,9 @@ use reqwest::StatusCode;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::store::{claim_job, complete_job, fail_job, ClaimedJob, StoreError};
+use crate::store::{
+    claim_job, complete_job, fail_job, recover_expired_leases, ClaimedJob, StoreError,
+};
 
 #[derive(Debug, Clone)]
 pub struct HindsightSink {
@@ -110,6 +112,9 @@ impl HindsightSink {
             ));
         }
         let http = HttpClient::builder()
+            // A redirected retain POST becomes a GET and a 200 login page would
+            // otherwise be acknowledged as a successful retain.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| SinkError::Permanent(format!("build HTTP client: {error}")))?;
         Ok(Self {
@@ -288,6 +293,9 @@ pub fn process_one(
         )));
     }
 
+    // Reclaim crashed-worker leases before claiming; otherwise an expired
+    // lease blocks every later job for the same document.
+    recover_expired_leases(db, now)?;
     let Some(job) = claim_job(db, owner, ttl, now)? else {
         return Ok(None);
     };
@@ -298,13 +306,16 @@ pub fn process_one(
                 kind: job.kind,
                 outcome,
             })),
-            Err(StoreError::LeaseNotHeld) => Ok(Some(ProcessedJob {
-                job_id: job.job_id,
-                kind: job.kind,
-                outcome: SinkOutcome::Failed(
-                    "lease lost; job recovered by another worker".to_string(),
-                ),
-            })),
+            Err(StoreError::LeaseNotHeld) => {
+                recover_expired_leases(db, Utc::now())?;
+                Ok(Some(ProcessedJob {
+                    job_id: job.job_id,
+                    kind: job.kind,
+                    outcome: SinkOutcome::Failed(
+                        "lease lost; job recovered by another worker".to_string(),
+                    ),
+                }))
+            }
             Err(error) => Err(SinkError::Ledger(error)),
         },
         Err(error) => {
@@ -321,13 +332,16 @@ pub fn process_one(
                     kind: job.kind,
                     outcome: SinkOutcome::Failed(message),
                 })),
-                Err(StoreError::LeaseNotHeld) => Ok(Some(ProcessedJob {
-                    job_id: job.job_id,
-                    kind: job.kind,
-                    outcome: SinkOutcome::Failed(
-                        "lease lost; job recovered by another worker".to_string(),
-                    ),
-                })),
+                Err(StoreError::LeaseNotHeld) => {
+                    recover_expired_leases(db, Utc::now())?;
+                    Ok(Some(ProcessedJob {
+                        job_id: job.job_id,
+                        kind: job.kind,
+                        outcome: SinkOutcome::Failed(
+                            "lease lost; job recovered by another worker".to_string(),
+                        ),
+                    }))
+                }
                 Err(error) => Err(SinkError::Ledger(error)),
             }
         }

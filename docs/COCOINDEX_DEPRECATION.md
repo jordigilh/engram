@@ -183,7 +183,7 @@ The retired code flow was the only path that embedded locally into pgvector.
 For every deployment, inventory:
 
 - per-project LMDB environments named by `cocoindex_db` (do not assume a
-  filename pattern; kubernaut-style deployments may use `cocoindex.db`);
+  filename pattern; some deployments use `cocoindex.db`);
 - optional branch-overlay state (`code_overlay_db`, default
   `~/.engram/cocoindex-overlay.db`);
 - transcript watermarks (default

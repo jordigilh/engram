@@ -30,9 +30,9 @@ pub use hashing::{sha256_hex, ContentHash, HashError};
 pub use ids::{chunk_document_id, document_base_id, pathlib_suffix, stable_section_key};
 pub use issue_poll::{
     apply_snapshot, ingest_issue_stream, poll_github, poll_issue_stream, poll_jira,
-    stream_fingerprint, HttpResponse, HttpTransport, IssueIngestError, IssueIngestOutcome,
-    IssuePollOutcome, IssueProvider, IssueSnapshot, IssueStream, PollError, ReqwestTransport,
-    DEFAULT_GITHUB_API,
+    stream_fingerprint, validate_bank_streams, HttpResponse, HttpTransport, IssueIngestError,
+    IssueIngestOutcome, IssuePollOutcome, IssueProvider, IssueSnapshot, IssueStream, PollError,
+    ReqwestTransport, DEFAULT_GITHUB_API,
 };
 pub use issues::{
     adf_to_text, issue_document_id, normalize_github_login, plan_github_issue, plan_jira_issue,
@@ -53,10 +53,11 @@ pub use sink::{
 };
 pub use store::{
     apply_reconciliation, claim_job, complete_job, connect, count_stranded_expired_leases,
-    fail_job, heartbeat_job, lease_is_active, load_issue_cursor, load_manifest, migrate,
-    recover_expired_leases, recover_expired_leases_for_banks, recover_expired_leases_in_bank,
-    recover_expired_leases_outside_banks, save_issue_cursor, upsert_source, ApplySummary,
-    ClaimedJob, FailDisposition, IssueCursor, RecoveryReport, StoreError, RECOVERY_BATCH,
+    fail_job, heartbeat_job, lease_is_active, load_issue_cursor, load_manifest,
+    load_source_revision, migrate, recover_expired_leases, recover_expired_leases_for_banks,
+    recover_expired_leases_in_bank, recover_expired_leases_outside_banks, save_issue_cursor,
+    upsert_source, ApplySummary, ClaimedJob, FailDisposition, IssueCursor, RecoveryReport,
+    StoreError, RECOVERY_BATCH,
 };
 pub use synthesis::{
     analyze, split_sentences, synthesize_document, Analysis, Stats, Synthesis, SynthesisError,

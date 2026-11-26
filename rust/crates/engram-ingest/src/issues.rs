@@ -434,7 +434,7 @@ pub fn plan_jira_issue(
         CallContext {
             metadata,
             tags,
-            timestamp: Some(issue.updated.clone()),
+            timestamp: (!issue.updated.is_empty()).then(|| issue.updated.clone()),
         },
     );
     Ok(plan)

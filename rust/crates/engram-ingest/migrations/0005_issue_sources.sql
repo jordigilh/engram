@@ -48,6 +48,6 @@ CREATE TABLE IF NOT EXISTS engram_ingest.issue_cursors (
     page_count     integer NOT NULL DEFAULT 0 CHECK (page_count >= 0),
     last_error     text,
     status         text NOT NULL DEFAULT 'idle'
-                        CHECK (status IN ('idle', 'ok', 'not_modified', 'error')),
+                        CHECK (status IN ('idle', 'applying', 'ok', 'not_modified', 'error')),
     updated_at     timestamptz NOT NULL DEFAULT now()
 );

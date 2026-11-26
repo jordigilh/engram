@@ -5,9 +5,9 @@ use std::sync::Mutex;
 
 use chrono::Utc;
 use engram_ingest::{
-    connect, ingest_issue_stream, migrate, save_issue_cursor, stream_fingerprint, upsert_source,
-    GitHubKind, HttpResponse, HttpTransport, IssueCursor, IssueIngestError, IssueIngestOutcome,
-    IssueStream, PollError,
+    apply_snapshot, connect, ingest_issue_stream, load_source_revision, migrate, save_issue_cursor,
+    stream_fingerprint, upsert_source, GitHubKind, HttpResponse, HttpTransport, IssueCursor,
+    IssueIngestError, IssueIngestOutcome, IssueSnapshot, IssueStream, PollError, StoreError,
 };
 use postgres::Client;
 use serde_json::{json, Value};
@@ -732,4 +732,60 @@ fn fingerprint_change_after_a_failed_poll_does_not_reuse_the_old_etag() {
     )
     .expect("changed config ingest");
     assert!(!routes.saw_if_none_match());
+}
+
+#[test]
+fn an_older_snapshot_cannot_delete_a_newer_issue() {
+    let Some(url) = test_url() else {
+        return;
+    };
+    let mut client = connect(&url).expect("connect");
+    let database: String = client
+        .query_one("SELECT current_database()", &[])
+        .expect("database name")
+        .get(0);
+    assert_eq!(database, "engram_ingest_test");
+    client
+        .execute("SELECT pg_advisory_lock($1)", &[&918_273_i64])
+        .expect("harness lock");
+    migrate(&mut client).expect("migrate");
+    truncate(&mut client);
+    let stream = IssueStream::github("p", "p-issues", "org/repo", GitHubKind::Issue, None, 100);
+    let source_id = seed_source(&mut client, &stream);
+    let base_revision = load_source_revision(&mut client, source_id).expect("revision");
+
+    let routes = Routes::default().get(
+        &github_list_url(),
+        response(200, json!([github_item(1, "open", &[], 0)])),
+    );
+    ingest_issue_stream(
+        &mut client,
+        source_id,
+        &stream,
+        &routes,
+        "token",
+        Utc::now(),
+    )
+    .expect("newer poll");
+
+    let empty = IssueSnapshot {
+        plans: Vec::new(),
+        page_count: 1,
+        item_count: 0,
+        etag: None,
+        last_updated: None,
+        deletions_allowed: true,
+    };
+    let error = apply_snapshot(&mut client, source_id, &empty, base_revision, Utc::now())
+        .expect_err("old snapshot must be rejected");
+    assert!(matches!(error, StoreError::StaleSnapshot));
+    let state: String = client
+        .query_one(
+            "SELECT state FROM engram_ingest.documents
+              WHERE source_id = $1 AND relative_path = 'issue/1'",
+            &[&source_id],
+        )
+        .expect("newer issue")
+        .get(0);
+    assert_eq!(state, "active");
 }

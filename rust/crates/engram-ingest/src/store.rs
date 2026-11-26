@@ -42,6 +42,8 @@ pub enum StoreError {
     ScanConflict(String),
     #[error("reconciliation is based on an obsolete source revision; reload the manifest")]
     StaleReconciliation,
+    #[error("the provider snapshot predates a newer ledger commit for this source")]
+    StaleSnapshot,
 }
 
 /// Recovery selection window. Startup and runtime passes use the same value so
@@ -474,6 +476,15 @@ pub fn upsert_source(client: &mut Client, source: &SourceRecord) -> Result<i64, 
     let id = row.get(0);
     transaction.commit()?;
     Ok(id)
+}
+
+pub fn load_source_revision(client: &mut Client, source_id: i64) -> Result<i64, StoreError> {
+    Ok(client
+        .query_one(
+            "SELECT revision FROM engram_ingest.sources WHERE id = $1",
+            &[&source_id],
+        )?
+        .get(0))
 }
 
 pub fn load_manifest(client: &mut Client, source_id: i64) -> Result<Manifest, StoreError> {

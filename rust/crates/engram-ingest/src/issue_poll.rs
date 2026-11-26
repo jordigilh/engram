@@ -12,8 +12,8 @@
 //! All HTTP access goes through [`HttpTransport`] so tests can script
 //! pagination, 304s, rate limits, and failures without a network.
 
-use std::collections::BTreeMap;
-use std::time::Duration;
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use postgres::Client;
@@ -28,8 +28,8 @@ use crate::issues::{
 use crate::ledger::{SourceRecord, ISSUE_LAYOUT_VERSION};
 use crate::reconcile::{reconcile_with_removed_reason, DeleteReason, Reconciliation, ScannedFile};
 use crate::store::{
-    apply_reconciliation, load_issue_cursor, load_manifest, save_issue_cursor, ApplySummary,
-    IssueCursor, StoreError,
+    apply_reconciliation, load_issue_cursor, load_manifest, load_source_revision,
+    save_issue_cursor, ApplySummary, IssueCursor, StoreError,
 };
 
 pub const DEFAULT_GITHUB_API: &str = "https://api.github.com";
@@ -75,9 +75,22 @@ impl PollError {
                 .get("retry-after")
                 .and_then(|value| value.parse::<u64>().ok())
                 .map(Duration::from_secs);
+            let reset_after = headers
+                .get("x-ratelimit-reset")
+                .and_then(|value| value.parse::<u64>().ok())
+                .and_then(|reset| {
+                    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+                    reset.checked_sub(now).map(Duration::from_secs)
+                });
             let exhausted = headers
                 .get("x-ratelimit-remaining")
                 .is_some_and(|value| value == "0");
+            let retry_after = match (retry_after, reset_after) {
+                (Some(retry), Some(reset)) => Some(retry.max(reset)),
+                (Some(retry), None) => Some(retry),
+                (None, Some(reset)) => Some(reset),
+                (None, None) => None,
+            };
             if status == 429 || exhausted || retry_after.is_some() {
                 return Self::RateLimited { retry_after };
             }
@@ -392,6 +405,42 @@ impl IssueStream {
     }
 }
 
+/// Reject stream sets that would share Hindsight document ids in one bank.
+///
+/// GitHub ids include the short repo and kind, so one prefix can serve several
+/// repositories. Jira ids are `{prefix}-{key}` and a JQL cannot be proven
+/// disjoint, so two Jira streams in the same bank must use different prefixes.
+pub fn validate_bank_streams(streams: &[IssueStream]) -> Result<(), PollError> {
+    let mut identities: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut jira_prefixes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for stream in streams {
+        stream.validate()?;
+        if !identities
+            .entry(stream.bank_id.clone())
+            .or_default()
+            .insert(stream.identity())
+        {
+            return Err(PollError::Invalid(format!(
+                "duplicate issue stream identity in bank {}",
+                stream.bank_id
+            )));
+        }
+        if stream.provider == IssueProvider::Jira
+            && !jira_prefixes
+                .entry(stream.bank_id.clone())
+                .or_default()
+                .insert(stream.effective_prefix().to_string())
+        {
+            return Err(PollError::Invalid(format!(
+                "two Jira streams in bank {} share the document prefix {:?}",
+                stream.bank_id,
+                stream.effective_prefix()
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssueSnapshot {
     pub plans: Vec<IssuePlan>,
@@ -399,6 +448,9 @@ pub struct IssueSnapshot {
     pub item_count: usize,
     pub etag: Option<String>,
     pub last_updated: Option<String>,
+    /// False when a multi-page page sequence could not be proven stable; the
+    /// snapshot may still retain changed issues but must not delete absent ones.
+    pub deletions_allowed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -421,12 +473,21 @@ impl IssueSnapshot {
     }
 
     pub fn reconciliation(&self, manifest: &crate::ledger::Manifest) -> Reconciliation {
-        reconcile_with_removed_reason(
+        let mut reconciliation = reconcile_with_removed_reason(
             manifest,
             &self.scan(),
             ISSUE_LAYOUT_VERSION,
             DeleteReason::IssueRemoved,
-        )
+        );
+        if !self.deletions_allowed {
+            reconciliation
+                .deletes
+                .retain(|delete| delete.reason != DeleteReason::IssueRemoved);
+            reconciliation.removed_files.clear();
+            reconciliation.stats.deleted_chunks = reconciliation.deletes.len();
+            reconciliation.stats.tombstoned_files = 0;
+        }
+        reconciliation
     }
 }
 
@@ -475,7 +536,9 @@ pub fn poll_github(
     let mut page_count = 0usize;
     let mut matched_count = 0usize;
     let mut first_etag: Option<String> = None;
+    let mut first_page_hash: Option<ContentHash> = None;
     let mut last_updated: Option<String> = None;
+    let initial_url = url.clone();
 
     loop {
         page_count += 1;
@@ -501,6 +564,7 @@ pub fn poll_github(
         }
         if page_count == 1 {
             first_etag = response.header("etag").map(str::to_string);
+            first_page_hash = Some(ContentHash::of(&response.body));
         }
         let page: Vec<Value> = serde_json::from_slice(&response.body)
             .map_err(|error| PollError::Invalid(error.to_string()))?;
@@ -513,6 +577,9 @@ pub fn poll_github(
             }
             if is_pr_stream || item.get("pull_request").is_none() {
                 matched_count += 1;
+                if matched_count > stream.limit {
+                    return Err(PollError::Truncated(stream.limit));
+                }
             }
         }
         items.extend(page);
@@ -528,9 +595,22 @@ pub fn poll_github(
         url = next;
     }
 
-    if matched_count > stream.limit {
-        return Err(PollError::Truncated(stream.limit));
-    }
+    // Offset-based pages have no snapshot token. Re-read page 1 after the last
+    // page; only a byte-identical first page proves the list did not shift
+    // underneath the scan, which is required before deleting absent issues.
+    let deletions_allowed = if page_count <= 1 {
+        true
+    } else {
+        let response = transport.get(&initial_url, &headers)?;
+        if response.status != 200 {
+            return Err(PollError::from_status(
+                response.status,
+                &response.headers,
+                response.body,
+            ));
+        }
+        first_page_hash == Some(ContentHash::of(&response.body))
+    };
 
     let mut plans = Vec::new();
     for item in items.iter() {
@@ -564,6 +644,7 @@ pub fn poll_github(
         item_count: matched_count,
         etag: if page_count == 1 { first_etag } else { None },
         last_updated,
+        deletions_allowed,
     }))
 }
 
@@ -692,6 +773,7 @@ pub fn poll_jira(
     ];
     let mut items: Vec<Value> = Vec::new();
     let mut next_page_token: Option<String> = None;
+    let mut requested_tokens = BTreeSet::new();
     let mut page_count = 0usize;
     let mut last_updated: Option<String> = None;
 
@@ -743,6 +825,11 @@ pub fn poll_jira(
                 break;
             }
             if let Some(token) = token {
+                if !requested_tokens.insert(token.clone()) {
+                    return Err(PollError::Invalid(
+                        "Jira repeated a nextPageToken that was already used".into(),
+                    ));
+                }
                 next_page_token = Some(token);
                 continue;
             }
@@ -773,6 +860,11 @@ pub fn poll_jira(
         if items.len() >= stream.limit {
             return Err(PollError::Truncated(stream.limit));
         }
+        if !requested_tokens.insert(token.clone()) {
+            return Err(PollError::Invalid(
+                "Jira repeated a nextPageToken that was already used".into(),
+            ));
+        }
         next_page_token = Some(token);
     }
 
@@ -800,6 +892,7 @@ pub fn poll_jira(
         item_count: items.len(),
         etag: None,
         last_updated,
+        deletions_allowed: true,
     }))
 }
 
@@ -859,6 +952,7 @@ pub fn ingest_issue_stream(
     now: DateTime<Utc>,
 ) -> Result<IssueIngestOutcome, IssueIngestError> {
     let previous = load_issue_cursor(client, source_id)?;
+    let base_revision = load_source_revision(client, source_id)?;
     let fingerprint = stream_fingerprint(stream);
     let outcome = match poll_issue_stream(transport, token, stream, previous.as_ref()) {
         Ok(outcome) => outcome,
@@ -882,11 +976,17 @@ pub fn ingest_issue_stream(
             Ok(IssueIngestOutcome::NotModified(cursor))
         }
         IssuePollOutcome::Snapshot(snapshot) => {
-            let summary = match apply_snapshot(client, source_id, &snapshot, now) {
+            // Drop the old ETag before applying so a crash between the ledger
+            // commit and the new cursor cannot replay a 304 for the old list.
+            let mut invalidated = previous.clone().unwrap_or_default();
+            invalidated.etag = None;
+            invalidated.status = "applying".to_string();
+            invalidated.last_polled_at = Some(now);
+            save_issue_cursor(client, source_id, &invalidated, now)?;
+            let summary = match apply_snapshot(client, source_id, &snapshot, base_revision, now) {
                 Ok(summary) => summary,
                 Err(error) => {
-                    let mut cursor = previous.clone().unwrap_or_default();
-                    cursor.last_polled_at = Some(now);
+                    let mut cursor = invalidated;
                     cursor.status = "error".to_string();
                     cursor.last_error = Some(error.to_string());
                     let _ = save_issue_cursor(client, source_id, &cursor, now);
@@ -913,18 +1013,19 @@ pub fn apply_snapshot(
     client: &mut Client,
     source_id: i64,
     snapshot: &IssueSnapshot,
+    base_revision: i64,
     now: DateTime<Utc>,
 ) -> Result<ApplySummary, StoreError> {
-    for attempt in 0..3 {
-        let manifest = load_manifest(client, source_id)?;
-        let reconciliation = snapshot.reconciliation(&manifest);
-        match apply_reconciliation(client, source_id, &reconciliation, now) {
-            Ok(summary) => return Ok(summary),
-            Err(StoreError::StaleReconciliation) if attempt < 2 => continue,
-            Err(error) => return Err(error),
-        }
+    let manifest = load_manifest(client, source_id)?;
+    if manifest.revision != base_revision {
+        return Err(StoreError::StaleSnapshot);
     }
-    Err(StoreError::StaleReconciliation)
+    let reconciliation = snapshot.reconciliation(&manifest);
+    match apply_reconciliation(client, source_id, &reconciliation, now) {
+        Ok(summary) => Ok(summary),
+        Err(StoreError::StaleReconciliation) => Err(StoreError::StaleSnapshot),
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]
@@ -1035,6 +1136,7 @@ mod tests {
         let transport = ScriptedTransport::new(vec![
             first,
             response(200, json!([github_item(2, "2026-01-03T00:00:00Z")])),
+            response(200, json!([github_item(1, "2026-01-02T00:00:00Z")])),
         ]);
         let outcome = poll_github(
             &transport,
@@ -1050,6 +1152,7 @@ mod tests {
         assert_eq!(snapshot.page_count, 2);
         assert_eq!(snapshot.item_count, 2);
         assert_eq!(snapshot.etag, None);
+        assert!(snapshot.deletions_allowed);
         assert_eq!(
             snapshot.last_updated.as_deref(),
             Some("2026-01-03T00:00:00Z")
@@ -1104,6 +1207,7 @@ mod tests {
         let transport = ScriptedTransport::new(vec![
             first,
             response(200, json!([github_item(2, "2026-01-03T00:00:00Z")])),
+            response(200, json!([github_item(1, "2026-01-02T00:00:00Z")])),
         ]);
         let IssuePollOutcome::Snapshot(snapshot) = poll_github(
             &transport,
@@ -1629,6 +1733,73 @@ mod tests {
         let explicit = jira_stream().with_document_prefix(Some("jira"));
         assert_eq!(default.identity(), explicit.identity());
         assert_eq!(stream_fingerprint(&default), stream_fingerprint(&explicit));
+    }
+
+    #[test]
+    fn unstable_multi_page_snapshot_disables_deletions() {
+        let mut first = response(200, json!([github_item(1, "2026-01-02T00:00:00Z")]));
+        first.headers.insert(
+            "link".to_string(),
+            "<https://api.github.com/next>; rel=\"next\"".to_string(),
+        );
+        let transport = ScriptedTransport::new(vec![
+            first,
+            response(200, json!([github_item(2, "2026-01-03T00:00:00Z")])),
+            response(200, json!([github_item(99, "2026-01-04T00:00:00Z")])),
+        ]);
+        let IssuePollOutcome::Snapshot(snapshot) = poll_github(
+            &transport,
+            "token",
+            "https://api.github.com",
+            &stream(),
+            None,
+        )
+        .unwrap() else {
+            panic!("expected snapshot");
+        };
+        assert!(!snapshot.deletions_allowed);
+    }
+
+    #[test]
+    fn repeated_jira_continuation_token_is_rejected() {
+        let transport = ScriptedTransport::new(vec![
+            response(
+                200,
+                json!({"issues": [], "isLast": false, "nextPageToken": "same"}),
+            ),
+            response(
+                200,
+                json!({"issues": [], "isLast": false, "nextPageToken": "same"}),
+            ),
+        ]);
+        let error = poll_jira(&transport, "token", &jira_stream(), None).unwrap_err();
+        assert!(matches!(error, PollError::Invalid(_)));
+    }
+
+    #[test]
+    fn bank_streams_reject_shared_jira_prefixes_and_duplicate_identities() {
+        let a = jira_stream();
+        let b = jira_stream();
+        assert!(validate_bank_streams(&[a.clone(), b]).is_err());
+        let b = jira_stream().with_document_prefix(Some("other"));
+        assert!(validate_bank_streams(&[a, b]).is_ok());
+        let first = stream();
+        let second = stream();
+        assert!(validate_bank_streams(&[first, second]).is_err());
+    }
+
+    #[test]
+    fn rate_limit_reset_is_used_when_retry_after_is_absent() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut headers = BTreeMap::new();
+        headers.insert("x-ratelimit-remaining".to_string(), "0".to_string());
+        headers.insert("x-ratelimit-reset".to_string(), (now + 60).to_string());
+        let error = PollError::from_status(403, &headers, Vec::new());
+        let retry = error.retry_after().expect("reset deadline");
+        assert!(retry >= Duration::from_secs(55) && retry <= Duration::from_secs(60));
     }
 
     #[test]

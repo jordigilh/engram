@@ -118,6 +118,17 @@ transcripts, service switch, and Python/CocoIndex removal (#232).
   reconciling a truncated snapshot.
 - **ETags are single-page only.** A stored ETag is replayed only when the prior
   snapshot fit in one page; a 304 on page 1 cannot prove later pages unchanged.
+  The ETag is cleared before a snapshot is applied, so a crash mid-apply cannot
+  replay a 304 for the old list.
+- **Multi-page GitHub snapshots prove stability before deleting.** Pages are
+  offset-based, so page 1 is re-read after the last page. Only a byte-identical
+  page 1 allows `issue_removed` tombstones; otherwise the snapshot still
+  retains changed issues but cannot delete absent ones.
+- **Rate limits use both headers.** `Retry-After` and `x-ratelimit-reset` are
+  combined to the later deadline.
+- **Bank streams are validated together.** `validate_bank_streams` rejects
+  duplicate identities and two Jira streams in one bank that share an effective
+  document prefix.
 - **One source row per stream.** GitHub `(repo, item kind, prefix)` and Jira
   `(server, project, JQL, prefix)` are separate sources, keyed by a config hash,
   so a failed repo or a changed JQL cannot silently alias another stream.

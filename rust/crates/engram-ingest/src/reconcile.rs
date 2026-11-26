@@ -23,6 +23,7 @@ pub struct ScannedFile {
 pub enum DeleteReason {
     FileRemoved,
     ChunkRemoved,
+    IssueRemoved,
 }
 
 impl DeleteReason {
@@ -30,6 +31,7 @@ impl DeleteReason {
         match self {
             Self::FileRemoved => "file_removed",
             Self::ChunkRemoved => "chunk_removed",
+            Self::IssueRemoved => "issue_removed",
         }
     }
 }
@@ -94,6 +96,17 @@ impl Reconciliation {
 }
 
 pub fn reconcile(manifest: &Manifest, scan: &[ScannedFile], layout_version: i32) -> Reconciliation {
+    reconcile_with_removed_reason(manifest, scan, layout_version, DeleteReason::FileRemoved)
+}
+
+/// Like [`reconcile`], but lets the caller name why a whole document left the
+/// scan. Issues use [`DeleteReason::IssueRemoved`]; docs keep `file_removed`.
+pub fn reconcile_with_removed_reason(
+    manifest: &Manifest,
+    scan: &[ScannedFile],
+    layout_version: i32,
+    removed_reason: DeleteReason,
+) -> Reconciliation {
     let scanned: BTreeMap<&str, &ScannedFile> = scan
         .iter()
         .map(|file| (file.relative_path.as_str(), file))
@@ -151,7 +164,7 @@ pub fn reconcile(manifest: &Manifest, scan: &[ScannedFile], layout_version: i32)
             .chunks_for(path)
             .filter(|chunk| chunk.state == RecordState::Active)
         {
-            push_delete(&mut result, chunk, DeleteReason::FileRemoved);
+            push_delete(&mut result, chunk, removed_reason);
         }
         result.removed_files.push(path.clone());
         result.stats.tombstoned_files += 1;

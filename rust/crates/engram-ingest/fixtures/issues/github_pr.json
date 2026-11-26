@@ -1,0 +1,38 @@
+{
+  "repo": "praxis-proxy/ai",
+  "prefix": null,
+  "kind": "pr",
+  "issue": {
+    "number": 2211,
+    "title": "feat(mcp): structured audit logging for MCP tool calls",
+    "body": "This PR adds structured audit logging. It is long enough to produce a header section.",
+    "state": "closed",
+    "labels": [{ "name": "ai" }],
+    "user": { "login": "alice" },
+    "created_at": "2026-11-26T00:30:00Z",
+    "updated_at": "2026-11-26T02:18:17Z",
+    "comments": 1,
+    "pull_request": { "merged_at": "2026-11-26T02:00:00Z" }
+  },
+  "comments": [
+    {
+      "id": 7178928526,
+      "body": "<!-- praxis:pr-description-check-v3 -->\nThis PR needs a non-empty description; see the contributing guide.",
+      "author_association": "CONTRIBUTOR",
+      "user": { "login": "praxis-bot-app[bot]" }
+    }
+  ],
+  "expected": {
+    "base_id": "ai-pr-2211",
+    "comment_id": "ai-pr-2211-comment0",
+    "state": "merged",
+    "tags": ["merged", "pr", "ai"],
+    "metadata": {
+      "source": "cocoindex",
+      "repo": "praxis-proxy/ai",
+      "kind": "pr",
+      "number": "2211",
+      "state": "merged"
+    }
+  }
+}

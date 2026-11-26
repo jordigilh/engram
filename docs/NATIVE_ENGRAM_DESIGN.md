@@ -252,7 +252,7 @@ Every input is represented by a stable source identity:
 ```text
 project
 source_tag
-source_kind       docs | issue | pull_request | jira | transcript | code
+source_kind       docs | github_issue | github_pr | jira_issue | transcript | code
 repository
 relative_path or remote_key
 branch/release_line (when applicable)

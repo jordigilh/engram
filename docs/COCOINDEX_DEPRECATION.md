@@ -120,8 +120,10 @@ oversized parts `part{n}` / `comment{i}-part{n}`; the document ID appends the
 key as `-{key}`. Keys are stable for append-only, unfiltered prefixes. They are
 **not** stable when the filtered comment list changes (author becomes
 untrusted, body drops below 20 chars, or the 10-comment cap evicts an older
-comment), because later ordinals shift. The Rust owner should key by a stable
-comment id instead.
+comment), because later ordinals shift. A stable comment-id key would avoid
+that drift, but it changes every existing comment document id; the Rust
+implementation preserves the ordinal keys for parity and defers a rekey to a
+separate reindex.
 
 Metadata and tags are provider-specific:
 
@@ -246,7 +248,9 @@ backout before dropping anything.
   must be implemented or explicitly dropped before the removal gate.
 - CocoIndex LMDB state is an undocumented memoization format; the Rust ledger
   needs its own manifest, not a byte-compatible port.
-- PDF extraction, Jira ADF, GitHub pagination/rate limits, discussion/board
-  providers, and the transcript contradiction pipeline are parity surface.
+- GitHub/Jira issue serialization, ADF, pagination, rate limits, and
+  out-of-scope deletion are implemented natively in `engram-ingest` (#243).
+- PDF extraction, discussion/board providers (#244), and the transcript
+  contradiction pipeline remain parity surface.
 - Hindsight retain is not idempotent by itself; stable IDs must be validated
   against duplicate consolidation.

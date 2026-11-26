@@ -131,6 +131,11 @@ transcripts, service switch, and Python/CocoIndex removal (#232).
 - **Snapshot hash includes metadata.** State, labels, milestone, updated
   timestamp, and comments are hashed alongside the header/body, so a close or
   relabel re-retains tags/metadata even though the header text is stable.
+- **An empty result set is authoritative.** That is what makes out-of-scope
+  deletion exact, but a Jira service account that loses browse permission can
+  also return `issues: []` with `200`. Keep JQL scoped to the intended project
+  and watch `issue_cursors.item_count`; a sudden drop to zero is the signal to
+  verify credentials before accepting the tombstone pass.
 
 ## Ledger mapping
 

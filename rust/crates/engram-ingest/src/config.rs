@@ -685,13 +685,19 @@ mod tests {
     }
 
     fn temp_dir() -> TempDir {
-        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "engram-ingest-config-{}-{unique}",
-            std::process::id()
-        ));
-        std::fs::create_dir(&path).expect("temp dir");
-        TempDir(path)
+        for _ in 0..100 {
+            let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "engram-ingest-config-{}-{unique}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return TempDir(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("temp dir: {error}"),
+            }
+        }
+        panic!("could not create a unique config fixture");
     }
 
     fn env_map(values: &[(&str, &str)]) -> HashMap<String, String> {

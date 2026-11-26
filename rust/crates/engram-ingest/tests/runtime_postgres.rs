@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use engram_ingest::config::RuntimeConfig;
-use engram_ingest::runtime::{Runtime, SourceOutcome};
+use engram_ingest::runtime::{Runtime, RuntimeError, SourceOutcome};
 use engram_ingest::worker::Shutdown;
 use engram_ingest::{claim_job, connect, count_drain_jobs, migrate};
 use postgres::Client;
@@ -297,6 +297,30 @@ fn run_exits_on_preexisting_shutdown_after_a_manual_scan() {
     let handle = runtime.start(shutdown.clone()).expect("start");
     handle.shutdown();
     handle.run().expect("run exits cleanly");
+}
+
+#[test]
+fn cancelled_once_drain_fails_when_work_was_observed() {
+    let Some((database_url, _client)) = setup() else {
+        return;
+    };
+    let server = TestServer::start(500, Duration::ZERO);
+    let root = temp_dir("cancel-docs");
+    let disorder = temp_dir("cancel-config");
+    write_doc(&root, "a.md", "# A\n\nalpha content");
+    let config_path = write_config(&root, &disorder, &database_url, server.url());
+
+    let handle = Runtime::new(load_config(&config_path))
+        .expect("runtime")
+        .start(Shutdown::default())
+        .expect("start");
+    handle.shutdown();
+    let result = handle.drain(Duration::from_secs(10));
+    let cancelled = matches!(&result, Err(RuntimeError::DrainCancelled { .. }));
+    assert!(
+        cancelled,
+        "cancelled drain must report the observed backlog: {result:?}"
+    );
 }
 
 #[test]

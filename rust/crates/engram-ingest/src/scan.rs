@@ -679,13 +679,19 @@ mod tests {
     }
 
     fn fixture() -> TempDir {
-        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "engram-ingest-scan-{}-{unique}",
-            std::process::id()
-        ));
-        std::fs::create_dir(&root).expect("root");
-        TempDir(root)
+        for _ in 0..100 {
+            let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let root = std::env::temp_dir().join(format!(
+                "engram-ingest-scan-{}-{unique}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&root) {
+                Ok(()) => return TempDir(root),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("root: {error}"),
+            }
+        }
+        panic!("could not create a unique scan fixture");
     }
 
     fn write(root: &Path, relative: &str, content: &[u8]) {

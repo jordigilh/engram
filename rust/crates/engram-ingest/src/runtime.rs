@@ -404,7 +404,16 @@ impl RuntimeHandle {
                 return Err(error);
             }
         };
-        let mut last_counts: Option<DrainCounts> = None;
+        // Observe the backlog before checking cancellation, so an immediate
+        // SIGTERM cannot report success without knowing whether work remains.
+        let initial = match count_drain_jobs(&mut client, &self.bank_ids, self.run_started) {
+            Ok(counts) => counts,
+            Err(error) => {
+                let _ = self.finish_inner(None);
+                return Err(error.into());
+            }
+        };
+        let mut last_counts: Option<DrainCounts> = Some(initial);
         loop {
             if self.shutdown.is_cancelled() {
                 return self.cancelled_or_finish(last_counts);
@@ -439,11 +448,16 @@ impl RuntimeHandle {
     /// snapshot was already empty; resident shutdown keeps its own semantics.
     fn cancelled_or_finish(self, counts: Option<DrainCounts>) -> Result<(), RuntimeError> {
         match counts {
-            Some(counts) if !counts.is_empty() => {
+            Some(counts) if counts.is_empty() => self.finish(),
+            Some(counts) => {
                 let _ = self.finish_inner(None);
                 Err(RuntimeError::DrainCancelled { counts })
             }
-            _ => self.finish(),
+            None => {
+                let counts = DrainCounts::default();
+                let _ = self.finish_inner(None);
+                Err(RuntimeError::DrainCancelled { counts })
+            }
         }
     }
 

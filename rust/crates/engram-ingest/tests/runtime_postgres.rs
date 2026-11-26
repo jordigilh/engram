@@ -3,12 +3,11 @@
 
 mod support;
 
+use chrono::{Duration as LedgerDuration, Utc};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-
-use chrono::{Duration as LedgerDuration, Utc};
 
 use engram_ingest::config::RuntimeConfig;
 use engram_ingest::runtime::{Runtime, SourceOutcome};
@@ -432,33 +431,31 @@ fn cli_once_fails_when_a_root_is_guarded_or_missing() {
     run_and_drain(load_config(&config_path));
 
     let run_once = || {
-        std::process::Command::new(binary())
-            .args([
+        let config = config_path.to_str().expect("config utf8");
+        run_cli(
+            &[
                 "run",
                 "--config",
-                config_path.to_str().expect("config utf8"),
+                config,
                 "--project",
                 "example",
                 "--once",
                 "--drain-timeout",
                 "30",
-            ])
-            .env_remove("ENGRAM_PROJECTS_CONFIG")
-            .env_remove("HINDSIGHT_URL")
-            .env_remove("COCOINDEX_PG_URL")
-            .output()
-            .expect("run binary")
+            ],
+            Duration::from_secs(30),
+        )
     };
 
     std::fs::remove_file(root.join("a.md")).expect("empty root");
-    let output = run_once();
-    assert!(!output.status.success(), "guarded root must fail --once");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("guarded"));
+    let (status, _stdout, stderr) = run_once();
+    assert!(!status.success(), "guarded root must fail --once");
+    assert!(stderr.contains("guarded"));
 
     std::fs::remove_dir_all(root.path()).expect("missing root");
-    let output = run_once();
-    assert!(!output.status.success(), "missing root must fail --once");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("skipped"));
+    let (status, _stdout, stderr) = run_once();
+    assert!(!status.success(), "missing root must fail --once");
+    assert!(stderr.contains("skipped"));
 }
 
 #[cfg(unix)]
@@ -507,6 +504,34 @@ fn wait_for_exit(child: &mut std::process::Child, timeout: Duration) -> std::pro
     }
 }
 
+/// Run the CLI with a parent-enforced deadline so a stalled child cannot hold
+/// the harness database lock forever.
+#[cfg(unix)]
+fn run_cli(args: &[&str], timeout: Duration) -> (std::process::ExitStatus, String, String) {
+    use std::io::Read as _;
+    let child = std::process::Command::new(binary())
+        .args(args)
+        .env_remove("ENGRAM_PROJECTS_CONFIG")
+        .env_remove("HINDSIGHT_URL")
+        .env_remove("COCOINDEX_PG_URL")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn binary");
+    let mut guard = ChildGuard::new(child);
+    let status = wait_for_exit(guard.child(), timeout);
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    if let Some(mut pipe) = guard.child().stdout.take() {
+        let _ = pipe.read_to_string(&mut stdout);
+    }
+    if let Some(mut pipe) = guard.child().stderr.take() {
+        let _ = pipe.read_to_string(&mut stderr);
+    }
+    guard.disarm();
+    (status, stdout, stderr)
+}
+
 #[cfg(unix)]
 #[test]
 fn cli_once_ingests_and_exits_zero() {
@@ -519,27 +544,21 @@ fn cli_once_ingests_and_exits_zero() {
     write_doc(&root, "a.md", "# A\n\nalpha content");
     let config_path = write_config(&root, &disorder, &database_url, server.url());
 
-    let output = std::process::Command::new(binary())
-        .args([
+    let config = config_path.to_str().expect("config utf8");
+    let (status, _stdout, stderr) = run_cli(
+        &[
             "run",
             "--config",
-            config_path.to_str().expect("config utf8"),
+            config,
             "--project",
             "example",
             "--once",
             "--drain-timeout",
             "30",
-        ])
-        .env_remove("ENGRAM_PROJECTS_CONFIG")
-        .env_remove("HINDSIGHT_URL")
-        .env_remove("COCOINDEX_PG_URL")
-        .output()
-        .expect("run binary");
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        ],
+        Duration::from_secs(30),
     );
+    assert!(status.success(), "stderr: {stderr}");
     assert!(count_jobs(&mut client, "succeeded") >= 1);
     assert!(!server.requests().is_empty());
 }

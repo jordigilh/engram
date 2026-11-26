@@ -46,6 +46,8 @@ pub enum RuntimeError {
     DrainTimeout { counts: DrainCounts },
     #[error("drain finished with failed jobs: {counts:?}")]
     DrainFailed { counts: DrainCounts },
+    #[error("drain was cancelled with work still pending: {counts:?}")]
+    DrainCancelled { counts: DrainCounts },
     #[error("runtime cancelled during startup")]
     Cancelled,
 }
@@ -237,6 +239,21 @@ impl Runtime {
         shutdown: Option<&Shutdown>,
     ) -> Result<Option<SourceOutcome>, RuntimeError> {
         let root = source.root.to_string_lossy().to_string();
+        let record = crate::ledger::SourceRecord {
+            project: source.project.clone(),
+            tag: source.tag.clone(),
+            root: root.clone(),
+            bank_id: source.bank_id.clone(),
+            docs_include: source.docs_include.clone(),
+            docs_exclude: source.docs_exclude.clone(),
+            document_format: crate::ledger::DEFAULT_DOCUMENT_FORMAT.to_string(),
+            source_kind: crate::ledger::DEFAULT_SOURCE_KIND.to_string(),
+        };
+        let source_id = upsert_source(client, &record)?;
+        // Capture the revision before the filesystem walk. If another runtime
+        // commits during the walk, apply sees the advanced revision and defers
+        // this plan instead of deleting a file the other runtime added.
+        let manifest = load_manifest(client, source_id)?;
         let (files, report) = match scan_source_with_shutdown(source, shutdown) {
             Ok(result) => result,
             Err(ScanError::Cancelled) => return Ok(None),
@@ -265,19 +282,6 @@ impl Runtime {
                 }))
             }
         };
-
-        let record = crate::ledger::SourceRecord {
-            project: source.project.clone(),
-            tag: source.tag.clone(),
-            root: root.clone(),
-            bank_id: source.bank_id.clone(),
-            docs_include: source.docs_include.clone(),
-            docs_exclude: source.docs_exclude.clone(),
-            document_format: crate::ledger::DEFAULT_DOCUMENT_FORMAT.to_string(),
-            source_kind: crate::ledger::DEFAULT_SOURCE_KIND.to_string(),
-        };
-        let source_id = upsert_source(client, &record)?;
-        let manifest = load_manifest(client, source_id)?;
         let active_documents = manifest
             .documents
             .values()
@@ -400,9 +404,10 @@ impl RuntimeHandle {
                 return Err(error);
             }
         };
+        let mut last_counts: Option<DrainCounts> = None;
         loop {
             if self.shutdown.is_cancelled() {
-                break;
+                return self.cancelled_or_finish(last_counts);
             }
             let counts = match count_drain_jobs(&mut client, &self.bank_ids, self.run_started) {
                 Ok(counts) => counts,
@@ -411,6 +416,7 @@ impl RuntimeHandle {
                     return Err(error.into());
                 }
             };
+            last_counts = Some(counts);
             if counts.dead > 0 {
                 let _ = self.finish_inner(None);
                 return Err(RuntimeError::DrainFailed { counts });
@@ -423,10 +429,22 @@ impl RuntimeHandle {
                 return Err(RuntimeError::DrainTimeout { counts });
             }
             if !self.shutdown.sleep(DRAIN_POLL_INTERVAL) {
-                break;
+                return self.cancelled_or_finish(last_counts);
             }
         }
         self.finish()
+    }
+
+    /// A cancelled one-shot drain is only success when the last observed
+    /// snapshot was already empty; resident shutdown keeps its own semantics.
+    fn cancelled_or_finish(self, counts: Option<DrainCounts>) -> Result<(), RuntimeError> {
+        match counts {
+            Some(counts) if !counts.is_empty() => {
+                let _ = self.finish_inner(None);
+                Err(RuntimeError::DrainCancelled { counts })
+            }
+            _ => self.finish(),
+        }
     }
 
     fn finish(self) -> Result<(), RuntimeError> {

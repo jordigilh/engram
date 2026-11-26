@@ -1060,9 +1060,10 @@ pub fn count_stranded_expired_leases(
 /// `pending` includes future-dated retries so a normal backoff is waited out
 /// rather than reported as a clean drain. `leased` counts every leased job, even
 /// an expired one that startup recovery has not reached yet, so a dead-slot
-/// backlog cannot look like a clean drain. `dead` counts terminal jobs created
-/// since the drain started; older dead rows belong to an earlier run and do not
-/// fail this backfill.
+/// backlog cannot look like a clean drain. `dead` counts terminal jobs marked
+/// dead since the run started, including jobs that startup recovery or an early
+/// worker failure killed before drain polling began; older dead rows from a
+/// previous run do not fail this backfill.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DrainCounts {
     pub pending: u64,

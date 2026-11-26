@@ -307,13 +307,21 @@ impl RuntimeConfig {
 }
 
 /// `document_base_id` joins the tag and the path with `--`, and path
-/// separators become `--` too. A tag that extends another with `--` can
-/// therefore produce the same id for a different path (repo + docs/intro vs
-/// repo--docs + intro).
+/// separators become `--` too. A tag that extends another with one or more
+/// hyphens can therefore produce the same id for a different path
+/// (repo + -intro vs repo- + intro, or repo + docs/intro vs repo--docs + intro).
 fn tags_ambiguous(left: &str, right: &str) -> bool {
-    left == right
-        || left.starts_with(&format!("{right}--"))
-        || right.starts_with(&format!("{left}--"))
+    if left == right {
+        return true;
+    }
+    let (shorter, longer) = if left.len() < right.len() {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    longer
+        .strip_prefix(shorter)
+        .is_some_and(|suffix| !suffix.is_empty() && (suffix.starts_with("--") || suffix == "-"))
 }
 
 fn merge_runtime_value(
@@ -655,18 +663,35 @@ where
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::ops::Deref;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-    fn temp_dir() -> PathBuf {
+    struct TempDir(PathBuf);
+
+    impl Deref for TempDir {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_dir() -> TempDir {
         let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
             "engram-ingest-config-{}-{unique}",
             std::process::id()
         ));
-        std::fs::create_dir_all(&path).expect("temp dir");
-        path
+        std::fs::create_dir(&path).expect("temp dir");
+        TempDir(path)
     }
 
     fn env_map(values: &[(&str, &str)]) -> HashMap<String, String> {
@@ -676,7 +701,7 @@ mod tests {
             .collect()
     }
 
-    fn write_config(body: &str) -> (PathBuf, PathBuf) {
+    fn write_config(body: &str) -> (TempDir, PathBuf) {
         let dir = temp_dir();
         let path = dir.join("projects.toml");
         std::fs::write(&path, body).expect("config");
@@ -1219,6 +1244,25 @@ docs_include = ["**/*.md"]
         let error = load(&path, &["a", "b"], &HashMap::new()).expect_err("ambiguous tags");
         assert!(error.to_string().contains("ambiguous tags"));
         assert!(error.to_string().contains("collide"));
+
+        let (_dir, hyphen) = write_config(
+            r#"
+[projects.a]
+docs_bank = "shared-docs"
+[[projects.a.sources]]
+tag = "repo"
+root = "/tmp/a"
+docs_include = ["**/*.md"]
+[projects.b]
+docs_bank = "shared-docs"
+[[projects.b.sources]]
+tag = "repo-"
+root = "/tmp/b"
+docs_include = ["**/*.md"]
+"#,
+        );
+        let error = load(&hyphen, &["a", "b"], &HashMap::new()).expect_err("hyphen suffix");
+        assert!(error.to_string().contains("ambiguous tags"));
     }
 
     #[test]

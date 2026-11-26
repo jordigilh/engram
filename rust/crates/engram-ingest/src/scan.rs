@@ -225,17 +225,9 @@ impl UnixWalker<'_> {
                     )
                 };
                 if fd < 0 {
-                    let error = std::io::Error::last_os_error();
-                    if matches!(
-                        error.raw_os_error(),
-                        Some(libc::ELOOP) | Some(libc::ENOTDIR)
-                    ) {
-                        self.report.skipped_symlinks += 1;
-                        continue;
-                    }
                     return Err(ScanError::Walk {
                         path: self.root.join(&child),
-                        source: error,
+                        source: std::io::Error::last_os_error(),
                     });
                 }
                 let result = self.walk(fd, &child);
@@ -253,18 +245,13 @@ impl UnixWalker<'_> {
                 libc::openat(
                     dir_fd,
                     cname.as_ptr(),
-                    libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                    libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
                 )
             };
             if fd < 0 {
-                let error = std::io::Error::last_os_error();
-                if error.raw_os_error() == Some(libc::ELOOP) {
-                    self.report.skipped_symlinks += 1;
-                    continue;
-                }
                 return Err(ScanError::Read {
                     path: self.root.join(&child),
-                    source: error,
+                    source: std::io::Error::last_os_error(),
                 });
             }
             let mut file = unsafe { File::from_raw_fd(fd) };
@@ -529,9 +516,13 @@ fn decode_utf16(bytes: &[u8], little_endian: bool) -> String {
             });
         }
     }
-    char::decode_utf16(units)
+    let mut decoded: String = char::decode_utf16(units)
         .map(|character| character.unwrap_or(char::REPLACEMENT_CHARACTER))
-        .collect()
+        .collect();
+    if bytes.len() % 2 == 1 {
+        decoded.push(char::REPLACEMENT_CHARACTER);
+    }
+    decoded
 }
 
 struct Patterns {
@@ -659,19 +650,42 @@ fn ancestor_prefixes(relative: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ops::Deref;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-    fn fixture() -> PathBuf {
+    struct TempDir(PathBuf);
+
+    impl Deref for TempDir {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl AsRef<Path> for TempDir {
+        fn as_ref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn fixture() -> TempDir {
         let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
             "engram-ingest-scan-{}-{unique}",
             std::process::id()
         ));
-        std::fs::create_dir_all(&root).expect("root");
-        root
+        std::fs::create_dir(&root).expect("root");
+        TempDir(root)
     }
 
     fn write(root: &Path, relative: &str, content: &[u8]) {
@@ -784,6 +798,12 @@ mod tests {
     }
 
     #[test]
+    fn utf16_odd_trailing_byte_becomes_replacement() {
+        assert_eq!(decode(&[0xFF, 0xFE, 0x41, 0x00, 0xFF]), "A\u{FFFD}");
+        assert_eq!(decode(&[0xFE, 0xFF, 0x00, 0x41, 0xFF]), "A\u{FFFD}");
+    }
+
+    #[test]
     fn missing_root_is_a_soft_skip() {
         let root = fixture().join("missing");
         let error = scan_source(&source(&root, &["**/*.md"], &[])).expect_err("missing");
@@ -796,7 +816,8 @@ mod tests {
         let error = scan_source(&source(&root, &["["], &[])).expect_err("pattern");
         assert!(matches!(error, ScanError::Pattern { .. }));
 
-        let file = fixture().join("file");
+        let dir = fixture();
+        let file = dir.join("file");
         std::fs::write(&file, b"not a directory").expect("file");
         let error = scan_source(&source(&file, &["**/*.md"], &[])).expect_err("not dir");
         assert!(matches!(error, ScanError::MissingRoot(_)));

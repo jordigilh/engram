@@ -250,8 +250,9 @@ migration.
 
 `--once` waits for every pending job (including backoff) and every leased job
 (even one whose lease expired but recovery has not reached), then exits 0. It
-exits non-zero on a drain timeout, when any job enters `dead` during the drain,
-or when a source was skipped/guarded as described above.
+exits non-zero on a drain timeout, a cancelled drain that still has work, when
+a source was skipped/guarded as described above, or when any job is marked
+`dead` from the start of the run (including startup recovery).
 
 `RuntimeHandle` exposes `shutdown()`, `health()`, `snapshot()`, `metrics()`
 (Prometheus text), `startup_recovery()`, and `prepared()`. The binary prints the

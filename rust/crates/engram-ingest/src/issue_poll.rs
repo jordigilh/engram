@@ -125,7 +125,16 @@ impl ReqwestTransport {
     pub fn new(timeout: Duration) -> Result<Self, PollError> {
         let client = HttpClient::builder()
             .timeout(timeout)
-            .redirect(reqwest::redirect::Policy::none())
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                let Some(original) = attempt.previous().first() else {
+                    return attempt.follow();
+                };
+                if urls_same_origin(original, attempt.url()) {
+                    attempt.follow()
+                } else {
+                    attempt.error("cross-origin redirect blocked")
+                }
+            }))
             .build()
             .map_err(|error| PollError::Transport(error.to_string()))?;
         Ok(Self { client })
@@ -285,13 +294,28 @@ impl IssueStream {
         self
     }
 
+    fn effective_prefix(&self) -> &str {
+        match self.provider {
+            IssueProvider::Jira => self
+                .document_prefix
+                .as_deref()
+                .filter(|prefix| !prefix.is_empty())
+                .unwrap_or("jira"),
+            IssueProvider::GitHub => self
+                .document_prefix
+                .as_deref()
+                .filter(|prefix| !prefix.is_empty())
+                .unwrap_or(""),
+        }
+    }
+
     pub fn identity(&self) -> String {
         let config = match self.provider {
             IssueProvider::GitHub => json!({
                 "provider": "github",
                 "repo": self.repo.as_deref().unwrap_or("").to_lowercase(),
                 "kind": self.github_kind.map(GitHubKind::as_str).unwrap_or("issue"),
-                "prefix": self.document_prefix.as_deref().unwrap_or(""),
+                "prefix": self.effective_prefix(),
             }),
             IssueProvider::Jira => json!({
                 "provider": "jira",
@@ -303,7 +327,7 @@ impl IssueStream {
                     .to_lowercase(),
                 "jql": self.jira_jql.as_deref().unwrap_or(""),
                 "project": self.jira_project.as_deref().unwrap_or(""),
-                "prefix": self.document_prefix.as_deref().unwrap_or(""),
+                "prefix": self.effective_prefix(),
             }),
         };
         let digest = ContentHash::of(&serde_json::to_vec(&config).unwrap_or_default());
@@ -501,9 +525,6 @@ pub fn poll_github(
                 "refusing to follow a GitHub page on another origin: {next}"
             )));
         }
-        if matched_count >= stream.limit {
-            return Err(PollError::Truncated(stream.limit));
-        }
         url = next;
     }
 
@@ -549,7 +570,7 @@ pub fn poll_github(
 pub fn stream_fingerprint(stream: &IssueStream) -> String {
     let value = json!({
         "provider": stream.provider.as_str(),
-        "prefix": stream.document_prefix.as_deref().unwrap_or(""),
+        "prefix": stream.effective_prefix(),
         "chunk_size": stream.chunk_size,
         "chunk_overlap": stream.chunk_overlap,
         "issue_layout_version": ISSUE_LAYOUT_VERSION,
@@ -562,6 +583,10 @@ fn same_origin(candidate: &str, base: &str) -> bool {
     else {
         return false;
     };
+    urls_same_origin(&candidate, &base)
+}
+
+fn urls_same_origin(candidate: &reqwest::Url, base: &reqwest::Url) -> bool {
     candidate.scheme() == base.scheme()
         && candidate.host_str() == base.host_str()
         && candidate.port_or_known_default() == base.port_or_known_default()
@@ -592,7 +617,14 @@ fn github_comments(
             .map_err(|error| PollError::Invalid(error.to_string()))?;
         comments.extend(page);
         match response.header("link").and_then(next_link) {
-            Some(next) => url = next,
+            Some(next) => {
+                if !same_origin(&next, api_base) {
+                    return Err(PollError::Invalid(format!(
+                        "refusing to follow a GitHub comment page on another origin: {next}"
+                    )));
+                }
+                url = next;
+            }
             None => return Ok(comments),
         }
     }
@@ -693,8 +725,30 @@ pub fn poll_jira(
             ));
         };
         let page = page.clone();
+        let is_last = match document.get("isLast") {
+            Some(value) => Some(
+                value
+                    .as_bool()
+                    .ok_or_else(|| PollError::Invalid("Jira isLast must be a boolean".into()))?,
+            ),
+            None => None,
+        };
+        let token = document
+            .get("nextPageToken")
+            .and_then(Value::as_str)
+            .filter(|token| !token.is_empty())
+            .map(str::to_string);
         if page.is_empty() {
-            break;
+            if is_last == Some(true) {
+                break;
+            }
+            if let Some(token) = token {
+                next_page_token = Some(token);
+                continue;
+            }
+            return Err(PollError::Invalid(
+                "Jira returned an empty page without a next token".into(),
+            ));
         }
         for item in &page {
             if let Some(updated) = item.pointer("/fields/updated").and_then(Value::as_str) {
@@ -705,12 +759,6 @@ pub fn poll_jira(
             }
         }
         items.extend(page);
-        let is_last = document.get("isLast").and_then(Value::as_bool);
-        let token = document
-            .get("nextPageToken")
-            .and_then(Value::as_str)
-            .filter(|token| !token.is_empty())
-            .map(str::to_string);
         if is_last == Some(true) {
             break;
         }
@@ -817,7 +865,6 @@ pub fn ingest_issue_stream(
         Err(error) => {
             let mut cursor = previous.unwrap_or_default();
             cursor.last_polled_at = Some(now);
-            cursor.fingerprint = Some(fingerprint);
             cursor.status = "error".to_string();
             cursor.last_error = Some(error.to_string());
             save_issue_cursor(client, source_id, &cursor, now)?;
@@ -840,7 +887,6 @@ pub fn ingest_issue_stream(
                 Err(error) => {
                     let mut cursor = previous.clone().unwrap_or_default();
                     cursor.last_polled_at = Some(now);
-                    cursor.fingerprint = Some(fingerprint);
                     cursor.status = "error".to_string();
                     cursor.last_error = Some(error.to_string());
                     let _ = save_issue_cursor(client, source_id, &cursor, now);
@@ -1079,7 +1125,10 @@ mod tests {
             "link".to_string(),
             "<https://api.github.com/next>; rel=\"next\"".to_string(),
         );
-        let transport = ScriptedTransport::new(vec![first]);
+        let transport = ScriptedTransport::new(vec![
+            first,
+            response(200, json!([github_item(2, "2026-01-03T00:00:00Z")])),
+        ]);
         let mut stream = stream();
         stream.limit = 1;
         let error =
@@ -1502,16 +1551,96 @@ mod tests {
     }
 
     #[test]
+    fn cross_origin_comment_link_is_rejected() {
+        let mut comments_page = response(
+            200,
+            json!([{
+                "id": 1,
+                "body": "A long enough first comment.",
+                "author_association": "MEMBER",
+                "user": {"login": "alice"}
+            }]),
+        );
+        comments_page.headers.insert(
+            "link".to_string(),
+            "<https://evil.example/comments-next>; rel=\"next\"".to_string(),
+        );
+        let transport = ScriptedTransport::new(vec![
+            response(
+                200,
+                json!([github_item_with_comments(1, "2026-01-02T00:00:00Z", 1)]),
+            ),
+            comments_page,
+        ]);
+        let error = poll_github(
+            &transport,
+            "token",
+            "https://api.github.com",
+            &stream(),
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(error, PollError::Invalid(_)));
+    }
+
+    #[test]
+    fn jira_empty_page_with_a_token_continues() {
+        let transport = ScriptedTransport::new(vec![
+            response(
+                200,
+                json!({"issues": [], "isLast": false, "nextPageToken": "next"}),
+            ),
+            response(
+                200,
+                json!({
+                    "issues": [{"key": "EX-1", "fields": {"summary": "S", "description": {"type": "doc", "content": []}, "status": {"name": "Open"}, "issuetype": {"name": "Story"}, "updated": "2026-01-02T00:00:00.000+0000"}}],
+                    "isLast": true
+                }),
+            ),
+        ]);
+        let IssuePollOutcome::Snapshot(snapshot) =
+            poll_jira(&transport, "token", &jira_stream(), None).unwrap()
+        else {
+            panic!("expected snapshot");
+        };
+        assert_eq!(snapshot.item_count, 1);
+        assert_eq!(snapshot.page_count, 2);
+    }
+
+    #[test]
+    fn jira_empty_page_without_a_token_is_invalid() {
+        let transport =
+            ScriptedTransport::new(vec![response(200, json!({"issues": [], "isLast": false}))]);
+        let error = poll_jira(&transport, "token", &jira_stream(), None).unwrap_err();
+        assert!(matches!(error, PollError::Invalid(_)));
+    }
+
+    #[test]
+    fn jira_non_boolean_is_last_is_invalid() {
+        let transport =
+            ScriptedTransport::new(vec![response(200, json!({"issues": [], "isLast": "yes"}))]);
+        let error = poll_jira(&transport, "token", &jira_stream(), None).unwrap_err();
+        assert!(matches!(error, PollError::Invalid(_)));
+    }
+
+    #[test]
+    fn jira_default_and_explicit_prefix_share_identity() {
+        let default = jira_stream();
+        let explicit = jira_stream().with_document_prefix(Some("jira"));
+        assert_eq!(default.identity(), explicit.identity());
+        assert_eq!(stream_fingerprint(&default), stream_fingerprint(&explicit));
+    }
+
+    #[test]
     fn fingerprint_change_disables_the_etag_fast_path() {
         let response = response(200, json!([github_item(1, "2026-01-02T00:00:00Z")]));
         let transport = ScriptedTransport::new(vec![response]);
-        let mut cursor = IssueCursor {
+        let cursor = IssueCursor {
             etag: Some("\"abc\"".to_string()),
             fingerprint: Some("different".to_string()),
             page_count: 1,
             ..IssueCursor::default()
         };
-        cursor.fingerprint = Some("different".to_string());
         let mut stream = stream();
         stream.document_prefix = Some("changed".to_string());
         poll_github(

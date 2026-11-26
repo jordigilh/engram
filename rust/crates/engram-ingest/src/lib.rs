@@ -29,9 +29,10 @@ pub use document::{format_local_timestamp, plan_document, relative_path, RetainC
 pub use hashing::{sha256_hex, ContentHash, HashError};
 pub use ids::{chunk_document_id, document_base_id, pathlib_suffix, stable_section_key};
 pub use issue_poll::{
-    apply_snapshot, ingest_issue_stream, poll_github, poll_issue_stream, poll_jira, HttpResponse,
-    HttpTransport, IssueIngestError, IssueIngestOutcome, IssuePollOutcome, IssueProvider,
-    IssueSnapshot, IssueStream, PollError, ReqwestTransport, DEFAULT_GITHUB_API,
+    apply_snapshot, ingest_issue_stream, poll_github, poll_issue_stream, poll_jira,
+    stream_fingerprint, HttpResponse, HttpTransport, IssueIngestError, IssueIngestOutcome,
+    IssuePollOutcome, IssueProvider, IssueSnapshot, IssueStream, PollError, ReqwestTransport,
+    DEFAULT_GITHUB_API,
 };
 pub use issues::{
     adf_to_text, issue_document_id, normalize_github_login, plan_github_issue, plan_jira_issue,

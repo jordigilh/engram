@@ -5,9 +5,9 @@ use std::sync::Mutex;
 
 use chrono::Utc;
 use engram_ingest::{
-    connect, ingest_issue_stream, migrate, save_issue_cursor, upsert_source, GitHubKind,
-    HttpResponse, HttpTransport, IssueCursor, IssueIngestError, IssueIngestOutcome, IssueStream,
-    PollError,
+    connect, ingest_issue_stream, migrate, save_issue_cursor, stream_fingerprint, upsert_source,
+    GitHubKind, HttpResponse, HttpTransport, IssueCursor, IssueIngestError, IssueIngestOutcome,
+    IssueStream, PollError,
 };
 use postgres::Client;
 use serde_json::{json, Value};
@@ -53,6 +53,7 @@ struct Routes {
     gets: Mutex<BTreeMap<String, HttpResponse>>,
     posts: Mutex<BTreeMap<String, HttpResponse>>,
     requests: Mutex<Vec<String>>,
+    request_headers: Mutex<Vec<BTreeMap<String, String>>>,
     etag_304: Mutex<Option<String>>,
 }
 
@@ -77,11 +78,29 @@ impl Routes {
         *self.etag_304.get_mut().unwrap() = Some(etag.to_string());
         self
     }
+
+    fn saw_if_none_match(&self) -> bool {
+        self.request_headers
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|headers| headers.contains_key("if-none-match"))
+    }
+
+    fn requests(&self) -> Vec<String> {
+        self.requests.lock().unwrap().clone()
+    }
 }
 
 impl HttpTransport for Routes {
     fn get(&self, url: &str, headers: &[(&str, String)]) -> Result<HttpResponse, PollError> {
         self.requests.lock().unwrap().push(url.to_string());
+        self.request_headers.lock().unwrap().push(
+            headers
+                .iter()
+                .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+                .collect(),
+        );
         if let Some(etag) = self.etag_304.lock().unwrap().as_ref() {
             let matches = headers
                 .iter()
@@ -557,4 +576,160 @@ fn migration_v5_is_rerunnable_against_populated_rows() {
         row.get::<_, Option<String>>(1).as_deref(),
         Some("fingerprint")
     );
+}
+
+#[test]
+fn pr_stream_uses_pulls_and_deletes_on_removal() {
+    let Some(url) = test_url() else {
+        return;
+    };
+    let mut client = connect(&url).expect("connect");
+    let database: String = client
+        .query_one("SELECT current_database()", &[])
+        .expect("database name")
+        .get(0);
+    assert_eq!(database, "engram_ingest_test");
+    client
+        .execute("SELECT pg_advisory_lock($1)", &[&918_273_i64])
+        .expect("harness lock");
+    migrate(&mut client).expect("migrate");
+    truncate(&mut client);
+    let stream = IssueStream::github("p", "p-issues", "org/repo", GitHubKind::Pr, None, 100);
+    let source_id = seed_source(&mut client, &stream);
+    let pulls_url = "https://api.github.com/repos/org/repo/pulls?state=all&per_page=100&sort=created&direction=desc";
+    let comments_url = "https://api.github.com/repos/org/repo/issues/9/comments?per_page=100";
+    let mut pr = github_item(9, "closed", &[], 0);
+    pr["state"] = json!("closed");
+    pr["merged_at"] = json!("2026-01-03T00:00:00Z");
+    let routes = Routes::default()
+        .get(pulls_url, response(200, json!([pr])))
+        .get(
+            comments_url,
+            response(
+                200,
+                json!([{
+                    "id": 1,
+                    "body": "A long enough PR comment.",
+                    "author_association": "MEMBER",
+                    "user": {"login": "alice"}
+                }]),
+            ),
+        );
+    let outcome = ingest_issue_stream(
+        &mut client,
+        source_id,
+        &stream,
+        &routes,
+        "token",
+        Utc::now(),
+    )
+    .expect("pr ingest");
+    let IssueIngestOutcome::Applied { summary, cursor } = outcome else {
+        panic!("expected applied");
+    };
+    assert!(summary.jobs_created >= 2);
+    assert_eq!(cursor.item_count, 1);
+    let rows = job_rows(&mut client);
+    let header = rows
+        .iter()
+        .find(|(_, document, _)| document == "repo-pr-9")
+        .unwrap();
+    assert_eq!(header.2["metadata"]["state"], "merged");
+    assert!(routes.requests()[0].contains("/pulls"));
+
+    let routes = Routes::default().get(pulls_url, response(200, json!([])));
+    ingest_issue_stream(
+        &mut client,
+        source_id,
+        &stream,
+        &routes,
+        "token",
+        Utc::now(),
+    )
+    .expect("delete pr");
+    let reason: String = client
+        .query_one(
+            "SELECT reason FROM engram_ingest.tombstones WHERE hindsight_document_id = 'repo-pr-9'",
+            &[],
+        )
+        .expect("tombstone")
+        .get(0);
+    assert_eq!(reason, "issue_removed");
+}
+
+#[test]
+fn fingerprint_change_after_a_failed_poll_does_not_reuse_the_old_etag() {
+    let Some(url) = test_url() else {
+        return;
+    };
+    let mut client = connect(&url).expect("connect");
+    let database: String = client
+        .query_one("SELECT current_database()", &[])
+        .expect("database name")
+        .get(0);
+    assert_eq!(database, "engram_ingest_test");
+    client
+        .execute("SELECT pg_advisory_lock($1)", &[&918_273_i64])
+        .expect("harness lock");
+    migrate(&mut client).expect("migrate");
+    truncate(&mut client);
+    let stream = IssueStream::github("p", "p-issues", "org/repo", GitHubKind::Issue, None, 100);
+    let source_id = seed_source(&mut client, &stream);
+    let routes = Routes::default().get(
+        &github_list_url(),
+        response_with_headers(
+            200,
+            json!([github_item(1, "open", &[], 0)]),
+            &[("etag", "\"v1\"")],
+        ),
+    );
+    ingest_issue_stream(
+        &mut client,
+        source_id,
+        &stream,
+        &routes,
+        "token",
+        Utc::now(),
+    )
+    .expect("seed");
+
+    let mut changed = stream.clone();
+    changed.chunk_size = 900;
+    let routes = Routes::default().get(
+        &github_list_url(),
+        response(500, json!({"message": "boom"})),
+    );
+    let error = ingest_issue_stream(
+        &mut client,
+        source_id,
+        &changed,
+        &routes,
+        "token",
+        Utc::now(),
+    )
+    .unwrap_err();
+    assert!(matches!(error, IssueIngestError::Poll(_)));
+    let stored: Option<String> = client
+        .query_one(
+            "SELECT fingerprint FROM engram_ingest.issue_cursors WHERE source_id = $1",
+            &[&source_id],
+        )
+        .expect("cursor")
+        .get(0);
+    assert_eq!(stored, Some(stream_fingerprint(&stream)));
+
+    let routes = Routes::default().get(
+        &github_list_url(),
+        response(200, json!([github_item(1, "open", &[], 0)])),
+    );
+    ingest_issue_stream(
+        &mut client,
+        source_id,
+        &changed,
+        &routes,
+        "token",
+        Utc::now(),
+    )
+    .expect("changed config ingest");
+    assert!(!routes.saw_if_none_match());
 }

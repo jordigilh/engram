@@ -1,12 +1,13 @@
 # `engram-ingest`
 
-Native ingestion core for the CocoIndex replacement (issue #214, slice 2 plus
-the docs-parity half of slice 3).
+Native ingestion core for the CocoIndex replacement (issue #214, slices 2-4:
+ledger/docs, Hindsight sink, worker loop, and GitHub/Jira issues).
 
 ## What this crate owns
 
 - Postgres ledger: `sources`, `documents`, `chunks`, `jobs`, `leases`,
-  `tombstones`, and `schema_migrations` in the `engram_ingest` schema.
+  `tombstones`, `issue_cursors`, and `schema_migrations` in the
+  `engram_ingest` schema.
 - SHA-256 reconciliation of a scan snapshot against the stored manifest.
 - Stable docs base IDs and heading-hash chunk keys, including the heading-less
   `chunk{i}` fallback.
@@ -19,6 +20,9 @@ the docs-parity half of slice 3).
 - Bank-scoped worker loop: bounded per-bank slot concurrency, jittered idle and
   error backoff, periodic expired-lease recovery, startup recovery, per-bank
   counters, and graceful cancellation.
+- GitHub/Jira issue ingestion: direct REST/ADF serialization, full-snapshot
+  polling with pagination, ETag single-page fast paths, rate-limit handling,
+  per-stream cursors, and out-of-scope deletion through the same ledger.
 
 ## Not in this slice
 
@@ -26,13 +30,14 @@ the docs-parity half of slice 3).
   adapter is a later ingestion slice.
 - Native-vs-CocoIndex shadow comparison of emitted operations (the remaining
   part of issue #214 slice 3).
-- Issues, transcripts, PDF extraction, git sync, CocoIndex/Python removal.
+- GitHub discussions/project boards (issue #244), transcripts, PDF extraction,
+  git sync, CocoIndex/Python removal.
 - Supervisor-level respawn/restart isolation. The worker exposes per-slot health
   (`WorkerHandle::health`) but restart policy lands with the service switch.
 
-PR map: the merged ledger/docs PR, the merged Hindsight sink, then this worker
-loop/concurrency/metrics slice, issues/transcripts, service switch, and
-Python/CocoIndex removal (#232).
+PR map: the merged ledger/docs PR, the merged Hindsight sink, the worker
+loop/concurrency/metrics slice, issues (#243), discussions/boards (#244),
+transcripts, service switch, and Python/CocoIndex removal (#232).
 
 ## Parity and deliberate behavior
 
@@ -104,6 +109,45 @@ Python/CocoIndex removal (#232).
 - **No Python tests were added.** The fixture generator is developer tooling
   under `rust/`, is not collected by pytest, and is ruff-clean.
 
+### Issues
+
+- **Full snapshots, not deltas.** Every poll fetches the whole configured
+  GitHub repo/item-kind or Jira JQL result set, matching Python's
+  `issues_main`. A delta fed to `reconcile` would delete every unchanged issue.
+  Hitting the configured `limit` with more pages left aborts the poll instead of
+  reconciling a truncated snapshot.
+- **ETags are single-page only.** A stored ETag is replayed only when the prior
+  snapshot fit in one page; a 304 on page 1 cannot prove later pages unchanged.
+  The ETag is cleared before a snapshot is applied, so a crash mid-apply cannot
+  replay a 304 for the old list.
+- **Multi-page GitHub snapshots prove stability before deleting.** Pages are
+  offset-based, so a second full pass must return the same ordered issue
+  identities. Only then are `issue_removed` tombstones allowed; otherwise the
+  snapshot still retains changed issues but cannot delete absent ones.
+- **Rate limits use both headers.** `Retry-After` and `x-ratelimit-reset` are
+  combined to the later deadline.
+- **Bank streams are validated together.** `validate_bank_streams` rejects
+  duplicate identities and two Jira streams in one bank that share an effective
+  document prefix.
+- **One source row per stream.** GitHub `(repo, item kind, prefix)` and Jira
+  `(server, project, JQL, prefix)` are separate sources, keyed by a config hash,
+  so a failed repo or a changed JQL cannot silently alias another stream.
+- **Ordinal comment keys are preserved.** Comment documents stay
+  `{base}-comment{i}` (and `-part{n}`) to keep existing Hindsight ids. Stable
+  comment-id keys are a separate reindex, not a silent id change.
+- **`gh` shape is normalized from REST.** Bot logins lose the `[bot]` suffix,
+  merged PRs derive `merged` from `pull_request.merged_at`, and
+  `milestone.due_on` maps to the Python `dueOn` field. Those three quirks keep
+  REST output identical to the existing `gh`-fed documents.
+- **Snapshot hash includes metadata.** State, labels, milestone, updated
+  timestamp, and comments are hashed alongside the header/body, so a close or
+  relabel re-retains tags/metadata even though the header text is stable.
+- **An empty result set is authoritative.** That is what makes out-of-scope
+  deletion exact, but a Jira service account that loses browse permission can
+  also return `issues: []` with `200`. Keep JQL scoped to the intended project
+  and watch `issue_cursors.item_count`; a sudden drop to zero is the signal to
+  verify credentials before accepting the tombstone pass.
+
 ## Ledger mapping
 
 | Design name (`NATIVE_ENGRAM_DESIGN.md`) | This crate |
@@ -112,6 +156,7 @@ Python/CocoIndex removal (#232).
 | `source_records` | `engram_ingest.sources` |
 | `source_units` | `engram_ingest.documents` + `engram_ingest.chunks` |
 | `ingest_jobs` | `engram_ingest.jobs` + `engram_ingest.leases` |
+| issue poll state | `engram_ingest.issue_cursors` |
 | `transcript_watermarks`, `gateway_events` | deferred to those slices |
 
 `migrate()` bootstraps `engram_ingest.schema_migrations`, applies every embedded
@@ -120,14 +165,19 @@ columns, constraints, and partial index the code depends on. It refuses a
 database that records a version the binary does not embed. Migration `0002`
 adds `jobs.last_error_class`; migration `0004` replaces the per-source lease
 index with `jobs_one_leased_per_bank_document_idx` and requeues surplus leased
-jobs before building it. The v1→v2 and v2→v4 upgrades are exercised by the
-Postgres harnesses.
+jobs before building it; migration `0005` adds `sources.source_kind`,
+`issue_cursors`, and the `issue_removed` tombstone reason. The v1→v2 and v2→v4
+upgrades are exercised by the Postgres harnesses.
 
-Source identity is the unique `(project, tag, root)`. Chunks are scoped by
-`source_id` with unique `(source_id, hindsight_document_id)` and
+Source identity is the unique `(project, tag, root)`. Issue streams set
+`tag = root` to `{provider}:{normalized scope}:{kind}:{config hash}` so a JQL,
+prefix, or repo change cannot silently alias an existing source row. Chunks are
+scoped by `source_id` with unique `(source_id, hindsight_document_id)` and
 `(document_id, chunk_key)`, so two projects with the same tag/path can share a
 Hindsight document id without touching each other's rows. That is the design's
-`(project, source identity, unit key)` constraint.
+`(project, source identity, unit key)` constraint. Two issue streams in the
+same bank must still use disjoint document prefixes/JQL scopes; their Hindsight
+ids are global to the bank.
 
 `migrate()` also runs an unversioned bank guard on every call. Migration `0003`
 adds nullable `sources.bank_id` / `jobs.bank_id` and the partial
@@ -144,7 +194,7 @@ The harness needs a disposable database whose name contains `test`:
 createdb -h /tmp -U hindsight engram_ingest_test
 ENGRAM_INGEST_TEST_DATABASE_URL='postgresql://hindsight@/engram_ingest_test?host=/tmp' \
   cargo test -p engram-ingest --test ledger_postgres --test sink_postgres \
-             --test worker_postgres
+             --test worker_postgres --test issues_postgres
 ```
 
 It truncates the `engram_ingest` tables and refuses any database whose name is

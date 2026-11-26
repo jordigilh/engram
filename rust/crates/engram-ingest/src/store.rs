@@ -42,6 +42,8 @@ pub enum StoreError {
     ScanConflict(String),
     #[error("reconciliation is based on an obsolete source revision; reload the manifest")]
     StaleReconciliation,
+    #[error("the provider snapshot predates a newer ledger commit for this source")]
+    StaleSnapshot,
 }
 
 /// Recovery selection window. Startup and runtime passes use the same value so
@@ -164,6 +166,10 @@ pub fn migrate(client: &mut Client) -> Result<(), StoreError> {
         ("sources", "revision"),
         ("sources", "last_plan_fingerprint"),
         ("sources", "bank_id"),
+        ("sources", "source_kind"),
+        ("issue_cursors", "etag"),
+        ("issue_cursors", "fingerprint"),
+        ("issue_cursors", "status"),
         ("tombstones", "generation"),
     ] {
         let exists: bool = client
@@ -188,6 +194,8 @@ pub fn migrate(client: &mut Client) -> Result<(), StoreError> {
         ("chunks", "chunks_document_chunk_key"),
         ("jobs", "jobs_source_dedupe_key"),
         ("sources", "sources_bank_id_format"),
+        ("sources", "sources_source_kind_check"),
+        ("tombstones", "tombstones_reason_check"),
         ("jobs", "jobs_bank_id_format"),
         ("tombstones", "tombstones_generation_key"),
     ] {
@@ -431,12 +439,13 @@ pub fn upsert_source(client: &mut Client, source: &SourceRecord) -> Result<i64, 
     let mut transaction = client.transaction()?;
     let row = transaction.query_opt(
         "INSERT INTO engram_ingest.sources
-             (project, tag, root, bank_id, docs_include, docs_exclude, document_format)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+             (project, tag, root, bank_id, docs_include, docs_exclude, document_format, source_kind)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (project, tag, root) DO UPDATE SET
              docs_include = EXCLUDED.docs_include,
              docs_exclude = EXCLUDED.docs_exclude,
              document_format = EXCLUDED.document_format,
+             source_kind = EXCLUDED.source_kind,
              updated_at = now()
          WHERE engram_ingest.sources.bank_id = EXCLUDED.bank_id
          RETURNING id",
@@ -448,6 +457,7 @@ pub fn upsert_source(client: &mut Client, source: &SourceRecord) -> Result<i64, 
             &source.docs_include,
             &source.docs_exclude,
             &source.document_format,
+            &source.source_kind,
         ],
     )?;
     let Some(row) = row else {
@@ -466,6 +476,15 @@ pub fn upsert_source(client: &mut Client, source: &SourceRecord) -> Result<i64, 
     let id = row.get(0);
     transaction.commit()?;
     Ok(id)
+}
+
+pub fn load_source_revision(client: &mut Client, source_id: i64) -> Result<i64, StoreError> {
+    Ok(client
+        .query_one(
+            "SELECT revision FROM engram_ingest.sources WHERE id = $1",
+            &[&source_id],
+        )?
+        .get(0))
 }
 
 pub fn load_manifest(client: &mut Client, source_id: i64) -> Result<Manifest, StoreError> {
@@ -1199,6 +1218,76 @@ pub fn fail_job(
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct IssueCursor {
+    pub etag: Option<String>,
+    pub fingerprint: Option<String>,
+    pub last_updated: Option<String>,
+    pub last_polled_at: Option<DateTime<Utc>>,
+    pub item_count: i32,
+    pub page_count: i32,
+    pub last_error: Option<String>,
+    pub status: String,
+}
+
+pub fn load_issue_cursor(
+    client: &mut Client,
+    source_id: i64,
+) -> Result<Option<IssueCursor>, StoreError> {
+    let row = client.query_opt(
+        "SELECT etag, fingerprint, last_updated, last_polled_at, item_count, page_count, last_error, status
+           FROM engram_ingest.issue_cursors
+          WHERE source_id = $1",
+        &[&source_id],
+    )?;
+    Ok(row.map(|row| IssueCursor {
+        etag: row.get(0),
+        fingerprint: row.get(1),
+        last_updated: row.get(2),
+        last_polled_at: row.get(3),
+        item_count: row.get(4),
+        page_count: row.get(5),
+        last_error: row.get(6),
+        status: row.get(7),
+    }))
+}
+
+pub fn save_issue_cursor(
+    client: &mut Client,
+    source_id: i64,
+    cursor: &IssueCursor,
+    now: DateTime<Utc>,
+) -> Result<(), StoreError> {
+    client.execute(
+        "INSERT INTO engram_ingest.issue_cursors
+             (source_id, etag, fingerprint, last_updated, last_polled_at, item_count, page_count, last_error, status, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (source_id) DO UPDATE SET
+             etag = EXCLUDED.etag,
+             fingerprint = EXCLUDED.fingerprint,
+             last_updated = EXCLUDED.last_updated,
+             last_polled_at = EXCLUDED.last_polled_at,
+             item_count = EXCLUDED.item_count,
+             page_count = EXCLUDED.page_count,
+             last_error = EXCLUDED.last_error,
+             status = EXCLUDED.status,
+             updated_at = EXCLUDED.updated_at",
+        &[
+            &source_id,
+            &cursor.etag,
+            &cursor.fingerprint,
+            &cursor.last_updated,
+            &cursor.last_polled_at,
+            &cursor.item_count,
+            &cursor.page_count,
+            &cursor.last_error,
+            &cursor.status,
+            &now,
+        ],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1213,6 +1302,7 @@ mod tests {
             "jobs",
             "leases",
             "tombstones",
+            "issue_cursors",
         ] {
             assert!(
                 MIGRATIONS
@@ -1230,7 +1320,7 @@ mod tests {
             .all(|pair| pair[0].version < pair[1].version));
         assert_eq!(
             MIGRATIONS.last().map(|migration| migration.version),
-            Some(4)
+            Some(5)
         );
     }
 

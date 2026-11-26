@@ -8,7 +8,12 @@ use crate::hashing::ContentHash;
 /// re-emits every chunk of every file instead of trusting old hashes.
 pub const LAYOUT_VERSION: i32 = 1;
 
+/// Separate from [`LAYOUT_VERSION`] so a future issue-comment rekey cannot
+/// force every docs source to re-emit its chunks.
+pub const ISSUE_LAYOUT_VERSION: i32 = 1;
+
 pub const DEFAULT_DOCUMENT_FORMAT: &str = "markdown";
+pub const DEFAULT_SOURCE_KIND: &str = "docs";
 
 #[derive(Debug, Clone, Copy)]
 pub struct Migration {
@@ -36,6 +41,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 4,
         sql: include_str!("../migrations/0004_bank_document_lease.sql"),
     },
+    Migration {
+        version: 5,
+        sql: include_str!("../migrations/0005_issue_sources.sql"),
+    },
 ];
 
 /// Hindsight bank ids become one URL path segment, so keep the accepted shape
@@ -59,6 +68,7 @@ pub struct SourceRecord {
     pub docs_include: Vec<String>,
     pub docs_exclude: Vec<String>,
     pub document_format: String,
+    pub source_kind: String,
 }
 
 impl SourceRecord {
@@ -77,6 +87,21 @@ impl SourceRecord {
             docs_include: includes.iter().map(|value| value.to_string()).collect(),
             docs_exclude: Vec::new(),
             document_format: DEFAULT_DOCUMENT_FORMAT.to_string(),
+            source_kind: DEFAULT_SOURCE_KIND.to_string(),
+        }
+    }
+
+    /// One issue stream (provider + repo + item kind, or Jira project/JQL).
+    pub fn issue(project: &str, tag: &str, root: &str, bank_id: &str, source_kind: &str) -> Self {
+        Self {
+            project: project.to_string(),
+            tag: tag.to_string(),
+            root: root.to_string(),
+            bank_id: bank_id.to_string(),
+            docs_include: Vec::new(),
+            docs_exclude: Vec::new(),
+            document_format: "issue".to_string(),
+            source_kind: source_kind.to_string(),
         }
     }
 }

@@ -91,9 +91,6 @@ pub fn scan_source_with_shutdown(
     source: &DocsSource,
     shutdown: Option<&Shutdown>,
 ) -> Result<(Vec<ScannedFile>, ScanReport), ScanError> {
-    if !source.root.is_dir() {
-        return Err(ScanError::MissingRoot(source.root.clone()));
-    }
     let patterns = Patterns::new(&source.docs_include, &source.docs_exclude)?;
     let mut files = Vec::new();
     let mut report = ScanReport::default();
@@ -150,16 +147,22 @@ struct UnixWalker<'a> {
 impl UnixWalker<'_> {
     fn walk_root(&mut self) -> Result<(), ScanError> {
         use std::os::unix::fs::OpenOptionsExt;
-        // The configured root may itself be a symlink, so this open is allowed
-        // to follow it. Only the resulting descriptor defines the boundary;
+        // The configured root (and its ancestors) is operator-owned and trusted
+        // at acquisition. It may itself be a symlink, so this single open is
+        // allowed to follow it. The resulting descriptor is the only boundary:
         // every child below it is opened with O_NOFOLLOW.
         let dir = std::fs::OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
             .open(self.root)
-            .map_err(|source| ScanError::Walk {
-                path: self.root.to_path_buf(),
-                source,
+            .map_err(|source| match source.kind() {
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory => {
+                    ScanError::MissingRoot(self.root.to_path_buf())
+                }
+                _ => ScanError::Walk {
+                    path: self.root.to_path_buf(),
+                    source,
+                },
             })?;
         self.walk(dir.as_raw_fd(), "")
     }

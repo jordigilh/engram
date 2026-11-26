@@ -274,6 +274,7 @@ impl Runtime {
             docs_include: source.docs_include.clone(),
             docs_exclude: source.docs_exclude.clone(),
             document_format: crate::ledger::DEFAULT_DOCUMENT_FORMAT.to_string(),
+            source_kind: crate::ledger::DEFAULT_SOURCE_KIND.to_string(),
         };
         let source_id = upsert_source(client, &record)?;
         let manifest = load_manifest(client, source_id)?;

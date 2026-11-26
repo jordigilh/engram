@@ -1,0 +1,34 @@
+{
+  "repo": "praxis-proxy/praxis",
+  "prefix": null,
+  "discussion": {
+    "number": 1562,
+    "title": "Hello from Hive Commons (fellow CNCF Sandbox project)",
+    "body": "We have read the Praxis AI and policy docs with interest and have a few questions, if you have time.",
+    "category": { "name": "General" },
+    "author": { "login": "clubanderson" },
+    "createdAt": "2026-11-18T14:02:50Z",
+    "updatedAt": "2026-11-18T14:02:50Z",
+    "comments": {
+      "nodes": [
+        {
+          "author": { "login": "shaneutt" },
+          "body": "A long enough discussion comment for the parity fixture.",
+          "authorAssociation": "MEMBER"
+        }
+      ]
+    }
+  },
+  "expected": {
+    "base_id": "praxis-discussion-1562",
+    "comment_id": "praxis-discussion-1562-comment0",
+    "metadata": {
+      "source": "cocoindex",
+      "repo": "praxis-proxy/praxis",
+      "kind": "discussion",
+      "number": "1562",
+      "category": "General"
+    },
+    "tags": ["discussion", "praxis", "general"]
+  }
+}

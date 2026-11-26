@@ -45,6 +45,10 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 5,
         sql: include_str!("../migrations/0005_issue_sources.sql"),
     },
+    Migration {
+        version: 6,
+        sql: include_str!("../migrations/0006_discussion_board_sources.sql"),
+    },
 ];
 
 /// Hindsight bank ids become one URL path segment, so keep the accepted shape

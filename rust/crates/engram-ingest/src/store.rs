@@ -1320,7 +1320,7 @@ mod tests {
             .all(|pair| pair[0].version < pair[1].version));
         assert_eq!(
             MIGRATIONS.last().map(|migration| migration.version),
-            Some(5)
+            Some(6)
         );
     }
 

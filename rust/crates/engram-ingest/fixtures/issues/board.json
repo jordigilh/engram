@@ -1,0 +1,42 @@
+{
+  "organization": "praxis-proxy",
+  "number": 9,
+  "prefix": null,
+  "board": {
+    "title": "Praxis Policy Engine (PPE)",
+    "shortDescription": "Policy engine roadmap",
+    "items": [
+      {
+        "content": {
+          "number": 130,
+          "title": "Epic: AuthPolicy/PPE attribute dictionary compatibility",
+          "repository": { "name": "policy" }
+        },
+        "fieldValues": {
+          "nodes": [{ "name": "Done", "field": { "name": "Status" } }]
+        }
+      },
+      {
+        "content": {
+          "number": 10,
+          "title": "Epic: PPE ODIS / AIMS Compliance",
+          "repository": { "name": "policy" }
+        },
+        "fieldValues": {
+          "nodes": [{ "name": "Review", "field": { "name": "Status" } }]
+        }
+      },
+      { "content": null, "fieldValues": { "nodes": [] } }
+    ]
+  },
+  "expected": {
+    "document_id": "board-9-praxis-policy-engine-(ppe)",
+    "metadata": {
+      "source": "cocoindex",
+      "kind": "board",
+      "board_number": "9",
+      "board_title": "Praxis Policy Engine (PPE)"
+    },
+    "tags": ["board", "roadmap", "praxis-policy-engine-(ppe)"]
+  }
+}

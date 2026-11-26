@@ -872,6 +872,20 @@ mod tests {
         assert_eq!(paths, vec!["a.md", "nested/b.md", "vendor/deep/c.md"]);
     }
 
+    #[test]
+    fn file_pattern_does_not_prune_unrelated_directories() {
+        let root = fixture();
+        write(&root, "README.md", b"readme");
+        write(&root, "guide/page.md", b"guide");
+        write(&root, "_draft/hidden.md", b"draft");
+        let (files, _) = scan_source(&source(&root, &["**/*.md"], &["**/_*"])).expect("scan");
+        let paths: Vec<&str> = files
+            .iter()
+            .map(|file| file.relative_path.as_str())
+            .collect();
+        assert_eq!(paths, vec!["README.md", "guide/page.md"]);
+    }
+
     #[cfg(unix)]
     #[test]
     fn configured_root_symlink_is_opened_by_its_canonical_target() {

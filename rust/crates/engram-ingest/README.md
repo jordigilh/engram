@@ -121,9 +121,9 @@ transcripts, service switch, and Python/CocoIndex removal (#232).
   The ETag is cleared before a snapshot is applied, so a crash mid-apply cannot
   replay a 304 for the old list.
 - **Multi-page GitHub snapshots prove stability before deleting.** Pages are
-  offset-based, so page 1 is re-read after the last page. Only a byte-identical
-  page 1 allows `issue_removed` tombstones; otherwise the snapshot still
-  retains changed issues but cannot delete absent ones.
+  offset-based, so a second full pass must return the same ordered issue
+  identities. Only then are `issue_removed` tombstones allowed; otherwise the
+  snapshot still retains changed issues but cannot delete absent ones.
 - **Rate limits use both headers.** `Retry-After` and `x-ratelimit-reset` are
   combined to the later deadline.
 - **Bank streams are validated together.** `validate_bank_streams` rejects

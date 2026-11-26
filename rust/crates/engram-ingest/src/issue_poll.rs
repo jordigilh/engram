@@ -536,7 +536,6 @@ pub fn poll_github(
     let mut page_count = 0usize;
     let mut matched_count = 0usize;
     let mut first_etag: Option<String> = None;
-    let mut first_page_hash: Option<ContentHash> = None;
     let mut last_updated: Option<String> = None;
     let initial_url = url.clone();
 
@@ -564,7 +563,6 @@ pub fn poll_github(
         }
         if page_count == 1 {
             first_etag = response.header("etag").map(str::to_string);
-            first_page_hash = Some(ContentHash::of(&response.body));
         }
         let page: Vec<Value> = serde_json::from_slice(&response.body)
             .map_err(|error| PollError::Invalid(error.to_string()))?;
@@ -595,21 +593,22 @@ pub fn poll_github(
         url = next;
     }
 
-    // Offset-based pages have no snapshot token. Re-read page 1 after the last
-    // page; only a byte-identical first page proves the list did not shift
-    // underneath the scan, which is required before deleting absent issues.
+    // Offset-based pages have no snapshot token. Run a second full pass and
+    // require the ordered issue identities to match before deleting absent
+    // issues; a shift between pages makes the two passes disagree.
     let deletions_allowed = if page_count <= 1 {
         true
     } else {
-        let response = transport.get(&initial_url, &headers)?;
-        if response.status != 200 {
-            return Err(PollError::from_status(
-                response.status,
-                &response.headers,
-                response.body,
-            ));
-        }
-        first_page_hash == Some(ContentHash::of(&response.body))
+        let first_identities = github_identities(&items, is_pr_stream);
+        let second_identities = fetch_github_identities(
+            transport,
+            &initial_url,
+            &headers,
+            api_base,
+            is_pr_stream,
+            stream.limit,
+        )?;
+        first_identities == second_identities
     };
 
     let mut plans = Vec::new();
@@ -671,6 +670,52 @@ fn urls_same_origin(candidate: &reqwest::Url, base: &reqwest::Url) -> bool {
     candidate.scheme() == base.scheme()
         && candidate.host_str() == base.host_str()
         && candidate.port_or_known_default() == base.port_or_known_default()
+}
+
+fn github_identities(items: &[Value], is_pr_stream: bool) -> Vec<u64> {
+    items
+        .iter()
+        .filter(|item| is_pr_stream || item.get("pull_request").is_none())
+        .filter_map(|item| item.get("number").and_then(Value::as_u64))
+        .collect()
+}
+
+fn fetch_github_identities(
+    transport: &dyn HttpTransport,
+    initial_url: &str,
+    headers: &[(&str, String)],
+    api_base: &str,
+    is_pr_stream: bool,
+    limit: usize,
+) -> Result<Vec<u64>, PollError> {
+    let mut identities = Vec::new();
+    let mut url = initial_url.to_string();
+    for _ in 0..MAX_PAGES {
+        let response = transport.get(&url, headers)?;
+        if response.status != 200 {
+            return Err(PollError::from_status(
+                response.status,
+                &response.headers,
+                response.body,
+            ));
+        }
+        let page: Vec<Value> = serde_json::from_slice(&response.body)
+            .map_err(|error| PollError::Invalid(error.to_string()))?;
+        identities.extend(github_identities(&page, is_pr_stream));
+        if identities.len() > limit {
+            return Err(PollError::Truncated(limit));
+        }
+        let Some(next) = response.header("link").and_then(next_link) else {
+            return Ok(identities);
+        };
+        if !same_origin(&next, api_base) {
+            return Err(PollError::Invalid(format!(
+                "refusing to follow a GitHub page on another origin: {next}"
+            )));
+        }
+        url = next;
+    }
+    Err(PollError::Truncated(limit))
 }
 
 fn github_comments(
@@ -1133,10 +1178,16 @@ mod tests {
             "link".to_string(),
             "<https://api.github.com/next>; rel=\"next\"".to_string(),
         );
+        let mut first_again = response(200, json!([github_item(1, "2026-01-02T00:00:00Z")]));
+        first_again.headers.insert(
+            "link".to_string(),
+            "<https://api.github.com/next>; rel=\"next\"".to_string(),
+        );
         let transport = ScriptedTransport::new(vec![
             first,
             response(200, json!([github_item(2, "2026-01-03T00:00:00Z")])),
-            response(200, json!([github_item(1, "2026-01-02T00:00:00Z")])),
+            first_again,
+            response(200, json!([github_item(2, "2026-01-03T00:00:00Z")])),
         ]);
         let outcome = poll_github(
             &transport,
@@ -1204,10 +1255,16 @@ mod tests {
             "link".to_string(),
             "<https://api.github.com/next>; rel=\"next\"".to_string(),
         );
+        let mut first_again = response(200, json!([github_item(1, "2026-01-02T00:00:00Z")]));
+        first_again.headers.insert(
+            "link".to_string(),
+            "<https://api.github.com/next>; rel=\"next\"".to_string(),
+        );
         let transport = ScriptedTransport::new(vec![
             first,
             response(200, json!([github_item(2, "2026-01-03T00:00:00Z")])),
-            response(200, json!([github_item(1, "2026-01-02T00:00:00Z")])),
+            first_again,
+            response(200, json!([github_item(2, "2026-01-03T00:00:00Z")])),
         ]);
         let IssuePollOutcome::Snapshot(snapshot) = poll_github(
             &transport,
@@ -1742,9 +1799,15 @@ mod tests {
             "link".to_string(),
             "<https://api.github.com/next>; rel=\"next\"".to_string(),
         );
+        let mut first_again = response(200, json!([github_item(1, "2026-01-02T00:00:00Z")]));
+        first_again.headers.insert(
+            "link".to_string(),
+            "<https://api.github.com/next>; rel=\"next\"".to_string(),
+        );
         let transport = ScriptedTransport::new(vec![
             first,
             response(200, json!([github_item(2, "2026-01-03T00:00:00Z")])),
+            first_again,
             response(200, json!([github_item(99, "2026-01-04T00:00:00Z")])),
         ]);
         let IssuePollOutcome::Snapshot(snapshot) = poll_github(

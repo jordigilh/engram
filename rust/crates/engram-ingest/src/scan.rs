@@ -35,6 +35,12 @@ use crate::reconcile::ScannedFile;
 use crate::synthesis::SynthesisError;
 use crate::worker::Shutdown;
 
+#[cfg(not(unix))]
+compile_error!(
+    "engram-ingest filesystem ingestion requires a Unix target (Linux/macOS); \
+     non-Unix handle-based traversal is not implemented"
+);
+
 #[derive(Debug, thiserror::Error)]
 pub enum ScanError {
     #[error("source root does not exist or is not a directory: {0}")]
@@ -461,26 +467,6 @@ impl Walker<'_> {
         }
         Ok(())
     }
-}
-
-#[cfg(not(unix))]
-/// Read a regular file without following a symlink swapped in after the walk
-/// checked the entry type.
-fn read_regular_file(path: &Path) -> std::io::Result<Vec<u8>> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "not a regular file",
-        ));
-    }
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
-    Ok(bytes)
 }
 
 #[cfg(not(unix))]

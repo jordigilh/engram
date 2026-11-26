@@ -207,6 +207,10 @@ or when a source was skipped/guarded as described above.
 (Prometheus text), `startup_recovery()`, and `prepared()`. The binary prints the
 startup reconciliation summary and the Prometheus snapshot on exit.
 
+Supported targets are Unix (Linux/macOS). Non-Unix builds fail explicitly
+because the scanner requires handle-based `openat`/`fdopendir` traversal to keep
+the configured-root containment guarantee.
+
 ## Running the Postgres harness
 
 The harness needs a disposable database whose name contains `test`:

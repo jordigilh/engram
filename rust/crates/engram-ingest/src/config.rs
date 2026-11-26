@@ -106,7 +106,7 @@ impl RuntimeConfig {
         let mut hindsight_url: Option<String> = None;
         let mut database_url: Option<String> = None;
         let mut seen_projects = HashSet::new();
-        let mut seen_bank_tags: BTreeMap<String, String> = BTreeMap::new();
+        let mut seen_bank_tags: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
 
         for project in projects {
             if !seen_projects.insert(project.clone()) {
@@ -207,14 +207,19 @@ impl RuntimeConfig {
                 }
                 let bank_id = resolve_docs_bank(project, table)?;
                 let identity = format!("{project}/{effective_tag}");
-                if let Some(previous) =
-                    seen_bank_tags.insert(format!("{bank_id}/{effective_tag}"), identity.clone())
+                let same_bank = seen_bank_tags.entry(bank_id.clone()).or_default();
+                if let Some((existing_tag, previous)) = same_bank
+                    .iter()
+                    .find(|(existing_tag, _)| tags_ambiguous(existing_tag, &effective_tag))
                 {
                     return Err(ConfigError::Invalid(format!(
-                        "sources {previous:?} and {identity:?} share bank {bank_id:?} and tag \
-                         {effective_tag:?}; their Hindsight document ids would collide"
+                        "sources {previous:?} and {identity:?} have ambiguous tags \
+                         {existing_tag:?} and {effective_tag:?} in bank {bank_id:?}; both '--' \
+                         and path separators are used in Hindsight document ids, so they can \
+                         collide"
                     )));
                 }
+                same_bank.push((effective_tag.clone(), identity));
                 project_sources.push(DocsSource {
                     project: project.clone(),
                     tag: effective_tag,
@@ -299,6 +304,16 @@ impl RuntimeConfig {
         }
         banks
     }
+}
+
+/// `document_base_id` joins the tag and the path with `--`, and path
+/// separators become `--` too. A tag that extends another with `--` can
+/// therefore produce the same id for a different path (repo + docs/intro vs
+/// repo--docs + intro).
+fn tags_ambiguous(left: &str, right: &str) -> bool {
+    left == right
+        || left.starts_with(&format!("{right}--"))
+        || right.starts_with(&format!("{left}--"))
 }
 
 fn merge_runtime_value(
@@ -1146,7 +1161,7 @@ docs_include = ["**/*.md"]
 "#,
         );
         let error = load(&path, &["a", "b"], &HashMap::new()).expect_err("collision");
-        assert!(error.to_string().contains("document ids would collide"));
+        assert!(error.to_string().contains("ambiguous tags"));
     }
 
     #[test]
@@ -1181,6 +1196,51 @@ docs_include = ["**/*.md"]
         let env = env_map(&[("HOME", "/home/operator")]);
         let config = load(&path, &["example"], &env).expect("load");
         assert_eq!(config.sources[0].root, PathBuf::from("/home/operator/docs"));
+    }
+
+    #[test]
+    fn rejects_ambiguous_tags_in_one_bank() {
+        let (_dir, path) = write_config(
+            r#"
+[projects.a]
+docs_bank = "shared-docs"
+[[projects.a.sources]]
+tag = "repo"
+root = "/tmp/a"
+docs_include = ["**/*.md"]
+[projects.b]
+docs_bank = "shared-docs"
+[[projects.b.sources]]
+tag = "repo--docs"
+root = "/tmp/b"
+docs_include = ["**/*.md"]
+"#,
+        );
+        let error = load(&path, &["a", "b"], &HashMap::new()).expect_err("ambiguous tags");
+        assert!(error.to_string().contains("ambiguous tags"));
+        assert!(error.to_string().contains("collide"));
+    }
+
+    #[test]
+    fn allows_non_ambiguous_tag_prefixes_in_one_bank() {
+        let (_dir, path) = write_config(
+            r#"
+[projects.a]
+docs_bank = "shared-docs"
+[[projects.a.sources]]
+tag = "repo"
+root = "/tmp/a"
+docs_include = ["**/*.md"]
+[projects.b]
+docs_bank = "shared-docs"
+[[projects.b.sources]]
+tag = "repo2"
+root = "/tmp/b"
+docs_include = ["**/*.md"]
+"#,
+        );
+        let config = load(&path, &["a", "b"], &HashMap::new()).expect("distinct tags");
+        assert_eq!(config.sources.len(), 2);
     }
 
     #[test]

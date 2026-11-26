@@ -19,16 +19,22 @@ the docs-parity half of slice 3).
 - Bank-scoped worker loop: bounded per-bank slot concurrency, jittered idle and
   error backoff, periodic expired-lease recovery, startup recovery, per-bank
   counters, and graceful cancellation.
+- Runtime entrypoint: project config/source selection, deterministic docs scan,
+  startup and periodic scan → reconcile → apply, one shared Hindsight sink, the
+  worker supervisor, SIGINT/SIGTERM shutdown, and a `--once` drain mode.
 
 ## Not in this slice
 
-- Filesystem watcher hints. `reconcile` consumes a scan snapshot; the watcher
-  adapter is a later ingestion slice.
+- Filesystem watcher hints. The runtime uses a bounded periodic reconciliation
+  scan; event debounce/hints are a later ingestion slice.
+- PDF extraction. A `document_format = "pdf"` source is rejected at startup
+  until the Rust extractor lands.
 - Native-vs-CocoIndex shadow comparison of emitted operations (the remaining
   part of issue #214 slice 3).
-- Issues, transcripts, PDF extraction, git sync, CocoIndex/Python removal.
-- Supervisor-level respawn/restart isolation. The worker exposes per-slot health
-  (`WorkerHandle::health`) but restart policy lands with the service switch.
+- Issues, transcripts, git sync, CocoIndex/Python removal.
+- Supervisor-level respawn/restart isolation. The runtime exposes per-slot health
+  (`WorkerHandle::health`) and drains on shutdown; restart policy lands with the
+  service switch.
 
 PR map: the merged ledger/docs PR, the merged Hindsight sink, then this worker
 loop/concurrency/metrics slice, issues/transcripts, service switch, and
@@ -135,6 +141,70 @@ adds nullable `sources.bank_id` / `jobs.bank_id` and the partial
 `MigrationGuard` telling the operator to set `sources.bank_id` explicitly in
 their own connection; rerunning then backfills jobs, enforces `NOT NULL`, and
 verifies the CHECK constraints and index.
+
+## Running the runtime
+
+The crate now builds the `engram-ingest` binary. It reads the deployment
+`projects.toml` subset already used by the Python flow:
+
+```toml
+[defaults]
+hindsight_url = "http://localhost:8888"          # HINDSIGHT_URL wins
+pg_dsn = "postgresql://hindsight@localhost/hindsight"  # COCOINDEX_PG_URL wins
+scan_interval_seconds = 300                      # 1..=86400
+concurrency = 1                                  # worker slots per bank, 1..=8
+allow_empty_root = false                         # true opts into deleting on an empty root
+
+[projects.example]
+docs_bank = "example-docs"                       # or a unique banks entry ending -docs
+
+[[projects.example.sources]]
+tag = "example"
+root = "~/src/example"                           # ~ and $VARS expand; relative to this file
+docs_include = ["**/*.md"]
+docs_exclude = ["**/vendor/**"]
+document_format = "markdown"                     # "pdf" is rejected in this slice
+```
+
+Start the resident loop (SIGINT/SIGTERM cancel it, then the worker drains and
+joins):
+
+```bash
+ENGRAM_PROJECTS_CONFIG=~/.engram/projects.toml \
+  cargo run -p engram-ingest -- run --project example
+```
+
+One-shot scan + drain for a backfill or a harness:
+
+```bash
+cargo run -p engram-ingest -- run --project example --once --drain-timeout 120
+```
+
+`--project` is repeatable. `--config` overrides `ENGRAM_PROJECTS_CONFIG`, which
+overrides `~/.engram/projects.toml`. `--scan-interval` and `--concurrency`
+override the file. Startup runs `migrate()` before any scan, so schema and
+bank-guard failures stop the process instead of stranding jobs.
+
+A missing or unreadable source root is skipped with a warning and the existing
+manifest is left untouched. An existing root that produces zero files while the
+manifest still has active documents is reported as `guarded`, because an
+unmounted bind mount looks exactly like a real deletion; pass
+`--allow-empty-root` (or `allow_empty_root = true`) to opt into that deletion.
+Resident mode logs skips/guards and keeps serving; `--once` exits non-zero when
+any source was skipped or guarded, so a mounted-root typo or withheld deletion
+cannot look like a clean backfill. A moved or renamed root is a new source
+identity (`project, tag, root`), so it starts a fresh ledger row and does
+**not** migrate the old documents; keep roots stable or run an explicit
+migration.
+
+`--once` waits for every pending job (including backoff) and every leased job
+(even one whose lease expired but recovery has not reached), then exits 0. It
+exits non-zero on a drain timeout, when any job enters `dead` during the drain,
+or when a source was skipped/guarded as described above.
+
+`RuntimeHandle` exposes `shutdown()`, `health()`, `snapshot()`, `metrics()`
+(Prometheus text), `startup_recovery()`, and `prepared()`. The binary prints the
+startup reconciliation summary and the Prometheus snapshot on exit.
 
 ## Running the Postgres harness
 

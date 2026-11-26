@@ -1036,6 +1036,65 @@ pub fn count_stranded_expired_leases(
     Ok(row.get(0))
 }
 
+/// Drain counters for the one-shot runtime (`--once`).
+///
+/// `pending` includes future-dated retries so a normal backoff is waited out
+/// rather than reported as a clean drain. `leased` counts every leased job, even
+/// an expired one that startup recovery has not reached yet, so a dead-slot
+/// backlog cannot look like a clean drain. `dead` counts terminal jobs created
+/// since the drain started; older dead rows belong to an earlier run and do not
+/// fail this backfill.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DrainCounts {
+    pub pending: u64,
+    pub leased: u64,
+    pub dead: u64,
+}
+
+impl DrainCounts {
+    pub fn is_empty(self) -> bool {
+        self.pending == 0 && self.leased == 0 && self.dead == 0
+    }
+}
+
+pub fn count_drain_jobs(
+    client: &mut Client,
+    banks: &[String],
+    since: DateTime<Utc>,
+) -> Result<DrainCounts, StoreError> {
+    if banks.is_empty() {
+        return Ok(DrainCounts::default());
+    }
+    let banks = banks.to_vec();
+    let pending = client.query_one(
+        "SELECT count(*)
+           FROM engram_ingest.jobs
+          WHERE bank_id = ANY($1)
+            AND state = 'pending'",
+        &[&banks],
+    )?;
+    let leased = client.query_one(
+        "SELECT count(*)
+           FROM engram_ingest.jobs
+          WHERE bank_id = ANY($1)
+            AND state = 'leased'",
+        &[&banks],
+    )?;
+    let dead = client.query_one(
+        "SELECT count(*)
+           FROM engram_ingest.jobs
+          WHERE bank_id = ANY($2)
+            AND state = 'dead'
+            AND updated_at >= $1",
+        &[&since, &banks],
+    )?;
+    Ok(DrainCounts {
+        pending: pending.get::<_, i64>(0).max(0) as u64,
+        leased: leased.get::<_, i64>(0).max(0) as u64,
+        dead: dead.get::<_, i64>(0).max(0) as u64,
+    })
+}
+
 fn recover_expired_leases_filtered(
     client: &mut Client,
     now: DateTime<Utc>,

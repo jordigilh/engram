@@ -95,10 +95,6 @@ pub fn scan_source_with_shutdown(
         return Err(ScanError::MissingRoot(source.root.clone()));
     }
     let patterns = Patterns::new(&source.docs_include, &source.docs_exclude)?;
-    let canonical_root = std::fs::canonicalize(&source.root).map_err(|error| ScanError::Walk {
-        path: source.root.clone(),
-        source: error,
-    })?;
     let mut files = Vec::new();
     let mut report = ScanReport::default();
     #[cfg(unix)]
@@ -111,10 +107,15 @@ pub fn scan_source_with_shutdown(
             files: &mut files,
             report: &mut report,
         }
-        .walk_root(&canonical_root)?;
+        .walk_root()?;
     }
     #[cfg(not(unix))]
     {
+        let canonical_root =
+            std::fs::canonicalize(&source.root).map_err(|error| ScanError::Walk {
+                path: source.root.clone(),
+                source: error,
+            })?;
         Walker {
             root: &source.root,
             canonical_root: &canonical_root,
@@ -147,12 +148,15 @@ struct UnixWalker<'a> {
 
 #[cfg(unix)]
 impl UnixWalker<'_> {
-    fn walk_root(&mut self, canonical_root: &Path) -> Result<(), ScanError> {
+    fn walk_root(&mut self) -> Result<(), ScanError> {
         use std::os::unix::fs::OpenOptionsExt;
+        // The configured root may itself be a symlink, so this open is allowed
+        // to follow it. Only the resulting descriptor defines the boundary;
+        // every child below it is opened with O_NOFOLLOW.
         let dir = std::fs::OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
-            .open(canonical_root)
+            .open(self.root)
             .map_err(|source| ScanError::Walk {
                 path: self.root.to_path_buf(),
                 source,

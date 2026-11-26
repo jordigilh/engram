@@ -100,10 +100,13 @@ impl RuntimeConfig {
             })?;
 
         let base = path.parent().unwrap_or_else(|| Path::new("."));
+        let env_hindsight = env("HINDSIGHT_URL").filter(|value| !value.trim().is_empty());
+        let env_database = env("COCOINDEX_PG_URL").filter(|value| !value.trim().is_empty());
         let mut sources = Vec::new();
         let mut hindsight_url: Option<String> = None;
         let mut database_url: Option<String> = None;
         let mut seen_projects = HashSet::new();
+        let mut seen_bank_tags: BTreeMap<String, String> = BTreeMap::new();
 
         for project in projects {
             if !seen_projects.insert(project.clone()) {
@@ -125,14 +128,17 @@ impl RuntimeConfig {
                 .clone()
                 .or_else(|| document.defaults.pg_dsn.clone())
                 .unwrap_or_else(|| DEFAULT_PG_DSN.to_string());
-            merge_runtime_value(
-                &mut hindsight_url,
-                project_hindsight,
-                "hindsight_url",
-                project,
-            )?;
-            merge_runtime_value(&mut database_url, project_dsn, "pg_dsn", project)?;
-
+            if env_hindsight.is_none() {
+                merge_runtime_value(
+                    &mut hindsight_url,
+                    project_hindsight,
+                    "hindsight_url",
+                    project,
+                )?;
+            }
+            if env_database.is_none() {
+                merge_runtime_value(&mut database_url, project_dsn, "pg_dsn", project)?;
+            }
             let mut seen_tags = HashSet::new();
             let mut project_sources = Vec::new();
             for (index, source) in table.sources.iter().enumerate() {
@@ -200,10 +206,19 @@ impl RuntimeConfig {
                     )));
                 }
                 let bank_id = resolve_docs_bank(project, table)?;
+                let identity = format!("{project}/{effective_tag}");
+                if let Some(previous) =
+                    seen_bank_tags.insert(format!("{bank_id}/{effective_tag}"), identity.clone())
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "sources {previous:?} and {identity:?} share bank {bank_id:?} and tag \
+                         {effective_tag:?}; their Hindsight document ids would collide"
+                    )));
+                }
                 project_sources.push(DocsSource {
                     project: project.clone(),
                     tag: effective_tag,
-                    root: resolve_root(root, base, env),
+                    root: resolve_root(root, base, env)?,
                     bank_id,
                     docs_include: source.docs_include.clone(),
                     docs_exclude: source.docs_exclude.clone(),
@@ -236,11 +251,9 @@ impl RuntimeConfig {
 
         Ok(Self {
             config_path: path,
-            hindsight_url: env("HINDSIGHT_URL")
-                .filter(|value| !value.trim().is_empty())
+            hindsight_url: env_hindsight
                 .unwrap_or_else(|| hindsight_url.unwrap_or_else(|| DEFAULT_HINDSIGHT_URL.into())),
-            database_url: env("COCOINDEX_PG_URL")
-                .filter(|value| !value.trim().is_empty())
+            database_url: env_database
                 .unwrap_or_else(|| database_url.unwrap_or_else(|| DEFAULT_PG_DSN.into())),
             scan_interval: Duration::from_secs(scan_interval_secs),
             concurrency,
@@ -428,11 +441,17 @@ fn resolve_config_path(
     config_path: Option<&Path>,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<PathBuf, ConfigError> {
-    let selected = config_path
-        .map(|path| path.to_string_lossy().to_string())
-        .or_else(|| env("ENGRAM_PROJECTS_CONFIG"))
-        .unwrap_or_else(|| DEFAULT_CONFIG_PATH.to_string());
-    let expanded = expand_path(&selected, env);
+    let expanded = match config_path {
+        Some(path) => match path.to_str() {
+            Some(text) => expand_path(text, env),
+            None => path.to_path_buf(),
+        },
+        None => {
+            let selected =
+                env("ENGRAM_PROJECTS_CONFIG").unwrap_or_else(|| DEFAULT_CONFIG_PATH.to_string());
+            expand_path(&selected, env)
+        }
+    };
     Ok(if expanded.is_absolute() {
         expanded
     } else {
@@ -445,13 +464,22 @@ fn resolve_config_path(
     })
 }
 
-fn resolve_root(raw: &str, config_dir: &Path, env: &dyn Fn(&str) -> Option<String>) -> PathBuf {
+fn resolve_root(
+    raw: &str,
+    config_dir: &Path,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<PathBuf, ConfigError> {
     let expanded = expand_path(raw.trim(), env);
-    if expanded.is_absolute() {
+    if expanded.as_os_str().is_empty() {
+        return Err(ConfigError::Invalid(
+            "a source root expands to an empty path".to_string(),
+        ));
+    }
+    Ok(if expanded.is_absolute() {
         expanded
     } else {
         config_dir.join(expanded)
-    }
+    })
 }
 
 fn expand_path(raw: &str, env: &dyn Fn(&str) -> Option<String>) -> PathBuf {
@@ -463,7 +491,7 @@ fn expand_path(raw: &str, env: &dyn Fn(&str) -> Option<String>) -> PathBuf {
     }
     if let Some(rest) = expanded_vars.strip_prefix("~/") {
         if let Some(home) = env("HOME") {
-            return PathBuf::from(home).join(rest);
+            return PathBuf::from(home).join(rest.trim_start_matches('/'));
         }
     }
     PathBuf::from(expanded_vars)
@@ -1072,6 +1100,87 @@ docs_include = ["**/*.md"]
         assert!(config.allow_empty_root);
         let config = config.with_allow_empty_root(false);
         assert!(!config.allow_empty_root);
+    }
+
+    #[test]
+    fn environment_override_skips_project_conflict() {
+        let (_dir, path) = write_config(
+            r#"
+[projects.a]
+hindsight_url = "http://a"
+docs_bank = "shared-docs"
+[[projects.a.sources]]
+tag = "a"
+root = "/tmp/a"
+docs_include = ["**/*.md"]
+[projects.b]
+hindsight_url = "http://b"
+docs_bank = "shared-docs"
+[[projects.b.sources]]
+tag = "b"
+root = "/tmp/b"
+docs_include = ["**/*.md"]
+"#,
+        );
+        let env = env_map(&[("HINDSIGHT_URL", "http://override")]);
+        let config = load(&path, &["a", "b"], &env).expect("override resolves conflict");
+        assert_eq!(config.hindsight_url, "http://override");
+    }
+
+    #[test]
+    fn rejects_bank_and_tag_collisions_across_projects() {
+        let (_dir, path) = write_config(
+            r#"
+[projects.a]
+docs_bank = "shared-docs"
+[[projects.a.sources]]
+tag = "repo"
+root = "/tmp/a"
+docs_include = ["**/*.md"]
+[projects.b]
+docs_bank = "shared-docs"
+[[projects.b.sources]]
+tag = "repo"
+root = "/tmp/b"
+docs_include = ["**/*.md"]
+"#,
+        );
+        let error = load(&path, &["a", "b"], &HashMap::new()).expect_err("collision");
+        assert!(error.to_string().contains("document ids would collide"));
+    }
+
+    #[test]
+    fn rejects_root_that_expands_to_empty() {
+        let (_dir, path) = write_config(
+            r#"
+[projects.example]
+docs_bank = "example-docs"
+[[projects.example.sources]]
+tag = "repo"
+root = "$EMPTY"
+docs_include = ["**/*.md"]
+"#,
+        );
+        let env = env_map(&[("EMPTY", "")]);
+        let error = load(&path, &["example"], &env).expect_err("empty expansion");
+        assert!(error.to_string().contains("empty path"));
+    }
+
+    #[test]
+    fn tilde_with_repeated_separator_stays_under_home() {
+        let (_dir, path) = write_config(
+            r#"
+[projects.example]
+docs_bank = "example-docs"
+[[projects.example.sources]]
+tag = "repo"
+root = "~//docs"
+docs_include = ["**/*.md"]
+"#,
+        );
+        let env = env_map(&[("HOME", "/home/operator")]);
+        let config = load(&path, &["example"], &env).expect("load");
+        assert_eq!(config.sources[0].root, PathBuf::from("/home/operator/docs"));
     }
 
     #[test]

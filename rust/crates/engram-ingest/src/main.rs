@@ -105,6 +105,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     engram_ingest::runtime::SourceOutcome::Skipped { project, tag, .. } => {
                         Some(format!("{project}/{tag} (skipped)"))
                     }
+                    engram_ingest::runtime::SourceOutcome::Deferred { project, tag, .. } => {
+                        Some(format!("{project}/{tag} (deferred)"))
+                    }
                     _ => None,
                 })
                 .collect();

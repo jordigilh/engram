@@ -3,6 +3,7 @@
 
 mod support;
 
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -24,14 +25,36 @@ fn test_url() -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
-fn temp_dir(label: &str) -> PathBuf {
+struct TempDir(PathBuf);
+
+impl Deref for TempDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl TempDir {
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp_dir(label: &str) -> TempDir {
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!(
         "engram-ingest-runtime-{label}-{}-{unique}",
         std::process::id()
     ));
-    std::fs::create_dir_all(&path).expect("temp dir");
-    path
+    std::fs::create_dir(&path).expect("temp dir");
+    TempDir(path)
 }
 
 fn truncate(client: &mut Client) {
@@ -291,7 +314,7 @@ fn missing_root_does_not_tombstone_the_manifest() {
     assert_eq!(active_documents(&mut client), 1);
     let requests = server.requests().len();
 
-    std::fs::remove_dir_all(&root).expect("remove root");
+    std::fs::remove_dir_all(root.path()).expect("remove root");
     let runtime = Runtime::new(load_config(&config_path)).expect("runtime");
     let handle = runtime.start(Shutdown::default()).expect("start");
     assert!(matches!(
@@ -432,10 +455,40 @@ fn cli_once_fails_when_a_root_is_guarded_or_missing() {
     assert!(!output.status.success(), "guarded root must fail --once");
     assert!(String::from_utf8_lossy(&output.stderr).contains("guarded"));
 
-    std::fs::remove_dir_all(&root).expect("missing root");
+    std::fs::remove_dir_all(root.path()).expect("missing root");
     let output = run_once();
     assert!(!output.status.success(), "missing root must fail --once");
     assert!(String::from_utf8_lossy(&output.stderr).contains("skipped"));
+}
+
+#[cfg(unix)]
+struct ChildGuard(Option<std::process::Child>);
+
+#[cfg(unix)]
+impl ChildGuard {
+    fn new(child: std::process::Child) -> Self {
+        Self(Some(child))
+    }
+
+    fn child(&mut self) -> &mut std::process::Child {
+        self.0.as_mut().expect("child")
+    }
+
+    fn disarm(mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.wait();
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -447,6 +500,7 @@ fn wait_for_exit(child: &mut std::process::Child, timeout: Duration) -> std::pro
         }
         if std::time::Instant::now() >= deadline {
             let _ = child.kill();
+            let _ = child.wait();
             panic!("child did not exit within {timeout:?}");
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -502,7 +556,7 @@ fn cli_resident_exits_zero_on_sigterm() {
     write_doc(&root, "a.md", "# A\n\nalpha content");
     let config_path = write_config(&root, &disorder, &database_url, server.url());
 
-    let mut child = std::process::Command::new(binary())
+    let child = std::process::Command::new(binary())
         .args([
             "run",
             "--config",
@@ -519,10 +573,11 @@ fn cli_resident_exits_zero_on_sigterm() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn binary");
+    let mut guard = ChildGuard::new(child);
 
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
     while server.requests().is_empty() && std::time::Instant::now() < deadline {
-        if child.try_wait().expect("wait").is_some() {
+        if guard.child().try_wait().expect("wait").is_some() {
             panic!("resident runtime exited before ingesting");
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -533,11 +588,12 @@ fn cli_resident_exits_zero_on_sigterm() {
     );
 
     let status = std::process::Command::new("kill")
-        .args(["-TERM", &child.id().to_string()])
+        .args(["-TERM", &guard.child().id().to_string()])
         .status()
         .expect("send SIGTERM");
     assert!(status.success());
-    let status = wait_for_exit(&mut child, Duration::from_secs(30));
+    let status = wait_for_exit(guard.child(), Duration::from_secs(30));
+    guard.disarm();
     assert!(status.success(), "resident runtime failed on SIGTERM");
     let leased: i64 = client
         .query_one(

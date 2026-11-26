@@ -171,13 +171,14 @@ joins):
 
 ```bash
 ENGRAM_PROJECTS_CONFIG=~/.engram/projects.toml \
-  cargo run -p engram-ingest -- run --project example
+  cargo run --manifest-path rust/Cargo.toml -p engram-ingest -- run --project example
 ```
 
 One-shot scan + drain for a backfill or a harness:
 
 ```bash
-cargo run -p engram-ingest -- run --project example --once --drain-timeout 120
+cargo run --manifest-path rust/Cargo.toml -p engram-ingest -- \
+  run --project example --once --drain-timeout 120
 ```
 
 `--project` is repeatable. `--config` overrides `ENGRAM_PROJECTS_CONFIG`, which

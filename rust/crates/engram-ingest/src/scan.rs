@@ -173,6 +173,14 @@ impl Walker<'_> {
             if self.patterns.excludes_file(&relative) {
                 continue;
             }
+            let canonical = std::fs::canonicalize(&path).map_err(|source| ScanError::Walk {
+                path: path.clone(),
+                source,
+            })?;
+            if !canonical.starts_with(self.canonical_root) {
+                self.report.skipped_symlinks += 1;
+                continue;
+            }
             let bytes = read_regular_file(&path).map_err(|source| ScanError::Read {
                 path: path.clone(),
                 source,
@@ -274,8 +282,14 @@ fn decode_utf16(bytes: &[u8], little_endian: bool) -> String {
 
 struct Patterns {
     includes: Vec<GlobMatcher>,
-    excludes: Vec<(bool, GlobMatcher)>,
+    excludes: Vec<ExcludeRule>,
     has_negation: bool,
+}
+
+struct ExcludeRule {
+    negated: bool,
+    files: GlobMatcher,
+    directory: Option<GlobMatcher>,
 }
 
 impl Patterns {
@@ -284,7 +298,7 @@ impl Patterns {
             .iter()
             .map(|pattern| compile(pattern))
             .collect::<Result<Vec<_>, _>>()?;
-        let mut matches = Vec::with_capacity(excludes.len());
+        let mut rules = Vec::with_capacity(excludes.len());
         let mut has_negation = false;
         for pattern in excludes {
             let (negated, raw) = match pattern.strip_prefix('!') {
@@ -294,11 +308,23 @@ impl Patterns {
                 }
                 None => (false, pattern.as_str()),
             };
-            matches.push((negated, compile(raw)?));
+            let files = compile(raw)?;
+            // `foo/**` excludes `foo` itself and everything below it. Compile
+            // the directory prefix explicitly instead of probing with a
+            // synthetic child path.
+            let directory = match raw.strip_suffix("/**") {
+                Some(prefix) => Some(compile(prefix.trim_end_matches('/'))?),
+                None => None,
+            };
+            rules.push(ExcludeRule {
+                negated,
+                files,
+                directory,
+            });
         }
         Ok(Self {
             includes,
-            excludes: matches,
+            excludes: rules,
             has_negation,
         })
     }
@@ -313,13 +339,13 @@ impl Patterns {
         }
         let ancestors = ancestor_prefixes(relative);
         let mut excluded = false;
-        for (negated, glob) in &self.excludes {
-            let matches = glob.is_match(relative)
+        for rule in &self.excludes {
+            let matches = rule.files.is_match(relative)
                 || ancestors
                     .iter()
-                    .any(|directory| matches_directory(glob, directory));
+                    .any(|directory| matches_directory(rule, directory));
             if matches {
-                excluded = !negated;
+                excluded = !rule.negated;
             }
         }
         excluded
@@ -329,15 +355,13 @@ impl Patterns {
         if self.has_negation {
             return false;
         }
-        self.excludes
-            .iter()
-            .fold(false, |excluded, (negated, glob)| {
-                if matches_directory(glob, relative) {
-                    !negated
-                } else {
-                    excluded
-                }
-            })
+        self.excludes.iter().fold(false, |excluded, rule| {
+            if matches_directory(rule, relative) {
+                !rule.negated
+            } else {
+                excluded
+            }
+        })
     }
 }
 
@@ -359,10 +383,12 @@ pub fn validate_patterns(includes: &[String], excludes: &[String]) -> Result<(),
 }
 
 /// A directory match covers the directory itself and everything below it.
-fn matches_directory(glob: &GlobMatcher, relative: &str) -> bool {
-    glob.is_match(relative)
-        || glob.is_match(format!("{relative}/"))
-        || glob.is_match(format!("{relative}/__engram_probe__"))
+fn matches_directory(rule: &ExcludeRule, relative: &str) -> bool {
+    rule.files.is_match(relative)
+        || rule
+            .directory
+            .as_ref()
+            .is_some_and(|directory| directory.is_match(relative))
 }
 
 /// Every parent prefix of a relative path, excluding the file itself.

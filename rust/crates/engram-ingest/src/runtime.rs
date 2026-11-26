@@ -173,6 +173,7 @@ impl Runtime {
 
     /// Prepare and start serving the configured banks.
     pub fn start(self, shutdown: Shutdown) -> Result<RuntimeHandle, RuntimeError> {
+        let run_started = Utc::now();
         let prepared = self.prepare_with_shutdown(Some(&shutdown))?;
         if shutdown.is_cancelled() {
             return Err(RuntimeError::Cancelled);
@@ -195,6 +196,7 @@ impl Runtime {
             worker,
             prepared,
             bank_ids,
+            run_started,
         })
     }
 
@@ -330,6 +332,7 @@ pub struct RuntimeHandle {
     worker: WorkerHandle,
     prepared: PrepareReport,
     bank_ids: Vec<String>,
+    run_started: chrono::DateTime<Utc>,
 }
 
 impl RuntimeHandle {
@@ -389,13 +392,24 @@ impl RuntimeHandle {
     /// One-shot mode: wait until no ready-pending job or live lease remains.
     pub fn drain(self, timeout: Duration) -> Result<(), RuntimeError> {
         let deadline = Instant::now() + timeout;
-        let drain_started = Utc::now();
-        let mut client = self.runtime.connect_for_scan()?;
+        let mut client = match self.runtime.connect_for_scan() {
+            Ok(client) => client,
+            Err(error) => {
+                let _ = self.finish_inner(None);
+                return Err(error);
+            }
+        };
         loop {
             if self.shutdown.is_cancelled() {
                 break;
             }
-            let counts = count_drain_jobs(&mut client, &self.bank_ids, drain_started)?;
+            let counts = match count_drain_jobs(&mut client, &self.bank_ids, self.run_started) {
+                Ok(counts) => counts,
+                Err(error) => {
+                    let _ = self.finish_inner(None);
+                    return Err(error.into());
+                }
+            };
             if counts.dead > 0 {
                 let _ = self.finish_inner(None);
                 return Err(RuntimeError::DrainFailed { counts });

@@ -1066,21 +1066,23 @@ pub fn count_drain_jobs(
         return Ok(DrainCounts::default());
     }
     let banks = banks.to_vec();
-    let pending = client.query_one(
+    let mut transaction = client.transaction()?;
+    transaction.batch_execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")?;
+    let pending = transaction.query_one(
         "SELECT count(*)
            FROM engram_ingest.jobs
           WHERE bank_id = ANY($1)
             AND state = 'pending'",
         &[&banks],
     )?;
-    let leased = client.query_one(
+    let leased = transaction.query_one(
         "SELECT count(*)
            FROM engram_ingest.jobs
           WHERE bank_id = ANY($1)
             AND state = 'leased'",
         &[&banks],
     )?;
-    let dead = client.query_one(
+    let dead = transaction.query_one(
         "SELECT count(*)
            FROM engram_ingest.jobs
           WHERE bank_id = ANY($2)
@@ -1088,6 +1090,7 @@ pub fn count_drain_jobs(
             AND updated_at >= $1",
         &[&since, &banks],
     )?;
+    transaction.commit()?;
     Ok(DrainCounts {
         pending: pending.get::<_, i64>(0).max(0) as u64,
         leased: leased.get::<_, i64>(0).max(0) as u64,

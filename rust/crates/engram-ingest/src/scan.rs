@@ -10,14 +10,26 @@
 //! directory excludes its descendants. Directory pruning is skipped when a
 //! negation exists, which keeps re-included subtrees reachable.
 
+#[cfg(not(unix))]
 use std::fmt::Write as _;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use std::ffi::{CStr, CString, OsString};
+#[cfg(unix)]
+use std::fs::File;
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+
 use globset::{GlobBuilder, GlobMatcher};
 
 use crate::config::DocsSource;
-use crate::document::{file_timestamp, plan_document};
+#[cfg(not(unix))]
+use crate::document::file_timestamp;
+use crate::document::{file_timestamp_from_metadata, plan_document};
 use crate::hashing::ContentHash;
 use crate::reconcile::ScannedFile;
 use crate::synthesis::SynthesisError;
@@ -83,16 +95,31 @@ pub fn scan_source_with_shutdown(
     })?;
     let mut files = Vec::new();
     let mut report = ScanReport::default();
-    Walker {
-        root: &source.root,
-        canonical_root: &canonical_root,
-        patterns: &patterns,
-        source,
-        shutdown,
-        files: &mut files,
-        report: &mut report,
+    #[cfg(unix)]
+    {
+        UnixWalker {
+            root: &source.root,
+            patterns: &patterns,
+            source,
+            shutdown,
+            files: &mut files,
+            report: &mut report,
+        }
+        .walk_root(&canonical_root)?;
     }
-    .walk(&source.root)?;
+    #[cfg(not(unix))]
+    {
+        Walker {
+            root: &source.root,
+            canonical_root: &canonical_root,
+            patterns: &patterns,
+            source,
+            shutdown,
+            files: &mut files,
+            report: &mut report,
+        }
+        .walk(&source.root)?;
+    }
     let mut seen = std::collections::BTreeSet::new();
     for file in &files {
         if !seen.insert(file.relative_path.clone()) {
@@ -102,6 +129,238 @@ pub fn scan_source_with_shutdown(
     Ok((files, report))
 }
 
+#[cfg(unix)]
+struct UnixWalker<'a> {
+    root: &'a Path,
+    patterns: &'a Patterns,
+    source: &'a DocsSource,
+    shutdown: Option<&'a Shutdown>,
+    files: &'a mut Vec<ScannedFile>,
+    report: &'a mut ScanReport,
+}
+
+#[cfg(unix)]
+impl UnixWalker<'_> {
+    fn walk_root(&mut self, canonical_root: &Path) -> Result<(), ScanError> {
+        use std::os::unix::fs::OpenOptionsExt;
+        let dir = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
+            .open(canonical_root)
+            .map_err(|source| ScanError::Walk {
+                path: self.root.to_path_buf(),
+                source,
+            })?;
+        self.walk(dir.as_raw_fd(), "")
+    }
+
+    /// Enumerate and read relative to an already-open directory descriptor.
+    /// Every child is opened with `openat` + `O_NOFOLLOW`, so a rename/symlink
+    /// swap cannot redirect the walk outside the opened tree.
+    fn walk(&mut self, dir_fd: RawFd, relative: &str) -> Result<(), ScanError> {
+        if self.shutdown.is_some_and(Shutdown::is_cancelled) {
+            return Err(ScanError::Cancelled);
+        }
+        let mut names = read_directory_names(dir_fd, self.root)?;
+        names.sort();
+
+        for name in names {
+            if self.shutdown.is_some_and(Shutdown::is_cancelled) {
+                return Err(ScanError::Cancelled);
+            }
+            let name_bytes = name.as_bytes();
+            let Ok(cname) = CString::new(name_bytes) else {
+                return Err(ScanError::Walk {
+                    path: self.root.join(relative),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "file name contains a NUL byte",
+                    ),
+                });
+            };
+            let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+            if unsafe {
+                libc::fstatat(dir_fd, cname.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW)
+            } != 0
+            {
+                return Err(ScanError::Walk {
+                    path: self.root.join(relative).join(&name),
+                    source: std::io::Error::last_os_error(),
+                });
+            }
+            let mode = (stat.st_mode as libc::mode_t) & libc::S_IFMT;
+            if mode == libc::S_IFLNK {
+                self.report.skipped_symlinks += 1;
+                continue;
+            }
+            let name_string = name.to_string_lossy().into_owned();
+            let child = if relative.is_empty() {
+                name_string
+            } else {
+                format!("{relative}/{name_string}")
+            };
+            if mode == libc::S_IFDIR {
+                if self.patterns.prune_directory(&child) {
+                    self.report.pruned_directories += 1;
+                    continue;
+                }
+                let fd = unsafe {
+                    libc::openat(
+                        dir_fd,
+                        cname.as_ptr(),
+                        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                    )
+                };
+                if fd < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if matches!(
+                        error.raw_os_error(),
+                        Some(libc::ELOOP) | Some(libc::ENOTDIR)
+                    ) {
+                        self.report.skipped_symlinks += 1;
+                        continue;
+                    }
+                    return Err(ScanError::Walk {
+                        path: self.root.join(&child),
+                        source: error,
+                    });
+                }
+                let result = self.walk(fd, &child);
+                unsafe { libc::close(fd) };
+                result?;
+                continue;
+            }
+            if mode != libc::S_IFREG
+                || !self.patterns.includes_file(&child)
+                || self.patterns.excludes_file(&child)
+            {
+                continue;
+            }
+            let fd = unsafe {
+                libc::openat(
+                    dir_fd,
+                    cname.as_ptr(),
+                    libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::ELOOP) {
+                    self.report.skipped_symlinks += 1;
+                    continue;
+                }
+                return Err(ScanError::Read {
+                    path: self.root.join(&child),
+                    source: error,
+                });
+            }
+            let mut file = unsafe { File::from_raw_fd(fd) };
+            let metadata = file.metadata().map_err(|source| ScanError::Read {
+                path: self.root.join(&child),
+                source,
+            })?;
+            if !metadata.is_file() {
+                return Err(ScanError::Read {
+                    path: self.root.join(&child),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "not a regular file",
+                    ),
+                });
+            }
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)
+                .map_err(|source| ScanError::Read {
+                    path: self.root.join(&child),
+                    source,
+                })?;
+            let content = decode(&bytes);
+            let calls = plan_document(
+                &self.source.tag,
+                &child,
+                &content,
+                file_timestamp_from_metadata(&metadata),
+            )
+            .map_err(|source| ScanError::Plan {
+                path: self.root.join(&child),
+                source,
+            })?;
+            self.report.matched_files += 1;
+            self.files.push(ScannedFile {
+                relative_path: child,
+                content_sha256: ContentHash::of(content.as_bytes()),
+                size_bytes: bytes.len() as i64,
+                calls,
+            });
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn read_directory_names(dir_fd: RawFd, root: &Path) -> Result<Vec<OsString>, ScanError> {
+    let duplicate = unsafe { libc::dup(dir_fd) };
+    if duplicate < 0 {
+        return Err(ScanError::Walk {
+            path: root.to_path_buf(),
+            source: std::io::Error::last_os_error(),
+        });
+    }
+    let directory = unsafe { libc::fdopendir(duplicate) };
+    if directory.is_null() {
+        let error = std::io::Error::last_os_error();
+        unsafe { libc::close(duplicate) };
+        return Err(ScanError::Walk {
+            path: root.to_path_buf(),
+            source: error,
+        });
+    }
+    let mut names = Vec::new();
+    loop {
+        clear_errno();
+        let entry = unsafe { libc::readdir(directory) };
+        if entry.is_null() {
+            let error = errno();
+            if error != 0 {
+                unsafe { libc::closedir(directory) };
+                return Err(ScanError::Walk {
+                    path: root.to_path_buf(),
+                    source: std::io::Error::from_raw_os_error(error),
+                });
+            }
+            break;
+        }
+        let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+        if name.to_bytes() == b"." || name.to_bytes() == b".." {
+            continue;
+        }
+        names.push(OsString::from(std::ffi::OsStr::from_bytes(name.to_bytes())));
+    }
+    unsafe { libc::closedir(directory) };
+    Ok(names)
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+fn clear_errno() {
+    unsafe { *libc::__errno_location() = 0 };
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+fn errno() -> i32 {
+    unsafe { *libc::__errno_location() }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn clear_errno() {
+    unsafe { *libc::__error() = 0 };
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn errno() -> i32 {
+    unsafe { *libc::__error() }
+}
+
+#[cfg(not(unix))]
 struct Walker<'a> {
     root: &'a Path,
     canonical_root: &'a Path,
@@ -112,6 +371,7 @@ struct Walker<'a> {
     report: &'a mut ScanReport,
 }
 
+#[cfg(not(unix))]
 impl Walker<'_> {
     fn walk(&mut self, directory: &Path) -> Result<(), ScanError> {
         if self.shutdown.is_some_and(Shutdown::is_cancelled) {
@@ -203,9 +463,9 @@ impl Walker<'_> {
     }
 }
 
+#[cfg(not(unix))]
 /// Read a regular file without following a symlink swapped in after the walk
 /// checked the entry type.
-#[cfg(unix)]
 fn read_regular_file(path: &Path) -> std::io::Result<Vec<u8>> {
     use std::os::unix::fs::OpenOptionsExt;
     let mut file = std::fs::OpenOptions::new()
@@ -234,6 +494,7 @@ fn read_regular_file(path: &Path) -> std::io::Result<Vec<u8>> {
     std::fs::read(path)
 }
 
+#[cfg(not(unix))]
 /// Relative path with `/` separators, built from the walk instead of
 /// `canonicalize` so a link or canonicalization failure cannot leak an
 /// absolute path into a Hindsight document id.
@@ -609,6 +870,20 @@ mod tests {
             .map(|file| file.relative_path.as_str())
             .collect();
         assert_eq!(paths, vec!["a.md", "nested/b.md", "vendor/deep/c.md"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_root_symlink_is_opened_by_its_canonical_target() {
+        let real = fixture();
+        write(&real, "a.md", b"body");
+        let parent = fixture();
+        let link = parent.join("linked-root");
+        std::os::unix::fs::symlink(&real, &link).expect("root link");
+        let (files, report) = scan_source(&source(&link, &["**/*.md"], &[])).expect("scan");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].relative_path, "a.md");
+        assert_eq!(report.skipped_symlinks, 0);
     }
 
     #[cfg(target_os = "linux")]

@@ -213,18 +213,36 @@ transcripts, service switch, and Python/CocoIndex removal (#232).
   acknowledged. The resolver owns Python's audit log and pending-review queue.
 - **Malformed/partial lines are skipped.** A concurrent write ending in an
   incomplete JSON line is ignored until the line is valid; it never advances the
-  watermark past unread data. Invalid UTF-8 rejects the file like Python
-  `read_text()`.
+  watermark past unread data. Invalid UTF-8 skips that file and leaves its
+  watermark untouched (stricter than Python's task-wide failure).
+- **Identity is path-scoped for state, stem-scoped for ids.** Watermarks and
+  ownership are keyed by root-relative path, while window ids keep the Python
+  `transcript-{stem}` prefix. A same-stem file whose window id is already owned
+  by another path is skipped for that scan instead of failing the whole source.
+- **Discovery stays inside the root.** Directory symlinks are followed only
+  when their canonical target remains under the configured root, and a visited
+  set prevents cycles. Reads are capped at 64 MiB.
 
 A `dead` transcript retain is terminal by design: the watermark stays put and
 the window is not re-enqueued. Redrive is an explicit operator action after the
 sink cause is fixed:
 
 ```sql
-UPDATE engram_ingest.jobs
+UPDATE engram_ingest.jobs j
    SET state = 'pending', attempts = 0, run_after = now(), updated_at = now()
- WHERE state = 'dead'
-   AND source_id IN (SELECT id FROM engram_ingest.sources WHERE source_kind = 'transcript');
+ WHERE j.state = 'dead'
+   AND j.source_id IN (SELECT id FROM engram_ingest.sources WHERE source_kind = 'transcript')
+   AND (
+       j.kind <> 'retain'
+       OR EXISTS (
+           SELECT 1
+             FROM engram_ingest.chunks c
+            WHERE c.source_id = j.source_id
+              AND c.hindsight_document_id = j.hindsight_document_id
+              AND c.state = 'active'
+              AND c.generation = j.generation
+       )
+   );
 ```
 
 ## Ledger mapping

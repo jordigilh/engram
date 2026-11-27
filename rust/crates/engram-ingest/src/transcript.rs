@@ -406,10 +406,29 @@ pub fn discover_transcripts(
         return Err(TranscriptError::MissingRoot(root.to_path_buf()));
     }
     let mut files = Vec::new();
-    let mut visited = std::collections::BTreeSet::new();
-    walk(root, root, workspace_prefixes, &mut files, &mut visited)?;
+    let mut ancestors = std::collections::BTreeSet::new();
+    let canonical_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    walk(
+        root,
+        root,
+        workspace_prefixes,
+        &mut files,
+        &mut ancestors,
+        &canonical_root,
+        WalkStage::Root,
+    )?;
     files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     Ok(files)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WalkStage {
+    /// The configured root: only selected `{prefix}*` workspaces.
+    Root,
+    /// A selected workspace: only its `agent-transcripts` directory.
+    Workspace,
+    /// Inside `agent-transcripts`: every descendant `.jsonl` file.
+    Transcripts,
 }
 
 fn walk(
@@ -417,10 +436,12 @@ fn walk(
     directory: &Path,
     prefixes: &[String],
     files: &mut Vec<TranscriptFileRef>,
-    visited: &mut std::collections::BTreeSet<PathBuf>,
+    ancestors: &mut std::collections::BTreeSet<PathBuf>,
+    canonical_root: &Path,
+    stage: WalkStage,
 ) -> Result<(), TranscriptError> {
     let canonical = fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
-    if !visited.insert(canonical) {
+    if !canonical.starts_with(canonical_root) || !ancestors.insert(canonical.clone()) {
         return Ok(());
     }
     let entries = fs::read_dir(directory).map_err(|source| TranscriptError::ReadDir {
@@ -433,16 +454,40 @@ fn walk(
             source,
         })?;
         let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
         // Follow directory symlinks; a workspace root is commonly a symlink.
         let metadata = match fs::metadata(&path) {
             Ok(metadata) => metadata,
             Err(_) => continue,
         };
         if metadata.is_dir() {
-            walk(root, &path, prefixes, files, visited)?;
+            let next = match stage {
+                WalkStage::Root => prefixes
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix.as_str()))
+                    .then_some(WalkStage::Workspace),
+                WalkStage::Workspace => {
+                    (name == "agent-transcripts").then_some(WalkStage::Transcripts)
+                }
+                WalkStage::Transcripts => Some(WalkStage::Transcripts),
+            };
+            if let Some(next) = next {
+                walk(
+                    root,
+                    &path,
+                    prefixes,
+                    files,
+                    ancestors,
+                    canonical_root,
+                    next,
+                )?;
+            }
             continue;
         }
-        if !metadata.is_file() || !matches_transcript_path(root, &path, prefixes) {
+        if stage != WalkStage::Transcripts
+            || !metadata.is_file()
+            || !matches_transcript_path(root, &path, prefixes)
+        {
             continue;
         }
         let relative_path = relative_posix(root, &path);
@@ -452,6 +497,7 @@ fn walk(
             path,
         });
     }
+    ancestors.remove(&canonical);
     Ok(())
 }
 
@@ -600,6 +646,31 @@ mod tests {
         let rewritten = vec![user("one"), assistant("changed"), user("three")];
         assert_eq!(prefix_sha256(&original, 3), prefix_sha256(&appended, 3));
         assert_ne!(prefix_sha256(&original, 3), prefix_sha256(&rewritten, 3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_does_not_follow_symlinks_outside_the_root() {
+        use std::os::unix::fs::symlink;
+
+        let root =
+            std::env::temp_dir().join(format!("engram-transcript-escape-{}", std::process::id()));
+        let outside =
+            std::env::temp_dir().join(format!("engram-transcript-outside-{}", std::process::id()));
+        fs::create_dir_all(root.join("workspace-demo").join("agent-transcripts")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret.jsonl"), "{}\n").unwrap();
+        symlink(
+            &outside,
+            root.join("workspace-demo")
+                .join("agent-transcripts")
+                .join("escape"),
+        )
+        .unwrap();
+        let files = discover_transcripts(&root, &["workspace-".to_string()]).unwrap();
+        assert!(files.is_empty(), "{files:?}");
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&outside).ok();
     }
 
     #[test]

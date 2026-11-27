@@ -99,6 +99,9 @@ pub struct Reconciliation {
     /// Transcript window ownership/watermark index, keyed by Hindsight
     /// document id. The store writes it in the same transaction as the chunk.
     pub transcript_windows: BTreeMap<String, TranscriptWindowMeta>,
+    /// Transcript ownership rows to remove because their window vanished from a
+    /// rewritten/rotated file (including withheld windows with no chunk row).
+    pub transcript_window_deletes: BTreeSet<String>,
 }
 
 impl Reconciliation {
@@ -108,6 +111,7 @@ impl Reconciliation {
             && self.removed_files.is_empty()
             && self.conflicts.is_empty()
             && self.transcript_windows.is_empty()
+            && self.transcript_window_deletes.is_empty()
     }
 }
 

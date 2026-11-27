@@ -8,44 +8,55 @@ compared against the documented Python contract without importing CocoIndex.
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
 from pathlib import Path
 
-CORRECTION_PATTERNS = [
-    re.compile(r"\bno[,.]?\s+that'?s\s+(not|wrong|incorrect)", re.I),
-    re.compile(r"\bdon'?t\s+do\s+that", re.I),
-    re.compile(r"\bI\s+(said|meant)\s+", re.I),
-    re.compile(r"\bwrong\s+(file|path|dir|approach|method|function|model|endpoint)", re.I),
-    re.compile(r"\bthat\s+broke", re.I),
-    re.compile(r"\bundo\s+(that|this|it)", re.I),
-    re.compile(r"\bthat'?s\s+not\s+what\s+I", re.I),
-    re.compile(r"\byou\s+(shouldn'?t|should\s+not)\s+have", re.I),
-    re.compile(r"\bdo\s+not\s+use\b", re.I),
-    re.compile(r"\bwe\s+don'?t\s+use\b", re.I),
-    re.compile(r"\b(you'?re|you\s+are)\s+(still\s+)?not\s+(following|aligned)\b", re.I),
-    re.compile(r"\bnot\s+following\s+(the\s+)?(project'?s?\s+)?(methodology|convention|AGENTS\.md|CLAUDE\.md)\b", re.I),
-    re.compile(r"\byou\s+keep\s+making\s+the\s+same\s+mistake\b", re.I),
-    re.compile(r"\bmistak(?:e|ing)\b.{0,40}\bfor\b", re.I),
-]
-INSTRUCTION_PATTERNS = [
-    re.compile(r"\balways\s+(use|follow|run|start\s+with|ensure)", re.I),
-    re.compile(r"\bnever\s+(skip|push|commit|deploy|use)", re.I),
-    re.compile(r"\bmandatory\b", re.I),
-    re.compile(r"\bour\s+(workflow|process|methodology|convention|standard)", re.I),
-    re.compile(r"\bthe\s+rule\s+is\b", re.I),
-    re.compile(r"\bfor\s+this\s+(project|repo|team)\s+we\b", re.I),
-    re.compile(r"\bwe\s+(always|never|require|must)\b", re.I),
-    re.compile(r"\bbefore\s+(implementing|proceeding|starting\s+any)", re.I),
-]
-BOILERPLATE_PREFIXES = (
-    "Briefly inform the user about the task result and perform any follow-up actions",
-    "The beginning of the above subagent result is already visible to the user.",
-)
-BOILERPLATE_TAG_RE = re.compile(
-    r"^\s*<(system_reminder|attached_files|system_notification|mcp_server_catalog|user_info)\b"
-)
+REPO_ROOT = Path(__file__).resolve().parents[5]
+CONFIGURED = REPO_ROOT / "src" / "engram" / "flows" / "configured.py"
+CORRECTION_GATE = REPO_ROOT / "src" / "engram" / "correction_gate.py"
+
+
+def _compiled_patterns(path: Path, name: str) -> list[re.Pattern[str]]:
+    tree = ast.parse(path.read_text())
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == name for target in node.targets
+        ):
+            patterns = []
+            for element in node.value.elts:
+                source = element.args[0].value
+                patterns.append(re.compile(source, re.I))
+            return patterns
+    raise RuntimeError(f"{name} not found in {path}")
+
+
+def _string_sequence(path: Path, name: str) -> tuple[str, ...]:
+    tree = ast.parse(path.read_text())
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == name for target in node.targets
+        ):
+            return tuple(element.value for element in node.value.elts)
+    raise RuntimeError(f"{name} not found in {path}")
+
+
+def _compiled_regex(path: Path, name: str) -> re.Pattern[str]:
+    tree = ast.parse(path.read_text())
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == name for target in node.targets
+        ):
+            return re.compile(node.value.args[0].value)
+    raise RuntimeError(f"{name} not found in {path}")
+
+
+CORRECTION_PATTERNS = _compiled_patterns(CONFIGURED, "CORRECTION_PATTERNS")
+INSTRUCTION_PATTERNS = _compiled_patterns(CONFIGURED, "INSTRUCTION_PATTERNS")
+BOILERPLATE_PREFIXES = _string_sequence(CORRECTION_GATE, "_BOILERPLATE_PREFIXES")
+BOILERPLATE_TAG_RE = _compiled_regex(CORRECTION_GATE, "_BOILERPLATE_TAG_RE")
 
 
 def is_system_boilerplate(text: str) -> bool:

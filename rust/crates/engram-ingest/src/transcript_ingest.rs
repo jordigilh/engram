@@ -31,13 +31,13 @@ use crate::reconcile::{
 use crate::store::{
     apply_reconciliation, delete_transcript_watermark, delete_transcript_windows, load_manifest,
     load_pending_transcript_invalidations, load_transcript_watermark,
-    load_transcript_watermark_ids, load_transcript_window_owners, mark_transcript_invalidation,
-    refresh_transcript_watermark, upsert_source, ApplySummary, StoreError,
+    load_transcript_watermark_paths, load_transcript_window_owners,
+    mark_transcript_invalidation_done, refresh_transcript_watermark, upsert_source, ApplySummary,
+    StoreError, TranscriptWatermarkUpdate,
 };
 use crate::transcript::{
-    discover_transcripts, learning_windows, learning_windows_with_detector, parse_messages,
-    prefix_sha256, window_document_id, RegexSignalDetector, SignalDetector, TranscriptError,
-    MAX_TRANSCRIPT_BYTES,
+    discover_transcripts, learning_windows_with_detector, parse_messages, prefix_sha256,
+    window_document_id, RegexSignalDetector, SignalDetector, TranscriptError, MAX_TRANSCRIPT_BYTES,
 };
 
 pub const TRANSCRIPT_SOURCE_METADATA: &str = "cocoindex-transcript";
@@ -209,15 +209,20 @@ pub enum TranscriptIngestError {
     Transcript(#[from] TranscriptError),
     #[error(transparent)]
     Store(#[from] StoreError),
-    #[error("two transcript files produced the same window document id {document_id}: {paths:?}")]
-    WindowConflict {
-        document_id: String,
-        paths: Vec<String>,
-    },
 }
 
 /// One transcript source pass: discover -> plan new windows -> apply ledger ->
 /// refresh watermarks. `client` should already have run `store::migrate`.
+struct WatermarkPlan {
+    relative_path: String,
+    transcript_id: String,
+    message_count: i32,
+    prefix_sha256: Vec<u8>,
+    observed_message_count: i32,
+    observed_prefix_sha256: Vec<u8>,
+    reset: bool,
+}
+
 pub fn ingest_transcript_source(
     client: &mut Client,
     source: &TranscriptSource,
@@ -237,7 +242,7 @@ pub fn ingest_transcript_source(
     let mut outcome = TranscriptIngestOutcome::default();
     let mut seen_paths = BTreeSet::new();
     let mut window_owners: BTreeMap<String, String> = BTreeMap::new();
-    let mut watermarks: Vec<(String, i32, Vec<u8>, bool)> = Vec::new();
+    let mut watermarks: Vec<WatermarkPlan> = Vec::new();
 
     for file in &files {
         seen_paths.insert(file.relative_path.clone());
@@ -287,22 +292,62 @@ pub fn ingest_transcript_source(
             }
         };
         let message_count = messages.len() as i32;
-        let stored = load_transcript_watermark(client, source_id, &transcript_id)?;
+        let stored = load_transcript_watermark(client, source_id, &relative_path)?;
         let previous = stored
             .as_ref()
             .map(|watermark| watermark.message_count)
             .unwrap_or(0)
             .max(0);
+        let observed_count = stored
+            .as_ref()
+            .map(|watermark| watermark.observed_message_count)
+            .unwrap_or(0)
+            .max(0);
         let prefix_at_previous = prefix_sha256(&messages, previous as usize);
-        // A count alone cannot detect an equal/larger in-place rewrite. Compare
-        // the parsed prefix the watermark covers; any mismatch means the file
-        // was rewritten or rotated and must be re-examined from zero.
+        // Compare against the last observed snapshot, not only the ack
+        // watermark: a replacement can arrive while the first retain is still
+        // pending and there is no acknowledged prefix yet.
         let rewritten = previous > message_count
-            || stored
+            || match stored
                 .as_ref()
-                .and_then(|watermark| watermark.prefix_sha256.as_deref())
-                .is_some_and(|saved| saved != prefix_at_previous.as_bytes());
+                .and_then(|watermark| watermark.observed_prefix_sha256.as_deref())
+            {
+                Some(_) if observed_count > message_count => true,
+                Some(saved) => {
+                    saved != prefix_sha256(&messages, observed_count as usize).as_bytes()
+                }
+                None => stored
+                    .as_ref()
+                    .and_then(|watermark| watermark.prefix_sha256.as_deref())
+                    .is_some_and(|saved| saved != prefix_at_previous.as_bytes()),
+            };
         let start_index = if rewritten { 0 } else { previous as usize };
+        let planned =
+            learning_windows_with_detector(&messages, start_index, options.detector.as_ref());
+        let existing_owners = load_transcript_window_owners(client, source_id, &transcript_id)?;
+        // Same-stem transcripts in different roots are common. The window-id
+        // contract keeps the stem, so a duplicate id cannot be owned by two
+        // paths; skip that file instead of failing the whole source.
+        if let Some((document_id, other_path)) = planned.iter().find_map(|window| {
+            let document_id = window_document_id(&transcript_id, &window.text);
+            existing_owners
+                .get(&document_id)
+                .filter(|owner| *owner != &relative_path)
+                .map(|owner| (document_id.clone(), owner.clone()))
+                .or_else(|| {
+                    window_owners
+                        .get(&document_id)
+                        .filter(|owner| *owner != &relative_path)
+                        .map(|owner| (document_id.clone(), owner.clone()))
+                })
+        }) {
+            outcome.files.push(skipped(
+                &relative_path,
+                &transcript_id,
+                format!("window id {document_id} is owned by {other_path}"),
+            ));
+            continue;
+        }
         let mut file_outcome = TranscriptFileOutcome {
             relative_path: relative_path.clone(),
             transcript_id: transcript_id.clone(),
@@ -316,42 +361,24 @@ pub fn ingest_transcript_source(
         };
         let mut calls: Vec<RetainCall> = Vec::new();
         let mut call_positions: BTreeMap<String, usize> = BTreeMap::new();
-        let existing_owners = load_transcript_window_owners(client, source_id, &transcript_id)?;
         let current_window_ids: Option<BTreeSet<String>> = rewritten.then(|| {
-            learning_windows(&messages, 0)
+            learning_windows_with_detector(&messages, 0, options.detector.as_ref())
                 .into_iter()
                 .map(|window| window_document_id(&transcript_id, &window.text))
                 .collect()
         });
-        for window in
-            learning_windows_with_detector(&messages, start_index, options.detector.as_ref())
-        {
+        for window in planned {
             if window.text.trim().is_empty() {
                 continue;
             }
             let document_id = window_document_id(&transcript_id, &window.text);
-            if let Some(existing_path) = existing_owners.get(&document_id) {
-                if existing_path != &relative_path {
-                    return Err(TranscriptIngestError::WindowConflict {
-                        document_id,
-                        paths: vec![existing_path.clone(), relative_path.clone()],
-                    });
-                }
+            if existing_owners.contains_key(&document_id) {
                 // Already retained or deliberately withheld. Do not re-run
                 // contradiction resolution: live invalidation is a side effect
                 // that must happen exactly once per window.
                 continue;
             }
-            if let Some(existing_path) = window_owners.get(&document_id) {
-                if existing_path != &relative_path {
-                    return Err(TranscriptIngestError::WindowConflict {
-                        document_id,
-                        paths: vec![existing_path.clone(), relative_path.clone()],
-                    });
-                }
-            } else {
-                window_owners.insert(document_id.clone(), relative_path.clone());
-            }
+            window_owners.insert(document_id.clone(), relative_path.clone());
             let mut status = "retained";
             let mut tags = if source.project.is_empty() {
                 Vec::new()
@@ -452,6 +479,15 @@ pub fn ingest_transcript_source(
                     reason: DeleteReason::ChunkRemoved,
                 });
             }
+            // Withheld windows have no chunk row, so their ownership rows must
+            // be cleared separately or the window can never be re-planned.
+            for (document_id, owner) in &existing_owners {
+                if owner == &relative_path && !current_ids.contains(document_id) {
+                    reconciliation
+                        .transcript_window_deletes
+                        .insert(document_id.clone());
+                }
+            }
         }
         if !calls.is_empty() {
             file_outcome.windows_retained = calls.len();
@@ -464,12 +500,15 @@ pub fn ingest_transcript_source(
         }
         outcome.windows_queued += file_outcome.windows_queued;
         outcome.windows_auto_resolved += file_outcome.windows_auto_resolved;
-        watermarks.push((
+        watermarks.push(WatermarkPlan {
+            relative_path: relative_path.clone(),
             transcript_id,
             message_count,
-            prefix_sha256(&messages, messages.len()).as_bytes().to_vec(),
-            rewritten,
-        ));
+            prefix_sha256: prefix_sha256(&messages, messages.len()).as_bytes().to_vec(),
+            observed_message_count: message_count,
+            observed_prefix_sha256: prefix_sha256(&messages, messages.len()).as_bytes().to_vec(),
+            reset: rewritten,
+        });
         outcome.files.push(file_outcome);
     }
 
@@ -512,7 +551,7 @@ pub fn ingest_transcript_source(
                 .invalidator
                 .invalidate(&pending.bank_id, &pending.memory_id, &pending.reason)
             {
-                mark_transcript_invalidation(client, source_id, &pending.document_id, true, now)?;
+                mark_transcript_invalidation_done(client, source_id, &pending.document_id, now)?;
                 outcome.invalidated += 1;
             }
         }
@@ -520,30 +559,34 @@ pub fn ingest_transcript_source(
 
     // Only after the ledger commit: a crash before this point replays the same
     // stable windows, and ownership/dedupe keys make that replay a no-op.
-    for (transcript_id, message_count, prefix, reset) in &watermarks {
+    for plan in &watermarks {
         refresh_transcript_watermark(
             client,
             source_id,
-            transcript_id,
-            *message_count,
-            prefix,
-            *reset,
+            TranscriptWatermarkUpdate {
+                relative_path: &plan.relative_path,
+                transcript_id: &plan.transcript_id,
+                message_count: plan.message_count,
+                prefix_sha256: &plan.prefix_sha256,
+                observed_message_count: plan.observed_message_count,
+                observed_prefix_sha256: &plan.observed_prefix_sha256,
+                reset: plan.reset,
+            },
             now,
         )?;
     }
     for path in &outcome.removed {
-        let transcript_id = crate::transcript::transcript_id_for_path(path);
-        delete_transcript_watermark(client, source_id, &transcript_id)?;
-        delete_transcript_windows(client, source_id, &transcript_id)?;
+        delete_transcript_watermark(client, source_id, path)?;
+        delete_transcript_windows(client, source_id, path)?;
     }
     // A signal-free transcript never created a document row, so its removal is
     // not visible in the manifest. Drop any watermark whose file is gone.
-    let current_ids: BTreeSet<String> = files
+    let current_paths: BTreeSet<String> = files
         .iter()
-        .map(|file| file.transcript_id.clone())
+        .map(|file| file.relative_path.clone())
         .collect();
-    for stale in load_transcript_watermark_ids(client, source_id)? {
-        if !current_ids.contains(&stale) {
+    for stale in load_transcript_watermark_paths(client, source_id)? {
+        if !current_paths.contains(&stale) {
             delete_transcript_watermark(client, source_id, &stale)?;
             delete_transcript_windows(client, source_id, &stale)?;
         }

@@ -172,9 +172,13 @@ pub fn migrate(client: &mut Client) -> Result<(), StoreError> {
         ("issue_cursors", "status"),
         ("tombstones", "generation"),
         ("transcript_watermarks", "message_count"),
+        ("transcript_watermarks", "relative_path"),
         ("transcript_watermarks", "prefix_sha256"),
+        ("transcript_watermarks", "observed_message_count"),
+        ("transcript_watermarks", "observed_prefix_sha256"),
         ("transcript_windows", "transcript_id"),
         ("transcript_windows", "relative_path"),
+        ("transcript_windows", "status"),
         ("transcript_windows", "invalidation_state"),
     ] {
         let exists: bool = client
@@ -791,6 +795,14 @@ pub fn apply_reconciliation(
         )?;
     }
 
+    for document_id in &reconciliation.transcript_window_deletes {
+        transaction.execute(
+            "DELETE FROM engram_ingest.transcript_windows
+              WHERE source_id = $1 AND hindsight_document_id = $2",
+            &[&source_id, document_id],
+        )?;
+    }
+
     for delete in &reconciliation.deletes {
         // A stale plan (loaded before a concurrent retain changed the chunk)
         // must not tombstone the newer generation or queue a sink delete.
@@ -914,6 +926,7 @@ fn plan_fingerprint(reconciliation: &Reconciliation) -> Result<ContentHash, Stor
         "deletes": deletes,
         "removed_files": reconciliation.removed_files,
         "transcript_windows": reconciliation.transcript_windows,
+        "transcript_window_deletes": reconciliation.transcript_window_deletes,
     });
     Ok(ContentHash::of(&serde_json::to_vec(&value)?))
 }
@@ -1455,25 +1468,41 @@ pub fn save_issue_cursor(
 pub struct TranscriptWatermark {
     pub message_count: i32,
     pub prefix_sha256: Option<Vec<u8>>,
+    pub observed_message_count: i32,
+    pub observed_prefix_sha256: Option<Vec<u8>>,
     pub last_processed: Option<DateTime<Utc>>,
 }
 
 pub fn load_transcript_watermark(
     client: &mut Client,
     source_id: i64,
-    transcript_id: &str,
+    relative_path: &str,
 ) -> Result<Option<TranscriptWatermark>, StoreError> {
     let row = client.query_opt(
-        "SELECT message_count, prefix_sha256, last_processed
+        "SELECT message_count, prefix_sha256, observed_message_count,
+                observed_prefix_sha256, last_processed
            FROM engram_ingest.transcript_watermarks
-          WHERE source_id = $1 AND transcript_id = $2",
-        &[&source_id, &transcript_id],
+          WHERE source_id = $1 AND relative_path = $2",
+        &[&source_id, &relative_path],
     )?;
     Ok(row.map(|row| TranscriptWatermark {
         message_count: row.get(0),
         prefix_sha256: row.get(1),
-        last_processed: row.get(2),
+        observed_message_count: row.get(2),
+        observed_prefix_sha256: row.get(3),
+        last_processed: row.get(4),
     }))
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TranscriptWatermarkUpdate<'a> {
+    pub relative_path: &'a str,
+    pub transcript_id: &'a str,
+    pub message_count: i32,
+    pub prefix_sha256: &'a [u8],
+    pub observed_message_count: i32,
+    pub observed_prefix_sha256: &'a [u8],
+    pub reset: bool,
 }
 
 /// Advance the ack watermark after a scan. The scan count and its parsed-prefix
@@ -1483,22 +1512,11 @@ pub fn load_transcript_watermark(
 pub fn refresh_transcript_watermark(
     client: &mut Client,
     source_id: i64,
-    transcript_id: &str,
-    scanned_message_count: i32,
-    prefix_sha256: &[u8],
-    reset: bool,
+    update: TranscriptWatermarkUpdate<'_>,
     now: DateTime<Utc>,
 ) -> Result<(), StoreError> {
     let mut transaction = client.transaction()?;
-    advance_transcript_watermark_transaction(
-        &mut transaction,
-        source_id,
-        transcript_id,
-        scanned_message_count,
-        prefix_sha256,
-        reset,
-        now,
-    )?;
+    advance_transcript_watermark_transaction(&mut transaction, source_id, update, now)?;
     transaction.commit()?;
     Ok(())
 }
@@ -1506,12 +1524,12 @@ pub fn refresh_transcript_watermark(
 pub fn delete_transcript_watermark(
     client: &mut Client,
     source_id: i64,
-    transcript_id: &str,
+    relative_path: &str,
 ) -> Result<(), StoreError> {
     client.execute(
         "DELETE FROM engram_ingest.transcript_watermarks
-          WHERE source_id = $1 AND transcript_id = $2",
-        &[&source_id, &transcript_id],
+          WHERE source_id = $1 AND relative_path = $2",
+        &[&source_id, &relative_path],
     )?;
     Ok(())
 }
@@ -1577,34 +1595,28 @@ pub fn load_pending_transcript_invalidations(
         .collect())
 }
 
-pub fn mark_transcript_invalidation(
+pub fn mark_transcript_invalidation_done(
     client: &mut Client,
     source_id: i64,
     document_id: &str,
-    done: bool,
     now: DateTime<Utc>,
 ) -> Result<(), StoreError> {
     client.execute(
         "UPDATE engram_ingest.transcript_windows
-            SET invalidation_state = $3, updated_at = $4
+            SET invalidation_state = 'done', updated_at = $3
           WHERE source_id = $1 AND hindsight_document_id = $2
             AND invalidation_state = 'pending'",
-        &[
-            &source_id,
-            &document_id,
-            &(if done { "done" } else { "pending" }),
-            &now,
-        ],
+        &[&source_id, &document_id, &now],
     )?;
     Ok(())
 }
 
-pub fn load_transcript_watermark_ids(
+pub fn load_transcript_watermark_paths(
     client: &mut Client,
     source_id: i64,
 ) -> Result<BTreeSet<String>, StoreError> {
     let rows = client.query(
-        "SELECT transcript_id
+        "SELECT relative_path
            FROM engram_ingest.transcript_watermarks
           WHERE source_id = $1",
         &[&source_id],
@@ -1618,12 +1630,12 @@ pub fn load_transcript_watermark_ids(
 pub fn delete_transcript_windows(
     client: &mut Client,
     source_id: i64,
-    transcript_id: &str,
+    relative_path: &str,
 ) -> Result<(), StoreError> {
     client.execute(
         "DELETE FROM engram_ingest.transcript_windows
-          WHERE source_id = $1 AND transcript_id = $2",
-        &[&source_id, &transcript_id],
+          WHERE source_id = $1 AND relative_path = $2",
+        &[&source_id, &relative_path],
     )?;
     Ok(())
 }
@@ -1633,12 +1645,18 @@ pub fn delete_transcript_windows(
 fn advance_transcript_watermark_transaction(
     transaction: &mut postgres::Transaction<'_>,
     source_id: i64,
-    transcript_id: &str,
-    scanned_message_count: i32,
-    prefix_sha256: &[u8],
-    reset: bool,
+    update: TranscriptWatermarkUpdate<'_>,
     now: DateTime<Utc>,
 ) -> Result<(), StoreError> {
+    let TranscriptWatermarkUpdate {
+        relative_path,
+        transcript_id,
+        message_count: scanned_message_count,
+        prefix_sha256,
+        observed_message_count,
+        observed_prefix_sha256,
+        reset,
+    } = update;
     let row = transaction.query_one(
         "SELECT MAX(blocked) AS blocked,
                 COALESCE(MAX(count) FILTER (
@@ -1656,41 +1674,49 @@ fn advance_transcript_watermark_transaction(
                    AND w.hindsight_document_id = j.hindsight_document_id
                  WHERE j.source_id = $1
                    AND j.kind = 'retain'
-                   AND w.transcript_id = $2
+                   AND w.relative_path = $2
            ) jobs",
-        &[&source_id, &transcript_id],
+        &[&source_id, &relative_path],
     )?;
     let blocked: Option<i32> = row.get(0);
     let acked: i32 = row.get(1);
+    // While a retain blocks acknowledgement, keep the stored count and hash
+    // untouched so they always describe the same prefix. The next unblocked
+    // scan advances both together.
+    let effective_reset = reset && blocked.is_none();
     let candidate = if blocked.is_none() {
-        if reset {
+        if effective_reset {
             scanned_message_count
         } else {
             acked.max(scanned_message_count)
         }
     } else {
-        acked
+        0
     };
     let new_prefix: Option<&[u8]> =
-        if blocked.is_none() && (reset || candidate == scanned_message_count) {
+        if blocked.is_none() && (effective_reset || candidate == scanned_message_count) {
             Some(prefix_sha256)
         } else {
             None
         };
     transaction.execute(
         "INSERT INTO engram_ingest.transcript_watermarks
-             (source_id, transcript_id, message_count, prefix_sha256, last_processed, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $5)
-         ON CONFLICT (source_id, transcript_id) DO UPDATE SET
+             (source_id, relative_path, transcript_id, message_count, prefix_sha256,
+              observed_message_count, observed_prefix_sha256, last_processed, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $7, $8, $6, $6)
+         ON CONFLICT (source_id, relative_path) DO UPDATE SET
+             transcript_id = EXCLUDED.transcript_id,
+             observed_message_count = EXCLUDED.observed_message_count,
+             observed_prefix_sha256 = EXCLUDED.observed_prefix_sha256,
              message_count = CASE
-                 WHEN $6 THEN EXCLUDED.message_count
+                 WHEN $9 THEN EXCLUDED.message_count
                  ELSE GREATEST(
                      engram_ingest.transcript_watermarks.message_count,
                      EXCLUDED.message_count
                  )
              END,
              prefix_sha256 = CASE
-                 WHEN $6 OR EXCLUDED.message_count
+                 WHEN $9 OR EXCLUDED.message_count
                       >= engram_ingest.transcript_watermarks.message_count
                  THEN COALESCE(
                      EXCLUDED.prefix_sha256,
@@ -1699,7 +1725,7 @@ fn advance_transcript_watermark_transaction(
                  ELSE engram_ingest.transcript_watermarks.prefix_sha256
              END,
              last_processed = CASE
-                 WHEN $6 OR EXCLUDED.message_count
+                 WHEN $9 OR EXCLUDED.message_count
                       > engram_ingest.transcript_watermarks.message_count
                  THEN EXCLUDED.last_processed
                  ELSE engram_ingest.transcript_watermarks.last_processed
@@ -1707,11 +1733,14 @@ fn advance_transcript_watermark_transaction(
              updated_at = EXCLUDED.updated_at",
         &[
             &source_id,
+            &relative_path,
             &transcript_id,
             &candidate,
             &new_prefix,
             &now,
-            &reset,
+            &observed_message_count,
+            &observed_prefix_sha256,
+            &effective_reset,
         ],
     )?;
     Ok(())

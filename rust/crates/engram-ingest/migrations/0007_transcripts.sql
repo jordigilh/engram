@@ -46,13 +46,21 @@ ALTER TABLE engram_ingest.tombstones
 
 CREATE TABLE IF NOT EXISTS engram_ingest.transcript_watermarks (
     source_id      bigint NOT NULL REFERENCES engram_ingest.sources(id) ON DELETE CASCADE,
+    relative_path  text NOT NULL,
     transcript_id  text NOT NULL,
     message_count  integer NOT NULL DEFAULT 0 CHECK (message_count >= 0),
     prefix_sha256  bytea CHECK (prefix_sha256 IS NULL OR octet_length(prefix_sha256) = 32),
+    observed_message_count integer NOT NULL DEFAULT 0 CHECK (observed_message_count >= 0),
+    observed_prefix_sha256 bytea CHECK (
+        observed_prefix_sha256 IS NULL OR octet_length(observed_prefix_sha256) = 32
+    ),
     last_processed timestamptz,
     updated_at     timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (source_id, transcript_id)
+    PRIMARY KEY (source_id, relative_path)
 );
+
+CREATE INDEX IF NOT EXISTS transcript_watermarks_transcript_idx
+    ON engram_ingest.transcript_watermarks (source_id, transcript_id);
 
 -- Durable window -> transcript ownership. The watermark query joins this
 -- table instead of trusting the Hindsight payload, which stays byte-compatible

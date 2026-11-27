@@ -79,6 +79,10 @@ fn transcript_path(root: &Path, name: &str) -> PathBuf {
         .join(name)
 }
 
+fn relative_transcript(name: &str) -> String {
+    format!("workspace-demo/agent-transcripts/{name}.jsonl")
+}
+
 fn write_messages(path: &Path, messages: &[serde_json::Value]) {
     let body = messages
         .iter()
@@ -166,7 +170,7 @@ fn watermark_survives_restart_replay_and_failed_retains() {
     assert_eq!(first_payload["tags"], json!(["engram-test"]));
     let id = source_id(&mut client);
     assert_eq!(
-        load_transcript_watermark(&mut client, id, "session")
+        load_transcript_watermark(&mut client, id, &relative_transcript("session"))
             .unwrap()
             .unwrap_or_default()
             .message_count,
@@ -187,7 +191,7 @@ fn watermark_survives_restart_replay_and_failed_retains() {
         ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("refreshed");
     assert_eq!(refreshed.summary.jobs_created, 0);
     assert_eq!(
-        load_transcript_watermark(&mut client, id, "session")
+        load_transcript_watermark(&mut client, id, &relative_transcript("session"))
             .unwrap()
             .unwrap()
             .message_count,
@@ -200,7 +204,7 @@ fn watermark_survives_restart_replay_and_failed_retains() {
     assert_eq!(after_ack.summary.jobs_created, 0);
     assert_eq!(job_count(&mut client, "succeeded"), 1);
     assert_eq!(
-        load_transcript_watermark(&mut client, id, "session")
+        load_transcript_watermark(&mut client, id, &relative_transcript("session"))
             .unwrap()
             .unwrap()
             .message_count,
@@ -220,7 +224,7 @@ fn watermark_survives_restart_replay_and_failed_retains() {
     ack_all(&mut client);
     ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("append refresh");
     assert_eq!(
-        load_transcript_watermark(&mut client, id, "session")
+        load_transcript_watermark(&mut client, id, &relative_transcript("session"))
             .unwrap()
             .unwrap()
             .message_count,
@@ -259,7 +263,7 @@ fn watermark_survives_restart_replay_and_failed_retains() {
     }
     assert_eq!(job_count(&mut client, "dead"), 1);
     assert_eq!(
-        load_transcript_watermark(&mut client, id, "session")
+        load_transcript_watermark(&mut client, id, &relative_transcript("session"))
             .unwrap()
             .unwrap()
             .message_count,
@@ -297,7 +301,7 @@ fn watermark_survives_restart_replay_and_failed_retains() {
     ingest_transcript_source(&mut client, &source, &options, Utc::now())
         .expect("truncated refresh");
     assert_eq!(
-        load_transcript_watermark(&mut client, id, "session")
+        load_transcript_watermark(&mut client, id, &relative_transcript("session"))
             .unwrap()
             .unwrap()
             .message_count,
@@ -337,23 +341,29 @@ fn watermark_survives_restart_replay_and_failed_retains() {
             .get::<_, i64>(0)
             >= 1
     );
-    assert!(load_transcript_watermark(&mut client, id, "session")
-        .unwrap()
-        .is_none());
+    assert!(
+        load_transcript_watermark(&mut client, id, &relative_transcript("session"))
+            .unwrap()
+            .is_none()
+    );
 
     // A signal-free transcript has no document row; its watermark must still be
     // cleaned up when the file disappears.
     let quiet = transcript_path(&root, "quiet.jsonl");
     write_messages(&quiet, &[user("plain one"), assistant("plain two")]);
     ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("quiet");
-    assert!(load_transcript_watermark(&mut client, id, "quiet")
-        .unwrap()
-        .is_some());
+    assert!(
+        load_transcript_watermark(&mut client, id, &relative_transcript("quiet"))
+            .unwrap()
+            .is_some()
+    );
     fs::remove_file(&quiet).unwrap();
     ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("quiet removed");
-    assert!(load_transcript_watermark(&mut client, id, "quiet")
-        .unwrap()
-        .is_none());
+    assert!(
+        load_transcript_watermark(&mut client, id, &relative_transcript("quiet"))
+            .unwrap()
+            .is_none()
+    );
 
     fs::remove_dir_all(&root).ok();
 }
@@ -455,7 +465,7 @@ fn equal_or_larger_rewrite_and_in_place_rotation_restart_from_zero() {
     ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("refresh");
     let id = source_id(&mut client);
     assert_eq!(
-        load_transcript_watermark(&mut client, id, "rewrite")
+        load_transcript_watermark(&mut client, id, &relative_transcript("rewrite"))
             .unwrap()
             .unwrap()
             .message_count,
@@ -484,7 +494,7 @@ fn equal_or_larger_rewrite_and_in_place_rotation_restart_from_zero() {
     ack_all(&mut client);
     ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("rewrite refresh");
     assert_eq!(
-        load_transcript_watermark(&mut client, id, "rewrite")
+        load_transcript_watermark(&mut client, id, &relative_transcript("rewrite"))
             .unwrap()
             .unwrap()
             .message_count,
@@ -556,6 +566,144 @@ fn live_invalidation_retries_until_acknowledged_without_duplicate_patch() {
 }
 
 #[test]
+fn rewrite_is_detected_while_the_first_retain_is_still_pending() {
+    let Some(url) = test_url() else {
+        eprintln!("ENGRAM_INGEST_TEST_DATABASE_URL is not set; skipping Postgres harness");
+        return;
+    };
+    let mut client = connect(&url).expect("connect");
+    let (root, source) = setup(&mut client);
+    let options = TranscriptOptions::default();
+    let path = transcript_path(&root, "pending-rewrite.jsonl");
+    write_messages(&path, &correction_messages());
+    ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("first");
+    assert_eq!(job_count(&mut client, "pending"), 1);
+    write_messages(
+        &path,
+        &[
+            user("No, that's wrong; use a different approach."),
+            assistant("ack"),
+            user("new tail"),
+            user("Always use tests too."),
+        ],
+    );
+    let second = ingest_transcript_source(&mut client, &source, &options, Utc::now())
+        .expect("pending rewrite");
+    assert_eq!(second.files[0].start_index, 0);
+    assert!(
+        second.summary.deleted_chunks >= 1,
+        "the pre-ack replacement must tombstone obsolete windows"
+    );
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn redrive_guard_skips_retains_whose_chunk_was_deleted() {
+    let Some(url) = test_url() else {
+        eprintln!("ENGRAM_INGEST_TEST_DATABASE_URL is not set; skipping Postgres harness");
+        return;
+    };
+    let mut client = connect(&url).expect("connect");
+    let (root, source) = setup(&mut client);
+    let options = TranscriptOptions::default();
+    let path = transcript_path(&root, "dead.jsonl");
+    write_messages(&path, &correction_messages());
+    ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("ingest");
+    let base = Utc::now();
+    for attempt in 0..3 {
+        let now = base + Duration::seconds(10 * (attempt + 1));
+        let job = claim_job(
+            &mut client,
+            "engram-test-transcripts",
+            "test-worker",
+            Duration::seconds(3_600),
+            now,
+        )
+        .unwrap()
+        .unwrap();
+        fail_job(
+            &mut client,
+            job.job_id,
+            &job.token,
+            now,
+            "permanent",
+            "sink 400",
+        )
+        .unwrap();
+    }
+    fs::remove_file(&path).unwrap();
+    ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("remove");
+    client
+        .batch_execute(
+            "UPDATE engram_ingest.jobs j
+                SET state = 'pending', attempts = 0, run_after = now(), updated_at = now()
+              WHERE j.state = 'dead'
+                AND j.source_id IN (
+                    SELECT id FROM engram_ingest.sources WHERE source_kind = 'transcript'
+                )
+                AND (
+                    j.kind <> 'retain'
+                    OR EXISTS (
+                        SELECT 1 FROM engram_ingest.chunks c
+                         WHERE c.source_id = j.source_id
+                           AND c.hindsight_document_id = j.hindsight_document_id
+                           AND c.state = 'active'
+                           AND c.generation = j.generation
+                    )
+                )",
+        )
+        .expect("guarded redrive");
+    let retain_state: String = client
+        .query_one(
+            "SELECT state FROM engram_ingest.jobs WHERE kind = 'retain' LIMIT 1",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert_eq!(retain_state, "dead");
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn same_stem_files_are_skipped_not_a_source_failure() {
+    let Some(url) = test_url() else {
+        eprintln!("ENGRAM_INGEST_TEST_DATABASE_URL is not set; skipping Postgres harness");
+        return;
+    };
+    let mut client = connect(&url).expect("connect");
+    let (root, source) = setup(&mut client);
+    let options = TranscriptOptions::default();
+    let messages = correction_messages();
+    for workspace in ["workspace-a", "workspace-b"] {
+        let directory = root
+            .join(workspace)
+            .join("agent-transcripts")
+            .join("session");
+        fs::create_dir_all(&directory).unwrap();
+        write_messages(&directory.join("session.jsonl"), &messages);
+    }
+    let outcome =
+        ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("source");
+    assert_eq!(
+        outcome
+            .files
+            .iter()
+            .filter(|file| file.skipped.is_some())
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcome
+            .files
+            .iter()
+            .filter(|file| file.windows_retained > 0)
+            .count(),
+        1
+    );
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn contradiction_modes_gate_queue_tags_and_live_invalidation() {
     let Some(url) = test_url() else {
         eprintln!("ENGRAM_INGEST_TEST_DATABASE_URL is not set; skipping Postgres harness");
@@ -584,12 +732,32 @@ fn contradiction_modes_gate_queue_tags_and_live_invalidation() {
         .get(0);
     assert_eq!(queued_status, "queued");
     assert_eq!(
-        load_transcript_watermark(&mut client, id, "queued")
+        load_transcript_watermark(&mut client, id, &relative_transcript("queued"))
             .unwrap()
             .unwrap()
             .message_count,
         5,
         "a withheld correction advances the watermark because no job is pending"
+    );
+    // A queued ownership row must not survive a rewrite that removes the window.
+    write_messages(&path, &[user("plain one"), assistant("plain two")]);
+    ingest_transcript_source(&mut client, &source, &queued, Utc::now()).expect("queued rewrite");
+    let remaining: i64 = client
+        .query_one(
+            "SELECT count(*) FROM engram_ingest.transcript_windows
+              WHERE relative_path = $1",
+            &[&relative_transcript("queued")],
+        )
+        .unwrap()
+        .get(0);
+    assert_eq!(remaining, 0);
+    assert_eq!(
+        load_transcript_watermark(&mut client, id, &relative_transcript("queued"))
+            .unwrap()
+            .unwrap()
+            .message_count,
+        2,
+        "the rewrite lowers the watermark to the new scanned count"
     );
 
     let shadow_invalidator = Arc::new(Mutex::new(Vec::new()));

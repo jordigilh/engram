@@ -250,7 +250,10 @@ backout before dropping anything.
   needs its own manifest, not a byte-compatible port.
 - GitHub/Jira issue serialization, ADF, pagination, rate limits, and
   out-of-scope deletion are implemented natively in `engram-ingest` (#243).
-- PDF extraction, discussion/board providers (#244), and the transcript
-  contradiction pipeline remain parity surface.
+- GitHub discussions and project boards are implemented natively in
+  `engram-ingest` (#244), including the literal board slug, `Total items`
+  count over all nodes, and the fixed status order.
+- PDF extraction and the transcript contradiction pipeline remain parity
+  surface.
 - Hindsight retain is not idempotent by itself; stable IDs must be validated
   against duplicate consolidation.

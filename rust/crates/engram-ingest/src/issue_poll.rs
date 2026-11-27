@@ -17,13 +17,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use postgres::Client;
-use reqwest::blocking::Client as HttpClient;
 use serde_json::{json, Value};
 
+use crate::boards::{plan_board, python_now_local_timestamp, Board, BoardItem};
+use crate::discussions::{plan_discussion, Discussion};
 use crate::hashing::ContentHash;
+use crate::http::{urls_same_origin, HttpTransport};
 use crate::issues::{
-    plan_github_issue, plan_jira_issue, GitHubIssue, GitHubKind, IssueError, IssuePlan, JiraIssue,
-    ISSUE_CHUNK_OVERLAP, ISSUE_CHUNK_SIZE,
+    plan_github_issue, plan_jira_issue, short_repo, GitHubIssue, GitHubKind, IssueError, IssuePlan,
+    JiraIssue, ISSUE_CHUNK_OVERLAP, ISSUE_CHUNK_SIZE,
 };
 use crate::ledger::{SourceRecord, ISSUE_LAYOUT_VERSION};
 use crate::reconcile::{reconcile_with_removed_reason, DeleteReason, Reconciliation, ScannedFile};
@@ -49,6 +51,8 @@ pub enum PollError {
     Truncated(usize),
     #[error("invalid HTTP response: {0}")]
     Invalid(String),
+    #[error("provider snapshot was unstable: {0}")]
+    Unstable(String),
     #[error(transparent)]
     Issue(#[from] IssueError),
 }
@@ -56,7 +60,7 @@ pub enum PollError {
 impl PollError {
     pub fn is_transient(&self) -> bool {
         match self {
-            Self::Transport(_) | Self::RateLimited { .. } => true,
+            Self::Transport(_) | Self::RateLimited { .. } | Self::Unstable(_) => true,
             Self::Http { status, .. } => *status >= 500,
             _ => false,
         }
@@ -70,6 +74,8 @@ impl PollError {
     }
 
     fn from_status(status: u16, headers: &BTreeMap<String, String>, body: Vec<u8>) -> Self {
+        let body_text = String::from_utf8_lossy(&body);
+        let secondary_rate_limit = body_text.to_lowercase().contains("secondary rate limit");
         if status == 429 || status == 403 {
             let retry_after = headers
                 .get("retry-after")
@@ -85,133 +91,32 @@ impl PollError {
             let exhausted = headers
                 .get("x-ratelimit-remaining")
                 .is_some_and(|value| value == "0");
-            let retry_after = match (retry_after, reset_after) {
+            let mut retry_after = match (retry_after, reset_after) {
                 (Some(retry), Some(reset)) => Some(retry.max(reset)),
                 (Some(retry), None) => Some(retry),
                 (None, Some(reset)) => Some(reset),
                 (None, None) => None,
             };
-            if status == 429 || exhausted || retry_after.is_some() {
+            if status == 403 && secondary_rate_limit && retry_after.is_none() {
+                retry_after = Some(Duration::from_secs(60));
+            }
+            if status == 429 || exhausted || secondary_rate_limit || retry_after.is_some() {
                 return Self::RateLimited { retry_after };
             }
         }
         Self::Http {
             status,
-            body: String::from_utf8_lossy(&body).chars().take(300).collect(),
+            body: body_text.chars().take(300).collect(),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HttpResponse {
-    pub status: u16,
-    /// Header names are lower-cased.
-    pub headers: BTreeMap<String, String>,
-    pub body: Vec<u8>,
-}
-
-impl HttpResponse {
-    pub fn header(&self, name: &str) -> Option<&str> {
-        self.headers
-            .get(&name.to_ascii_lowercase())
-            .map(String::as_str)
-    }
-}
-
-pub trait HttpTransport: Send + Sync {
-    fn get(&self, url: &str, headers: &[(&str, String)]) -> Result<HttpResponse, PollError>;
-    fn post_json(
-        &self,
-        url: &str,
-        headers: &[(&str, String)],
-        body: &Value,
-    ) -> Result<HttpResponse, PollError>;
-}
-
-/// Blocking reqwest transport. Redirects are disabled: an API token must not
-/// be forwarded to a redirect target.
-pub struct ReqwestTransport {
-    client: HttpClient,
-}
-
-impl ReqwestTransport {
-    pub fn new(timeout: Duration) -> Result<Self, PollError> {
-        let client = HttpClient::builder()
-            .timeout(timeout)
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                let Some(original) = attempt.previous().first() else {
-                    return attempt.follow();
-                };
-                if urls_same_origin(original, attempt.url()) {
-                    attempt.follow()
-                } else {
-                    attempt.error("cross-origin redirect blocked")
-                }
-            }))
-            .build()
-            .map_err(|error| PollError::Transport(error.to_string()))?;
-        Ok(Self { client })
-    }
-}
-
-impl HttpTransport for ReqwestTransport {
-    fn get(&self, url: &str, headers: &[(&str, String)]) -> Result<HttpResponse, PollError> {
-        let mut request = self.client.get(url);
-        for (name, value) in headers {
-            request = request.header(*name, value);
-        }
-        let response = request
-            .send()
-            .map_err(|error| PollError::Transport(error.to_string()))?;
-        response_parts(response)
-    }
-
-    fn post_json(
-        &self,
-        url: &str,
-        headers: &[(&str, String)],
-        body: &Value,
-    ) -> Result<HttpResponse, PollError> {
-        let mut request = self.client.post(url).json(body);
-        for (name, value) in headers {
-            request = request.header(*name, value);
-        }
-        let response = request
-            .send()
-            .map_err(|error| PollError::Transport(error.to_string()))?;
-        response_parts(response)
-    }
-}
-
-fn response_parts(response: reqwest::blocking::Response) -> Result<HttpResponse, PollError> {
-    let status = response.status().as_u16();
-    let mut headers = BTreeMap::new();
-    for (name, value) in response.headers() {
-        if let Ok(value) = value.to_str() {
-            headers
-                .entry(name.as_str().to_ascii_lowercase())
-                .and_modify(|existing: &mut String| {
-                    existing.push_str(", ");
-                    existing.push_str(value);
-                })
-                .or_insert_with(|| value.to_string());
-        }
-    }
-    let body = response
-        .bytes()
-        .map_err(|error| PollError::Transport(error.to_string()))?
-        .to_vec();
-    Ok(HttpResponse {
-        status,
-        headers,
-        body,
-    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IssueProvider {
     GitHub,
     Jira,
+    GitHubDiscussions,
+    GitHubProjects,
 }
 
 impl IssueProvider {
@@ -219,6 +124,8 @@ impl IssueProvider {
         match self {
             Self::GitHub => "github",
             Self::Jira => "jira",
+            Self::GitHubDiscussions => "github_discussions",
+            Self::GitHubProjects => "github_projects",
         }
     }
 }
@@ -234,6 +141,8 @@ pub struct IssueStream {
     pub source_kind: String,
     pub repo: Option<String>,
     pub github_kind: Option<GitHubKind>,
+    pub github_organization: Option<String>,
+    pub github_project_number: Option<u64>,
     pub jira_server: Option<String>,
     pub jira_email: Option<String>,
     pub jira_jql: Option<String>,
@@ -264,6 +173,8 @@ impl IssueStream {
             .to_string(),
             repo: Some(repo.to_string()),
             github_kind: Some(kind),
+            github_organization: None,
+            github_project_number: None,
             jira_server: None,
             jira_email: None,
             jira_jql: None,
@@ -291,6 +202,8 @@ impl IssueStream {
             source_kind: "jira_issue".to_string(),
             repo: None,
             github_kind: None,
+            github_organization: None,
+            github_project_number: None,
             jira_server: Some(server.to_string()),
             jira_email: Some(email.to_string()),
             jira_jql: Some(jql.to_string()),
@@ -307,6 +220,60 @@ impl IssueStream {
         self
     }
 
+    pub fn github_discussions(
+        project: &str,
+        bank_id: &str,
+        repo: &str,
+        document_prefix: Option<&str>,
+        limit: usize,
+    ) -> Self {
+        Self {
+            project: project.to_string(),
+            bank_id: bank_id.to_string(),
+            provider: IssueProvider::GitHubDiscussions,
+            source_kind: "github_discussion".to_string(),
+            repo: Some(repo.to_string()),
+            github_kind: None,
+            github_organization: None,
+            github_project_number: None,
+            jira_server: None,
+            jira_email: None,
+            jira_jql: None,
+            jira_project: None,
+            document_prefix: document_prefix.map(str::to_string),
+            limit,
+            chunk_size: ISSUE_CHUNK_SIZE,
+            chunk_overlap: ISSUE_CHUNK_OVERLAP,
+        }
+    }
+
+    pub fn github_project(
+        project: &str,
+        bank_id: &str,
+        organization: &str,
+        number: u64,
+        document_prefix: Option<&str>,
+    ) -> Self {
+        Self {
+            project: project.to_string(),
+            bank_id: bank_id.to_string(),
+            provider: IssueProvider::GitHubProjects,
+            source_kind: "github_board".to_string(),
+            repo: None,
+            github_kind: None,
+            github_organization: Some(organization.to_string()),
+            github_project_number: Some(number),
+            jira_server: None,
+            jira_email: None,
+            jira_jql: None,
+            jira_project: None,
+            document_prefix: document_prefix.map(str::to_string),
+            limit: 0,
+            chunk_size: ISSUE_CHUNK_SIZE,
+            chunk_overlap: ISSUE_CHUNK_OVERLAP,
+        }
+    }
+
     fn effective_prefix(&self) -> &str {
         match self.provider {
             IssueProvider::Jira => self
@@ -314,7 +281,12 @@ impl IssueStream {
                 .as_deref()
                 .filter(|prefix| !prefix.is_empty())
                 .unwrap_or("jira"),
-            IssueProvider::GitHub => self
+            IssueProvider::GitHubProjects => self
+                .document_prefix
+                .as_deref()
+                .filter(|prefix| !prefix.is_empty())
+                .unwrap_or("board"),
+            IssueProvider::GitHub | IssueProvider::GitHubDiscussions => self
                 .document_prefix
                 .as_deref()
                 .filter(|prefix| !prefix.is_empty())
@@ -342,6 +314,21 @@ impl IssueStream {
                 "project": self.jira_project.as_deref().unwrap_or(""),
                 "prefix": self.effective_prefix(),
             }),
+            IssueProvider::GitHubDiscussions => json!({
+                "provider": "github_discussion",
+                "repo": self.repo.as_deref().unwrap_or("").to_lowercase(),
+                "prefix": self.effective_prefix(),
+            }),
+            IssueProvider::GitHubProjects => json!({
+                "provider": "github_board",
+                "organization": self
+                    .github_organization
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase(),
+                "number": self.github_project_number,
+                "prefix": self.effective_prefix(),
+            }),
         };
         let digest = ContentHash::of(&serde_json::to_vec(&config).unwrap_or_default());
         let short = digest.to_string();
@@ -361,6 +348,18 @@ impl IssueStream {
                     .to_lowercase(),
                 self.jira_project.as_deref().unwrap_or("")
             ),
+            IssueProvider::GitHubDiscussions => format!(
+                "github_discussion:{}:{short}",
+                self.repo.as_deref().unwrap_or("").to_lowercase()
+            ),
+            IssueProvider::GitHubProjects => format!(
+                "github_board:{}:{}:{short}",
+                self.github_organization
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase(),
+                self.github_project_number.unwrap_or(0)
+            ),
         }
     }
 
@@ -376,7 +375,7 @@ impl IssueStream {
     }
 
     fn validate(&self) -> Result<(), PollError> {
-        if self.limit == 0 {
+        if self.provider != IssueProvider::GitHubProjects && self.limit == 0 {
             return Err(PollError::Invalid("issue limit must be positive".into()));
         }
         match self.provider {
@@ -386,6 +385,30 @@ impl IssueStream {
                 }
                 if self.github_kind.is_none() {
                     return Err(PollError::Invalid("GitHub stream needs a kind".into()));
+                }
+            }
+            IssueProvider::GitHubDiscussions => {
+                let repo = self.repo.as_deref().unwrap_or("");
+                if repo
+                    .split_once('/')
+                    .filter(|(owner, name)| !owner.is_empty() && !name.is_empty())
+                    .is_none()
+                {
+                    return Err(PollError::Invalid(
+                        "GitHub discussion stream needs owner/name".into(),
+                    ));
+                }
+            }
+            IssueProvider::GitHubProjects => {
+                if self.github_organization.as_deref().unwrap_or("").is_empty() {
+                    return Err(PollError::Invalid(
+                        "GitHub project stream needs an organization".into(),
+                    ));
+                }
+                if self.github_project_number.unwrap_or(0) == 0 {
+                    return Err(PollError::Invalid(
+                        "GitHub project stream needs a project number".into(),
+                    ));
                 }
             }
             IssueProvider::Jira => {
@@ -413,6 +436,8 @@ impl IssueStream {
 pub fn validate_bank_streams(streams: &[IssueStream]) -> Result<(), PollError> {
     let mut identities: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut jira_prefixes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut discussion_scopes: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
+    let mut board_scopes: BTreeMap<String, BTreeSet<(String, u64)>> = BTreeMap::new();
     for stream in streams {
         stream.validate()?;
         if !identities
@@ -436,6 +461,38 @@ pub fn validate_bank_streams(streams: &[IssueStream]) -> Result<(), PollError> {
                 stream.bank_id,
                 stream.effective_prefix()
             )));
+        }
+        if stream.provider == IssueProvider::GitHubDiscussions {
+            let scope = (
+                stream.effective_prefix().to_string(),
+                short_repo(stream.repo.as_deref().unwrap_or("")),
+            );
+            if !discussion_scopes
+                .entry(stream.bank_id.clone())
+                .or_default()
+                .insert(scope.clone())
+            {
+                return Err(PollError::Invalid(format!(
+                    "two discussion streams in bank {} share prefix {:?} and repo {:?}",
+                    stream.bank_id, scope.0, scope.1
+                )));
+            }
+        }
+        if stream.provider == IssueProvider::GitHubProjects {
+            let scope = (
+                stream.effective_prefix().to_string(),
+                stream.github_project_number.unwrap_or(0),
+            );
+            if !board_scopes
+                .entry(stream.bank_id.clone())
+                .or_default()
+                .insert(scope.clone())
+            {
+                return Err(PollError::Invalid(format!(
+                    "two board streams in bank {} share prefix {:?} and number {}",
+                    stream.bank_id, scope.0, scope.1
+                )));
+            }
         }
     }
     Ok(())
@@ -501,6 +558,8 @@ pub fn poll_issue_stream(
     match stream.provider {
         IssueProvider::GitHub => poll_github(transport, token, DEFAULT_GITHUB_API, stream, cursor),
         IssueProvider::Jira => poll_jira(transport, token, stream, cursor),
+        IssueProvider::GitHubDiscussions => poll_discussions(transport, token, stream, cursor),
+        IssueProvider::GitHubProjects => poll_board(transport, token, stream),
     }
 }
 
@@ -600,15 +659,18 @@ pub fn poll_github(
         true
     } else {
         let first_identities = github_identities(&items, is_pr_stream);
-        let second_identities = fetch_github_identities(
+        match fetch_github_identities(
             transport,
             &initial_url,
             &headers,
             api_base,
             is_pr_stream,
             stream.limit,
-        )?;
-        first_identities == second_identities
+        ) {
+            Ok(second) => first_identities == second,
+            Err(PollError::Truncated(_)) => false,
+            Err(error) => return Err(error),
+        }
     };
 
     let mut plans = Vec::new();
@@ -664,12 +726,6 @@ fn same_origin(candidate: &str, base: &str) -> bool {
         return false;
     };
     urls_same_origin(&candidate, &base)
-}
-
-fn urls_same_origin(candidate: &reqwest::Url, base: &reqwest::Url) -> bool {
-    candidate.scheme() == base.scheme()
-        && candidate.host_str() == base.host_str()
-        && candidate.port_or_known_default() == base.port_or_known_default()
 }
 
 fn github_identities(items: &[Value], is_pr_stream: bool) -> Vec<u64> {
@@ -967,6 +1023,454 @@ fn base64_basic(email: &str, token: &str) -> String {
     output
 }
 
+const GRAPHQL_URL: &str = "https://api.github.com/graphql";
+
+const DISCUSSIONS_QUERY: &str = r#"
+query($owner: String!, $name: String!, $first: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    discussions(first: $first, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number title body category { name } author { login }
+        createdAt updatedAt
+        comments(first: 20) { nodes { author { login } body authorAssociation } }
+      }
+    }
+  }
+}
+"#;
+
+const DISCUSSION_NUMBERS_QUERY: &str = r#"
+query($owner: String!, $name: String!, $first: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    discussions(first: $first, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes { number }
+    }
+  }
+}
+"#;
+
+const PROJECTS_QUERY: &str = r#"
+query($org: String!, $number: Int!, $after: String) {
+  organization(login: $org) { projectV2(number: $number) {
+    title shortDescription items(first: 100, after: $after, orderBy: {field: POSITION, direction: ASC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes { content {
+        ... on Issue { number title url state repository { name } }
+        ... on PullRequest { number title url state repository { name } }
+      } fieldValues(first: 10) { nodes {
+        ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2FieldCommon { name } } }
+      } }
+    }
+  } }
+}
+"#;
+
+fn github_graphql_headers(token: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("Accept", "application/json".to_string()),
+        ("Content-Type", "application/json".to_string()),
+        ("User-Agent", "engram-ingest".to_string()),
+        ("Authorization", format!("Bearer {token}")),
+    ]
+}
+
+fn github_graphql(
+    transport: &dyn HttpTransport,
+    token: &str,
+    query: &str,
+    variables: Value,
+) -> Result<Value, PollError> {
+    let response = transport.post_json(
+        GRAPHQL_URL,
+        &github_graphql_headers(token),
+        &json!({"query": query, "variables": variables}),
+    )?;
+    if response.status != 200 {
+        return Err(PollError::from_status(
+            response.status,
+            &response.headers,
+            response.body,
+        ));
+    }
+    let document: Value = serde_json::from_slice(&response.body)
+        .map_err(|error| PollError::Invalid(error.to_string()))?;
+    if let Some(errors) = document.get("errors").and_then(Value::as_array) {
+        if !errors.is_empty() {
+            let rate_limited = errors.iter().any(|error| {
+                error.get("type").and_then(Value::as_str) == Some("RATE_LIMITED")
+                    || error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .is_some_and(|message| message.to_lowercase().contains("rate limit"))
+            });
+            if rate_limited {
+                return Err(PollError::RateLimited {
+                    retry_after: Some(Duration::from_secs(60)),
+                });
+            }
+            let first = errors
+                .first()
+                .and_then(|error| error.get("message"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown GraphQL error");
+            return Err(PollError::Invalid(format!(
+                "GitHub GraphQL returned errors: {first}"
+            )));
+        }
+    }
+    Ok(document)
+}
+
+fn page_has_next(block: &Value, what: &str) -> Result<bool, PollError> {
+    let page_info = block
+        .get("pageInfo")
+        .filter(|value| value.is_object())
+        .ok_or_else(|| PollError::Invalid(format!("{what} pageInfo is missing")))?;
+    page_info
+        .get("hasNextPage")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| PollError::Invalid(format!("{what} hasNextPage is missing")))
+}
+
+pub fn poll_discussions(
+    transport: &dyn HttpTransport,
+    token: &str,
+    stream: &IssueStream,
+    _cursor: Option<&IssueCursor>,
+) -> Result<IssuePollOutcome, PollError> {
+    let repo = stream
+        .repo
+        .as_deref()
+        .ok_or_else(|| PollError::Invalid("discussion stream needs a repo".into()))?;
+    let (owner, name) = repo
+        .split_once('/')
+        .filter(|(owner, name)| !owner.is_empty() && !name.is_empty())
+        .ok_or_else(|| PollError::Invalid(format!("invalid GitHub repo {repo:?}")))?;
+    let mut discussions: Vec<Discussion> = Vec::new();
+    let mut page_count = 0usize;
+    let mut after = Value::Null;
+    let mut cursors = BTreeSet::new();
+    let mut last_updated: Option<String> = None;
+    let mut truncated = false;
+
+    loop {
+        page_count += 1;
+        if page_count > MAX_PAGES {
+            return Err(PollError::Truncated(stream.limit));
+        }
+        let remaining = stream.limit.saturating_sub(discussions.len());
+        if remaining == 0 {
+            truncated = true;
+            break;
+        }
+        let document = github_graphql(
+            transport,
+            token,
+            DISCUSSIONS_QUERY,
+            json!({
+                "owner": owner,
+                "name": name,
+                "first": remaining.min(100),
+                "after": after,
+            }),
+        )?;
+        let repository = document
+            .pointer("/data/repository")
+            .filter(|value| !value.is_null())
+            .ok_or_else(|| PollError::Invalid("GitHub GraphQL returned no repository".into()))?;
+        let block = repository
+            .get("discussions")
+            .filter(|value| value.is_object())
+            .ok_or_else(|| PollError::Invalid("GitHub GraphQL returned no discussions".into()))?;
+        let nodes = block
+            .get("nodes")
+            .and_then(Value::as_array)
+            .ok_or_else(|| PollError::Invalid("discussion nodes are missing".into()))?;
+        for node in nodes {
+            if !node.is_object() {
+                continue;
+            }
+            let discussion = Discussion::from_graphql(node)?;
+            if !discussion.updated_at.is_empty() {
+                let updated = discussion.updated_at.clone();
+                last_updated = Some(match last_updated {
+                    Some(current) if current.as_str() >= updated.as_str() => current,
+                    _ => updated,
+                });
+            }
+            discussions.push(discussion);
+            if discussions.len() > stream.limit {
+                return Err(PollError::Truncated(stream.limit));
+            }
+        }
+        let has_next = page_has_next(block, "discussion")?;
+        if !has_next {
+            break;
+        }
+        let cursor = block
+            .pointer("/pageInfo/endCursor")
+            .and_then(Value::as_str)
+            .filter(|cursor| !cursor.is_empty())
+            .ok_or_else(|| PollError::Invalid("discussion page has no endCursor".into()))?;
+        if !cursors.insert(cursor.to_string()) {
+            return Err(PollError::Invalid(
+                "GitHub repeated a discussion page cursor".into(),
+            ));
+        }
+        after = Value::String(cursor.to_string());
+        if discussions.len() >= stream.limit {
+            truncated = true;
+            break;
+        }
+    }
+
+    let deletions_allowed = if truncated {
+        false
+    } else if page_count <= 1 {
+        true
+    } else {
+        let identities: Vec<u64> = discussions.iter().map(|item| item.number).collect();
+        match fetch_discussion_numbers(transport, token, owner, name, stream.limit) {
+            Ok(second) => identities == second,
+            Err(PollError::Truncated(_)) => false,
+            Err(error) => return Err(error),
+        }
+    };
+    let plans = discussions
+        .iter()
+        .map(|item| {
+            plan_discussion(
+                item,
+                repo,
+                stream.document_prefix.as_deref(),
+                stream.chunk_size,
+                stream.chunk_overlap,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(IssuePollOutcome::Snapshot(IssueSnapshot {
+        plans,
+        page_count,
+        item_count: discussions.len(),
+        etag: None,
+        last_updated,
+        deletions_allowed,
+    }))
+}
+
+fn fetch_discussion_numbers(
+    transport: &dyn HttpTransport,
+    token: &str,
+    owner: &str,
+    name: &str,
+    limit: usize,
+) -> Result<Vec<u64>, PollError> {
+    let mut numbers = Vec::new();
+    let mut after = Value::Null;
+    let mut cursors = BTreeSet::new();
+    for _ in 0..MAX_PAGES {
+        let remaining = limit.saturating_sub(numbers.len());
+        if remaining == 0 {
+            return Err(PollError::Truncated(limit));
+        }
+        let document = github_graphql(
+            transport,
+            token,
+            DISCUSSION_NUMBERS_QUERY,
+            json!({
+                "owner": owner,
+                "name": name,
+                "first": remaining.min(100),
+                "after": after,
+            }),
+        )?;
+        let repository = document
+            .pointer("/data/repository")
+            .filter(|value| !value.is_null())
+            .ok_or_else(|| PollError::Invalid("GitHub GraphQL returned no repository".into()))?;
+        let block = repository
+            .get("discussions")
+            .filter(|value| value.is_object())
+            .ok_or_else(|| PollError::Invalid("GitHub GraphQL returned no discussions".into()))?;
+        for node in block
+            .get("nodes")
+            .and_then(Value::as_array)
+            .ok_or_else(|| PollError::Invalid("discussion nodes are missing".into()))?
+        {
+            if !node.is_object() {
+                continue;
+            }
+            numbers.push(
+                node.get("number")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| PollError::Invalid("discussion without number".into()))?,
+            );
+            if numbers.len() > limit {
+                return Err(PollError::Truncated(limit));
+            }
+        }
+        if !page_has_next(block, "discussion")? {
+            return Ok(numbers);
+        }
+        let cursor = block
+            .pointer("/pageInfo/endCursor")
+            .and_then(Value::as_str)
+            .filter(|cursor| !cursor.is_empty())
+            .ok_or_else(|| PollError::Invalid("discussion page has no endCursor".into()))?;
+        if !cursors.insert(cursor.to_string()) {
+            return Err(PollError::Invalid(
+                "GitHub repeated a discussion page cursor".into(),
+            ));
+        }
+        after = Value::String(cursor.to_string());
+    }
+    Err(PollError::Truncated(limit))
+}
+
+struct BoardPass {
+    title: String,
+    description: String,
+    items: Vec<BoardItem>,
+    page_count: usize,
+}
+
+fn fetch_board_pass(
+    transport: &dyn HttpTransport,
+    token: &str,
+    organization: &str,
+    number: u64,
+) -> Result<BoardPass, PollError> {
+    let mut items: Vec<BoardItem> = Vec::new();
+    let mut title = String::new();
+    let mut description = String::new();
+    let mut after = Value::Null;
+    let mut cursors = BTreeSet::new();
+    let mut page_count = 0usize;
+
+    loop {
+        page_count += 1;
+        if page_count > MAX_PAGES {
+            return Err(PollError::Truncated(MAX_PAGES));
+        }
+        let document = github_graphql(
+            transport,
+            token,
+            PROJECTS_QUERY,
+            json!({"org": organization, "number": number, "after": after}),
+        )?;
+        let project = document
+            .pointer("/data/organization/projectV2")
+            .filter(|value| !value.is_null())
+            .ok_or_else(|| {
+                PollError::Invalid(format!(
+                    "GitHub project {organization}/{number} was not returned"
+                ))
+            })?;
+        if title.is_empty() {
+            title = project
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+        }
+        if let Some(short) = project
+            .get("shortDescription")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            description = short.to_string();
+        }
+        let block = project
+            .get("items")
+            .filter(|value| value.is_object())
+            .ok_or_else(|| PollError::Invalid("project items are missing".into()))?;
+        for node in block
+            .get("nodes")
+            .and_then(Value::as_array)
+            .ok_or_else(|| PollError::Invalid("project item nodes are missing".into()))?
+        {
+            if !node.is_object() {
+                continue;
+            }
+            items.push(BoardItem::from_graphql(node));
+        }
+        if !page_has_next(block, "project")? {
+            break;
+        }
+        let cursor = block
+            .pointer("/pageInfo/endCursor")
+            .and_then(Value::as_str)
+            .filter(|cursor| !cursor.is_empty())
+            .ok_or_else(|| PollError::Invalid("project page has no endCursor".into()))?;
+        if !cursors.insert(cursor.to_string()) {
+            return Err(PollError::Invalid(
+                "GitHub repeated a project page cursor".into(),
+            ));
+        }
+        after = Value::String(cursor.to_string());
+    }
+    if title.is_empty() {
+        return Err(PollError::Invalid(format!(
+            "GitHub project {organization}/{number} has no title"
+        )));
+    }
+    Ok(BoardPass {
+        title,
+        description,
+        items,
+        page_count,
+    })
+}
+
+pub fn poll_board(
+    transport: &dyn HttpTransport,
+    token: &str,
+    stream: &IssueStream,
+) -> Result<IssuePollOutcome, PollError> {
+    let organization = stream
+        .github_organization
+        .as_deref()
+        .ok_or_else(|| PollError::Invalid("board stream needs an organization".into()))?;
+    let number = stream
+        .github_project_number
+        .ok_or_else(|| PollError::Invalid("board stream needs a project number".into()))?;
+    let first = fetch_board_pass(transport, token, organization, number)?;
+    // Offset-based item pages have no snapshot token; require a second
+    // identical pass before replacing the board document. Two identical empty
+    // passes are a confirmed empty board, not a transient partial page.
+    let second = fetch_board_pass(transport, token, organization, number)?;
+    if first.title != second.title
+        || first.description != second.description
+        || first.items != second.items
+    {
+        return Err(PollError::Unstable(format!(
+            "GitHub project {organization}/{number} changed between stability passes"
+        )));
+    }
+    let board = Board {
+        number,
+        organization: organization.to_string(),
+        title: first.title,
+        description: first.description,
+        items: first.items,
+    };
+    let plan = plan_board(
+        &board,
+        stream.document_prefix.as_deref(),
+        Some(python_now_local_timestamp()),
+    )?;
+    Ok(IssuePollOutcome::Snapshot(IssueSnapshot {
+        item_count: board.items.len(),
+        plans: vec![plan],
+        page_count: first.page_count + second.page_count,
+        etag: None,
+        last_updated: None,
+        deletions_allowed: true,
+    }))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IssueIngestOutcome {
     NotModified(IssueCursor),
@@ -1076,12 +1580,14 @@ pub fn apply_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::HttpResponse;
     use std::sync::Mutex;
 
     #[derive(Default)]
     struct ScriptedTransport {
         responses: Mutex<Vec<Result<HttpResponse, PollError>>>,
         requests: Mutex<Vec<(String, BTreeMap<String, String>)>>,
+        post_bodies: Mutex<Vec<Value>>,
     }
 
     impl ScriptedTransport {
@@ -1089,6 +1595,7 @@ mod tests {
             Self {
                 responses: Mutex::new(responses.into_iter().map(Ok).collect()),
                 requests: Mutex::new(Vec::new()),
+                post_bodies: Mutex::new(Vec::new()),
             }
         }
 
@@ -1096,11 +1603,16 @@ mod tests {
             Self {
                 responses: Mutex::new(responses),
                 requests: Mutex::new(Vec::new()),
+                post_bodies: Mutex::new(Vec::new()),
             }
         }
 
         fn requests(&self) -> Vec<(String, BTreeMap<String, String>)> {
             self.requests.lock().unwrap().clone()
+        }
+
+        fn post_bodies(&self) -> Vec<Value> {
+            self.post_bodies.lock().unwrap().clone()
         }
     }
 
@@ -1120,8 +1632,9 @@ mod tests {
             &self,
             url: &str,
             headers: &[(&str, String)],
-            _body: &Value,
+            body: &Value,
         ) -> Result<HttpResponse, PollError> {
+            self.post_bodies.lock().unwrap().push(body.clone());
             self.get(url, headers)
         }
     }
@@ -1449,6 +1962,7 @@ mod tests {
     fn transient_classification_and_retry_after_cover_all_variants() {
         assert!(PollError::Transport("x".into()).is_transient());
         assert!(PollError::RateLimited { retry_after: None }.is_transient());
+        assert!(PollError::Unstable("changed".into()).is_transient());
         assert!(PollError::Http {
             status: 500,
             body: String::new()
@@ -1490,6 +2004,13 @@ mod tests {
             PollError::from_status(403, &BTreeMap::new(), Vec::new()),
             PollError::Http { status: 403, .. }
         ));
+        let secondary = PollError::from_status(
+            403,
+            &BTreeMap::new(),
+            b"You have exceeded a secondary rate limit".to_vec(),
+        );
+        assert!(secondary.is_transient());
+        assert_eq!(secondary.retry_after(), Some(Duration::from_secs(60)));
         let body = "x".repeat(400);
         let error = PollError::from_status(500, &BTreeMap::new(), body.into_bytes());
         match error {
@@ -1863,6 +2384,391 @@ mod tests {
         let error = PollError::from_status(403, &headers, Vec::new());
         let retry = error.retry_after().expect("reset deadline");
         assert!(retry >= Duration::from_secs(55) && retry <= Duration::from_secs(60));
+    }
+
+    fn discussion_node(number: u64) -> Value {
+        json!({
+            "number": number,
+            "title": format!("Discussion {number}"),
+            "body": "A sufficiently long discussion body for parity.",
+            "category": {"name": "Ideas"},
+            "author": {"login": "alice"},
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-02T00:00:00Z",
+            "comments": {"nodes": []}
+        })
+    }
+
+    fn discussions_page(nodes: Vec<Value>, has_next: bool, cursor: Option<&str>) -> Value {
+        json!({
+            "data": {"repository": {"discussions": {
+                "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
+                "nodes": nodes
+            }}}
+        })
+    }
+
+    fn discussion_stream() -> IssueStream {
+        IssueStream::github_discussions("p", "p-issues", "praxis-proxy/praxis", None, 100)
+    }
+
+    #[test]
+    fn discussion_polling_produces_the_python_ids() {
+        let transport = ScriptedTransport::new(vec![response(
+            200,
+            discussions_page(vec![discussion_node(1562)], false, None),
+        )]);
+        let IssuePollOutcome::Snapshot(snapshot) =
+            poll_discussions(&transport, "token", &discussion_stream(), None).unwrap()
+        else {
+            panic!("expected snapshot");
+        };
+        assert_eq!(snapshot.item_count, 1);
+        assert_eq!(
+            snapshot.plans[0].calls[0].document_id,
+            "praxis-discussion-1562"
+        );
+        assert_eq!(snapshot.plans[0].calls[0].metadata["kind"], "discussion");
+        assert!(snapshot.deletions_allowed);
+    }
+
+    #[test]
+    fn discussion_pagination_requires_matching_two_passes_for_deletes() {
+        let transport = ScriptedTransport::new(vec![
+            response(
+                200,
+                discussions_page(vec![discussion_node(2)], true, Some("c1")),
+            ),
+            response(200, discussions_page(vec![discussion_node(1)], false, None)),
+            response(
+                200,
+                discussions_page(vec![discussion_node(2)], true, Some("c1")),
+            ),
+            response(200, discussions_page(vec![discussion_node(1)], false, None)),
+        ]);
+        let IssuePollOutcome::Snapshot(snapshot) =
+            poll_discussions(&transport, "token", &discussion_stream(), None).unwrap()
+        else {
+            panic!("expected snapshot");
+        };
+        assert_eq!(snapshot.page_count, 2);
+        assert!(snapshot.deletions_allowed);
+        let bodies = transport.post_bodies();
+        assert_eq!(bodies[0]["variables"]["first"], 100);
+        assert!(bodies[0]["variables"]["after"].is_null());
+        assert_eq!(bodies[1]["variables"]["after"], "c1");
+
+        let transport = ScriptedTransport::new(vec![
+            response(
+                200,
+                discussions_page(vec![discussion_node(2)], true, Some("c1")),
+            ),
+            response(200, discussions_page(vec![discussion_node(1)], false, None)),
+            response(
+                200,
+                discussions_page(vec![discussion_node(2)], true, Some("c1")),
+            ),
+            response(
+                200,
+                discussions_page(vec![discussion_node(99)], false, None),
+            ),
+        ]);
+        let IssuePollOutcome::Snapshot(snapshot) =
+            poll_discussions(&transport, "token", &discussion_stream(), None).unwrap()
+        else {
+            panic!("expected snapshot");
+        };
+        assert!(!snapshot.deletions_allowed);
+    }
+
+    #[test]
+    fn discussion_limit_truncation_disables_deletes_without_failing() {
+        let mut stream = discussion_stream();
+        stream.limit = 1;
+        let transport = ScriptedTransport::new(vec![response(
+            200,
+            discussions_page(vec![discussion_node(2)], true, Some("c1")),
+        )]);
+        let IssuePollOutcome::Snapshot(snapshot) =
+            poll_discussions(&transport, "token", &stream, None).unwrap()
+        else {
+            panic!("expected snapshot");
+        };
+        assert_eq!(snapshot.item_count, 1);
+        assert!(!snapshot.deletions_allowed);
+    }
+
+    #[test]
+    fn graphql_errors_and_null_repository_are_not_empty_snapshots() {
+        let transport = ScriptedTransport::new(vec![response(
+            200,
+            json!({"errors": [{"type": "RATE_LIMITED", "message": "slow down"}]}),
+        )]);
+        let error = poll_discussions(&transport, "token", &discussion_stream(), None).unwrap_err();
+        assert!(matches!(error, PollError::RateLimited { .. }));
+
+        let transport = ScriptedTransport::new(vec![response(
+            200,
+            json!({"errors": [{"message": "You have exceeded a secondary rate limit"}]}),
+        )]);
+        let error = poll_discussions(&transport, "token", &discussion_stream(), None).unwrap_err();
+        assert!(matches!(error, PollError::RateLimited { .. }));
+
+        let transport = ScriptedTransport::new(vec![response(
+            200,
+            json!({"errors": [{"type": "NOT_FOUND", "message": "missing"}], "data": {"repository": null}}),
+        )]);
+        let error = poll_discussions(&transport, "token", &discussion_stream(), None).unwrap_err();
+        assert!(matches!(error, PollError::Invalid(_)));
+
+        let transport =
+            ScriptedTransport::new(vec![response(200, json!({"data": {"repository": null}}))]);
+        let error = poll_discussions(&transport, "token", &discussion_stream(), None).unwrap_err();
+        assert!(matches!(error, PollError::Invalid(_)));
+    }
+
+    #[test]
+    fn missing_page_info_is_not_a_complete_snapshot() {
+        let transport = ScriptedTransport::new(vec![response(
+            200,
+            json!({"data": {"repository": {"discussions": {"nodes": []}}}}),
+        )]);
+        let error = poll_discussions(&transport, "token", &discussion_stream(), None).unwrap_err();
+        assert!(matches!(error, PollError::Invalid(_)));
+
+        let transport = ScriptedTransport::new(vec![response(
+            200,
+            json!({"data": {"organization": {"projectV2": {
+                "title": "Board",
+                "items": {"nodes": []}
+            }}}}),
+        )]);
+        let error = poll_board(&transport, "token", &board_stream()).unwrap_err();
+        assert!(matches!(error, PollError::Invalid(_)));
+    }
+
+    #[test]
+    fn null_connection_nodes_are_skipped() {
+        let transport = ScriptedTransport::new(vec![response(
+            200,
+            discussions_page(vec![Value::Null], false, None),
+        )]);
+        let IssuePollOutcome::Snapshot(snapshot) =
+            poll_discussions(&transport, "token", &discussion_stream(), None).unwrap()
+        else {
+            panic!("expected snapshot");
+        };
+        assert_eq!(snapshot.item_count, 0);
+        assert!(snapshot.plans.is_empty());
+
+        let transport = ScriptedTransport::new(vec![
+            response(200, board_page(vec![Value::Null], false, None)),
+            response(200, board_page(vec![Value::Null], false, None)),
+        ]);
+        let IssuePollOutcome::Snapshot(snapshot) =
+            poll_board(&transport, "token", &board_stream()).unwrap()
+        else {
+            panic!("expected snapshot");
+        };
+        assert_eq!(snapshot.item_count, 0);
+        assert!(snapshot.plans[0].calls[0]
+            .content
+            .contains("Total items: 0"));
+    }
+
+    #[test]
+    fn second_pass_truncation_disables_deletes_without_failing() {
+        let mut stream = discussion_stream();
+        stream.limit = 2;
+        let transport = ScriptedTransport::new(vec![
+            response(
+                200,
+                discussions_page(vec![discussion_node(2)], true, Some("c1")),
+            ),
+            response(200, discussions_page(vec![discussion_node(1)], false, None)),
+            response(
+                200,
+                discussions_page(
+                    vec![discussion_node(2), discussion_node(1)],
+                    true,
+                    Some("c2"),
+                ),
+            ),
+        ]);
+        let IssuePollOutcome::Snapshot(snapshot) =
+            poll_discussions(&transport, "token", &stream, None).unwrap()
+        else {
+            panic!("expected snapshot");
+        };
+        assert_eq!(snapshot.item_count, 2);
+        assert!(!snapshot.deletions_allowed);
+    }
+
+    fn board_node(number: u64, status: &str) -> Value {
+        json!({
+            "content": {"number": number, "title": format!("Item {number}"), "repository": {"name": "praxis"}},
+            "fieldValues": {"nodes": [{"name": status, "field": {"name": "Status"}}]}
+        })
+    }
+
+    fn board_page(nodes: Vec<Value>, has_next: bool, cursor: Option<&str>) -> Value {
+        json!({
+            "data": {"organization": {"projectV2": {
+                "title": "Praxis Policy Engine (PPE)",
+                "shortDescription": null,
+                "items": {
+                    "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
+                    "nodes": nodes
+                }
+            }}}
+        })
+    }
+
+    fn board_stream() -> IssueStream {
+        IssueStream::github_project("p", "p-issues", "praxis-proxy", 9, None)
+    }
+
+    #[test]
+    fn board_polling_paginates_and_keeps_the_one_document_contract() {
+        let transport = ScriptedTransport::new(vec![
+            response(
+                200,
+                board_page(vec![board_node(130, "Done")], true, Some("c1")),
+            ),
+            response(200, board_page(vec![board_node(131, "Next")], false, None)),
+            response(
+                200,
+                board_page(vec![board_node(130, "Done")], true, Some("c1")),
+            ),
+            response(200, board_page(vec![board_node(131, "Next")], false, None)),
+        ]);
+        let IssuePollOutcome::Snapshot(snapshot) =
+            poll_board(&transport, "token", &board_stream()).unwrap()
+        else {
+            panic!("expected snapshot");
+        };
+        assert_eq!(snapshot.item_count, 2);
+        assert_eq!(snapshot.page_count, 4);
+        assert_eq!(snapshot.plans.len(), 1);
+        assert_eq!(
+            snapshot.plans[0].calls[0].document_id,
+            "board-9-praxis-policy-engine-(ppe)"
+        );
+        assert!(snapshot.plans[0].calls[0]
+            .content
+            .contains("Total items: 2"));
+        assert!(snapshot.plans[0].calls[0]
+            .content
+            .contains("## Status: Next (1)"));
+        let bodies = transport.post_bodies();
+        assert!(bodies[0]["variables"]["after"].is_null());
+        assert_eq!(bodies[1]["variables"]["after"], "c1");
+    }
+
+    #[test]
+    fn board_changed_between_stability_passes_is_an_error() {
+        let transport = ScriptedTransport::new(vec![
+            response(200, board_page(vec![board_node(130, "Done")], false, None)),
+            response(200, board_page(vec![board_node(131, "Next")], false, None)),
+        ]);
+        let error = poll_board(&transport, "token", &board_stream()).unwrap_err();
+        assert!(matches!(error, PollError::Unstable(_)));
+    }
+
+    #[test]
+    fn two_identical_empty_passes_confirm_an_empty_board() {
+        let transport = ScriptedTransport::new(vec![
+            response(200, board_page(Vec::new(), false, None)),
+            response(200, board_page(Vec::new(), false, None)),
+        ]);
+        let IssuePollOutcome::Snapshot(snapshot) =
+            poll_board(&transport, "token", &board_stream()).unwrap()
+        else {
+            panic!("expected snapshot");
+        };
+        assert_eq!(snapshot.item_count, 0);
+        assert!(snapshot.plans[0].calls[0]
+            .content
+            .contains("Total items: 0"));
+    }
+
+    #[test]
+    fn board_missing_project_or_title_is_an_error() {
+        let transport = ScriptedTransport::new(vec![response(
+            200,
+            json!({"data": {"organization": {"projectV2": null}}}),
+        )]);
+        let error = poll_board(&transport, "token", &board_stream()).unwrap_err();
+        assert!(matches!(error, PollError::Invalid(_)));
+
+        let transport = ScriptedTransport::new(vec![response(
+            200,
+            json!({"data": {"organization": {"projectV2": {"title": "", "items": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}}}}}),
+        )]);
+        let error = poll_board(&transport, "token", &board_stream()).unwrap_err();
+        assert!(matches!(error, PollError::Invalid(_)));
+    }
+
+    #[test]
+    fn new_stream_scopes_are_checked_for_bank_disjointness() {
+        let a = discussion_stream();
+        let b = discussion_stream().with_document_prefix(Some("other"));
+        assert!(validate_bank_streams(&[a, b]).is_ok());
+        let a = discussion_stream();
+        let b = discussion_stream();
+        assert!(validate_bank_streams(&[a, b]).is_err());
+
+        let a = board_stream();
+        let b = IssueStream::github_project("p", "p-issues", "other-org", 9, None);
+        assert!(validate_bank_streams(&[a.clone(), b]).is_err());
+        let b = IssueStream::github_project("p", "p-issues", "other-org", 10, None);
+        assert!(validate_bank_streams(&[a, b]).is_ok());
+    }
+
+    #[test]
+    fn provider_names_include_the_graphql_providers() {
+        assert_eq!(
+            IssueProvider::GitHubDiscussions.as_str(),
+            "github_discussions"
+        );
+        assert_eq!(IssueProvider::GitHubProjects.as_str(), "github_projects");
+    }
+
+    #[test]
+    fn discussion_and_board_validation_errors_are_explicit() {
+        let mut discussion = discussion_stream();
+        discussion.repo = Some("missing-owner".to_string());
+        assert!(matches!(discussion.validate(), Err(PollError::Invalid(_))));
+        let mut board = board_stream();
+        board.github_organization = None;
+        assert!(matches!(board.validate(), Err(PollError::Invalid(_))));
+        let mut board = board_stream();
+        board.github_project_number = Some(0);
+        assert!(matches!(board.validate(), Err(PollError::Invalid(_))));
+    }
+
+    #[test]
+    fn snapshot_scan_and_empty_reconciliation_are_pure() {
+        let plan = IssuePlan {
+            relative_path: "discussion/1".to_string(),
+            snapshot_sha256: ContentHash::of(b"snapshot"),
+            size_bytes: 8,
+            calls: Vec::new(),
+        };
+        let snapshot = IssueSnapshot {
+            plans: vec![plan],
+            page_count: 1,
+            item_count: 1,
+            etag: None,
+            last_updated: None,
+            deletions_allowed: true,
+        };
+        let scan = snapshot.scan();
+        assert_eq!(scan.len(), 1);
+        assert_eq!(scan[0].relative_path, "discussion/1");
+        assert!(snapshot
+            .reconciliation(&crate::ledger::Manifest::default())
+            .is_empty());
     }
 
     #[test]

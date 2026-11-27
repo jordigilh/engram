@@ -1,7 +1,8 @@
 # `engram-ingest`
 
-Native ingestion core for the CocoIndex replacement (issue #214, slices 2-4:
-ledger/docs, Hindsight sink, worker loop, and GitHub/Jira issues).
+Native ingestion core for the CocoIndex replacement (issue #214, slices 2-5:
+ledger/docs, Hindsight sink, worker loop, GitHub/Jira issues, and GitHub
+discussions/project boards).
 
 ## What this crate owns
 
@@ -23,6 +24,9 @@ ledger/docs, Hindsight sink, worker loop, and GitHub/Jira issues).
 - GitHub/Jira issue ingestion: direct REST/ADF serialization, full-snapshot
   polling with pagination, ETag single-page fast paths, rate-limit handling,
   per-stream cursors, and out-of-scope deletion through the same ledger.
+- GitHub discussions and project boards: GraphQL pagination, stable discussion
+  IDs and comment keys, and one-document board grouping with the Python status
+  order.
 - Runtime entrypoint: project config/source selection, deterministic docs scan,
   startup and periodic scan → reconcile → apply, one shared Hindsight sink, the
   worker supervisor, SIGINT/SIGTERM shutdown, and a `--once` drain mode.
@@ -33,8 +37,7 @@ ledger/docs, Hindsight sink, worker loop, and GitHub/Jira issues).
   scan; event debounce/hints are a later ingestion slice.
 - PDF extraction. A `document_format = "pdf"` source is rejected at startup
   until the Rust extractor lands.
-- GitHub discussions/project boards (issue #244), transcripts, git sync,
-  CocoIndex/Python removal.
+- Transcripts, git sync, CocoIndex/Python removal.
 - Supervisor-level respawn/restart isolation. The runtime exposes per-slot health
   (`WorkerHandle::health`) and drains on shutdown; restart policy lands with the
   service switch.
@@ -132,8 +135,8 @@ transcripts, service switch, and Python/CocoIndex removal (#232).
 - **Rate limits use both headers.** `Retry-After` and `x-ratelimit-reset` are
   combined to the later deadline.
 - **Bank streams are validated together.** `validate_bank_streams` rejects
-  duplicate identities and two Jira streams in one bank that share an effective
-  document prefix.
+  duplicate identities, shared Jira prefixes, shared discussion
+  `(prefix, short_repo)` scopes, and shared board `(prefix, number)` scopes.
 - **One source row per stream.** GitHub `(repo, item kind, prefix)` and Jira
   `(server, project, JQL, prefix)` are separate sources, keyed by a config hash,
   so a failed repo or a changed JQL cannot silently alias another stream.
@@ -153,6 +156,25 @@ transcripts, service switch, and Python/CocoIndex removal (#232).
   and watch `issue_cursors.item_count`; a sudden drop to zero is the signal to
   verify credentials before accepting the tombstone pass.
 
+### Discussions and boards
+
+- **Discussion ids match Python.** `[{prefix}-]{short_repo}-discussion-{number}`,
+  with `comment{i}` / `part{n}` keys and no `state` metadata field.
+- **Discussion comments are first-ten-raw.** The first ten GraphQL comment
+  nodes are selected, then body length and the literal `[bot]` suffix are
+  checked. Surviving comments are renumbered, exactly like Python. A bot login
+  without the suffix such as `praxis-bot` remains eligible.
+- **Discussions paginate and prove stability before deleting.** A truncated
+  limit disables deletions; multi-page results require two matching ordered
+  identity passes.
+- **Boards are one document.** The literal slug
+  `lower().replace(" ", "-").replace("/", "-")` and the Python status order are
+  preserved. `Total items` counts every GraphQL node, including drafts with no
+  content. Board timestamps are excluded from the snapshot hash so a poll does
+  not re-retain unchanged boards.
+- **GraphQL failures are not empty snapshots.** Non-empty `errors`, a null
+  repository/project, or a missing board title returns an error before apply.
+
 ## Ledger mapping
 
 | Design name (`NATIVE_ENGRAM_DESIGN.md`) | This crate |
@@ -171,18 +193,19 @@ database that records a version the binary does not embed. Migration `0002`
 adds `jobs.last_error_class`; migration `0004` replaces the per-source lease
 index with `jobs_one_leased_per_bank_document_idx` and requeues surplus leased
 jobs before building it; migration `0005` adds `sources.source_kind`,
-`issue_cursors`, and the `issue_removed` tombstone reason. The v1→v2 and v2→v4
-upgrades are exercised by the Postgres harnesses.
+`issue_cursors`, and the `issue_removed` tombstone reason; migration `0006`
+widens `source_kind` for discussions and boards. The v1→v2 and v2→v4 upgrades
+are exercised by the Postgres harnesses.
 
-Source identity is the unique `(project, tag, root)`. Issue streams set
-`tag = root` to `{provider}:{normalized scope}:{kind}:{config hash}` so a JQL,
-prefix, or repo change cannot silently alias an existing source row. Chunks are
-scoped by `source_id` with unique `(source_id, hindsight_document_id)` and
-`(document_id, chunk_key)`, so two projects with the same tag/path can share a
-Hindsight document id without touching each other's rows. That is the design's
-`(project, source identity, unit key)` constraint. Two issue streams in the
-same bank must still use disjoint document prefixes/JQL scopes; their Hindsight
-ids are global to the bank.
+Source identity is the unique `(project, tag, root)`. Issue, discussion, and
+board streams set `tag = root` to a provider scope plus a config hash so a JQL,
+prefix, repo, or project change cannot silently alias an existing source row.
+Chunks are scoped by `source_id` with unique `(source_id, hindsight_document_id)`
+and `(document_id, chunk_key)`, so two projects with the same tag/path can share
+a Hindsight document id without touching each other's rows. That is the design's
+`(project, source identity, unit key)` constraint. Streams in the same bank must
+still use disjoint document namespaces; their Hindsight ids are global to the
+bank.
 
 `migrate()` also runs an unversioned bank guard on every call. Migration `0003`
 adds nullable `sources.bank_id` / `jobs.bank_id` and the partial
@@ -304,7 +327,7 @@ The harness needs a disposable database whose name contains `test`:
 createdb -h /tmp -U hindsight engram_ingest_test
 ENGRAM_INGEST_TEST_DATABASE_URL='postgresql://hindsight@/engram_ingest_test?host=/tmp' \
   cargo test -p engram-ingest --test ledger_postgres --test sink_postgres \
-             --test worker_postgres --test issues_postgres
+             --test worker_postgres --test issues_postgres --test discussions_postgres
 ```
 
 It truncates the `engram_ingest` tables and refuses any database whose name is
@@ -320,4 +343,13 @@ cargo fmt --all --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --all --locked
 cargo +1.88.0 check --all-targets --locked
+```
+
+Unit-tier business-logic coverage (excludes the HTTP/Postgres adapters
+`http`, `store`, `sink`, and `worker`):
+
+```bash
+cargo llvm-cov -p engram-ingest --lib \
+  --ignore-filename-regex '(http|runtime|signals|store|sink|worker)\.rs' \
+  --fail-under-lines 90
 ```

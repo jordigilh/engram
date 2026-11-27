@@ -118,7 +118,12 @@ pub fn format_local_timestamp(seconds: i64, micros: u32, offset_seconds: i32) ->
 
 /// Convenience for callers that have a canonical file path.
 pub fn file_timestamp(path: &Path) -> Option<String> {
-    let metadata = std::fs::metadata(path).ok()?;
+    file_timestamp_from_metadata(&std::fs::metadata(path).ok()?)
+}
+
+/// Timestamp from an already-open file handle, so a scan never re-stats a path
+/// that could have been swapped after the handle was opened.
+pub fn file_timestamp_from_metadata(metadata: &std::fs::Metadata) -> Option<String> {
     let modified = metadata.modified().ok()?;
     let since_epoch = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
     let mut seconds = since_epoch.as_secs() as i64;

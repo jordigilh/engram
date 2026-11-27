@@ -1077,6 +1077,69 @@ pub fn count_stranded_expired_leases(
     Ok(row.get(0))
 }
 
+/// Drain counters for the one-shot runtime (`--once`).
+///
+/// `pending` includes future-dated retries so a normal backoff is waited out
+/// rather than reported as a clean drain. `leased` counts every leased job, even
+/// an expired one that startup recovery has not reached yet, so a dead-slot
+/// backlog cannot look like a clean drain. `dead` counts terminal jobs marked
+/// dead since the run started, including jobs that startup recovery or an early
+/// worker failure killed before drain polling began; older dead rows from a
+/// previous run do not fail this backfill.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DrainCounts {
+    pub pending: u64,
+    pub leased: u64,
+    pub dead: u64,
+}
+
+impl DrainCounts {
+    pub fn is_empty(self) -> bool {
+        self.pending == 0 && self.leased == 0 && self.dead == 0
+    }
+}
+
+pub fn count_drain_jobs(
+    client: &mut Client,
+    banks: &[String],
+    since: DateTime<Utc>,
+) -> Result<DrainCounts, StoreError> {
+    if banks.is_empty() {
+        return Ok(DrainCounts::default());
+    }
+    let banks = banks.to_vec();
+    let mut transaction = client.transaction()?;
+    transaction.batch_execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")?;
+    let pending = transaction.query_one(
+        "SELECT count(*)
+           FROM engram_ingest.jobs
+          WHERE bank_id = ANY($1)
+            AND state = 'pending'",
+        &[&banks],
+    )?;
+    let leased = transaction.query_one(
+        "SELECT count(*)
+           FROM engram_ingest.jobs
+          WHERE bank_id = ANY($1)
+            AND state = 'leased'",
+        &[&banks],
+    )?;
+    let dead = transaction.query_one(
+        "SELECT count(*)
+           FROM engram_ingest.jobs
+          WHERE bank_id = ANY($2)
+            AND state = 'dead'
+            AND updated_at >= $1",
+        &[&since, &banks],
+    )?;
+    transaction.commit()?;
+    Ok(DrainCounts {
+        pending: pending.get::<_, i64>(0).max(0) as u64,
+        leased: leased.get::<_, i64>(0).max(0) as u64,
+        dead: dead.get::<_, i64>(0).max(0) as u64,
+    })
+}
+
 fn recover_expired_leases_filtered(
     client: &mut Client,
     now: DateTime<Utc>,

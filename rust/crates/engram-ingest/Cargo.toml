@@ -10,16 +10,25 @@ description = "Native Engram ingestion ledger, docs stable IDs, chunking, and sy
 name = "engram_ingest"
 path = "src/lib.rs"
 
+[[bin]]
+name = "engram-ingest"
+path = "src/main.rs"
+
 [dependencies]
 chrono = { workspace = true }
+clap = { workspace = true }
 getrandom = { workspace = true }
+globset = { workspace = true }
+libc = { workspace = true }
 postgres = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
+signal-hook = { workspace = true }
 thiserror = { workspace = true }
+toml = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

@@ -3,13 +3,15 @@
 //! This crate owns the docs and issues halves of the CocoIndex replacement:
 //! the Postgres ledger, SHA-256 reconciliation, stable document/chunk IDs,
 //! heading-aware Markdown chunking, deterministic synthesis metadata, the
-//! Hindsight sink, the bank-scoped worker loop, and GitHub/Jira issue
-//! serialization/polling. Each issue stream polls a full snapshot, reconciles
-//! it into the same ledger, and reuses the worker supervisor for retain and
-//! delete jobs.
+//! Hindsight sink, the bank-scoped worker loop, GitHub/Jira issue
+//! serialization/polling, and the docs runtime entrypoint that performs
+//! startup/periodic reconciliation and supervises workers. Each issue stream
+//! polls a full snapshot, reconciles it into the same ledger, and reuses the
+//! worker supervisor for retain and delete jobs.
 
 pub mod boards;
 pub mod chunking;
+pub mod config;
 pub mod discussions;
 pub mod document;
 pub mod hashing;
@@ -21,6 +23,9 @@ pub mod jobs;
 pub mod ledger;
 pub mod python_text;
 pub mod reconcile;
+pub mod runtime;
+pub mod scan;
+pub mod signals;
 pub mod sink;
 pub mod stopwords;
 pub mod store;
@@ -32,6 +37,7 @@ pub use boards::{
     BOARD_STATUS_ORDER,
 };
 pub use chunking::{split_fixed_window, split_markdown_sections};
+pub use config::{DocsSource, RuntimeConfig, DEFAULT_SCAN_INTERVAL_SECS};
 pub use discussions::{discussion_header, plan_discussion, Discussion, DiscussionComment};
 pub use document::{format_local_timestamp, plan_document, relative_path, RetainCall};
 pub use hashing::{sha256_hex, ContentHash, HashError};
@@ -56,17 +62,20 @@ pub use ledger::{
 pub use reconcile::{
     reconcile, reconcile_with_removed_reason, DeleteReason, Reconciliation, ScannedFile,
 };
+pub use runtime::{PrepareReport, Runtime, RuntimeError, RuntimeHandle, SourceOutcome};
+pub use scan::{scan_source, ScanError, ScanReport};
 pub use sink::{
     process_one, process_one_reporting, DeleteOutcome, HindsightSink, ProcessStep, ProcessedJob,
     RetainRequest, SinkError, SinkOutcome,
 };
 pub use store::{
-    apply_reconciliation, claim_job, complete_job, connect, count_stranded_expired_leases,
-    fail_job, heartbeat_job, lease_is_active, load_issue_cursor, load_manifest,
-    load_source_revision, migrate, recover_expired_leases, recover_expired_leases_for_banks,
-    recover_expired_leases_in_bank, recover_expired_leases_outside_banks, save_issue_cursor,
-    upsert_source, ApplySummary, ClaimedJob, FailDisposition, IssueCursor, RecoveryReport,
-    StoreError, RECOVERY_BATCH,
+    apply_reconciliation, claim_job, complete_job, connect, count_drain_jobs,
+    count_stranded_expired_leases, fail_job, heartbeat_job, lease_is_active, load_issue_cursor,
+    load_manifest, load_source_revision, migrate, recover_expired_leases,
+    recover_expired_leases_for_banks, recover_expired_leases_in_bank,
+    recover_expired_leases_outside_banks, save_issue_cursor, upsert_source, ApplySummary,
+    ClaimedJob, DrainCounts, FailDisposition, IssueCursor, RecoveryReport, StoreError,
+    RECOVERY_BATCH,
 };
 pub use synthesis::{
     analyze, split_sentences, synthesize_document, Analysis, Stats, Synthesis, SynthesisError,

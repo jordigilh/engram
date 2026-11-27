@@ -657,7 +657,7 @@ fn format_jira_comment(comment: &JiraComment) -> Option<String> {
     ))
 }
 
-fn truncate_comment_body(body: &str) -> String {
+pub(crate) fn truncate_comment_body(body: &str) -> String {
     let body = python_text::strip(body);
     if python_text::char_len(body) > MAX_COMMENT_CHARS {
         format!(

@@ -37,8 +37,8 @@ ORACLE = HERE / "docs_shadow_oracle.py"
 DEFAULT_OUT = REPO_ROOT / "docs/findings"
 
 
-def run(command: list[str], *, cwd: pathlib.Path | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(command, cwd=cwd, text=True)
+def run(command: list[str], *, cwd: pathlib.Path | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(command, cwd=cwd, text=True, env=env)
 
 
 def freeze(repo: pathlib.Path, rev: str, destination: pathlib.Path) -> None:
@@ -78,6 +78,7 @@ def capture_oracle(
     work: pathlib.Path,
     repo: pathlib.Path,
     extra: list[str],
+    pg_dsn: str | None,
 ) -> dict:
     command = [
         sys.executable,
@@ -92,7 +93,10 @@ def capture_oracle(
         str(work),
         *extra,
     ]
-    completed = run(command)
+    env = dict(os.environ)
+    if pg_dsn:
+        env["ENGRAM_SHADOW_PG_DSN"] = pg_dsn
+    completed = run(command, env=env)
     if completed.returncode:
         raise SystemExit(f"oracle capture failed for {root}")
     return json.loads(out.read_text(encoding="utf-8"))
@@ -107,9 +111,14 @@ def choose_mutations(after_root: pathlib.Path, before: dict) -> tuple[pathlib.Pa
         retains.sort(key=lambda retain: retain["sequence"])
 
     edit = None
+    id_counts = defaultdict(int)
+    for retain in before["retains"]:
+        id_counts[retain["document_id"]] += 1
     for relative in sorted(by_path):
         retains = by_path[relative]
         if len(retains) < 2 or not retains[-1]["chunk_key"]:
+            continue
+        if id_counts[retains[-1]["document_id"]] != 1:
             continue
         path = after_root / relative
         text = path.read_text(encoding="utf-8")
@@ -170,8 +179,6 @@ def main() -> None:
         oracle_extra.extend(["--include", pattern])
     for pattern in args.exclude:
         oracle_extra.extend(["--exclude", pattern])
-    if args.pg_dsn:
-        oracle_extra.extend(["--pg-dsn", args.pg_dsn])
 
     work = pathlib.Path(tempfile.mkdtemp(prefix="engram-docs-shadow-"))
     try:
@@ -179,14 +186,21 @@ def main() -> None:
         after_root = work / "after"
         before_root.mkdir()
         revision = resolve_revision(repo, args.rev)
-        freeze(repo, args.rev, before_root)
+        freeze(repo, revision, before_root)
         shutil.copytree(before_root, after_root, symlinks=True, copy_function=shutil.copy2)
         set_subsecond_mtime(before_root / "docs")
         set_subsecond_mtime(after_root / "docs")
 
         before_json = work / "oracle-before.json"
         after_json = work / "oracle-after.json"
-        before = capture_oracle(before_root / "docs", before_json, work / "oracle-before-work", repo, oracle_extra)
+        before = capture_oracle(
+            before_root / "docs",
+            before_json,
+            work / "oracle-before-work",
+            repo,
+            oracle_extra,
+            args.pg_dsn,
+        )
         if before["provenance"]["flow_source_commit"] != revision:
             print(
                 f"warning: frozen docs revision {revision} differs from flow source "
@@ -194,7 +208,14 @@ def main() -> None:
                 file=sys.stderr,
             )
         edited, removed = apply_mutations(after_root / "docs", before)
-        after = capture_oracle(after_root / "docs", after_json, work / "oracle-after-work", repo, oracle_extra)
+        after = capture_oracle(
+            after_root / "docs",
+            after_json,
+            work / "oracle-after-work",
+            repo,
+            oracle_extra,
+            args.pg_dsn,
+        )
 
         before_ids = {retain["document_id"] for retain in before["retains"]}
         after_ids = {retain["document_id"] for retain in after["retains"]}

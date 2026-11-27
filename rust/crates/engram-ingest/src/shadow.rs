@@ -576,21 +576,40 @@ pub fn compare_ledger(oracle: &OracleDump, reconciliation: &Reconciliation) -> S
     for retain in &oracle.retains {
         oracle_last.insert(retain.document_id.as_str(), retain);
     }
-    let mut rust: BTreeMap<&str, (&str, &crate::document::RetainCall)> = BTreeMap::new();
+    let mut rust: BTreeMap<&str, Vec<(&str, &crate::document::RetainCall)>> = BTreeMap::new();
+    let mut total_rust_calls = 0;
     for file in &reconciliation.retain {
         for call in &file.calls {
-            rust.insert(
-                call.document_id.as_str(),
-                (file.relative_path.as_str(), call),
-            );
+            total_rust_calls += 1;
+            rust.entry(call.document_id.as_str())
+                .or_default()
+                .push((file.relative_path.as_str(), call));
         }
     }
 
     report.retains.oracle_retains = oracle.retains.len();
-    report.retains.rust_retains = rust.len();
+    report.retains.rust_retains = total_rust_calls;
+
+    let mut duplicate_planner_ids: BTreeSet<&str> = BTreeSet::new();
+    for (document_id, calls) in &rust {
+        if calls.len() > 1 {
+            duplicate_planner_ids.insert(document_id);
+            let (path, _) = calls[0];
+            report.note(
+                Divergence::new(
+                    DivergenceKind::ExtraRetain,
+                    format!(
+                        "reconciled plan emitted {} retains for one document id",
+                        calls.len()
+                    ),
+                )
+                .for_document(path, document_id),
+            );
+        }
+    }
 
     for (document_id, oracle_call) in &oracle_last {
-        let Some((path, rust_call)) = rust.get(document_id) else {
+        let Some(calls) = rust.get(document_id) else {
             report.note(
                 Divergence::new(
                     DivergenceKind::MissingRetain,
@@ -600,6 +619,7 @@ pub fn compare_ledger(oracle: &OracleDump, reconciliation: &Reconciliation) -> S
             );
             continue;
         };
+        let (path, rust_call) = *calls.last().expect("at least one retain");
         report.retains.matched += 1;
         if oracle_call.content != rust_call.content {
             report.note(
@@ -638,9 +658,9 @@ pub fn compare_ledger(oracle: &OracleDump, reconciliation: &Reconciliation) -> S
             );
         }
     }
-    for document_id in rust.keys() {
+    for (document_id, calls) in &rust {
         if !oracle_last.contains_key(document_id) {
-            let (path, _) = rust[document_id];
+            let (path, _) = calls[0];
             report.note(
                 Divergence::new(
                     DivergenceKind::ExtraRetain,
@@ -663,7 +683,7 @@ pub fn compare_ledger(oracle: &OracleDump, reconciliation: &Reconciliation) -> S
             .push(retain);
     }
     for (document_id, calls) in &occurrences {
-        if calls.len() < 2 {
+        if calls.len() < 2 || duplicate_planner_ids.contains(document_id) {
             continue;
         }
         let path = &calls[0].relative_path;
@@ -864,7 +884,18 @@ pub fn compare_deletes(
     let mut divergences = Vec::new();
     let mut emitted: BTreeMap<&str, &DeleteChunk> = BTreeMap::new();
     for delete in &reconciliation.deletes {
-        emitted.insert(delete.hindsight_document_id.as_str(), delete);
+        if emitted
+            .insert(delete.hindsight_document_id.as_str(), delete)
+            .is_some()
+        {
+            divergences.push(
+                Divergence::new(
+                    DivergenceKind::ExtraDelete,
+                    "reconciled plan emitted more than one delete for one document id",
+                )
+                .for_document(&delete.relative_path, &delete.hindsight_document_id),
+            );
+        }
     }
 
     for (document_id, expected_delete) in expected {
@@ -976,7 +1007,9 @@ pub fn validate_oracle(oracle: &OracleDump) -> Result<(), String> {
             oracle.provenance.python
         ));
     }
-    if oracle.provenance.flow_source_commit.is_empty() {
+    if oracle.provenance.flow_source_commit.is_empty()
+        || oracle.provenance.flow_source_commit == "unknown"
+    {
         return Err("oracle provenance has no flow source commit".to_string());
     }
     Ok(())
@@ -1410,6 +1443,22 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_delete_operations_are_reported() {
+        let (before, after, manifest, after_scan) = delete_scenario();
+        let expected = expected_deletes(&before, &after);
+        let mut reconciliation = reconcile(&manifest, &after_scan, LAYOUT_VERSION);
+        reconciliation
+            .deletes
+            .push(reconciliation.deletes[0].clone());
+
+        let (parity, divergences) = compare_deletes(&expected, &reconciliation);
+        assert_eq!(parity.emitted, 3);
+        assert!(divergences
+            .iter()
+            .any(|item| item.kind == DivergenceKind::ExtraDelete));
+    }
+
+    #[test]
     fn delete_path_mismatches_are_reported() {
         let (before, after, manifest, after_scan) = delete_scenario();
         let expected = expected_deletes(&before, &after);
@@ -1455,7 +1504,7 @@ mod tests {
         assert!(ledger
             .divergences
             .iter()
-            .any(|item| item.kind == DivergenceKind::RetainPath));
+            .any(|item| item.kind == DivergenceKind::ExtraRetain));
 
         let conflicts = conflict_divergences(&reconciliation);
         assert_eq!(conflicts.len(), 1);
@@ -1532,6 +1581,8 @@ mod tests {
         assert!(validate_oracle(&wrong).is_err());
         wrong.provenance.python = "3.14.6".to_string();
         wrong.provenance.flow_source_commit.clear();
+        assert!(validate_oracle(&wrong).is_err());
+        wrong.provenance.flow_source_commit = "unknown".to_string();
         assert!(validate_oracle(&wrong).is_err());
     }
 

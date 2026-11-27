@@ -107,6 +107,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "revision": options.revision,
             "mutation": options.mutation,
         },
+        "scope": {
+            "cocoindex": oracle_before.provenance.cocoindex.clone(),
+            "statement": "Measured against the deployed CocoIndex version above; pyproject.toml pins cocoindex==1.2.0, so this report does not claim 1.2.0 parity.",
+        },
         "provenance_before": report_provenance(&oracle_before.provenance),
         "provenance_after": report_provenance(&oracle_after.provenance),
         "scan_before": {
@@ -298,7 +302,7 @@ fn render_markdown(
         options.revision
     ));
     lines.push(format!(
-        "| Source commit | `{}` | `{}` |",
+        "| Flow source commit | `{}` | `{}` |",
         text(&provenance_before["flow_source_commit"]),
         text(&provenance_after["flow_source_commit"])
     ));
@@ -345,6 +349,11 @@ fn render_markdown(
         text(&source["bank"]),
         text(&source["docs_include"]),
         text(&source["docs_exclude"])
+    ));
+    lines.push(String::new());
+    lines.push(format!(
+        "Scope: this measurement covers CocoIndex `{}` from the deployed capture venv. `pyproject.toml` pins `cocoindex==1.2.0`, so the report does not claim 1.2.0 parity.",
+        text(&document["scope"]["cocoindex"])
     ));
     lines.push(String::new());
     lines.push("## Measured parity".to_string());
@@ -419,10 +428,10 @@ fn render_markdown(
     lines.push("See `rust/crates/engram-ingest/fixtures/docs_shadow_run.py`.".to_string());
     lines.push(String::new());
     lines.push("```bash".to_string());
-    lines.push(
-        "~/.engram/venv/bin/python rust/crates/engram-ingest/fixtures/docs_shadow_run.py --rev origin/main"
-            .to_string(),
-    );
+    lines.push(format!(
+        "~/.engram/venv/bin/python rust/crates/engram-ingest/fixtures/docs_shadow_run.py --rev {}",
+        options.revision
+    ));
     lines.push("```".to_string());
     lines.push(String::new());
     lines.push(

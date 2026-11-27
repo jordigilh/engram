@@ -7,7 +7,7 @@ Measured comparison of the real CocoIndex docs flow with the native docs planner
 | | Before | After |
 |---|---|---|
 | Source revision | `2fe0bce497d85701ba89b52079ab5a0bd31c1a8b` | same |
-| Source commit | `2fe0bce497d85701ba89b52079ab5a0bd31c1a8b` | `2fe0bce497d85701ba89b52079ab5a0bd31c1a8b` |
+| Flow source commit | `728f2389ead89314b92bf46bba7b88d22da4c149` | `728f2389ead89314b92bf46bba7b88d22da4c149` |
 | Flow source dirty | false | false |
 | Python | 3.14.6 | 3.14.6 |
 | CocoIndex | 1.0.26 | 1.0.26 |
@@ -17,6 +17,8 @@ Measured comparison of the real CocoIndex docs flow with the native docs planner
 | Source tag | `engram-docs` | `engram-docs` |
 
 Rust source identity: project `engram`, tag `engram-docs`, bank `engram-docs`, include `["**/*.md"]`, exclude `[]`.
+
+Scope: this measurement covers CocoIndex `1.0.26` from the deployed capture venv. `pyproject.toml` pins `cocoindex==1.2.0`, so the report does not claim 1.2.0 parity.
 
 ## Measured parity
 
@@ -63,7 +65,7 @@ Mutation scenario: edited CALL_GRAPH_CLUSTERING.md; removed spikes/2026-10-02-op
 See `rust/crates/engram-ingest/fixtures/docs_shadow_run.py`.
 
 ```bash
-~/.engram/venv/bin/python rust/crates/engram-ingest/fixtures/docs_shadow_run.py --rev origin/main
+~/.engram/venv/bin/python rust/crates/engram-ingest/fixtures/docs_shadow_run.py --rev 2fe0bce497d85701ba89b52079ab5a0bd31c1a8b
 ```
 
 Both sides read the same frozen snapshots; the tree sha256 and source revision above identify them.

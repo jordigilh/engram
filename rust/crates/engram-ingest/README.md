@@ -222,7 +222,9 @@ association. A non-default Postgres endpoint is passed with
 
 The oracle script, driver, and `docs_shadow` example are developer tooling.
 Nothing in the service path imports them, and the Rust comparison core in
-`src/shadow.rs` is covered by Rust unit tests.
+`src/shadow.rs` is covered by Rust unit tests. The checked-in report records
+the exact deployed CocoIndex version; it does not claim parity for a different
+pin (this repository pins `cocoindex==1.2.0`).
 
 ## Running the runtime
 

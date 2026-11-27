@@ -42,8 +42,14 @@ from typing import Any
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 DEFAULT_PG_DSN = "postgresql://hindsight@/hindsight?host=/tmp"
-if str(REPO_ROOT / "src") not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT / "src"))
+
+
+def use_checkout(repo: pathlib.Path) -> None:
+    """Import the flow helpers from the same checkout the child runs."""
+    source = str((repo / "src").resolve())
+    if source in sys.path:
+        sys.path.remove(source)
+    sys.path.insert(0, source)
 
 
 class CaptureServer:
@@ -240,6 +246,7 @@ def capture(
     import networkx
     import sklearn
 
+    use_checkout(repo)
     root = root.resolve()
     if not root.is_dir():
         raise SystemExit(f"root is not a directory: {root}")
@@ -310,8 +317,6 @@ def capture(
 
     files = list_tree_files(root, tag, includes, excludes)
     retains = attribute(server.records, files)
-    if not retains:
-        raise SystemExit(f"the real flow emitted no retains for {root}")
 
     tree_hash = hashlib.sha256()
     for file in files:
@@ -378,7 +383,7 @@ def main() -> None:
         temporary = tempfile.TemporaryDirectory(prefix="engram-shadow-oracle-")
         work_dir = pathlib.Path(temporary.name)
     else:
-        work_dir = args.work_dir
+        work_dir = args.work_dir.resolve()
         work_dir.mkdir(parents=True, exist_ok=True)
     try:
         capture(

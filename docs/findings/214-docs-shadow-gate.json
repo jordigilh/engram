@@ -271,14 +271,14 @@
   "issue": 214,
   "provenance_after": {
     "cocoindex": "1.0.26",
-    "flow_source_commit": "2fe0bce497d85701ba89b52079ab5a0bd31c1a8b",
+    "flow_source_commit": "728f2389ead89314b92bf46bba7b88d22da4c149",
     "flow_source_dirty": false,
     "flow_source_sha256": {
       "src/engram/chunking.py": "e920fcd9c339dc4399b24abb1b44d9cc96db29413fd4dc00710b37a1a6ba1ec5",
       "src/engram/flows/configured.py": "1fff283c1ef49d6880e97561c6179fccdbb67910ce5f2e3bcfede3f2199caa1d",
       "src/engram/synthesis.py": "9d322a88e66bc9517033b68fca09b94c3e97e86c4b0b60e1a41d40c8a6d38309"
     },
-    "generated_at": "2026-11-26T16:32:35.359888+00:00",
+    "generated_at": "2026-11-27T03:53:57.870708+00:00",
     "networkx": "3.7",
     "python": "3.14.6",
     "sklearn": "1.9.1",
@@ -297,14 +297,14 @@
   },
   "provenance_before": {
     "cocoindex": "1.0.26",
-    "flow_source_commit": "2fe0bce497d85701ba89b52079ab5a0bd31c1a8b",
+    "flow_source_commit": "728f2389ead89314b92bf46bba7b88d22da4c149",
     "flow_source_dirty": false,
     "flow_source_sha256": {
       "src/engram/chunking.py": "e920fcd9c339dc4399b24abb1b44d9cc96db29413fd4dc00710b37a1a6ba1ec5",
       "src/engram/flows/configured.py": "1fff283c1ef49d6880e97561c6179fccdbb67910ce5f2e3bcfede3f2199caa1d",
       "src/engram/synthesis.py": "9d322a88e66bc9517033b68fca09b94c3e97e86c4b0b60e1a41d40c8a6d38309"
     },
-    "generated_at": "2026-11-26T16:32:29.454396+00:00",
+    "generated_at": "2026-11-27T03:53:52.036076+00:00",
     "networkx": "3.7",
     "python": "3.14.6",
     "sklearn": "1.9.1",
@@ -330,6 +330,10 @@
     "matched_files": 37,
     "pruned_directories": 0,
     "skipped_symlinks": 0
+  },
+  "scope": {
+    "cocoindex": "1.0.26",
+    "statement": "Measured against the deployed CocoIndex version above; pyproject.toml pins cocoindex==1.2.0, so this report does not claim 1.2.0 parity."
   },
   "source": {
     "bank": "engram-docs",

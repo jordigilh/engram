@@ -17,6 +17,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Read;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
@@ -29,11 +30,11 @@ use crate::reconcile::{
     DeleteChunk, DeleteReason, Reconciliation, RetainFile, TranscriptWindowMeta,
 };
 use crate::store::{
-    apply_reconciliation, delete_transcript_watermark, delete_transcript_windows, load_manifest,
-    load_pending_transcript_invalidations, load_transcript_watermark,
-    load_transcript_watermark_paths, load_transcript_window_owners,
-    mark_transcript_invalidation_done, refresh_transcript_watermark, upsert_source, ApplySummary,
-    StoreError, TranscriptWatermarkUpdate,
+    apply_reconciliation, delete_transcript_state, load_manifest,
+    load_pending_transcript_invalidations, load_transcript_ownership_paths,
+    load_transcript_signal_indices, load_transcript_watermark, load_transcript_watermark_paths,
+    load_transcript_window_owners, mark_transcript_invalidation_done, refresh_transcript_watermark,
+    upsert_source, ApplySummary, StoreError, TranscriptWatermarkUpdate,
 };
 use crate::transcript::{
     discover_transcripts, learning_windows_with_detector, parse_messages, prefix_sha256,
@@ -189,6 +190,7 @@ pub struct TranscriptFileOutcome {
     pub windows_retained: usize,
     pub windows_queued: usize,
     pub windows_auto_resolved: usize,
+    pub windows_conflicted: usize,
     pub invalidated: usize,
     pub skipped: Option<String>,
 }
@@ -220,6 +222,7 @@ struct WatermarkPlan {
     prefix_sha256: Vec<u8>,
     observed_message_count: i32,
     observed_prefix_sha256: Vec<u8>,
+    expected_observed: Option<(i32, Vec<u8>)>,
     reset: bool,
 }
 
@@ -265,7 +268,7 @@ pub fn ingest_transcript_source(
             ));
             continue;
         }
-        let bytes = match fs::read(&file.path) {
+        let bytes = match read_bounded(&file.path) {
             Ok(bytes) => bytes,
             Err(error) => {
                 outcome
@@ -325,29 +328,7 @@ pub fn ingest_transcript_source(
         let planned =
             learning_windows_with_detector(&messages, start_index, options.detector.as_ref());
         let existing_owners = load_transcript_window_owners(client, source_id, &transcript_id)?;
-        // Same-stem transcripts in different roots are common. The window-id
-        // contract keeps the stem, so a duplicate id cannot be owned by two
-        // paths; skip that file instead of failing the whole source.
-        if let Some((document_id, other_path)) = planned.iter().find_map(|window| {
-            let document_id = window_document_id(&transcript_id, &window.text);
-            existing_owners
-                .get(&document_id)
-                .filter(|owner| *owner != &relative_path)
-                .map(|owner| (document_id.clone(), owner.clone()))
-                .or_else(|| {
-                    window_owners
-                        .get(&document_id)
-                        .filter(|owner| *owner != &relative_path)
-                        .map(|owner| (document_id.clone(), owner.clone()))
-                })
-        }) {
-            outcome.files.push(skipped(
-                &relative_path,
-                &transcript_id,
-                format!("window id {document_id} is owned by {other_path}"),
-            ));
-            continue;
-        }
+        let existing_signals = load_transcript_signal_indices(client, source_id, &relative_path)?;
         let mut file_outcome = TranscriptFileOutcome {
             relative_path: relative_path.clone(),
             transcript_id: transcript_id.clone(),
@@ -356,6 +337,7 @@ pub fn ingest_transcript_source(
             windows_retained: 0,
             windows_queued: 0,
             windows_auto_resolved: 0,
+            windows_conflicted: 0,
             invalidated: 0,
             skipped: None,
         };
@@ -371,12 +353,28 @@ pub fn ingest_transcript_source(
             if window.text.trim().is_empty() {
                 continue;
             }
+            let signal_index = window.signal_raw_index as i32;
             let document_id = window_document_id(&transcript_id, &window.text);
-            if existing_owners.contains_key(&document_id) {
+            if let Some(owner) = existing_owners.get(&document_id) {
+                if owner != &relative_path {
+                    file_outcome.windows_conflicted += 1;
+                    continue;
+                }
                 // Already retained or deliberately withheld. Do not re-run
                 // contradiction resolution: live invalidation is a side effect
                 // that must happen exactly once per window.
                 continue;
+            }
+            if !rewritten && existing_signals.contains(&signal_index) {
+                // The tail window can change when an append adds after-context.
+                // The next retry of the same file, not another window, owns it.
+                continue;
+            }
+            if let Some(owner) = window_owners.get(&document_id) {
+                if owner != &relative_path {
+                    file_outcome.windows_conflicted += 1;
+                    continue;
+                }
             }
             window_owners.insert(document_id.clone(), relative_path.clone());
             let mut status = "retained";
@@ -403,6 +401,7 @@ pub fn ingest_transcript_source(
                                 transcript_id: transcript_id.clone(),
                                 relative_path: relative_path.clone(),
                                 message_count,
+                                signal_index,
                                 status: status.to_string(),
                                 invalidate_memory_id: None,
                                 invalidate_reason: None,
@@ -447,6 +446,7 @@ pub fn ingest_transcript_source(
                     transcript_id: transcript_id.clone(),
                     relative_path: relative_path.clone(),
                     message_count,
+                    signal_index,
                     status: status.to_string(),
                     invalidate_memory_id,
                     invalidate_reason,
@@ -500,15 +500,28 @@ pub fn ingest_transcript_source(
         }
         outcome.windows_queued += file_outcome.windows_queued;
         outcome.windows_auto_resolved += file_outcome.windows_auto_resolved;
-        watermarks.push(WatermarkPlan {
-            relative_path: relative_path.clone(),
-            transcript_id,
-            message_count,
-            prefix_sha256: prefix_sha256(&messages, messages.len()).as_bytes().to_vec(),
-            observed_message_count: message_count,
-            observed_prefix_sha256: prefix_sha256(&messages, messages.len()).as_bytes().to_vec(),
-            reset: rewritten,
-        });
+        if file_outcome.windows_conflicted == 0 {
+            // A conflicting window belongs to another path; keep this file's
+            // watermark behind so the occurrence can be planned if the owner
+            // leaves scope.
+            watermarks.push(WatermarkPlan {
+                relative_path: relative_path.clone(),
+                transcript_id,
+                message_count,
+                prefix_sha256: prefix_sha256(&messages, messages.len()).as_bytes().to_vec(),
+                observed_message_count: message_count,
+                observed_prefix_sha256: prefix_sha256(&messages, messages.len())
+                    .as_bytes()
+                    .to_vec(),
+                expected_observed: stored.as_ref().and_then(|watermark| {
+                    watermark
+                        .observed_prefix_sha256
+                        .as_ref()
+                        .map(|prefix| (watermark.observed_message_count, prefix.clone()))
+                }),
+                reset: rewritten,
+            });
+        }
         outcome.files.push(file_outcome);
     }
 
@@ -570,25 +583,30 @@ pub fn ingest_transcript_source(
                 prefix_sha256: &plan.prefix_sha256,
                 observed_message_count: plan.observed_message_count,
                 observed_prefix_sha256: &plan.observed_prefix_sha256,
+                expected_observed: plan
+                    .expected_observed
+                    .as_ref()
+                    .map(|(count, prefix)| (*count, prefix.as_slice())),
                 reset: plan.reset,
             },
             now,
         )?;
     }
     for path in &outcome.removed {
-        delete_transcript_watermark(client, source_id, path)?;
-        delete_transcript_windows(client, source_id, path)?;
+        delete_transcript_state(client, source_id, path)?;
     }
-    // A signal-free transcript never created a document row, so its removal is
-    // not visible in the manifest. Drop any watermark whose file is gone.
+    // A signal-free or queued-only transcript may have no watermark row, but
+    // ownership still proves the path was seen. Union both sources so an
+    // orphaned ownership row cannot suppress a later replay.
     let current_paths: BTreeSet<String> = files
         .iter()
         .map(|file| file.relative_path.clone())
         .collect();
-    for stale in load_transcript_watermark_paths(client, source_id)? {
+    let mut known_paths = load_transcript_watermark_paths(client, source_id)?;
+    known_paths.extend(load_transcript_ownership_paths(client, source_id)?);
+    for stale in known_paths {
         if !current_paths.contains(&stale) {
-            delete_transcript_watermark(client, source_id, &stale)?;
-            delete_transcript_windows(client, source_id, &stale)?;
+            delete_transcript_state(client, source_id, &stale)?;
         }
     }
 
@@ -604,6 +622,7 @@ fn skipped(relative_path: &str, transcript_id: &str, reason: String) -> Transcri
         windows_retained: 0,
         windows_queued: 0,
         windows_auto_resolved: 0,
+        windows_conflicted: 0,
         invalidated: 0,
         skipped: Some(reason),
     }
@@ -611,4 +630,12 @@ fn skipped(relative_path: &str, transcript_id: &str, reason: String) -> Transcri
 
 fn truncate_chars(text: &str, limit: usize) -> String {
     text.chars().take(limit).collect()
+}
+
+fn read_bounded(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    let file = fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_TRANSCRIPT_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
 }

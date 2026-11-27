@@ -171,8 +171,8 @@ fn watermark_survives_restart_replay_and_failed_retains() {
     let id = source_id(&mut client);
     assert_eq!(
         load_transcript_watermark(&mut client, id, &relative_transcript("session"))
-            .unwrap()
-            .unwrap_or_default()
+            .expect("watermark read")
+            .expect("a pending scan must still save a watermark row")
             .message_count,
         0,
         "a pending retain must not advance the watermark"
@@ -537,7 +537,7 @@ fn live_invalidation_retries_until_acknowledged_without_duplicate_patch() {
         }))
         .with_invalidator(Box::new(FlakyInvalidator {
             calls: Arc::clone(&calls),
-            fail_first: 1,
+            fail_first: 2,
         }));
     let path = transcript_path(&root, "flaky.jsonl");
     write_messages(&path, &correction_messages());
@@ -554,14 +554,37 @@ fn live_invalidation_retries_until_acknowledged_without_duplicate_patch() {
         .unwrap()
         .get(0);
     assert_eq!(pending, 1);
+    // A rewrite that removes the window must not drop the committed intent.
+    write_messages(&path, &[user("plain one"), assistant("plain two")]);
+    let rewritten = ingest_transcript_source(&mut client, &source, &options, Utc::now())
+        .expect("pending rewrite");
+    assert_eq!(rewritten.invalidated, 0);
+    let still_pending: i64 = client
+        .query_one(
+            "SELECT count(*) FROM engram_ingest.transcript_windows
+              WHERE invalidation_state = 'pending'",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert_eq!(still_pending, 1);
     let second =
         ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("retry");
     assert_eq!(second.invalidated, 1);
-    assert_eq!(*calls.lock().unwrap(), 2);
+    assert_eq!(*calls.lock().unwrap(), 3);
+    let remaining: i64 = client
+        .query_one(
+            "SELECT count(*) FROM engram_ingest.transcript_windows
+              WHERE invalidation_state = 'pending'",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert_eq!(remaining, 0);
     let third =
         ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("acknowledged");
     assert_eq!(third.invalidated, 0);
-    assert_eq!(*calls.lock().unwrap(), 2);
+    assert_eq!(*calls.lock().unwrap(), 3);
     fs::remove_dir_all(&root).ok();
 }
 
@@ -594,6 +617,37 @@ fn rewrite_is_detected_while_the_first_retain_is_still_pending() {
         second.summary.deleted_chunks >= 1,
         "the pre-ack replacement must tombstone obsolete windows"
     );
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn append_after_tail_signal_does_not_duplicate_the_occurrence() {
+    let Some(url) = test_url() else {
+        eprintln!("ENGRAM_INGEST_TEST_DATABASE_URL is not set; skipping Postgres harness");
+        return;
+    };
+    let mut client = connect(&url).expect("connect");
+    let (root, source) = setup(&mut client);
+    let options = TranscriptOptions::default();
+    let path = transcript_path(&root, "tail.jsonl");
+    write_messages(&path, &[user("Always use tests before proceeding.")]);
+    let first =
+        ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("tail signal");
+    assert_eq!(first.summary.jobs_created, 1);
+    write_messages(
+        &path,
+        &[
+            user("Always use tests before proceeding."),
+            assistant("reply"),
+        ],
+    );
+    let replay =
+        ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("tail append");
+    assert_eq!(
+        replay.summary.jobs_created, 0,
+        "the rendered window changed, but the same signal must not be retained twice"
+    );
+    assert_eq!(job_count(&mut client, "pending"), 1);
     fs::remove_dir_all(&root).ok();
 }
 
@@ -633,6 +687,32 @@ fn redrive_guard_skips_retains_whose_chunk_was_deleted() {
     }
     fs::remove_file(&path).unwrap();
     ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("remove");
+    let base = Utc::now() + Duration::seconds(60);
+    for attempt in 0..3 {
+        let now = base + Duration::seconds(10 * (attempt + 1));
+        let job = claim_job(
+            &mut client,
+            "engram-test-transcripts",
+            "test-worker",
+            Duration::seconds(3_600),
+            now,
+        )
+        .unwrap()
+        .unwrap();
+        fail_job(
+            &mut client,
+            job.job_id,
+            &job.token,
+            now,
+            "permanent",
+            "sink 400",
+        )
+        .unwrap();
+    }
+    // Restore the same window: its chunk generation advances and the old dead
+    // retain/delete must not be requeued over the restored memory.
+    write_messages(&path, &correction_messages());
+    ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("restore");
     client
         .batch_execute(
             "UPDATE engram_ingest.jobs j
@@ -650,17 +730,30 @@ fn redrive_guard_skips_retains_whose_chunk_was_deleted() {
                            AND c.state = 'active'
                            AND c.generation = j.generation
                     )
+                )
+                AND (
+                    j.kind <> 'delete'
+                    OR EXISTS (
+                        SELECT 1 FROM engram_ingest.chunks c
+                         WHERE c.source_id = j.source_id
+                           AND c.hindsight_document_id = j.hindsight_document_id
+                           AND c.state = 'tombstoned'
+                           AND c.generation = j.generation
+                    )
                 )",
         )
         .expect("guarded redrive");
-    let retain_state: String = client
+    let dead: i64 = client
         .query_one(
-            "SELECT state FROM engram_ingest.jobs WHERE kind = 'retain' LIMIT 1",
+            "SELECT count(*) FROM engram_ingest.jobs WHERE state = 'dead'",
             &[],
         )
         .unwrap()
         .get(0);
-    assert_eq!(retain_state, "dead");
+    assert!(
+        dead >= 2,
+        "both the old retain and delete must stay dead after restore"
+    );
     fs::remove_dir_all(&root).ok();
 }
 
@@ -674,13 +767,15 @@ fn same_stem_files_are_skipped_not_a_source_failure() {
     let (root, source) = setup(&mut client);
     let options = TranscriptOptions::default();
     let messages = correction_messages();
-    for workspace in ["workspace-a", "workspace-b"] {
+    let mut extended = messages.clone();
+    extended.push(user("Always use tests too."));
+    for (workspace, content) in [("workspace-a", &messages), ("workspace-b", &extended)] {
         let directory = root
             .join(workspace)
             .join("agent-transcripts")
             .join("session");
         fs::create_dir_all(&directory).unwrap();
-        write_messages(&directory.join("session.jsonl"), &messages);
+        write_messages(&directory.join("session.jsonl"), content);
     }
     let outcome =
         ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("source");
@@ -688,17 +783,18 @@ fn same_stem_files_are_skipped_not_a_source_failure() {
         outcome
             .files
             .iter()
-            .filter(|file| file.skipped.is_some())
-            .count(),
+            .map(|file| file.windows_conflicted)
+            .sum::<usize>(),
         1
     );
     assert_eq!(
         outcome
             .files
             .iter()
-            .filter(|file| file.windows_retained > 0)
-            .count(),
-        1
+            .map(|file| file.windows_retained)
+            .sum::<usize>(),
+        2,
+        "the later file's distinct instruction is preserved"
     );
     fs::remove_dir_all(&root).ok();
 }

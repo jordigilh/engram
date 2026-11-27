@@ -7,6 +7,7 @@
 --
 -- Rollback (after stopping writers and backing up):
 --   DELETE FROM engram_ingest.sources WHERE source_kind = 'transcript';
+--   DROP TABLE engram_ingest.transcript_windows;
 --   DROP TABLE engram_ingest.transcript_watermarks;
 --   ALTER TABLE engram_ingest.tombstones DROP CONSTRAINT tombstones_reason_check;
 --   ALTER TABLE engram_ingest.tombstones ADD CONSTRAINT tombstones_reason_check
@@ -73,6 +74,7 @@ CREATE TABLE IF NOT EXISTS engram_ingest.transcript_windows (
     transcript_id         text NOT NULL,
     relative_path         text NOT NULL DEFAULT '',
     message_count         integer NOT NULL CHECK (message_count >= 0),
+    signal_index          integer NOT NULL DEFAULT 0 CHECK (signal_index >= 0),
     status                text NOT NULL DEFAULT 'retained'
                               CHECK (status IN ('retained', 'queued')),
     invalidate_memory_id  text,
@@ -86,3 +88,6 @@ CREATE TABLE IF NOT EXISTS engram_ingest.transcript_windows (
 
 CREATE INDEX IF NOT EXISTS transcript_windows_watermark_idx
     ON engram_ingest.transcript_windows (source_id, transcript_id, message_count);
+
+CREATE INDEX IF NOT EXISTS transcript_windows_path_idx
+    ON engram_ingest.transcript_windows (source_id, relative_path);

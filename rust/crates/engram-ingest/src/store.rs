@@ -757,14 +757,15 @@ pub fn apply_reconciliation(
         transaction.execute(
             "INSERT INTO engram_ingest.transcript_windows
                  (source_id, hindsight_document_id, transcript_id, relative_path,
-                  message_count, status, invalidate_memory_id, invalidate_reason,
-                  invalidation_state, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-                     CASE WHEN $7::text IS NULL THEN 'none' ELSE 'pending' END, $9)
+                  message_count, signal_index, status, invalidate_memory_id,
+                  invalidate_reason, invalidation_state, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                     CASE WHEN $8::text IS NULL THEN 'none' ELSE 'pending' END, $10)
              ON CONFLICT (source_id, hindsight_document_id) DO UPDATE SET
                  transcript_id = EXCLUDED.transcript_id,
                  relative_path = EXCLUDED.relative_path,
                  message_count = EXCLUDED.message_count,
+                 signal_index = EXCLUDED.signal_index,
                  status = EXCLUDED.status,
                  invalidate_memory_id = COALESCE(
                      EXCLUDED.invalidate_memory_id,
@@ -787,6 +788,7 @@ pub fn apply_reconciliation(
                 &meta.transcript_id,
                 &meta.relative_path,
                 &meta.message_count,
+                &meta.signal_index,
                 &meta.status,
                 &meta.invalidate_memory_id,
                 &meta.invalidate_reason,
@@ -798,7 +800,8 @@ pub fn apply_reconciliation(
     for document_id in &reconciliation.transcript_window_deletes {
         transaction.execute(
             "DELETE FROM engram_ingest.transcript_windows
-              WHERE source_id = $1 AND hindsight_document_id = $2",
+              WHERE source_id = $1 AND hindsight_document_id = $2
+                AND invalidation_state <> 'pending'",
             &[&source_id, document_id],
         )?;
     }
@@ -823,7 +826,8 @@ pub fn apply_reconciliation(
         }
         transaction.execute(
             "DELETE FROM engram_ingest.transcript_windows
-              WHERE source_id = $1 AND hindsight_document_id = $2",
+              WHERE source_id = $1 AND hindsight_document_id = $2
+                AND invalidation_state <> 'pending'",
             &[&source_id, &delete.hindsight_document_id],
         )?;
         transaction.execute(
@@ -1502,6 +1506,7 @@ pub struct TranscriptWatermarkUpdate<'a> {
     pub prefix_sha256: &'a [u8],
     pub observed_message_count: i32,
     pub observed_prefix_sha256: &'a [u8],
+    pub expected_observed: Option<(i32, &'a [u8])>,
     pub reset: bool,
 }
 
@@ -1553,6 +1558,62 @@ pub fn load_transcript_window_owners(
         .into_iter()
         .map(|row| (row.get::<_, String>(0), row.get::<_, String>(1)))
         .collect())
+}
+
+/// Signal occurrences already planned for one path. The rendered window id can
+/// change when an append grows the tail context, so replay dedupe also needs the
+/// stable signal position.
+pub fn load_transcript_signal_indices(
+    client: &mut Client,
+    source_id: i64,
+    relative_path: &str,
+) -> Result<BTreeSet<i32>, StoreError> {
+    let rows = client.query(
+        "SELECT signal_index
+           FROM engram_ingest.transcript_windows
+          WHERE source_id = $1 AND relative_path = $2",
+        &[&source_id, &relative_path],
+    )?;
+    Ok(rows.into_iter().map(|row| row.get::<_, i32>(0)).collect())
+}
+
+pub fn load_transcript_ownership_paths(
+    client: &mut Client,
+    source_id: i64,
+) -> Result<BTreeSet<String>, StoreError> {
+    let rows = client.query(
+        "SELECT DISTINCT relative_path
+           FROM engram_ingest.transcript_windows
+          WHERE source_id = $1",
+        &[&source_id],
+    )?;
+    Ok(rows
+        .into_iter()
+        .map(|row| row.get::<_, String>(0))
+        .collect())
+}
+
+/// Remove a path's watermark and ownership atomically. Pending live
+/// invalidations outlive the window so a failed PATCH can still be retried.
+pub fn delete_transcript_state(
+    client: &mut Client,
+    source_id: i64,
+    relative_path: &str,
+) -> Result<(), StoreError> {
+    let mut transaction = client.transaction()?;
+    transaction.execute(
+        "DELETE FROM engram_ingest.transcript_windows
+          WHERE source_id = $1 AND relative_path = $2
+            AND invalidation_state <> 'pending'",
+        &[&source_id, &relative_path],
+    )?;
+    transaction.execute(
+        "DELETE FROM engram_ingest.transcript_watermarks
+          WHERE source_id = $1 AND relative_path = $2",
+        &[&source_id, &relative_path],
+    )?;
+    transaction.commit()?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1608,6 +1669,18 @@ pub fn mark_transcript_invalidation_done(
             AND invalidation_state = 'pending'",
         &[&source_id, &document_id, &now],
     )?;
+    client.execute(
+        "DELETE FROM engram_ingest.transcript_windows w
+          WHERE w.source_id = $1 AND w.hindsight_document_id = $2
+            AND w.invalidation_state = 'done'
+            AND NOT EXISTS (
+                SELECT 1 FROM engram_ingest.chunks c
+                 WHERE c.source_id = w.source_id
+                   AND c.hindsight_document_id = w.hindsight_document_id
+                   AND c.state = 'active'
+            )",
+        &[&source_id, &document_id],
+    )?;
     Ok(())
 }
 
@@ -1655,8 +1728,32 @@ fn advance_transcript_watermark_transaction(
         prefix_sha256,
         observed_message_count,
         observed_prefix_sha256,
+        expected_observed,
         reset,
     } = update;
+    // Serialize with any concurrent scan for this path. If the observed
+    // snapshot changed since this scan read it, another scan already published
+    // a newer view; do not overwrite it with stale state.
+    let current = transaction.query_opt(
+        "SELECT observed_message_count, observed_prefix_sha256
+           FROM engram_ingest.transcript_watermarks
+          WHERE source_id = $1 AND relative_path = $2
+          FOR UPDATE",
+        &[&source_id, &relative_path],
+    )?;
+    let stale = match (&current, expected_observed) {
+        (Some(row), Some((expected_count, expected_prefix))) => {
+            let current_count: i32 = row.get(0);
+            let current_prefix: Option<Vec<u8>> = row.get(1);
+            current_count != expected_count || current_prefix.as_deref() != Some(expected_prefix)
+        }
+        (Some(_), None) => true,
+        (None, Some(_)) => true,
+        (None, None) => false,
+    };
+    if stale {
+        return Ok(());
+    }
     let row = transaction.query_one(
         "SELECT MAX(blocked) AS blocked,
                 COALESCE(MAX(count) FILTER (
@@ -1672,6 +1769,10 @@ fn advance_transcript_watermark_transaction(
                   JOIN engram_ingest.transcript_windows w
                     ON w.source_id = j.source_id
                    AND w.hindsight_document_id = j.hindsight_document_id
+                  JOIN engram_ingest.chunks c
+                    ON c.source_id = j.source_id
+                   AND c.hindsight_document_id = j.hindsight_document_id
+                   AND c.generation = j.generation
                  WHERE j.source_id = $1
                    AND j.kind = 'retain'
                    AND w.relative_path = $2
@@ -1706,8 +1807,14 @@ fn advance_transcript_watermark_transaction(
          VALUES ($1, $2, $3, $4, $5, $7, $8, $6, $6)
          ON CONFLICT (source_id, relative_path) DO UPDATE SET
              transcript_id = EXCLUDED.transcript_id,
-             observed_message_count = EXCLUDED.observed_message_count,
-             observed_prefix_sha256 = EXCLUDED.observed_prefix_sha256,
+             observed_message_count = CASE
+                 WHEN $10 THEN EXCLUDED.observed_message_count
+                 ELSE engram_ingest.transcript_watermarks.observed_message_count
+             END,
+             observed_prefix_sha256 = CASE
+                 WHEN $10 THEN EXCLUDED.observed_prefix_sha256
+                 ELSE engram_ingest.transcript_watermarks.observed_prefix_sha256
+             END,
              message_count = CASE
                  WHEN $9 THEN EXCLUDED.message_count
                  ELSE GREATEST(
@@ -1741,6 +1848,7 @@ fn advance_transcript_watermark_transaction(
             &observed_message_count,
             &observed_prefix_sha256,
             &effective_reset,
+            &blocked.is_none(),
         ],
     )?;
     Ok(())

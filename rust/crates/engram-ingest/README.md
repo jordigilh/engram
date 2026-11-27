@@ -233,15 +233,20 @@ UPDATE engram_ingest.jobs j
  WHERE j.state = 'dead'
    AND j.source_id IN (SELECT id FROM engram_ingest.sources WHERE source_kind = 'transcript')
    AND (
-       j.kind <> 'retain'
-       OR EXISTS (
-           SELECT 1
-             FROM engram_ingest.chunks c
+       (j.kind = 'retain' AND EXISTS (
+           SELECT 1 FROM engram_ingest.chunks c
             WHERE c.source_id = j.source_id
               AND c.hindsight_document_id = j.hindsight_document_id
               AND c.state = 'active'
               AND c.generation = j.generation
-       )
+       ))
+       OR (j.kind = 'delete' AND EXISTS (
+           SELECT 1 FROM engram_ingest.chunks c
+            WHERE c.source_id = j.source_id
+              AND c.hindsight_document_id = j.hindsight_document_id
+              AND c.state = 'tombstoned'
+              AND c.generation = j.generation
+       ))
    );
 ```
 

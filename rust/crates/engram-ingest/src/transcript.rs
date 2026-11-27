@@ -456,10 +456,10 @@ fn walk(
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
         // Follow directory symlinks; a workspace root is commonly a symlink.
-        let metadata = match fs::metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(_) => continue,
-        };
+        let metadata = fs::metadata(&path).map_err(|source| TranscriptError::ReadDir {
+            path: path.clone(),
+            source,
+        })?;
         if metadata.is_dir() {
             let next = match stage {
                 WalkStage::Root => prefixes
@@ -488,6 +488,14 @@ fn walk(
             || !metadata.is_file()
             || !matches_transcript_path(root, &path, prefixes)
         {
+            continue;
+        }
+        let canonical_file =
+            fs::canonicalize(&path).map_err(|source| TranscriptError::ReadDir {
+                path: path.clone(),
+                source,
+            })?;
+        if !canonical_file.starts_with(canonical_root) {
             continue;
         }
         let relative_path = relative_posix(root, &path);

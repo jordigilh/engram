@@ -77,6 +77,7 @@ pub struct TranscriptWindowMeta {
     pub transcript_id: String,
     pub relative_path: String,
     pub message_count: i32,
+    pub signal_index: i32,
     pub status: String,
     pub invalidate_memory_id: Option<String>,
     pub invalidate_reason: Option<String>,

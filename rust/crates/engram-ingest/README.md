@@ -413,11 +413,11 @@ A project with `transcripts = true` gets one transcript source with the fixed
 ledger tag `transcripts` and the identity `(project, "transcripts",
 paths.transcripts_dir)`; a project with no docs sources is valid as long as
 transcripts are configured. The startup and periodic scans run
-`ingest_transcript_source` after the docs sources with the deterministic
-defaults (`RegexSignalDetector`, `RetainResolver`, Shadow contradiction mode) —
-no LLM calls or dependencies. The transcript bank joins `bank_ids()`, so the
-same bank-scoped worker supervisor serves its retains and tombstones, and
-`--once` drains them with everything else.
+`ingest_transcript_source_with_discovery` after the docs sources with the
+deterministic defaults (`RegexSignalDetector`, `RetainResolver`, Shadow
+contradiction mode) — no LLM calls or dependencies. The transcript bank joins
+`bank_ids()`, so the same bank-scoped worker supervisor serves its retains and
+tombstones, and `--once` drains them with everything else.
 
 Transcript-specific runtime semantics:
 

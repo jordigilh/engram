@@ -27,6 +27,10 @@ recall-quality benchmark is built against.
 
 ## Index
 
+### November 2026 (1 entry)
+
+- [2026-11-26: A healthy zvec-grep daemon was invisible because the native LaunchAgent used a private `ZVEC_GREP_HOME`](findings/2026-11.md#2026-11-26-a-healthy-zvec-grep-daemon-was-invisible-because-the-native-launchagent-used-a-private-zvec_grep_home)
+
 ### October 2026 (1 entry)
 
 - [2026-10-02: Migrated the shared Hindsight bank from `cursor-memory` to `shared-memory`](findings/2026-10.md#2026-10-02-migrated-the-shared-hindsight-bank-from-cursor-memory-to-shared-memory)

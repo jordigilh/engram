@@ -36,6 +36,9 @@ jobs:
           # boundary. Keep its release gate strict while the legacy gateway
           # catalog/transport remains a much larger separately-reported surface.
           coverage report --include='*/src/engram/pipeline/zvec_policy.py' --fail-under=90
+          # The native zvec-grep deployment path (#249) is deterministic
+          # business logic: rendering, fail-closed preflight, verify, uninstall.
+          coverage report --include='*/src/engram/deploy/zvec_grep_native.py' --fail-under=90
 
   opencode-plugin-tests:
     runs-on: ubuntu-latest

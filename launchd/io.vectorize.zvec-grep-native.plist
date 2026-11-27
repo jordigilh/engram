@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.vectorize.zvec-grep-native</string>
+    <!-- Engram's native zvec-grep daemon. It runs on zg's default home
+         (__HOME__/.zvec-grep) and deliberately does NOT set ZVEC_GREP_HOME,
+         so every CLI caller resolves the same daemon state without any env
+         propagation. A deliberately isolated second daemon must set
+         ZVEC_GREP_HOME explicitly AND a distinct listen port; see
+         docs/NATIVE_ZVEC_GREP_HOME.md. Install with engram-zvec-grep-native
+         install; never hand-edit the deployed copy. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.local/zvec-grep-native/bin/zg</string>
+        <string>--server</string>
+        <string>run</string>
+        <string>--listen</string>
+        <string>127.0.0.1:7999</string>
+        <string>--mcp-toolset</string>
+        <string>full</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <!-- The model cache stays outside the default home on purpose: it is
+             large, shared with other zg deployments, and not daemon state. -->
+        <key>ZVEC_GREP_MODEL_CACHE</key>
+        <string>__HOME__/.engram/zvec-grep/models</string>
+        <key>ZVEC_GREP_MCP_SESSION_IDLE_SECONDS</key>
+        <string>43200</string>
+    </dict>
+    <!-- ZG keeps several RocksDB/vector index files open across the shared
+         workspace pool. launchd's default soft limit is 256, which causes
+         otherwise healthy workspace searches to fail with EMFILE. -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.local/zvec-grep-native/logs/server-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.local/zvec-grep-native/logs/server-stderr.log</string>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+</dict>
+</plist>

@@ -767,17 +767,25 @@ pub fn apply_reconciliation(
                  message_count = EXCLUDED.message_count,
                  signal_index = EXCLUDED.signal_index,
                  status = EXCLUDED.status,
-                 invalidate_memory_id = COALESCE(
-                     EXCLUDED.invalidate_memory_id,
-                     engram_ingest.transcript_windows.invalidate_memory_id
-                 ),
-                 invalidate_reason = COALESCE(
-                     EXCLUDED.invalidate_reason,
-                     engram_ingest.transcript_windows.invalidate_reason
-                 ),
+                 invalidate_memory_id = CASE
+                     WHEN engram_ingest.transcript_windows.invalidation_state = 'pending'
+                     THEN engram_ingest.transcript_windows.invalidate_memory_id
+                     ELSE COALESCE(
+                         EXCLUDED.invalidate_memory_id,
+                         engram_ingest.transcript_windows.invalidate_memory_id
+                     )
+                 END,
+                 invalidate_reason = CASE
+                     WHEN engram_ingest.transcript_windows.invalidation_state = 'pending'
+                     THEN engram_ingest.transcript_windows.invalidate_reason
+                     ELSE COALESCE(
+                         EXCLUDED.invalidate_reason,
+                         engram_ingest.transcript_windows.invalidate_reason
+                     )
+                 END,
                  invalidation_state = CASE
-                     WHEN engram_ingest.transcript_windows.invalidation_state = 'done'
-                     THEN 'done'
+                     WHEN engram_ingest.transcript_windows.invalidation_state IN ('done', 'pending')
+                     THEN engram_ingest.transcript_windows.invalidation_state
                      WHEN EXCLUDED.invalidate_memory_id IS NOT NULL THEN 'pending'
                      ELSE engram_ingest.transcript_windows.invalidation_state
                  END,
@@ -1734,6 +1742,7 @@ pub fn mark_transcript_invalidation_done(
         "DELETE FROM engram_ingest.transcript_windows w
           WHERE w.source_id = $1 AND w.hindsight_document_id = $2
             AND w.invalidation_state = 'done'
+            AND w.status = 'retained'
             AND NOT EXISTS (
                 SELECT 1 FROM engram_ingest.chunks c
                  WHERE c.source_id = w.source_id

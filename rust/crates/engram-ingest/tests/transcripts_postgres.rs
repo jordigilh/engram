@@ -401,6 +401,30 @@ struct FixedResolver {
     action: ResolutionAction,
 }
 
+struct ChangingResolver {
+    calls: Arc<Mutex<usize>>,
+}
+
+impl ContradictionResolver for ChangingResolver {
+    fn resolve(
+        &self,
+        _bank_id: &str,
+        _statement: &str,
+        _project: Option<&str>,
+    ) -> ContradictionResolution {
+        let mut calls = self.calls.lock().unwrap();
+        *calls += 1;
+        let memory_id = if *calls == 1 { "mem-1" } else { "mem-2" };
+        ContradictionResolution {
+            action: ResolutionAction::AutoResolved,
+            superseded_memory_id: Some(memory_id.to_string()),
+            superseded_document_id: Some("doc-1".to_string()),
+            confidence: 0.95,
+            explanation: "fixture".to_string(),
+        }
+    }
+}
+
 impl ContradictionResolver for FixedResolver {
     fn resolve(
         &self,
@@ -595,6 +619,45 @@ fn live_invalidation_retries_until_acknowledged_without_duplicate_patch() {
         ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("acknowledged");
     assert_eq!(third.invalidated, 0);
     assert_eq!(*calls.lock().unwrap(), 4);
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn restored_window_preserves_the_original_pending_invalidation_target() {
+    let Some(url) = test_url() else {
+        eprintln!("ENGRAM_INGEST_TEST_DATABASE_URL is not set; skipping Postgres harness");
+        return;
+    };
+    let mut client = connect(&url).expect("connect");
+    let (root, source) = setup(&mut client);
+    let resolver_calls = Arc::new(Mutex::new(0));
+    let invalidator_calls = Arc::new(Mutex::new(0));
+    let options = TranscriptOptions::default()
+        .with_mode(ContradictionMode::Live)
+        .with_resolver(Box::new(ChangingResolver {
+            calls: Arc::clone(&resolver_calls),
+        }))
+        .with_invalidator(Box::new(FlakyInvalidator {
+            calls: Arc::clone(&invalidator_calls),
+            fail_first: usize::MAX,
+        }));
+    let path = transcript_path(&root, "changing.jsonl");
+    write_messages(&path, &correction_messages());
+    ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("first");
+    fs::remove_file(&path).unwrap();
+    ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("remove");
+    write_messages(&path, &correction_messages());
+    ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("restore");
+    let target: String = client
+        .query_one(
+            "SELECT invalidate_memory_id FROM engram_ingest.transcript_windows
+              WHERE invalidation_state = 'pending' LIMIT 1",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert_eq!(target, "mem-1");
+    assert_eq!(*resolver_calls.lock().unwrap(), 2);
     fs::remove_dir_all(&root).ok();
 }
 

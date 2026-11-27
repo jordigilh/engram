@@ -37,9 +37,7 @@ discussions/project boards).
   scan; event debounce/hints are a later ingestion slice.
 - PDF extraction. A `document_format = "pdf"` source is rejected at startup
   until the Rust extractor lands.
-- Native-vs-CocoIndex shadow comparison of emitted operations (the remaining
-  part of issue #214 slice 3).
-- Transcripts, PDF extraction, git sync, CocoIndex/Python removal.
+- Transcripts, git sync, CocoIndex/Python removal.
 - Supervisor-level respawn/restart isolation. The runtime exposes per-slot health
   (`WorkerHandle::health`) and drains on shutdown; restart policy lands with the
   service switch.
@@ -115,8 +113,9 @@ transcripts, service switch, and Python/CocoIndex removal (#232).
   `changed` counter belongs to reconciliation (`jobs_created`), not the sink.
 - **Python 3.14 is authoritative** for `pathlib` suffix semantics; Python 3.13
   differs only for trailing-dot filenames. See `fixtures/README.md`.
-- **No Python tests were added.** The fixture generator is developer tooling
-  under `rust/`, is not collected by pytest, and is ruff-clean.
+- **No Python tests were added.** The fixture generator and docs shadow tooling
+  under `rust/` are developer tooling, are not collected by pytest, and are
+  ruff-clean.
 
 ### Issues
 
@@ -214,6 +213,41 @@ adds nullable `sources.bank_id` / `jobs.bank_id` and the partial
 `MigrationGuard` telling the operator to set `sources.bank_id` explicitly in
 their own connection; rerunning then backfills jobs, enforces `NOT NULL`, and
 verifies the CHECK constraints and index.
+
+## Docs shadow gate
+
+`fixtures/docs_shadow_run.py` freezes the real `docs/` tree at a git revision,
+runs the deployed CocoIndex `docs` app twice (unmodified and a deterministic
+mutation that removes one real file and one real heading section), and compares
+the captured retain payloads with the native planner. The oracle runs
+`python -m engram.flows.configured --apps docs --mode backfill` against a
+loopback Hindsight capture server, so timestamps, source identity, and the real
+`docs_main`/`localfs` path are exercised rather than a synthetic fixture.
+
+```bash
+~/.engram/venv/bin/python \
+  rust/crates/engram-ingest/fixtures/docs_shadow_run.py --rev origin/main
+```
+
+It writes `docs/findings/214-docs-shadow-gate.{md,json}` and exits non-zero on
+an unexpected divergence. The checked-in report is the measured result, not an
+assertion: on `2fe0bce` (37 files, 1,376,464 bytes) the oracle and the native
+planner matched all 2,709 retains and all 12 oracle-derived deletes across the
+mutation, with zero unexpected divergences. Ten document ids per snapshot are
+repeated headings; the ledger intentionally keeps the last occurrence, which
+the report records as `duplicate_collapse`. Duplicates spanning files, scan
+conflicts, unattributed ids, and repeated bare keys fail the gate.
+
+Path/chunk-key attribution uses the flow's own `_document_base_id` helper, so
+it corroborates the emitted document ids rather than independently proving file
+association. A non-default Postgres endpoint is passed with
+`ENGRAM_SHADOW_PG_DSN` or `--pg-dsn`.
+
+The oracle script, driver, and `docs_shadow` example are developer tooling.
+Nothing in the service path imports them, and the Rust comparison core in
+`src/shadow.rs` is covered by Rust unit tests. The checked-in report records
+the exact deployed CocoIndex version; it does not claim parity for a different
+pin (this repository pins `cocoindex==1.2.0`).
 
 ## Running the runtime
 

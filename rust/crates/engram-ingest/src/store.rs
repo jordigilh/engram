@@ -216,6 +216,28 @@ pub fn migrate(client: &mut Client) -> Result<(), StoreError> {
             )));
         }
     }
+    let source_kind_definition: Option<String> = client
+        .query_opt(
+            "SELECT pg_get_constraintdef(c.oid)
+               FROM pg_constraint c
+               JOIN pg_class t ON t.oid = c.conrelid
+               JOIN pg_namespace n ON n.oid = t.relnamespace
+              WHERE n.nspname = 'engram_ingest'
+                AND t.relname = 'sources'
+                AND c.conname = 'sources_source_kind_check'",
+            &[],
+        )?
+        .map(|row| row.get(0));
+    let source_kind_definition = source_kind_definition.ok_or_else(|| {
+        StoreError::MigrationMismatch("sources.sources_source_kind_check".to_string())
+    })?;
+    if !source_kind_definition.contains("github_discussion")
+        || !source_kind_definition.contains("github_board")
+    {
+        return Err(StoreError::MigrationMismatch(
+            "sources_source_kind_check is missing discussion/board kinds".to_string(),
+        ));
+    }
     for table in ["sources", "jobs"] {
         let not_null: bool = client
             .query_one(

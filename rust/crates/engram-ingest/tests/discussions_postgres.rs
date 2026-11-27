@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use chrono::Utc;
 use engram_ingest::{
     connect, ingest_issue_stream, migrate, upsert_source, HttpResponse, HttpTransport,
-    IssueIngestOutcome, IssueStream, PollError,
+    IssueIngestOutcome, IssueStream, PollError, StoreError,
 };
 use postgres::Client;
 use serde_json::{json, Value};
@@ -244,6 +244,12 @@ fn board_snapshot_paginates_and_rejects_missing_projects() {
             Some("c1"),
         )),
         response(board_page(vec![board_item(131, "Next")], false, None)),
+        response(board_page(
+            vec![board_item(130, "Done"), board_item(10, "Review")],
+            true,
+            Some("c1"),
+        )),
+        response(board_page(vec![board_item(131, "Next")], false, None)),
     ]);
     let outcome = ingest_issue_stream(
         &mut client,
@@ -338,4 +344,40 @@ fn migration_v6_is_rerunnable_and_accepts_new_source_kinds() {
         .map(|row| row.get(0))
         .collect();
     assert_eq!(kinds, vec!["github_board", "github_discussion"]);
+}
+
+#[test]
+fn migration_guard_detects_a_v5_constraint_recorded_as_v6() {
+    let Some(url) = test_url() else {
+        return;
+    };
+    let mut client = connect(&url).expect("connect");
+    let database: String = client
+        .query_one("SELECT current_database()", &[])
+        .expect("database name")
+        .get(0);
+    assert_eq!(database, "engram_ingest_test");
+    client
+        .execute("SELECT pg_advisory_lock($1)", &[&918_273_i64])
+        .expect("harness lock");
+    migrate(&mut client).expect("migrate");
+    truncate(&mut client);
+    client
+        .batch_execute(
+            "ALTER TABLE engram_ingest.sources DROP CONSTRAINT sources_source_kind_check;
+             ALTER TABLE engram_ingest.sources ADD CONSTRAINT sources_source_kind_check
+                 CHECK (source_kind IN ('docs','github_issue','github_pr','jira_issue'));
+             DELETE FROM engram_ingest.schema_migrations WHERE version = 6;
+             INSERT INTO engram_ingest.schema_migrations (version) VALUES (6);",
+        )
+        .expect("simulate drifted v6");
+    let error = migrate(&mut client).expect_err("drifted constraint must fail");
+    assert!(matches!(error, StoreError::MigrationMismatch(_)));
+    client
+        .execute(
+            "DELETE FROM engram_ingest.schema_migrations WHERE version = 6",
+            &[],
+        )
+        .expect("drop drifted marker");
+    migrate(&mut client).expect("restore v6 after drift test");
 }

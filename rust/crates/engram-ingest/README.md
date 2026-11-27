@@ -234,3 +234,12 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo test --all --locked
 cargo +1.88.0 check --all-targets --locked
 ```
+
+Unit-tier business-logic coverage (excludes the HTTP/Postgres adapters
+`http`, `store`, `sink`, and `worker`):
+
+```bash
+cargo llvm-cov -p engram-ingest --lib \
+  --ignore-filename-regex '(http|store|sink|worker)\.rs' \
+  --fail-under-lines 90
+```

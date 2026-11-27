@@ -13,6 +13,7 @@ pub mod chunking;
 pub mod discussions;
 pub mod document;
 pub mod hashing;
+pub mod http;
 pub mod ids;
 pub mod issue_poll;
 pub mod issues;
@@ -34,12 +35,13 @@ pub use chunking::{split_fixed_window, split_markdown_sections};
 pub use discussions::{discussion_header, plan_discussion, Discussion, DiscussionComment};
 pub use document::{format_local_timestamp, plan_document, relative_path, RetainCall};
 pub use hashing::{sha256_hex, ContentHash, HashError};
+pub use http::{HttpResponse, HttpTransport, ReqwestTransport};
 pub use ids::{chunk_document_id, document_base_id, pathlib_suffix, stable_section_key};
 pub use issue_poll::{
     apply_snapshot, ingest_issue_stream, poll_board, poll_discussions, poll_github,
-    poll_issue_stream, poll_jira, stream_fingerprint, validate_bank_streams, HttpResponse,
-    HttpTransport, IssueIngestError, IssueIngestOutcome, IssuePollOutcome, IssueProvider,
-    IssueSnapshot, IssueStream, PollError, ReqwestTransport, DEFAULT_GITHUB_API,
+    poll_issue_stream, poll_jira, stream_fingerprint, validate_bank_streams, IssueIngestError,
+    IssueIngestOutcome, IssuePollOutcome, IssueProvider, IssueSnapshot, IssueStream, PollError,
+    DEFAULT_GITHUB_API,
 };
 pub use issues::{
     adf_to_text, issue_document_id, normalize_github_login, plan_github_issue, plan_jira_issue,

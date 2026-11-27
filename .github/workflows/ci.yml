@@ -161,6 +161,9 @@ jobs:
       - name: Unit-tier coverage gate
         run: cargo llvm-cov -p engram-ingest --all-targets --fail-under-lines 90
 
+      - name: Business-logic unit coverage gate
+        run: cargo llvm-cov -p engram-ingest --lib --ignore-filename-regex '(http|store|sink|worker)\.rs' --fail-under-lines 90
+
   integration-tests:
     runs-on: ubuntu-latest
     services:

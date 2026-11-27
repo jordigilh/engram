@@ -17,12 +17,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use postgres::Client;
-use reqwest::blocking::Client as HttpClient;
 use serde_json::{json, Value};
 
 use crate::boards::{plan_board, python_now_local_timestamp, Board, BoardItem};
 use crate::discussions::{plan_discussion, Discussion};
 use crate::hashing::ContentHash;
+use crate::http::{urls_same_origin, HttpTransport};
 use crate::issues::{
     plan_github_issue, plan_jira_issue, short_repo, GitHubIssue, GitHubKind, IssueError, IssuePlan,
     JiraIssue, ISSUE_CHUNK_OVERLAP, ISSUE_CHUNK_SIZE,
@@ -51,6 +51,8 @@ pub enum PollError {
     Truncated(usize),
     #[error("invalid HTTP response: {0}")]
     Invalid(String),
+    #[error("provider snapshot was unstable: {0}")]
+    Unstable(String),
     #[error(transparent)]
     Issue(#[from] IssueError),
 }
@@ -58,7 +60,7 @@ pub enum PollError {
 impl PollError {
     pub fn is_transient(&self) -> bool {
         match self {
-            Self::Transport(_) | Self::RateLimited { .. } => true,
+            Self::Transport(_) | Self::RateLimited { .. } | Self::Unstable(_) => true,
             Self::Http { status, .. } => *status >= 500,
             _ => false,
         }
@@ -107,112 +109,6 @@ impl PollError {
             body: body_text.chars().take(300).collect(),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HttpResponse {
-    pub status: u16,
-    /// Header names are lower-cased.
-    pub headers: BTreeMap<String, String>,
-    pub body: Vec<u8>,
-}
-
-impl HttpResponse {
-    pub fn header(&self, name: &str) -> Option<&str> {
-        self.headers
-            .get(&name.to_ascii_lowercase())
-            .map(String::as_str)
-    }
-}
-
-pub trait HttpTransport: Send + Sync {
-    fn get(&self, url: &str, headers: &[(&str, String)]) -> Result<HttpResponse, PollError>;
-    fn post_json(
-        &self,
-        url: &str,
-        headers: &[(&str, String)],
-        body: &Value,
-    ) -> Result<HttpResponse, PollError>;
-}
-
-/// Blocking reqwest transport. Redirects are disabled: an API token must not
-/// be forwarded to a redirect target.
-pub struct ReqwestTransport {
-    client: HttpClient,
-}
-
-impl ReqwestTransport {
-    pub fn new(timeout: Duration) -> Result<Self, PollError> {
-        let client = HttpClient::builder()
-            .timeout(timeout)
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                let Some(original) = attempt.previous().first() else {
-                    return attempt.follow();
-                };
-                if urls_same_origin(original, attempt.url()) {
-                    attempt.follow()
-                } else {
-                    attempt.error("cross-origin redirect blocked")
-                }
-            }))
-            .build()
-            .map_err(|error| PollError::Transport(error.to_string()))?;
-        Ok(Self { client })
-    }
-}
-
-impl HttpTransport for ReqwestTransport {
-    fn get(&self, url: &str, headers: &[(&str, String)]) -> Result<HttpResponse, PollError> {
-        let mut request = self.client.get(url);
-        for (name, value) in headers {
-            request = request.header(*name, value);
-        }
-        let response = request
-            .send()
-            .map_err(|error| PollError::Transport(error.to_string()))?;
-        response_parts(response)
-    }
-
-    fn post_json(
-        &self,
-        url: &str,
-        headers: &[(&str, String)],
-        body: &Value,
-    ) -> Result<HttpResponse, PollError> {
-        let mut request = self.client.post(url).json(body);
-        for (name, value) in headers {
-            request = request.header(*name, value);
-        }
-        let response = request
-            .send()
-            .map_err(|error| PollError::Transport(error.to_string()))?;
-        response_parts(response)
-    }
-}
-
-fn response_parts(response: reqwest::blocking::Response) -> Result<HttpResponse, PollError> {
-    let status = response.status().as_u16();
-    let mut headers = BTreeMap::new();
-    for (name, value) in response.headers() {
-        if let Ok(value) = value.to_str() {
-            headers
-                .entry(name.as_str().to_ascii_lowercase())
-                .and_modify(|existing: &mut String| {
-                    existing.push_str(", ");
-                    existing.push_str(value);
-                })
-                .or_insert_with(|| value.to_string());
-        }
-    }
-    let body = response
-        .bytes()
-        .map_err(|error| PollError::Transport(error.to_string()))?
-        .to_vec();
-    Ok(HttpResponse {
-        status,
-        headers,
-        body,
-    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -832,12 +728,6 @@ fn same_origin(candidate: &str, base: &str) -> bool {
     urls_same_origin(&candidate, &base)
 }
 
-fn urls_same_origin(candidate: &reqwest::Url, base: &reqwest::Url) -> bool {
-    candidate.scheme() == base.scheme()
-        && candidate.host_str() == base.host_str()
-        && candidate.port_or_known_default() == base.port_or_known_default()
-}
-
 fn github_identities(items: &[Value], is_pr_stream: bool) -> Vec<u64> {
     items
         .iter()
@@ -1164,7 +1054,7 @@ query($owner: String!, $name: String!, $first: Int!, $after: String) {
 const PROJECTS_QUERY: &str = r#"
 query($org: String!, $number: Int!, $after: String) {
   organization(login: $org) { projectV2(number: $number) {
-    title shortDescription items(first: 100, after: $after) {
+    title shortDescription items(first: 100, after: $after, orderBy: {field: POSITION, direction: ASC}) {
       pageInfo { hasNextPage endCursor }
       nodes { content {
         ... on Issue { number title url state repository { name } }
@@ -1439,18 +1329,19 @@ fn fetch_discussion_numbers(
     Err(PollError::Truncated(limit))
 }
 
-pub fn poll_board(
+struct BoardPass {
+    title: String,
+    description: String,
+    items: Vec<BoardItem>,
+    page_count: usize,
+}
+
+fn fetch_board_pass(
     transport: &dyn HttpTransport,
     token: &str,
-    stream: &IssueStream,
-) -> Result<IssuePollOutcome, PollError> {
-    let organization = stream
-        .github_organization
-        .as_deref()
-        .ok_or_else(|| PollError::Invalid("board stream needs an organization".into()))?;
-    let number = stream
-        .github_project_number
-        .ok_or_else(|| PollError::Invalid("board stream needs a project number".into()))?;
+    organization: &str,
+    number: u64,
+) -> Result<BoardPass, PollError> {
     let mut items: Vec<BoardItem> = Vec::new();
     let mut title = String::new();
     let mut description = String::new();
@@ -1520,18 +1411,50 @@ pub fn poll_board(
         }
         after = Value::String(cursor.to_string());
     }
-
     if title.is_empty() {
         return Err(PollError::Invalid(format!(
             "GitHub project {organization}/{number} has no title"
         )));
     }
-    let board = Board {
-        number,
-        organization: organization.to_string(),
+    Ok(BoardPass {
         title,
         description,
         items,
+        page_count,
+    })
+}
+
+pub fn poll_board(
+    transport: &dyn HttpTransport,
+    token: &str,
+    stream: &IssueStream,
+) -> Result<IssuePollOutcome, PollError> {
+    let organization = stream
+        .github_organization
+        .as_deref()
+        .ok_or_else(|| PollError::Invalid("board stream needs an organization".into()))?;
+    let number = stream
+        .github_project_number
+        .ok_or_else(|| PollError::Invalid("board stream needs a project number".into()))?;
+    let first = fetch_board_pass(transport, token, organization, number)?;
+    // Offset-based item pages have no snapshot token; require a second
+    // identical pass before replacing the board document. Two identical empty
+    // passes are a confirmed empty board, not a transient partial page.
+    let second = fetch_board_pass(transport, token, organization, number)?;
+    if first.title != second.title
+        || first.description != second.description
+        || first.items != second.items
+    {
+        return Err(PollError::Unstable(format!(
+            "GitHub project {organization}/{number} changed between stability passes"
+        )));
+    }
+    let board = Board {
+        number,
+        organization: organization.to_string(),
+        title: first.title,
+        description: first.description,
+        items: first.items,
     };
     let plan = plan_board(
         &board,
@@ -1541,7 +1464,7 @@ pub fn poll_board(
     Ok(IssuePollOutcome::Snapshot(IssueSnapshot {
         item_count: board.items.len(),
         plans: vec![plan],
-        page_count,
+        page_count: first.page_count + second.page_count,
         etag: None,
         last_updated: None,
         deletions_allowed: true,
@@ -1657,6 +1580,7 @@ pub fn apply_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::HttpResponse;
     use std::sync::Mutex;
 
     #[derive(Default)]
@@ -2038,6 +1962,7 @@ mod tests {
     fn transient_classification_and_retry_after_cover_all_variants() {
         assert!(PollError::Transport("x".into()).is_transient());
         assert!(PollError::RateLimited { retry_after: None }.is_transient());
+        assert!(PollError::Unstable("changed".into()).is_transient());
         assert!(PollError::Http {
             status: 500,
             body: String::new()
@@ -2079,6 +2004,13 @@ mod tests {
             PollError::from_status(403, &BTreeMap::new(), Vec::new()),
             PollError::Http { status: 403, .. }
         ));
+        let secondary = PollError::from_status(
+            403,
+            &BTreeMap::new(),
+            b"You have exceeded a secondary rate limit".to_vec(),
+        );
+        assert!(secondary.is_transient());
+        assert_eq!(secondary.retry_after(), Some(Duration::from_secs(60)));
         let body = "x".repeat(400);
         let error = PollError::from_status(500, &BTreeMap::new(), body.into_bytes());
         match error {
@@ -2629,10 +2561,10 @@ mod tests {
         assert_eq!(snapshot.item_count, 0);
         assert!(snapshot.plans.is_empty());
 
-        let transport = ScriptedTransport::new(vec![response(
-            200,
-            board_page(vec![Value::Null], false, None),
-        )]);
+        let transport = ScriptedTransport::new(vec![
+            response(200, board_page(vec![Value::Null], false, None)),
+            response(200, board_page(vec![Value::Null], false, None)),
+        ]);
         let IssuePollOutcome::Snapshot(snapshot) =
             poll_board(&transport, "token", &board_stream()).unwrap()
         else {
@@ -2704,6 +2636,11 @@ mod tests {
                 board_page(vec![board_node(130, "Done")], true, Some("c1")),
             ),
             response(200, board_page(vec![board_node(131, "Next")], false, None)),
+            response(
+                200,
+                board_page(vec![board_node(130, "Done")], true, Some("c1")),
+            ),
+            response(200, board_page(vec![board_node(131, "Next")], false, None)),
         ]);
         let IssuePollOutcome::Snapshot(snapshot) =
             poll_board(&transport, "token", &board_stream()).unwrap()
@@ -2711,6 +2648,7 @@ mod tests {
             panic!("expected snapshot");
         };
         assert_eq!(snapshot.item_count, 2);
+        assert_eq!(snapshot.page_count, 4);
         assert_eq!(snapshot.plans.len(), 1);
         assert_eq!(
             snapshot.plans[0].calls[0].document_id,
@@ -2725,6 +2663,33 @@ mod tests {
         let bodies = transport.post_bodies();
         assert!(bodies[0]["variables"]["after"].is_null());
         assert_eq!(bodies[1]["variables"]["after"], "c1");
+    }
+
+    #[test]
+    fn board_changed_between_stability_passes_is_an_error() {
+        let transport = ScriptedTransport::new(vec![
+            response(200, board_page(vec![board_node(130, "Done")], false, None)),
+            response(200, board_page(vec![board_node(131, "Next")], false, None)),
+        ]);
+        let error = poll_board(&transport, "token", &board_stream()).unwrap_err();
+        assert!(matches!(error, PollError::Unstable(_)));
+    }
+
+    #[test]
+    fn two_identical_empty_passes_confirm_an_empty_board() {
+        let transport = ScriptedTransport::new(vec![
+            response(200, board_page(Vec::new(), false, None)),
+            response(200, board_page(Vec::new(), false, None)),
+        ]);
+        let IssuePollOutcome::Snapshot(snapshot) =
+            poll_board(&transport, "token", &board_stream()).unwrap()
+        else {
+            panic!("expected snapshot");
+        };
+        assert_eq!(snapshot.item_count, 0);
+        assert!(snapshot.plans[0].calls[0]
+            .content
+            .contains("Total items: 0"));
     }
 
     #[test]
@@ -2758,6 +2723,52 @@ mod tests {
         assert!(validate_bank_streams(&[a.clone(), b]).is_err());
         let b = IssueStream::github_project("p", "p-issues", "other-org", 10, None);
         assert!(validate_bank_streams(&[a, b]).is_ok());
+    }
+
+    #[test]
+    fn provider_names_include_the_graphql_providers() {
+        assert_eq!(
+            IssueProvider::GitHubDiscussions.as_str(),
+            "github_discussions"
+        );
+        assert_eq!(IssueProvider::GitHubProjects.as_str(), "github_projects");
+    }
+
+    #[test]
+    fn discussion_and_board_validation_errors_are_explicit() {
+        let mut discussion = discussion_stream();
+        discussion.repo = Some("missing-owner".to_string());
+        assert!(matches!(discussion.validate(), Err(PollError::Invalid(_))));
+        let mut board = board_stream();
+        board.github_organization = None;
+        assert!(matches!(board.validate(), Err(PollError::Invalid(_))));
+        let mut board = board_stream();
+        board.github_project_number = Some(0);
+        assert!(matches!(board.validate(), Err(PollError::Invalid(_))));
+    }
+
+    #[test]
+    fn snapshot_scan_and_empty_reconciliation_are_pure() {
+        let plan = IssuePlan {
+            relative_path: "discussion/1".to_string(),
+            snapshot_sha256: ContentHash::of(b"snapshot"),
+            size_bytes: 8,
+            calls: Vec::new(),
+        };
+        let snapshot = IssueSnapshot {
+            plans: vec![plan],
+            page_count: 1,
+            item_count: 1,
+            etag: None,
+            last_updated: None,
+            deletions_allowed: true,
+        };
+        let scan = snapshot.scan();
+        assert_eq!(scan.len(), 1);
+        assert_eq!(scan[0].relative_path, "discussion/1");
+        assert!(snapshot
+            .reconciliation(&crate::ledger::Manifest::default())
+            .is_empty());
     }
 
     #[test]

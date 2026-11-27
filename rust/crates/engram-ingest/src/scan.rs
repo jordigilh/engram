@@ -876,7 +876,11 @@ mod tests {
     #[test]
     fn malformed_pdf_aborts_the_snapshot() {
         let root = fixture();
-        write(&root, "broken.pdf", b"not a pdf");
+        write(
+            &root,
+            "broken.pdf",
+            include_bytes!("../fixtures/pdf/broken.pdf"),
+        );
         let error = scan_source(&source_with_format(
             &root,
             &["**/*.pdf"],

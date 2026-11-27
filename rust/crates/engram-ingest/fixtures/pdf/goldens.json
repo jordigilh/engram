@@ -2,7 +2,7 @@
   "provenance": {
     "python": "3.14.6",
     "pdfplumber": "0.11.10",
-    "source_commit": "60761771cd709035185d4c6a7aef3d147d7cf7e4",
+    "source_commit": "f3adae0d2a82365124aacf10e0ec60785d360e02",
     "sources": {
       "src/engram/chunking.py": "e920fcd9c339dc4399b24abb1b44d9cc96db29413fd4dc00710b37a1a6ba1ec5",
       "src/engram/flows/configured.py": "1fff283c1ef49d6880e97561c6179fccdbb67910ce5f2e3bcfede3f2199caa1d",
@@ -10,24 +10,50 @@
     },
     "fixture": {
       "file": "guide.pdf",
-      "sha256": "8b8f938431878f472772baecad60fba6813992eb9bddd2d85c65d6c545c4dd03",
-      "size_bytes": 1656
+      "sha256": "939e30c0c4a9173ad0f46ca308f5ee38dad9eb1df456b0fceb7be6d711beaaac",
+      "size_bytes": 1655
     }
   },
   "source_tag": "manual",
   "relative": "guide.pdf",
   "timestamp": "2026-11-27T09:30:00.123456",
   "pages": [
-    "Quarterly Report\nRevenue grew 12% in Café operations across every region this quarter.\nR&D (draft) review: naïve façade.",
+    "Quarterly Report\nRevenue grew 12% in Café operations across every region this quarter.\nR&D (draft) review: naïve façade.\nMultiple spaces stay single.",
     "",
     "Summary\nCafé résumé – naïve façade\nIndented detail stays indented.",
     ""
   ],
-  "rendered": "--- Page 1 ---\n\nQuarterly Report\nRevenue grew 12% in Café operations across every region this quarter.\nR&D (draft) review: naïve façade.\n\n--- Page 3 ---\n\nSummary\nCafé résumé – naïve façade\nIndented detail stays indented.",
+  "rendered": "--- Page 1 ---\n\nQuarterly Report\nRevenue grew 12% in Café operations across every region this quarter.\nR&D (draft) review: naïve façade.\nMultiple spaces stay single.\n\n--- Page 3 ---\n\nSummary\nCafé résumé – naïve façade\nIndented detail stays indented.",
+  "timestamp_cases": [
+    {
+      "seconds": 1700000000,
+      "micros": 0,
+      "offset_seconds": 0,
+      "expected": "2023-11-14T22:13:20"
+    },
+    {
+      "seconds": 1700000000,
+      "micros": 123456,
+      "offset_seconds": 0,
+      "expected": "2023-11-14T22:13:20.123456"
+    },
+    {
+      "seconds": 1700000000,
+      "micros": 0,
+      "offset_seconds": 3600,
+      "expected": "2023-11-14T23:13:20"
+    },
+    {
+      "seconds": 0,
+      "micros": 999999,
+      "offset_seconds": -18000,
+      "expected": "1969-12-31T19:00:00.999999"
+    }
+  ],
   "expected": [
     {
       "document_id": "manual--guide",
-      "content": "--- Page 1 ---\n\nQuarterly Report\nRevenue grew 12% in Café operations across every region this quarter.\nR&D (draft) review: naïve façade.\n\n--- Page 3 ---\n\nSummary\nCafé résumé – naïve façade\nIndented detail stays indented.",
+      "content": "--- Page 1 ---\n\nQuarterly Report\nRevenue grew 12% in Café operations across every region this quarter.\nR&D (draft) review: naïve façade.\nMultiple spaces stay single.\n\n--- Page 3 ---\n\nSummary\nCafé résumé – naïve façade\nIndented detail stays indented.",
       "metadata": {
         "source": "cocoindex",
         "repo": "manual",

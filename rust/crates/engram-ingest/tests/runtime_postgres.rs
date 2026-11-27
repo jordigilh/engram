@@ -403,6 +403,44 @@ fn ingests_pdf_with_python_page_contract_and_deletes_it() {
 }
 
 #[test]
+fn corrupt_pdf_skips_the_source_and_leaves_the_manifest_untouched() {
+    let Some((database_url, mut client)) = setup() else {
+        return;
+    };
+    let server = TestServer::start(200, Duration::ZERO);
+    let root = temp_dir("broken-pdf-docs");
+    let disorder = temp_dir("broken-pdf-config");
+    std::fs::create_dir_all(root.join("manual")).expect("pdf dir");
+    std::fs::write(
+        root.join("manual/broken.pdf"),
+        include_bytes!("../fixtures/pdf/broken.pdf"),
+    )
+    .expect("broken fixture");
+    let config_path = write_pdf_config(&root, &disorder, &database_url, server.url());
+
+    let runtime = Runtime::new(load_config(&config_path)).expect("runtime");
+    let handle = runtime.start(Shutdown::default()).expect("start");
+    let outcomes = &handle.prepared().outcomes;
+    assert!(
+        matches!(
+            outcomes.as_slice(),
+            [SourceOutcome::Skipped { reason, .. }]
+                if reason.contains("scan aborted") && reason.contains("corrupt page content")
+        ),
+        "outcomes: {outcomes:?}"
+    );
+    handle.drain(Duration::from_secs(30)).expect("drain");
+
+    assert!(
+        server.requests().is_empty(),
+        "no retain for a rejected snapshot: {:?}",
+        server.requests()
+    );
+    assert_eq!(count_jobs(&mut client, "succeeded"), 0);
+    assert_eq!(active_documents(&mut client), 0);
+}
+
+#[test]
 fn restart_resumes_pending_jobs_without_duplicates() {
     let Some((database_url, mut client)) = setup() else {
         return;

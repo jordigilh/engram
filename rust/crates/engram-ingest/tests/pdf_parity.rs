@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use engram_ingest::{plan_document, render_pdf, ContentHash};
+use engram_ingest::{format_local_timestamp, plan_document, render_pdf, ContentHash};
 use serde::Deserialize;
 
 const GOLDENS: &str = include_str!("../fixtures/pdf/goldens.json");
@@ -24,12 +24,22 @@ struct Goldens {
     timestamp: Option<String>,
     pages: Vec<String>,
     rendered: String,
+    timestamp_cases: Vec<TimestampCase>,
     expected: Vec<ExpectedCall>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TimestampCase {
+    seconds: i64,
+    micros: u32,
+    offset_seconds: i32,
+    expected: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct Provenance {
     fixture: FixtureIdentity,
+    sources: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,6 +69,38 @@ fn fixture_bytes_match_the_golden_provenance() {
         ContentHash::of(FIXTURE).to_hex(),
         "guide.pdf and goldens.json drifted; regenerate both"
     );
+}
+
+#[test]
+fn oracle_is_pinned_to_the_python_sources_it_came_from() {
+    let goldens: Goldens = serde_json::from_str(GOLDENS).expect("goldens");
+    assert_eq!(
+        goldens.provenance.sources.len(),
+        3,
+        "configured.py, chunking.py, and synthesis.py must be pinned"
+    );
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    for (relative, expected) in &goldens.provenance.sources {
+        let bytes = std::fs::read(root.join(relative))
+            .unwrap_or_else(|error| panic!("read {relative}: {error}"));
+        assert_eq!(
+            ContentHash::of(&bytes).to_hex(),
+            *expected,
+            "{relative} changed; regenerate the PDF oracle"
+        );
+    }
+}
+
+#[test]
+fn timestamp_formatting_matches_python_isoformat() {
+    let goldens: Goldens = serde_json::from_str(GOLDENS).expect("goldens");
+    for case in &goldens.timestamp_cases {
+        assert_eq!(
+            format_local_timestamp(case.seconds, case.micros, case.offset_seconds)
+                .expect("timestamp"),
+            case.expected
+        );
+    }
 }
 
 #[test]

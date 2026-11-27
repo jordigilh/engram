@@ -19,6 +19,7 @@ import zlib
 
 FIXTURE = pathlib.Path(__file__).with_name("guide.pdf")
 BLANK_FIXTURE = pathlib.Path(__file__).with_name("blank.pdf")
+BROKEN_FIXTURE = pathlib.Path(__file__).with_name("broken.pdf")
 
 
 def escape(text: str) -> str:
@@ -41,7 +42,9 @@ def content(lines: list[str]) -> bytes:
     return ("\n".join(operators) + "\n").encode("latin-1")
 
 
-def build(pages: list[list[str]], path: pathlib.Path) -> None:
+def build_streams(
+    streams: list[bytes], path: pathlib.Path, *, compress: bool = True
+) -> None:
     objects: list[bytes] = []
 
     def add(body: bytes) -> int:
@@ -55,14 +58,14 @@ def build(pages: list[list[str]], path: pathlib.Path) -> None:
     pages_id = len(objects) + 1
     add(b"")  # pages root, filled in once the page objects exist
     page_ids = []
-    for lines in pages:
-        stream = content(lines)
-        body = zlib.compress(stream) if stream else b""
-        contents = add(
-            b"<< /Length %d /Filter /FlateDecode >>\nstream\n" % len(body)
-            + body
-            + b"\nendstream"
-        )
+    for stream in streams:
+        if compress and stream:
+            body = zlib.compress(stream)
+            head = b"<< /Length %d /Filter /FlateDecode >>" % len(body)
+        else:
+            body = stream
+            head = b"<< /Length %d >>" % len(body)
+        contents = add(head + b"\nstream\n" + body + b"\nendstream")
         page_ids.append(
             add(
                 (
@@ -96,11 +99,16 @@ def build(pages: list[list[str]], path: pathlib.Path) -> None:
     path.write_bytes(out)
 
 
+def build(pages: list[list[str]], path: pathlib.Path) -> None:
+    build_streams([content(lines) for lines in pages], path)
+
+
 PAGES = [
     [
         "Quarterly Report",
         "Revenue grew 12% in Café operations across every region this quarter.",
         "R&D (draft) review: naïve façade.",
+        "Multiple   spaces   stay single.",
     ],
     [],
     [
@@ -118,3 +126,6 @@ if __name__ == "__main__":
     # Text-less document: no page has a non-whitespace text object. It pins the
     # Python `process_pdf_file` early return on the scan side.
     build([[], ["   "]], BLANK_FIXTURE)
+    # Corrupt page content: an unterminated string literal. Lenient decoders
+    # would silently ingest a partial page; the Rust preflight must reject it.
+    build_streams([b"BT /F1 12 Tf (Quarterly Tj ET"], BROKEN_FIXTURE, compress=False)

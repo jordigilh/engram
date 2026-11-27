@@ -15,11 +15,13 @@ byte-for-byte; review any diff together with the fixture or Python changes.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import pathlib
 import platform
 import subprocess
+from datetime import datetime, timedelta, timezone
 
 import pdfplumber
 
@@ -53,25 +55,62 @@ def rendered_from_pages(pages: list[str]) -> str:
     )
 
 
+def timestamp_cases() -> list[dict]:
+    cases = []
+    for seconds, micros, offset in [
+        (1_700_000_000, 0, 0),
+        (1_700_000_000, 123_456, 0),
+        (1_700_000_000, 0, 3600),
+        (0, 999_999, -18_000),
+    ]:
+        moment = datetime.fromtimestamp(
+            seconds, timezone(timedelta(seconds=offset))
+        ).replace(tzinfo=None, microsecond=micros)
+        cases.append(
+            {
+                "seconds": seconds,
+                "micros": micros,
+                "offset_seconds": offset,
+                "expected": moment.isoformat(),
+            }
+        )
+    return cases
+
+
 def main() -> None:
     fixture = FIXTURES / "guide.pdf"
     with pdfplumber.open(str(fixture)) as pdf:
         pages = [page.extract_text() or "" for page in pdf.pages]
-    rendered = rendered_from_pages(pages)
+    diagnostic_render = rendered_from_pages(pages)
 
-    captured: list[dict] = []
+    captured_calls: list[dict] = []
+    captured_document: dict = {}
 
-    def capture(**kwargs):
-        captured.append(kwargs)
+    original_retain_document = configured._retain_document
 
-    configured.hindsight_retain = capture
-    configured._retain_document(
-        bank_id="fixture-bank",
-        content=rendered,
-        source_tag=SOURCE_TAG,
-        relative=RELATIVE,
-        timestamp=TIMESTAMP,
+    def capture_call(**kwargs):
+        captured_calls.append(kwargs)
+
+    def capture_document(**kwargs):
+        captured_document.update(kwargs)
+        original_retain_document(**kwargs)
+
+    class FakeFile:
+        file_path = fixture
+
+    configured.hindsight_retain = capture_call
+    configured._retain_document = capture_document
+    configured._file_timestamp = lambda _path: TIMESTAMP
+    asyncio.run(
+        configured.process_pdf_file(FakeFile(), FIXTURES, "fixture-bank", SOURCE_TAG)
     )
+
+    rendered = captured_document["content"]
+    relative = captured_document["relative"]
+    timestamp = captured_document["timestamp"]
+    assert rendered == diagnostic_render, "pdfplumber reconstruction drifted"
+    assert relative == RELATIVE, relative
+    assert timestamp == TIMESTAMP, timestamp
 
     payload = {
         "provenance": {
@@ -94,10 +133,11 @@ def main() -> None:
             },
         },
         "source_tag": SOURCE_TAG,
-        "relative": RELATIVE,
-        "timestamp": TIMESTAMP,
+        "relative": relative,
+        "timestamp": timestamp,
         "pages": pages,
         "rendered": rendered,
+        "timestamp_cases": timestamp_cases(),
         "expected": [
             {
                 "document_id": call["document_id"],
@@ -106,7 +146,7 @@ def main() -> None:
                 "tags": call["tags"],
                 "timestamp": call["timestamp"],
             }
-            for call in captured
+            for call in captured_calls
         ],
     }
     (FIXTURES / "goldens.json").write_text(

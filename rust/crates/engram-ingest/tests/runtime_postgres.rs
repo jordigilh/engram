@@ -997,6 +997,10 @@ fn incomplete_discovery_fails_once_but_keeps_the_manifest() {
     run_and_drain(load_config(&config_path));
     let posts = transcript_bank_posts(&server);
     assert_eq!(posts, 2, "both windows must be delivered first");
+    let deletes_before = methods(&server.requests())
+        .iter()
+        .filter(|method| *method == "DELETE")
+        .count();
     let active: i64 = client
         .query_one(
             "SELECT count(*) FROM engram_ingest.chunks WHERE state = 'active'",
@@ -1035,7 +1039,7 @@ fn incomplete_discovery_fails_once_but_keeps_the_manifest() {
         );
         assert!(stderr.contains("discovery incomplete"), "stderr: {stderr}");
         // No tombstone may have fired for the unreadable subtree: the hidden
-        // transcript's chunk stays active and no delete is delivered.
+        // transcript's chunk stays active and no DELETE request is sent.
         let active: i64 = client
             .query_one(
                 "SELECT count(*) FROM engram_ingest.chunks WHERE state = 'active'",
@@ -1044,10 +1048,18 @@ fn incomplete_discovery_fails_once_but_keeps_the_manifest() {
             .expect("chunks")
             .get(0);
         assert_eq!(active, 2, "the hidden window must survive the pass");
+        let deletes_after = methods(&server.requests())
+            .iter()
+            .filter(|method| *method == "DELETE")
+            .count();
+        assert_eq!(
+            deletes_after, deletes_before,
+            "no delete may fire for the hidden transcript"
+        );
         assert_eq!(
             transcript_bank_posts(&server),
             posts,
-            "no delete may fire for the hidden transcript"
+            "no retain may fire for the hidden transcript"
         );
     }
 }

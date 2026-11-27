@@ -22,6 +22,7 @@ pub mod python_text;
 pub mod reconcile;
 pub mod runtime;
 pub mod scan;
+pub mod shadow;
 pub mod signals;
 pub mod sink;
 pub mod stopwords;
@@ -55,6 +56,12 @@ pub use reconcile::{
 };
 pub use runtime::{PrepareReport, Runtime, RuntimeError, RuntimeHandle, SourceOutcome};
 pub use scan::{scan_source, ScanError, ScanReport};
+pub use shadow::{
+    compare, compare_deletes, compare_ledger, conflict_divergences, expected_deletes,
+    manifest_from_scan, merge_conflicts, merge_deletes, parse_oracle, validate_oracle,
+    DeleteParity, Divergence, DivergenceKind, ExpectedDelete, ExpectedDeleteReason, FileParity,
+    OracleDump, OracleFile, OracleProvenance, OracleRetain, OracleTree, RetainParity, ShadowReport,
+};
 pub use sink::{
     process_one, process_one_reporting, DeleteOutcome, HindsightSink, ProcessStep, ProcessedJob,
     RetainRequest, SinkError, SinkOutcome,

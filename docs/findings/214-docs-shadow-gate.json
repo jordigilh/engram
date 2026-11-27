@@ -1,0 +1,346 @@
+{
+  "after": {
+    "deletes": {
+      "emitted": 0,
+      "expected": 0,
+      "matched": 0
+    },
+    "divergences": [
+      {
+        "detail": "oracle emitted 2 retains; ledger keeps the last occurrence (b5cb270cef4070520cfe95ac6f66e38535cf7510180533148c1d8210c51e93fb)",
+        "document_id": "engram-docs--COCOINDEX--d75ea1f5c7984749",
+        "kind": "duplicate_collapse",
+        "relative_path": "COCOINDEX.md"
+      },
+      {
+        "detail": "oracle emitted 3 retains; ledger keeps the last occurrence (1ff2817b0ccf5fdb618bd39c60b24cc86f40a240c26f062608384bfff3d532b0)",
+        "document_id": "engram-docs--METRICS--0cef4c7169d6f944",
+        "kind": "duplicate_collapse",
+        "relative_path": "METRICS.md"
+      },
+      {
+        "detail": "oracle emitted 3 retains; ledger keeps the last occurrence (ebd971e029deac8d02c9cda7379076bda9edde2d935d37af71374d2c40e45c36)",
+        "document_id": "engram-docs--METRICS--db76a4eb653aefdb",
+        "kind": "duplicate_collapse",
+        "relative_path": "METRICS.md"
+      },
+      {
+        "detail": "oracle emitted 6 retains; ledger keeps the last occurrence (616de78515c278b93b6eb0f63b9bf09616bb7a95384eb1663971ccd32e8f87e7)",
+        "document_id": "engram-docs--RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS--47ae8687dd180255",
+        "kind": "duplicate_collapse",
+        "relative_path": "RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS.md"
+      },
+      {
+        "detail": "oracle emitted 4 retains; ledger keeps the last occurrence (bb6e8635d369ccebc74de177717012ef0612d6a4ea30c731c83946820cbd2fcf)",
+        "document_id": "engram-docs--RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS--47ae8687dd180255-part1",
+        "kind": "duplicate_collapse",
+        "relative_path": "RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS.md"
+      },
+      {
+        "detail": "oracle emitted 3 retains; ledger keeps the last occurrence (e0da939d26ddb24a36a51801b28504de1a205a742c60e3ef3a6b10b07c407c46)",
+        "document_id": "engram-docs--RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS--47ae8687dd180255-part2",
+        "kind": "duplicate_collapse",
+        "relative_path": "RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS.md"
+      },
+      {
+        "detail": "oracle emitted 3 retains; ledger keeps the last occurrence (09af7e913574c4f7106676acf7201353259ea1c1c4f9eb629d8e88d2722c76c1)",
+        "document_id": "engram-docs--RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS--47ae8687dd180255-part3",
+        "kind": "duplicate_collapse",
+        "relative_path": "RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS.md"
+      },
+      {
+        "detail": "oracle emitted 3 retains; ledger keeps the last occurrence (85b4a1a8ebb12ebe7f3a737fd9332bff989e7e40ca39872899e2e217baa9e944)",
+        "document_id": "engram-docs--RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS--9535295cc37590b6",
+        "kind": "duplicate_collapse",
+        "relative_path": "RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS.md"
+      },
+      {
+        "detail": "oracle emitted 6 retains; ledger keeps the last occurrence (9836e12822eeee3a8b65c6512c3a5973661dbebb017a905138ecacb90d2051ae)",
+        "document_id": "engram-docs--RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS--a602b198d7abb81e",
+        "kind": "duplicate_collapse",
+        "relative_path": "RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS.md"
+      },
+      {
+        "detail": "oracle emitted 3 retains; ledger keeps the last occurrence (a62907c749f3cecd15a2a22f28254cf2e71f4ca9c84899a366f9a976db46989b)",
+        "document_id": "engram-docs--RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS--b14859c1eccddacf",
+        "kind": "duplicate_collapse",
+        "relative_path": "RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS.md"
+      }
+    ],
+    "files": {
+      "matched": 36,
+      "oracle_files": 36,
+      "rust_files": 36
+    },
+    "retains": {
+      "duplicate_ids": 10,
+      "matched": 2697,
+      "oracle_retains": 2697,
+      "rust_retains": 2697
+    },
+    "unexpected": 0
+  },
+  "before": {
+    "deletes": {
+      "emitted": 0,
+      "expected": 0,
+      "matched": 0
+    },
+    "divergences": [
+      {
+        "detail": "oracle emitted 2 retains; ledger keeps the last occurrence (b5cb270cef4070520cfe95ac6f66e38535cf7510180533148c1d8210c51e93fb)",
+        "document_id": "engram-docs--COCOINDEX--d75ea1f5c7984749",
+        "kind": "duplicate_collapse",
+        "relative_path": "COCOINDEX.md"
+      },
+      {
+        "detail": "oracle emitted 3 retains; ledger keeps the last occurrence (1ff2817b0ccf5fdb618bd39c60b24cc86f40a240c26f062608384bfff3d532b0)",
+        "document_id": "engram-docs--METRICS--0cef4c7169d6f944",
+        "kind": "duplicate_collapse",
+        "relative_path": "METRICS.md"
+      },
+      {
+        "detail": "oracle emitted 3 retains; ledger keeps the last occurrence (ebd971e029deac8d02c9cda7379076bda9edde2d935d37af71374d2c40e45c36)",
+        "document_id": "engram-docs--METRICS--db76a4eb653aefdb",
+        "kind": "duplicate_collapse",
+        "relative_path": "METRICS.md"
+      },
+      {
+        "detail": "oracle emitted 6 retains; ledger keeps the last occurrence (616de78515c278b93b6eb0f63b9bf09616bb7a95384eb1663971ccd32e8f87e7)",
+        "document_id": "engram-docs--RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS--47ae8687dd180255",
+        "kind": "duplicate_collapse",
+        "relative_path": "RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS.md"
+      },
+      {
+        "detail": "oracle emitted 4 retains; ledger keeps the last occurrence (bb6e8635d369ccebc74de177717012ef0612d6a4ea30c731c83946820cbd2fcf)",
+        "document_id": "engram-docs--RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS--47ae8687dd180255-part1",
+        "kind": "duplicate_collapse",
+        "relative_path": "RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS.md"
+      },
+      {
+        "detail": "oracle emitted 3 retains; ledger keeps the last occurrence (e0da939d26ddb24a36a51801b28504de1a205a742c60e3ef3a6b10b07c407c46)",
+        "document_id": "engram-docs--RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS--47ae8687dd180255-part2",
+        "kind": "duplicate_collapse",
+        "relative_path": "RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS.md"
+      },
+      {
+        "detail": "oracle emitted 3 retains; ledger keeps the last occurrence (09af7e913574c4f7106676acf7201353259ea1c1c4f9eb629d8e88d2722c76c1)",
+        "document_id": "engram-docs--RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS--47ae8687dd180255-part3",
+        "kind": "duplicate_collapse",
+        "relative_path": "RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS.md"
+      },
+      {
+        "detail": "oracle emitted 3 retains; ledger keeps the last occurrence (85b4a1a8ebb12ebe7f3a737fd9332bff989e7e40ca39872899e2e217baa9e944)",
+        "document_id": "engram-docs--RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS--9535295cc37590b6",
+        "kind": "duplicate_collapse",
+        "relative_path": "RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS.md"
+      },
+      {
+        "detail": "oracle emitted 6 retains; ledger keeps the last occurrence (9836e12822eeee3a8b65c6512c3a5973661dbebb017a905138ecacb90d2051ae)",
+        "document_id": "engram-docs--RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS--a602b198d7abb81e",
+        "kind": "duplicate_collapse",
+        "relative_path": "RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS.md"
+      },
+      {
+        "detail": "oracle emitted 3 retains; ledger keeps the last occurrence (a62907c749f3cecd15a2a22f28254cf2e71f4ca9c84899a366f9a976db46989b)",
+        "document_id": "engram-docs--RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS--b14859c1eccddacf",
+        "kind": "duplicate_collapse",
+        "relative_path": "RGCTL_SEMANTIC_SEARCH_ENHANCEMENTS.md"
+      }
+    ],
+    "files": {
+      "matched": 37,
+      "oracle_files": 37,
+      "rust_files": 37
+    },
+    "retains": {
+      "duplicate_ids": 10,
+      "matched": 2709,
+      "oracle_retains": 2709,
+      "rust_retains": 2709
+    },
+    "unexpected": 0
+  },
+  "deletes": {
+    "deletes": {
+      "emitted": 12,
+      "expected": 12,
+      "matched": 12
+    },
+    "divergences": [],
+    "files": {
+      "matched": 0,
+      "oracle_files": 0,
+      "rust_files": 0
+    },
+    "retains": {
+      "duplicate_ids": 0,
+      "matched": 0,
+      "oracle_retains": 0,
+      "rust_retains": 0
+    },
+    "unexpected": 0
+  },
+  "expected_deletes": {
+    "engram-docs--CALL_GRAPH_CLUSTERING--df4a28bd3f46c32b": {
+      "chunk_key": "df4a28bd3f46c32b",
+      "content_sha256": "164ba79c47f0dc5cb00e550b4774a52b239a7336326beebb98fe9135ad847416",
+      "document_id": "engram-docs--CALL_GRAPH_CLUSTERING--df4a28bd3f46c32b",
+      "reason": "chunk_removed",
+      "relative_path": "CALL_GRAPH_CLUSTERING.md"
+    },
+    "engram-docs--CALL_GRAPH_CLUSTERING--df4a28bd3f46c32b-part1": {
+      "chunk_key": "df4a28bd3f46c32b-part1",
+      "content_sha256": "fb5cae3e720f1191f7ebc454d7b273e4b8886d00ee245d567bc55b950a98a162",
+      "document_id": "engram-docs--CALL_GRAPH_CLUSTERING--df4a28bd3f46c32b-part1",
+      "reason": "chunk_removed",
+      "relative_path": "CALL_GRAPH_CLUSTERING.md"
+    },
+    "engram-docs--spikes--2026-10-02-opencode-mcp-namespace": {
+      "chunk_key": "",
+      "content_sha256": "27adf7fd0e05008ae578f7e1c0d04a8351e37a1ed31e7f90719ef5a8c1f4026b",
+      "document_id": "engram-docs--spikes--2026-10-02-opencode-mcp-namespace",
+      "reason": "file_removed",
+      "relative_path": "spikes/2026-10-02-opencode-mcp-namespace.md"
+    },
+    "engram-docs--spikes--2026-10-02-opencode-mcp-namespace--1d61cf491863d30b": {
+      "chunk_key": "1d61cf491863d30b",
+      "content_sha256": "808918343a86178f819540eea9512cba6d04db1477c930f587ad13d6e2991ad9",
+      "document_id": "engram-docs--spikes--2026-10-02-opencode-mcp-namespace--1d61cf491863d30b",
+      "reason": "file_removed",
+      "relative_path": "spikes/2026-10-02-opencode-mcp-namespace.md"
+    },
+    "engram-docs--spikes--2026-10-02-opencode-mcp-namespace--1d61cf491863d30b-part1": {
+      "chunk_key": "1d61cf491863d30b-part1",
+      "content_sha256": "1c6ab1aa7448ab57eb88b4d4729d0dc8327d3ddbb8ebea5c24c8d0aaad196f97",
+      "document_id": "engram-docs--spikes--2026-10-02-opencode-mcp-namespace--1d61cf491863d30b-part1",
+      "reason": "file_removed",
+      "relative_path": "spikes/2026-10-02-opencode-mcp-namespace.md"
+    },
+    "engram-docs--spikes--2026-10-02-opencode-mcp-namespace--29021b420f91ba47": {
+      "chunk_key": "29021b420f91ba47",
+      "content_sha256": "9006ffdd11a96bca843c4ab80963022376904667a9a79898b88dddd1cacfdcec",
+      "document_id": "engram-docs--spikes--2026-10-02-opencode-mcp-namespace--29021b420f91ba47",
+      "reason": "file_removed",
+      "relative_path": "spikes/2026-10-02-opencode-mcp-namespace.md"
+    },
+    "engram-docs--spikes--2026-10-02-opencode-mcp-namespace--b78e639c035b223d": {
+      "chunk_key": "b78e639c035b223d",
+      "content_sha256": "f1acef1d32072d9a4948cb02eaa89e7ffac8c2d093ad127c6f1b4ce9317322fd",
+      "document_id": "engram-docs--spikes--2026-10-02-opencode-mcp-namespace--b78e639c035b223d",
+      "reason": "file_removed",
+      "relative_path": "spikes/2026-10-02-opencode-mcp-namespace.md"
+    },
+    "engram-docs--spikes--2026-10-02-opencode-mcp-namespace--c04b0df1a071a656": {
+      "chunk_key": "c04b0df1a071a656",
+      "content_sha256": "7c54cda641d88b77e38de0edcb75be7d24aa776ff994f62ec3ad298e8a8b6c03",
+      "document_id": "engram-docs--spikes--2026-10-02-opencode-mcp-namespace--c04b0df1a071a656",
+      "reason": "file_removed",
+      "relative_path": "spikes/2026-10-02-opencode-mcp-namespace.md"
+    },
+    "engram-docs--spikes--2026-10-02-opencode-mcp-namespace--d49dc61ac70616c2": {
+      "chunk_key": "d49dc61ac70616c2",
+      "content_sha256": "76c6f810c735b2b6936ec1d381e44c0bfb5d71cd49b83515779c23462127daf7",
+      "document_id": "engram-docs--spikes--2026-10-02-opencode-mcp-namespace--d49dc61ac70616c2",
+      "reason": "file_removed",
+      "relative_path": "spikes/2026-10-02-opencode-mcp-namespace.md"
+    },
+    "engram-docs--spikes--2026-10-02-opencode-mcp-namespace--d5c61ee2333fa75f": {
+      "chunk_key": "d5c61ee2333fa75f",
+      "content_sha256": "e36ea7efa67bc2d127f168e048f1056f3874954626fe88fccf1e513d924d8f64",
+      "document_id": "engram-docs--spikes--2026-10-02-opencode-mcp-namespace--d5c61ee2333fa75f",
+      "reason": "file_removed",
+      "relative_path": "spikes/2026-10-02-opencode-mcp-namespace.md"
+    },
+    "engram-docs--spikes--2026-10-02-opencode-mcp-namespace--d5c61ee2333fa75f-part1": {
+      "chunk_key": "d5c61ee2333fa75f-part1",
+      "content_sha256": "6ec9fa8296695f17f0b012a7b267c18d1ebd5741283c93e1655a76a32e63644c",
+      "document_id": "engram-docs--spikes--2026-10-02-opencode-mcp-namespace--d5c61ee2333fa75f-part1",
+      "reason": "file_removed",
+      "relative_path": "spikes/2026-10-02-opencode-mcp-namespace.md"
+    },
+    "engram-docs--spikes--2026-10-02-opencode-mcp-namespace--ed536822e628ace3": {
+      "chunk_key": "ed536822e628ace3",
+      "content_sha256": "2b171667e53f885191e47f657d4cdcd878c174c1161d70eeafe5285fb05d3b8d",
+      "document_id": "engram-docs--spikes--2026-10-02-opencode-mcp-namespace--ed536822e628ace3",
+      "reason": "file_removed",
+      "relative_path": "spikes/2026-10-02-opencode-mcp-namespace.md"
+    }
+  },
+  "gate": "docs-shadow",
+  "issue": 214,
+  "provenance_after": {
+    "cocoindex": "1.0.26",
+    "flow_source_commit": "2fe0bce497d85701ba89b52079ab5a0bd31c1a8b",
+    "flow_source_dirty": false,
+    "flow_source_sha256": {
+      "src/engram/chunking.py": "e920fcd9c339dc4399b24abb1b44d9cc96db29413fd4dc00710b37a1a6ba1ec5",
+      "src/engram/flows/configured.py": "1fff283c1ef49d6880e97561c6179fccdbb67910ce5f2e3bcfede3f2199caa1d",
+      "src/engram/synthesis.py": "9d322a88e66bc9517033b68fca09b94c3e97e86c4b0b60e1a41d40c8a6d38309"
+    },
+    "generated_at": "2026-11-26T16:32:35.359888+00:00",
+    "networkx": "3.7",
+    "python": "3.14.6",
+    "sklearn": "1.9.1",
+    "tree": {
+      "bank_id": "engram-docs",
+      "bytes": 1370917,
+      "docs_exclude": [],
+      "docs_include": [
+        "**/*.md"
+      ],
+      "files": 36,
+      "root": "<frozen>/docs",
+      "sha256": "42bb149cd12d56bb584773b76f3a156fc2d6f95eacfccffe73285dd71c22609e",
+      "source_tag": "engram-docs"
+    }
+  },
+  "provenance_before": {
+    "cocoindex": "1.0.26",
+    "flow_source_commit": "2fe0bce497d85701ba89b52079ab5a0bd31c1a8b",
+    "flow_source_dirty": false,
+    "flow_source_sha256": {
+      "src/engram/chunking.py": "e920fcd9c339dc4399b24abb1b44d9cc96db29413fd4dc00710b37a1a6ba1ec5",
+      "src/engram/flows/configured.py": "1fff283c1ef49d6880e97561c6179fccdbb67910ce5f2e3bcfede3f2199caa1d",
+      "src/engram/synthesis.py": "9d322a88e66bc9517033b68fca09b94c3e97e86c4b0b60e1a41d40c8a6d38309"
+    },
+    "generated_at": "2026-11-26T16:32:29.454396+00:00",
+    "networkx": "3.7",
+    "python": "3.14.6",
+    "sklearn": "1.9.1",
+    "tree": {
+      "bank_id": "engram-docs",
+      "bytes": 1376464,
+      "docs_exclude": [],
+      "docs_include": [
+        "**/*.md"
+      ],
+      "files": 37,
+      "root": "<frozen>/docs",
+      "sha256": "f3d84402cf34e5fa9fb508323441e27823f9ea50cf3b162817f2356e4e520193",
+      "source_tag": "engram-docs"
+    }
+  },
+  "scan_after": {
+    "matched_files": 36,
+    "pruned_directories": 0,
+    "skipped_symlinks": 0
+  },
+  "scan_before": {
+    "matched_files": 37,
+    "pruned_directories": 0,
+    "skipped_symlinks": 0
+  },
+  "source": {
+    "bank": "engram-docs",
+    "docs_exclude": [],
+    "docs_include": [
+      "**/*.md"
+    ],
+    "mutation": "edited CALL_GRAPH_CLUSTERING.md; removed spikes/2026-10-02-opencode-mcp-namespace.md",
+    "project": "engram",
+    "revision": "2fe0bce497d85701ba89b52079ab5a0bd31c1a8b",
+    "tag": "engram-docs"
+  },
+  "unexpected_total": 0
+}

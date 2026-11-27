@@ -26,3 +26,13 @@ deployed flow venv is 3.14. The fixture header records the interpreter,
 sklearn/networkx versions, source commit, and SHA-256 of the three Python source
 files. CI does not run the generator, so review any `goldens.json` diff together
 with the corresponding Python source change.
+
+## Docs shadow gate
+
+`docs_shadow_oracle.py` and `docs_shadow_run.py` are the issue #214 slice 3
+measurement tools. They run the deployed `configured.py` docs app over a
+loopback capture server against a frozen real docs tree, including timestamps,
+and compare the emitted operations with the native planner. The driver writes
+`docs/findings/214-docs-shadow-gate.{md,json}`. See the crate README section
+"Docs shadow gate" for the command. These are developer tools, not pytest
+modules.

@@ -102,12 +102,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     engram_ingest::runtime::SourceOutcome::Guarded { project, tag, .. } => {
                         Some(format!("{project}/{tag} (guarded)"))
                     }
-                    engram_ingest::runtime::SourceOutcome::Skipped { project, tag, .. } => {
-                        Some(format!("{project}/{tag} (skipped)"))
-                    }
+                    engram_ingest::runtime::SourceOutcome::Skipped {
+                        project,
+                        tag,
+                        reason,
+                        ..
+                    } => Some(format!("{project}/{tag} (skipped: {reason})")),
                     engram_ingest::runtime::SourceOutcome::Deferred { project, tag, .. } => {
                         Some(format!("{project}/{tag} (deferred)"))
                     }
+                    engram_ingest::runtime::SourceOutcome::Transcripts {
+                        project,
+                        tag,
+                        files_skipped,
+                        ..
+                    } if *files_skipped > 0 => Some(format!(
+                        "{project}/{tag} ({files_skipped} transcript file(s) skipped)"
+                    )),
                     _ => None,
                 })
                 .collect();
@@ -116,8 +127,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 handle.drain(Duration::from_secs(args.drain_timeout))?;
                 if !incomplete.is_empty() {
                     return Err(std::io::Error::other(format!(
-                        "{} source(s) were not applied ({}); fix the root or pass \
-                         --allow-empty-root if an empty root is a genuine deletion",
+                        "{} source(s) were not fully applied ({}); fix the root or \
+                         configuration, or pass --allow-empty-root if an empty root is a \
+                         genuine deletion",
                         incomplete.len(),
                         incomplete.join(", ")
                     ))

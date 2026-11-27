@@ -97,6 +97,44 @@ fn toml_escape(value: &str) -> String {
 }
 
 fn write_config(root: &Path, disorder: &Path, database_url: &str, hindsight_url: &str) -> PathBuf {
+    write_config_maybe_transcripts(Some(root), None, disorder, database_url, hindsight_url)
+}
+
+fn write_config_maybe_transcripts(
+    root: Option<&Path>,
+    transcripts_root: Option<&Path>,
+    disorder: &Path,
+    database_url: &str,
+    hindsight_url: &str,
+) -> PathBuf {
+    let docs = root
+        .map(|root| {
+            format!(
+                r#"
+[[projects.example.sources]]
+tag = "repo"
+root = "{}"
+docs_include = ["**/*.md"]
+docs_exclude = ["**/vendor/**"]
+"#,
+                toml_escape(&root.to_string_lossy())
+            )
+        })
+        .unwrap_or_default();
+    let transcripts = transcripts_root
+        .map(|root| {
+            format!(
+                r#"transcripts = true
+transcript_bank = "example-transcripts"
+workspace_prefixes = ["workspace-"]
+
+[projects.example.paths]
+transcripts_dir = "{}"
+"#,
+                toml_escape(&root.to_string_lossy())
+            )
+        })
+        .unwrap_or_default();
     let path = disorder.join("projects.toml");
     let body = format!(
         r#"
@@ -108,19 +146,43 @@ concurrency = 1
 
 [projects.example]
 docs_bank = "example-docs"
-
-[[projects.example.sources]]
-tag = "repo"
-root = "{}"
-docs_include = ["**/*.md"]
-docs_exclude = ["**/vendor/**"]
-"#,
+{}{}"#,
         toml_escape(hindsight_url),
         toml_escape(database_url),
-        toml_escape(&root.to_string_lossy())
+        transcripts,
+        docs
     );
     std::fs::write(&path, body).expect("config");
     path
+}
+
+fn write_transcript(root: &Path, name: &str, messages: &[serde_json::Value]) {
+    let dir = root.join("workspace-demo").join("agent-transcripts");
+    std::fs::create_dir_all(&dir).expect("transcript dir");
+    let body = messages
+        .iter()
+        .map(|message| serde_json::to_string(message).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(dir.join(format!("{name}.jsonl")), body + "\n").expect("transcript");
+}
+
+fn transcript_user(text: &str) -> serde_json::Value {
+    serde_json::json!({"role": "user", "message": {"content": text}})
+}
+
+fn transcript_assistant(text: &str) -> serde_json::Value {
+    serde_json::json!({"role": "assistant", "message": {"content": text}})
+}
+
+fn transcript_bank_posts(server: &TestServer) -> usize {
+    server
+        .requests()
+        .iter()
+        .filter(|request| {
+            request.starts_with("POST") && request.contains("banks/example-transcripts/")
+        })
+        .count()
 }
 
 fn load_config(path: &Path) -> RuntimeConfig {
@@ -434,6 +496,406 @@ fn drain_counts_an_expired_lease_until_recovery() {
     assert!(counts.pending >= 1);
     assert_eq!(counts.pending as i64, count_jobs(&mut client, "pending"));
     assert_eq!(claimed.kind, "retain");
+}
+
+#[test]
+fn transcripts_ingest_retain_and_ack_end_to_end() {
+    let Some((database_url, mut client)) = setup() else {
+        return;
+    };
+    let server = TestServer::start(200, Duration::ZERO);
+    let root = temp_dir("mixed-docs");
+    let transcripts = temp_dir("mixed-transcripts");
+    let disorder = temp_dir("mixed-config");
+    write_doc(&root, "a.md", "# A\n\nalpha content");
+    write_transcript(
+        &transcripts,
+        "session",
+        &[
+            transcript_assistant("I will use the first approach."),
+            transcript_user("No, that's wrong; use the other approach."),
+            transcript_assistant("Understood, switching to the other approach."),
+        ],
+    );
+    let config_path = write_config_maybe_transcripts(
+        Some(&root),
+        Some(&transcripts),
+        &disorder,
+        &database_url,
+        server.url(),
+    );
+
+    let runtime = Runtime::new(load_config(&config_path)).expect("runtime");
+    let handle = runtime.start(Shutdown::default()).expect("start");
+    assert!(matches!(
+        handle.prepared().outcomes.as_slice(),
+        [
+            SourceOutcome::Applied { .. },
+            SourceOutcome::Transcripts {
+                files: 1,
+                windows_retained: 1,
+                windows_queued: 0,
+                ..
+            }
+        ]
+    ));
+    // The transcript bank is served by the same worker supervisor.
+    let metrics = handle.metrics();
+    assert!(metrics.contains("example-docs"), "metrics: {metrics}");
+    assert!(
+        metrics.contains("example-transcripts"),
+        "metrics: {metrics}"
+    );
+    handle.drain(Duration::from_secs(30)).expect("drain");
+
+    let posts = transcript_bank_posts(&server);
+    assert_eq!(posts, 1, "one window must reach the transcript bank");
+    assert!(count_jobs(&mut client, "succeeded") >= 2);
+
+    // A second pass after the ack must not re-retain the same window.
+    run_and_drain(load_config(&config_path));
+    assert_eq!(
+        transcript_bank_posts(&server),
+        posts,
+        "acked watermark must suppress replay"
+    );
+}
+
+#[test]
+fn transcripts_only_project_ingests_without_docs_sources() {
+    let Some((database_url, mut client)) = setup() else {
+        return;
+    };
+    let server = TestServer::start(200, Duration::ZERO);
+    let transcripts = temp_dir("only-transcripts");
+    let disorder = temp_dir("only-config");
+    write_transcript(
+        &transcripts,
+        "session",
+        &[
+            transcript_user("No, that's wrong; use the other approach."),
+            transcript_assistant("Understood, switching to the other approach."),
+        ],
+    );
+    let config_path = write_config_maybe_transcripts(
+        None,
+        Some(&transcripts),
+        &disorder,
+        &database_url,
+        server.url(),
+    );
+
+    let runtime = Runtime::new(load_config(&config_path)).expect("runtime");
+    let handle = runtime.start(Shutdown::default()).expect("start");
+    assert!(matches!(
+        handle.prepared().outcomes.as_slice(),
+        [SourceOutcome::Transcripts {
+            files: 1,
+            windows_retained: 1,
+            ..
+        }]
+    ));
+    assert_eq!(handle.bank_ids(), ["example-transcripts"]);
+    handle.drain(Duration::from_secs(30)).expect("drain");
+    assert_eq!(transcript_bank_posts(&server), 1);
+    assert!(count_jobs(&mut client, "succeeded") >= 1);
+}
+
+#[test]
+fn missing_transcript_root_is_skipped_without_tombstoning() {
+    let Some((database_url, mut client)) = setup() else {
+        return;
+    };
+    let server = TestServer::start(200, Duration::ZERO);
+    let transcripts = temp_dir("missing-transcripts");
+    let disorder = temp_dir("missing-transcripts-config");
+    write_transcript(
+        &transcripts,
+        "session",
+        &[transcript_user("No, that's wrong; use the other approach.")],
+    );
+    let config_path = write_config_maybe_transcripts(
+        None,
+        Some(&transcripts),
+        &disorder,
+        &database_url,
+        server.url(),
+    );
+    run_and_drain(load_config(&config_path));
+    let posts = transcript_bank_posts(&server);
+    assert_eq!(posts, 1);
+    let active: i64 = client
+        .query_one(
+            "SELECT count(*) FROM engram_ingest.chunks WHERE state = 'active'",
+            &[],
+        )
+        .expect("chunks")
+        .get(0);
+    assert_eq!(active, 1);
+
+    std::fs::remove_dir_all(transcripts.path()).expect("remove transcript root");
+    let runtime = Runtime::new(load_config(&config_path)).expect("runtime");
+    let handle = runtime.start(Shutdown::default()).expect("start");
+    assert!(matches!(
+        handle.prepared().outcomes.as_slice(),
+        [SourceOutcome::Skipped { .. }]
+    ));
+    handle.drain(Duration::from_secs(10)).expect("drain");
+    assert_eq!(transcript_bank_posts(&server), posts, "no delete may fire");
+    let active: i64 = client
+        .query_one(
+            "SELECT count(*) FROM engram_ingest.chunks WHERE state = 'active'",
+            &[],
+        )
+        .expect("chunks")
+        .get(0);
+    assert_eq!(active, 1, "the manifest must survive a missing root");
+}
+
+#[test]
+fn appended_transcript_messages_ingest_only_new_windows() {
+    let Some((database_url, _client)) = setup() else {
+        return;
+    };
+    let server = TestServer::start(200, Duration::ZERO);
+    let transcripts = temp_dir("append-transcripts");
+    let disorder = temp_dir("append-config");
+    write_transcript(
+        &transcripts,
+        "session",
+        &[
+            transcript_assistant("I will use the first approach."),
+            transcript_user("No, that's wrong; use the other approach."),
+        ],
+    );
+    let config_path = write_config_maybe_transcripts(
+        None,
+        Some(&transcripts),
+        &disorder,
+        &database_url,
+        server.url(),
+    );
+    run_and_drain(load_config(&config_path));
+    assert_eq!(transcript_bank_posts(&server), 1);
+
+    write_transcript(
+        &transcripts,
+        "session",
+        &[
+            transcript_assistant("I will use the first approach."),
+            transcript_user("No, that's wrong; use the other approach."),
+            transcript_assistant("Understood, switching to the other approach."),
+            transcript_user("Don't do that; always run the tests before committing."),
+            transcript_assistant("Understood, tests first."),
+        ],
+    );
+    run_and_drain(load_config(&config_path));
+    assert_eq!(
+        transcript_bank_posts(&server),
+        2,
+        "only the newly appended signal may be retained"
+    );
+}
+
+#[test]
+fn prefix_typo_does_not_mass_tombstone() {
+    let Some((database_url, mut client)) = setup() else {
+        return;
+    };
+    let server = TestServer::start(200, Duration::ZERO);
+    let transcripts = temp_dir("typo-transcripts");
+    let disorder = temp_dir("typo-config");
+    write_transcript(
+        &transcripts,
+        "session",
+        &[transcript_user("No, that's wrong; use the other approach.")],
+    );
+    let config_path = write_config_maybe_transcripts(
+        None,
+        Some(&transcripts),
+        &disorder,
+        &database_url,
+        server.url(),
+    );
+    run_and_drain(load_config(&config_path));
+    let posts = transcript_bank_posts(&server);
+    assert_eq!(posts, 1);
+    let active: i64 = client
+        .query_one(
+            "SELECT count(*) FROM engram_ingest.chunks WHERE state = 'active'",
+            &[],
+        )
+        .expect("chunks")
+        .get(0);
+    assert_eq!(active, 1);
+
+    // Rewrite the config with a prefix that matches nothing: the root still
+    // exists and discovery is complete, so the guard must fire instead of
+    // tombstoning every active window.
+    let typo_path = disorder.join("typo.toml");
+    std::fs::write(
+        &typo_path,
+        format!(
+            r#"
+[defaults]
+hindsight_url = "{}"
+pg_dsn = "{}"
+scan_interval_seconds = 1
+concurrency = 1
+
+[projects.example]
+transcripts = true
+transcript_bank = "example-transcripts"
+workspace_prefixes = ["workspace-typo-"]
+
+[projects.example.paths]
+transcripts_dir = "{}"
+"#,
+            toml_escape(server.url()),
+            toml_escape(&database_url),
+            toml_escape(&transcripts.to_string_lossy())
+        ),
+    )
+    .expect("typo config");
+
+    let runtime = Runtime::new(load_config(&typo_path)).expect("runtime");
+    let handle = runtime.start(Shutdown::default()).expect("start");
+    assert!(matches!(
+        handle.prepared().outcomes.as_slice(),
+        [SourceOutcome::Guarded { .. }]
+    ));
+    handle.drain(Duration::from_secs(10)).expect("drain");
+    assert_eq!(transcript_bank_posts(&server), posts, "no delete may fire");
+    let active: i64 = client
+        .query_one(
+            "SELECT count(*) FROM engram_ingest.chunks WHERE state = 'active'",
+            &[],
+        )
+        .expect("chunks")
+        .get(0);
+    assert_eq!(active, 1, "the guard must keep every window");
+
+    // The explicit opt-in treats the empty discovery as a real deletion.
+    let config = load_config(&typo_path).with_allow_empty_root(true);
+    let handle = Runtime::new(config)
+        .expect("runtime")
+        .start(Shutdown::default())
+        .expect("start");
+    assert!(matches!(
+        handle.prepared().outcomes.as_slice(),
+        [SourceOutcome::Transcripts { .. }]
+    ));
+    handle.drain(Duration::from_secs(30)).expect("drain");
+    let requests = server.requests();
+    assert!(
+        methods(&requests).iter().any(|method| *method == "DELETE"),
+        "the opt-in must deliver the deletions: {requests:?}"
+    );
+    let active: i64 = client
+        .query_one(
+            "SELECT count(*) FROM engram_ingest.chunks WHERE state = 'active'",
+            &[],
+        )
+        .expect("chunks")
+        .get(0);
+    assert_eq!(active, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_transcript_root_is_skipped() {
+    let Some((database_url, _client)) = setup() else {
+        return;
+    };
+    let server = TestServer::start(200, Duration::ZERO);
+    let transcripts = temp_dir("unreadable-transcripts");
+    let disorder = temp_dir("unreadable-config");
+    write_transcript(
+        &transcripts,
+        "session",
+        &[transcript_user("No, that's wrong; use the other approach.")],
+    );
+    let config_path = write_config_maybe_transcripts(
+        None,
+        Some(&transcripts),
+        &disorder,
+        &database_url,
+        server.url(),
+    );
+
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(transcripts.path(), std::fs::Permissions::from_mode(0o000))
+        .expect("restrict root");
+    // A root user bypasses directory permissions; skip the assertion rather
+    // than report a false failure.
+    let restricted = std::fs::read_dir(transcripts.path()).is_err();
+    let result = std::panic::catch_unwind(|| {
+        let runtime = Runtime::new(load_config(&config_path)).expect("runtime");
+        let handle = runtime.start(Shutdown::default()).expect("start");
+        let skipped = matches!(
+            handle.prepared().outcomes.as_slice(),
+            [SourceOutcome::Skipped { reason, .. }] if reason.contains("aborted")
+        );
+        handle.drain(Duration::from_secs(10)).expect("drain");
+        skipped
+    });
+    std::fs::set_permissions(transcripts.path(), std::fs::Permissions::from_mode(0o755))
+        .expect("restore root");
+    assert!(
+        result.is_ok(),
+        "runtime must not panic on an unreadable root"
+    );
+    if restricted {
+        assert!(
+            result.unwrap(),
+            "an unreadable root must be reported as skipped, not fatal"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_once_fails_when_the_transcript_root_is_missing() {
+    let Some((database_url, _client)) = setup() else {
+        return;
+    };
+    let server = TestServer::start(200, Duration::ZERO);
+    let transcripts = temp_dir("cli-missing-transcripts");
+    let disorder = temp_dir("cli-missing-config");
+    write_transcript(
+        &transcripts,
+        "session",
+        &[transcript_user("No, that's wrong; use the other approach.")],
+    );
+    let config_path = write_config_maybe_transcripts(
+        None,
+        Some(&transcripts),
+        &disorder,
+        &database_url,
+        server.url(),
+    );
+    run_and_drain(load_config(&config_path));
+
+    std::fs::remove_dir_all(transcripts.path()).expect("remove transcript root");
+    let config = config_path.to_str().expect("config utf8");
+    let (status, _stdout, stderr) = run_cli(
+        &[
+            "run",
+            "--config",
+            config,
+            "--project",
+            "example",
+            "--once",
+            "--drain-timeout",
+            "30",
+        ],
+        Duration::from_secs(30),
+    );
+    assert!(
+        !status.success(),
+        "missing transcript root must fail --once"
+    );
+    assert!(stderr.contains("skipped"), "stderr: {stderr}");
 }
 
 #[cfg(unix)]

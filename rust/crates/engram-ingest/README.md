@@ -31,8 +31,9 @@ discussions/project boards).
   SHA-1 window ids, durable ack watermarks, append replay, truncation/rotation
   tolerance, and the existing ledger/worker path for retain and tombstones.
 - Runtime entrypoint: project config/source selection, deterministic docs scan,
-  startup and periodic scan → reconcile → apply, one shared Hindsight sink, the
-  worker supervisor, SIGINT/SIGTERM shutdown, and a `--once` drain mode.
+  startup and periodic scan → reconcile → apply for docs **and transcript
+  sources**, one shared Hindsight sink, the worker supervisor (docs and
+  transcript banks), SIGINT/SIGTERM shutdown, and a `--once` drain mode.
 
 ## Not in this slice
 
@@ -40,9 +41,11 @@ discussions/project boards).
   scan; event debounce/hints are a later ingestion slice.
 - PDF extraction. A `document_format = "pdf"` source is rejected at startup
   until the Rust extractor lands.
-- Transcript service wiring into `engram-ingest run`; the transcript source loop
-  is exposed as `transcript_ingest::ingest_transcript_source` for the service
-  switch slice.
+- LLM-backed contradiction resolution. The transcript path runs the
+  deterministic `RegexSignalDetector` and `RetainResolver` (retain/no-op) in
+  Shadow mode; the `ContradictionResolver`/`MemoryInvalidator` traits stay
+  injectable for a later classifier slice, and no external LLM calls or
+  dependencies are added.
 - Git sync and CocoIndex/Python removal.
 - Supervisor-level respawn/restart isolation. The runtime exposes per-slot health
   (`WorkerHandle::health`) and drains on shutdown; restart policy lands with the
@@ -356,6 +359,20 @@ root = "~/src/example"                           # ~ and $VARS expand; relative 
 docs_include = ["**/*.md"]
 docs_exclude = ["**/vendor/**"]
 document_format = "markdown"                     # "pdf" is rejected in this slice
+
+# Optional transcript ingestion (issue #254), parsed exactly like
+# src/engram/project_config.py: `transcripts` (legacy `transcript_enabled`)
+# enables it; `transcript_bank` (legacy `transcripts_bank`) is shape-checked
+# whenever set, even when disabled; the directory comes from
+# `paths.transcripts_dir` (`[defaults.paths]` provides a fallback), expanded
+# and resolved like a source root; `workspace_prefixes` selects the
+# `{prefix}*/agent-transcripts/**/*.jsonl` workspaces under it.
+transcripts = true
+transcript_bank = "example-transcripts"
+workspace_prefixes = ["Users-jgil-src-example-"]
+
+[projects.example.paths]
+transcripts_dir = "~/.cursor/projects"
 ```
 
 Start the resident loop (SIGINT/SIGTERM cancel it, then the worker drains and
@@ -389,6 +406,45 @@ cannot look like a clean backfill. A moved or renamed root is a new source
 identity (`project, tag, root`), so it starts a fresh ledger row and does
 **not** migrate the old documents; keep roots stable or run an explicit
 migration.
+
+### Transcript sources in the runtime (issue #254)
+
+A project with `transcripts = true` gets one transcript source with the fixed
+ledger tag `transcripts` and the identity `(project, "transcripts",
+paths.transcripts_dir)`; a project with no docs sources is valid as long as
+transcripts are configured. The startup and periodic scans run
+`ingest_transcript_source` after the docs sources with the deterministic
+defaults (`RegexSignalDetector`, `RetainResolver`, Shadow contradiction mode) —
+no LLM calls or dependencies. The transcript bank joins `bank_ids()`, so the
+same bank-scoped worker supervisor serves its retains and tombstones, and
+`--once` drains them with everything else.
+
+Transcript-specific runtime semantics:
+
+- A missing `paths.transcripts_dir` is `skipped` like a missing docs root:
+  resident mode logs and continues (Python's `transcript_main` warns and
+  returns); `--once` exits non-zero.
+- A transcript root that exists while discovery matches no files and the
+  manifest still has active documents is `guarded` exactly like an empty docs
+  root — a `workspace_prefixes` typo must not mass-tombstone retained windows.
+  `--allow-empty-root` opts into treating it as a real deletion.
+- `--once` also exits non-zero when a transcript file was skipped
+  (unreadable, invalid UTF-8, or over the 64 MiB read cap), so withheld data
+  cannot look like a clean backfill. `Deferred` (`StaleReconciliation` from a
+  concurrent runtime) and `Skipped`/`Guarded` follow the docs contract.
+- Two projects may share one `transcript_bank`, matching Python: window ids
+  are stem- and content-digest scoped, so a same-stem/same-text window in a
+  shared bank converges on identical content instead of corrupting state.
+  Same-project docs sources may not use the tag `transcripts` on the same
+  root (that would alias the ledger identity and flip `source_kind`).
+- The Python JSON watermark file (`transcript_watermarks`, default
+  `~/.engram/logs/cocoindex-transcript-watermarks.json`) is not migrated:
+  Postgres watermarks start empty and the first scan replays the same stable
+  window ids, which re-retains identical content and converges without
+  duplicates.
+- Transcript scans honor shutdown between sources but not inside one source's
+  discovery walk; the walk is bounded by the configured root and the 64 MiB
+  per-file read cap.
 
 `--once` waits for every pending job (including backoff) and every leased job
 (even one whose lease expired but recovery has not reached), then exits 0. It

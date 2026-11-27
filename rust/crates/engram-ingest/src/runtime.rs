@@ -18,6 +18,10 @@ use crate::store::{
     apply_reconciliation, connect, count_drain_jobs, load_manifest, migrate, upsert_source,
     ApplySummary, DrainCounts, RecoveryReport, StoreError,
 };
+use crate::transcript::{discover_transcripts, TranscriptError};
+use crate::transcript_ingest::{
+    ingest_transcript_source, TranscriptIngestError, TranscriptOptions, TranscriptSource,
+};
 use crate::worker::{
     BankConfig, Shutdown, SlotHealth, WorkerConfig, WorkerError, WorkerHandle,
     WorkerMetricsSnapshot, WorkerSupervisor,
@@ -80,6 +84,19 @@ pub enum SourceOutcome {
         root: String,
         reason: String,
     },
+    /// One transcript source pass: the deterministic detector found learning
+    /// windows and the ledger applied them for delivery (issue #254).
+    Transcripts {
+        project: String,
+        tag: String,
+        root: String,
+        files: usize,
+        windows_retained: usize,
+        windows_queued: usize,
+        windows_auto_resolved: usize,
+        files_skipped: usize,
+        transcripts_removed: usize,
+    },
 }
 
 impl SourceOutcome {
@@ -116,6 +133,21 @@ impl SourceOutcome {
                 reason,
                 ..
             } => format!("{project}/{tag}: guarded: {reason}"),
+            Self::Transcripts {
+                project,
+                tag,
+                files,
+                windows_retained,
+                windows_queued,
+                windows_auto_resolved,
+                files_skipped,
+                transcripts_removed,
+                ..
+            } => format!(
+                "{project}/{tag}: {files} transcript file(s), {windows_retained} windows retained \
+                 ({windows_queued} queued, {windows_auto_resolved} auto-resolved), \
+                 {files_skipped} file(s) skipped, {transcripts_removed} transcript(s) removed"
+            ),
         }
     }
 }
@@ -229,7 +261,138 @@ impl Runtime {
                 None => break,
             }
         }
+        for source in &self.config.transcripts {
+            if shutdown.is_some_and(Shutdown::is_cancelled) {
+                break;
+            }
+            match self.ingest_transcripts(client, source, shutdown)? {
+                Some(outcome) => outcomes.push(outcome),
+                None => break,
+            }
+        }
         Ok(outcomes)
+    }
+
+    /// One transcript source pass through the shared ledger (issue #254). The
+    /// deterministic `RegexSignalDetector` and `RetainResolver` defaults keep
+    /// this offline; retain/delete delivery stays with the bank-scoped worker
+    /// supervisor, which serves `source.bank_id` because the runtime config
+    /// includes transcript banks in `bank_ids()`.
+    fn ingest_transcripts(
+        &self,
+        client: &mut Client,
+        source: &TranscriptSource,
+        shutdown: Option<&Shutdown>,
+    ) -> Result<Option<SourceOutcome>, RuntimeError> {
+        let root = source.root.to_string_lossy().to_string();
+        // The discovery walk can be long; honor cancellation up front like the
+        // docs scanner does before its walk. The walk is bounded by the
+        // configured root and per-file read cap; there is no intra-source
+        // cancellation, which the README records as an accepted bound.
+        if shutdown.is_some_and(Shutdown::is_cancelled) {
+            return Ok(None);
+        }
+        // Pre-flight discovery: an existing root whose complete discovery
+        // matches no files while the manifest still has active documents is
+        // the transcript shape of an unmounted docs root (usually a
+        // workspace_prefixes typo). Guard it exactly like the docs scanner so
+        // the pass cannot mass-tombstone every retained window.
+        let discovery = match discover_transcripts(&source.root, &source.workspace_prefixes) {
+            Ok(discovery) => discovery,
+            Err(TranscriptError::MissingRoot(_)) => {
+                // Python's transcript_main warns and continues on a missing
+                // root; keep the existing manifest untouched.
+                return Ok(Some(SourceOutcome::Skipped {
+                    project: source.project.clone(),
+                    tag: source.tag.clone(),
+                    root,
+                    reason: "transcript root does not exist; leaving the existing manifest \
+                             untouched"
+                        .to_string(),
+                }));
+            }
+            Err(error) => {
+                return Ok(Some(SourceOutcome::Skipped {
+                    project: source.project.clone(),
+                    tag: source.tag.clone(),
+                    root,
+                    reason: format!(
+                        "transcript scan aborted to protect the manifest from a partial \
+                         snapshot: {error}"
+                    ),
+                }));
+            }
+        };
+        if discovery.files.is_empty() && discovery.complete {
+            let source_id = upsert_source(client, &source.record())?;
+            let manifest = load_manifest(client, source_id)?;
+            let active_documents = manifest
+                .documents
+                .values()
+                .filter(|document| document.state == crate::ledger::RecordState::Active)
+                .count();
+            if active_documents > 0 && !self.config.allow_empty_root {
+                return Ok(Some(SourceOutcome::Guarded {
+                    project: source.project.clone(),
+                    tag: source.tag.clone(),
+                    root,
+                    reason: format!(
+                        "discovery matched no transcript files while {active_documents} \
+                         document(s) are active; fix workspace_prefixes or pass \
+                         --allow-empty-root to treat this as a real deletion"
+                    ),
+                }));
+            }
+        }
+        let outcome = match ingest_transcript_source(
+            client,
+            source,
+            &TranscriptOptions::default(),
+            Utc::now(),
+        ) {
+            Ok(outcome) => outcome,
+            Err(TranscriptIngestError::Store(StoreError::StaleReconciliation)) => {
+                // Another runtime advanced this source's revision between the
+                // manifest load and the apply; the next scan replays the same
+                // stable windows. Same contract as the docs path.
+                return Ok(Some(SourceOutcome::Deferred {
+                    project: source.project.clone(),
+                    tag: source.tag.clone(),
+                    root,
+                    reason: "another apply advanced the source revision; retrying next scan"
+                        .to_string(),
+                }));
+            }
+            Err(TranscriptIngestError::Store(error)) => return Err(error.into()),
+            Err(TranscriptIngestError::Transcript(error)) => {
+                return Ok(Some(SourceOutcome::Skipped {
+                    project: source.project.clone(),
+                    tag: source.tag.clone(),
+                    root,
+                    reason: format!(
+                        "transcript scan aborted to protect the manifest from a partial \
+                         snapshot: {error}"
+                    ),
+                }));
+            }
+        };
+        let windows_retained = outcome.files.iter().map(|file| file.windows_retained).sum();
+        let files_skipped = outcome
+            .files
+            .iter()
+            .filter(|file| file.skipped.is_some())
+            .count();
+        Ok(Some(SourceOutcome::Transcripts {
+            project: source.project.clone(),
+            tag: source.tag.clone(),
+            root,
+            files: outcome.files.len(),
+            windows_retained,
+            windows_queued: outcome.windows_queued,
+            windows_auto_resolved: outcome.windows_auto_resolved,
+            files_skipped,
+            transcripts_removed: outcome.removed.len(),
+        }))
     }
 
     fn scan_source(
@@ -527,6 +690,25 @@ mod tests {
             reason: "empty".to_string(),
         };
         assert!(guarded.label().contains("guarded: empty"));
+        let transcripts = SourceOutcome::Transcripts {
+            project: "example".to_string(),
+            tag: "transcripts".to_string(),
+            root: "/tmp/transcripts".to_string(),
+            files: 3,
+            windows_retained: 5,
+            windows_queued: 1,
+            windows_auto_resolved: 2,
+            files_skipped: 1,
+            transcripts_removed: 4,
+        };
+        let label = transcripts.label();
+        assert!(label.contains("example/transcripts"), "{label}");
+        assert!(label.contains("3 transcript file(s)"), "{label}");
+        assert!(label.contains("5 windows retained"), "{label}");
+        assert!(label.contains("1 queued"), "{label}");
+        assert!(label.contains("2 auto-resolved"), "{label}");
+        assert!(label.contains("1 file(s) skipped"), "{label}");
+        assert!(label.contains("4 transcript(s) removed"), "{label}");
     }
 
     #[test]

@@ -142,7 +142,18 @@ Sink: Hindsight retain API.
 ### Transcripts
 
 - Opt-in only (`--apps transcripts`), never unattended.
+- Native runtime cutover (issue #254): `engram-ingest run` ingests transcript
+  sources whenever a project sets `transcripts = true`, which is the opt-in
+  gate — the same flag the Python flow required before selecting the app
+  explicitly. The original never-unattended rule existed because the flow
+  spent LLM tokens on contradiction classification; the native path runs the
+  deterministic regex detector and retain-only resolver offline, so a
+  configured project ingesting unattended no longer spends tokens. Projects
+  that do not set `transcripts = true` are untouched.
 - Watermark file stores `message_count` and `last_processed` per transcript.
+  The native runtime does not read or migrate this file: Postgres watermarks
+  (migration 0007) start empty and stable window ids make first-scan replay
+  converge without duplicates.
 - Learning windows contain up to 5 filtered entries: the signal plus two
   parsed messages before and after (empty/boilerplate messages are dropped, so
   the raw span can be larger); window ID is

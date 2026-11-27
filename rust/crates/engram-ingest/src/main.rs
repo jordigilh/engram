@@ -115,10 +115,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         project,
                         tag,
                         files_skipped,
+                        discovery_incomplete,
                         ..
-                    } if *files_skipped > 0 => Some(format!(
-                        "{project}/{tag} ({files_skipped} transcript file(s) skipped)"
-                    )),
+                    } if *files_skipped > 0 || *discovery_incomplete => {
+                        let mut reasons = Vec::new();
+                        if *files_skipped > 0 {
+                            reasons.push(format!("{files_skipped} transcript file(s) skipped"));
+                        }
+                        if *discovery_incomplete {
+                            reasons.push("transcript discovery incomplete".to_string());
+                        }
+                        Some(format!("{project}/{tag} ({})", reasons.join("; ")))
+                    }
                     _ => None,
                 })
                 .collect();

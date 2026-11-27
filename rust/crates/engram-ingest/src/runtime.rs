@@ -100,6 +100,13 @@ pub enum SourceOutcome {
         windows_queued: usize,
         windows_auto_resolved: usize,
         files_skipped: usize,
+        /// `path: reason` for each skipped file, in scan order.
+        skipped_files: Vec<String>,
+        /// True when the discovery walk could not inspect some entries.
+        /// Removals are suppressed for that pass, but transcripts in the
+        /// unreadable subtree are missing from it, so `--once` reports the
+        /// source as incomplete.
+        discovery_incomplete: bool,
         transcripts_removed: usize,
     },
 }
@@ -147,14 +154,34 @@ impl SourceOutcome {
                 windows_queued,
                 windows_auto_resolved,
                 files_skipped,
+                skipped_files,
+                discovery_incomplete,
                 transcripts_removed,
                 ..
-            } => format!(
-                "{project}/{tag}: {files} transcript file(s), {windows_retained} windows retained \
-                 ({windows_conflicted} conflicted, {windows_queued} queued, \
-                 {windows_auto_resolved} auto-resolved), {files_skipped} file(s) skipped, \
-                 {transcripts_removed} transcript(s) removed"
-            ),
+            } => {
+                let mut label = format!(
+                    "{project}/{tag}: {files} transcript file(s), {windows_retained} windows \
+                     retained ({windows_conflicted} conflicted, {windows_queued} queued, \
+                     {windows_auto_resolved} auto-resolved), {files_skipped} file(s) skipped, \
+                     {transcripts_removed} transcript(s) removed"
+                );
+                if *discovery_incomplete {
+                    label.push_str("; discovery incomplete (some entries were unreadable)");
+                }
+                // Keep the per-file detail bounded; the count above carries
+                // the full tally.
+                for detail in skipped_files.iter().take(5) {
+                    label.push_str("; skipped ");
+                    label.push_str(detail);
+                }
+                if skipped_files.len() > 5 {
+                    label.push_str(&format!(
+                        "; … and {} more skipped file(s)",
+                        skipped_files.len() - 5
+                    ));
+                }
+                label
+            }
         }
     }
 }
@@ -326,7 +353,8 @@ impl Runtime {
         // exactly like the docs scanner so the pass cannot mass-tombstone
         // every retained window. The same discovery snapshot is applied
         // below, so the guard decision and the plan cannot diverge.
-        if discovery.files.is_empty() && discovery.complete {
+        let discovery_complete = discovery.complete;
+        if discovery.files.is_empty() && discovery_complete {
             let source_id = upsert_source(client, &source.record())?;
             let manifest = load_manifest(client, source_id)?;
             let active_documents = manifest
@@ -386,11 +414,16 @@ impl Runtime {
             .iter()
             .map(|file| file.windows_conflicted)
             .sum();
-        let files_skipped = outcome
+        let skipped_files: Vec<String> = outcome
             .files
             .iter()
-            .filter(|file| file.skipped.is_some())
-            .count();
+            .filter_map(|file| {
+                file.skipped
+                    .as_ref()
+                    .map(|reason| format!("{}: {reason}", file.relative_path))
+            })
+            .collect();
+        let files_skipped = skipped_files.len();
         Ok(Some(SourceOutcome::Transcripts {
             project: source.project.clone(),
             tag: source.tag.clone(),
@@ -401,6 +434,8 @@ impl Runtime {
             windows_queued: outcome.windows_queued,
             windows_auto_resolved: outcome.windows_auto_resolved,
             files_skipped,
+            skipped_files,
+            discovery_incomplete: !discovery_complete,
             transcripts_removed: outcome.removed.len(),
         }))
     }
@@ -710,6 +745,10 @@ mod tests {
             windows_queued: 1,
             windows_auto_resolved: 2,
             files_skipped: 1,
+            skipped_files: vec![
+                "workspace-demo/agent-transcripts/corrupt.jsonl: not UTF-8".to_string()
+            ],
+            discovery_incomplete: false,
             transcripts_removed: 4,
         };
         let label = transcripts.label();
@@ -720,7 +759,38 @@ mod tests {
         assert!(label.contains("1 queued"), "{label}");
         assert!(label.contains("2 auto-resolved"), "{label}");
         assert!(label.contains("1 file(s) skipped"), "{label}");
+        assert!(
+            label.contains("skipped workspace-demo/agent-transcripts/corrupt.jsonl"),
+            "{label}"
+        );
         assert!(label.contains("4 transcript(s) removed"), "{label}");
+
+        let incomplete = SourceOutcome::Transcripts {
+            project: "example".to_string(),
+            tag: "transcripts".to_string(),
+            root: "/tmp/transcripts".to_string(),
+            files: 3,
+            windows_retained: 5,
+            windows_conflicted: 1,
+            windows_queued: 1,
+            windows_auto_resolved: 2,
+            files_skipped: 7,
+            skipped_files: (0..7)
+                .map(|index| format!("workspace-demo/agent-transcripts/{index}.jsonl: reason"))
+                .collect(),
+            discovery_incomplete: true,
+            transcripts_removed: 4,
+        };
+        let label = incomplete.label();
+        assert!(
+            label.contains("discovery incomplete (some entries were unreadable)"),
+            "{label}"
+        );
+        assert!(
+            label.contains("skipped workspace-demo/agent-transcripts/0.jsonl"),
+            "{label}"
+        );
+        assert!(label.contains("… and 2 more skipped file(s)"), "{label}");
     }
 
     #[test]

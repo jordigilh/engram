@@ -353,26 +353,28 @@ allow_empty_root = false                         # true opts into deleting on an
 [projects.example]
 docs_bank = "example-docs"                       # or a unique banks entry ending -docs
 
-[[projects.example.sources]]
-tag = "example"
-root = "~/src/example"                           # ~ and $VARS expand; relative to this file
-docs_include = ["**/*.md"]
-docs_exclude = ["**/vendor/**"]
-document_format = "markdown"                     # "pdf" is rejected in this slice
-
 # Optional transcript ingestion (issue #254), parsed exactly like
 # src/engram/project_config.py: `transcripts` (legacy `transcript_enabled`)
 # enables it; `transcript_bank` (legacy `transcripts_bank`) is shape-checked
 # whenever set, even when disabled; the directory comes from
 # `paths.transcripts_dir` (`[defaults.paths]` provides a fallback), expanded
 # and resolved like a source root; `workspace_prefixes` selects the
-# `{prefix}*/agent-transcripts/**/*.jsonl` workspaces under it.
+# `{prefix}*/agent-transcripts/**/*.jsonl` workspaces under it. These keys
+# must stay in the [projects.example] table, before any
+# [[projects.example.sources]] entry.
 transcripts = true
 transcript_bank = "example-transcripts"
 workspace_prefixes = ["Users-jgil-src-example-"]
 
 [projects.example.paths]
 transcripts_dir = "~/.cursor/projects"
+
+[[projects.example.sources]]
+tag = "example"
+root = "~/src/example"                           # ~ and $VARS expand; relative to this file
+docs_include = ["**/*.md"]
+docs_exclude = ["**/vendor/**"]
+document_format = "markdown"                     # "pdf" is rejected in this slice
 ```
 
 Start the resident loop (SIGINT/SIGTERM cancel it, then the worker drains and
@@ -432,12 +434,16 @@ Transcript-specific runtime semantics:
   the applied plan evaluate the same discovery snapshot.
 - `--once` also exits non-zero when a transcript file was skipped
   (unreadable, invalid UTF-8, or over the 64 MiB read cap), so withheld data
-  cannot look like a clean backfill. Windows withheld by a cross-path
-  ownership conflict are reported in the outcome label as `conflicted`; the
-  owning path retains that content, so conflicts are an observability signal
-  that self-heals, not data loss, and do not fail `--once`.
-  `Deferred` (`StaleReconciliation` from a concurrent runtime) and
-  `Skipped`/`Guarded` follow the docs contract.
+  cannot look like a clean backfill; the startup label names each skipped
+  file and reason (bounded to five, the count carries the full tally). An
+  incomplete discovery walk (an unreadable nested directory or entry)
+  likewise fails `--once` — removals are suppressed for that pass, but the
+  transcripts in the unreadable subtree are missing from it. Windows
+  withheld by a cross-path ownership conflict are reported in the outcome
+  label as `conflicted`; the owning path retains that content, so conflicts
+  are an observability signal that self-heals, not data loss, and do not
+  fail `--once`. `Deferred` (`StaleReconciliation` from a concurrent
+  runtime) and `Skipped`/`Guarded` follow the docs contract.
 - Two projects may share one `transcript_bank`, matching Python: window ids
   are stem- and content-digest scoped, so a same-stem/same-text window in a
   shared bank converges on identical content instead of corrupting state.

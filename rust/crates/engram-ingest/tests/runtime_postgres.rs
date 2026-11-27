@@ -952,8 +952,83 @@ fn cli_once_fails_when_a_transcript_file_is_skipped() {
         stderr.contains("transcript file(s) skipped"),
         "stderr: {stderr}"
     );
+    // The startup label names the skipped file.
+    assert!(stderr.contains("corrupt.jsonl"), "stderr: {stderr}");
     // The readable file's window was still delivered.
     assert_eq!(transcript_bank_posts(&server), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn incomplete_discovery_fails_once_but_keeps_the_manifest() {
+    let Some((database_url, mut client)) = setup() else {
+        return;
+    };
+    let server = TestServer::start(200, Duration::ZERO);
+    let transcripts = temp_dir("incomplete-transcripts");
+    let disorder = temp_dir("incomplete-config");
+    write_transcript(
+        &transcripts,
+        "session",
+        &[transcript_user("No, that's wrong; use the other approach.")],
+    );
+    // A locked nested directory makes discovery incomplete: the walk cannot
+    // inspect it, so removals are suppressed and its transcripts are missing
+    // from the pass without a per-file skip record.
+    let locked = transcripts
+        .join("workspace-demo")
+        .join("agent-transcripts")
+        .join("locked");
+    std::fs::create_dir_all(&locked).expect("locked dir");
+    std::fs::write(locked.join("hidden.jsonl"), "{}\n").expect("hidden transcript");
+    let config_path = write_config_maybe_transcripts(
+        None,
+        Some(&transcripts),
+        &disorder,
+        &database_url,
+        server.url(),
+    );
+
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
+        .expect("lock directory");
+    // A root user bypasses directory permissions; skip the assertions rather
+    // than report a false failure.
+    let restricted = std::fs::read_dir(&locked).is_err();
+    let config = config_path.to_str().expect("config utf8");
+    let (status, _stdout, stderr) = run_cli(
+        &[
+            "run",
+            "--config",
+            config,
+            "--project",
+            "example",
+            "--once",
+            "--drain-timeout",
+            "30",
+        ],
+        Duration::from_secs(30),
+    );
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
+        .expect("unlock directory");
+    // The readable window is delivered either way.
+    assert_eq!(transcript_bank_posts(&server), 1);
+    if restricted {
+        assert!(
+            !status.success(),
+            "an incomplete discovery must fail --once, stderr: {stderr}"
+        );
+        assert!(stderr.contains("discovery incomplete"), "stderr: {stderr}");
+        // No tombstone may have fired for the unreadable subtree.
+        let active: i64 = client
+            .query_one(
+                "SELECT count(*) FROM engram_ingest.chunks WHERE state = 'active'",
+                &[],
+            )
+            .expect("chunks")
+            .get(0);
+        assert_eq!(active, 1);
+    }
 }
 
 #[cfg(unix)]

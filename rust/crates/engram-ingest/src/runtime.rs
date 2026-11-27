@@ -18,6 +18,11 @@ use crate::store::{
     apply_reconciliation, connect, count_drain_jobs, load_manifest, migrate, upsert_source,
     ApplySummary, DrainCounts, RecoveryReport, StoreError,
 };
+use crate::transcript::{discover_transcripts, TranscriptError};
+use crate::transcript_ingest::{
+    ingest_transcript_source_with_discovery, TranscriptIngestError, TranscriptOptions,
+    TranscriptSource,
+};
 use crate::worker::{
     BankConfig, Shutdown, SlotHealth, WorkerConfig, WorkerError, WorkerHandle,
     WorkerMetricsSnapshot, WorkerSupervisor,
@@ -80,6 +85,30 @@ pub enum SourceOutcome {
         root: String,
         reason: String,
     },
+    /// One transcript source pass: the deterministic detector found learning
+    /// windows and the ledger applied them for delivery (issue #254).
+    Transcripts {
+        project: String,
+        tag: String,
+        root: String,
+        files: usize,
+        windows_retained: usize,
+        /// Windows withheld this scan because another path already owns their
+        /// document id. The owning path retains the content, so this is an
+        /// observability signal, not data loss.
+        windows_conflicted: usize,
+        windows_queued: usize,
+        windows_auto_resolved: usize,
+        files_skipped: usize,
+        /// `path: reason` for each skipped file, in scan order.
+        skipped_files: Vec<String>,
+        /// True when the discovery walk could not inspect some entries.
+        /// Removals are suppressed for that pass, but transcripts in the
+        /// unreadable subtree are missing from it, so `--once` reports the
+        /// source as incomplete.
+        discovery_incomplete: bool,
+        transcripts_removed: usize,
+    },
 }
 
 impl SourceOutcome {
@@ -116,6 +145,43 @@ impl SourceOutcome {
                 reason,
                 ..
             } => format!("{project}/{tag}: guarded: {reason}"),
+            Self::Transcripts {
+                project,
+                tag,
+                files,
+                windows_retained,
+                windows_conflicted,
+                windows_queued,
+                windows_auto_resolved,
+                files_skipped,
+                skipped_files,
+                discovery_incomplete,
+                transcripts_removed,
+                ..
+            } => {
+                let mut label = format!(
+                    "{project}/{tag}: {files} transcript file(s), {windows_retained} windows \
+                     retained ({windows_conflicted} conflicted, {windows_queued} queued, \
+                     {windows_auto_resolved} auto-resolved), {files_skipped} file(s) skipped, \
+                     {transcripts_removed} transcript(s) removed"
+                );
+                if *discovery_incomplete {
+                    label.push_str("; discovery incomplete (some entries were unreadable)");
+                }
+                // Keep the per-file detail bounded; the count above carries
+                // the full tally.
+                for detail in skipped_files.iter().take(5) {
+                    label.push_str("; skipped ");
+                    label.push_str(detail);
+                }
+                if skipped_files.len() > 5 {
+                    label.push_str(&format!(
+                        "; … and {} more skipped file(s)",
+                        skipped_files.len() - 5
+                    ));
+                }
+                label
+            }
         }
     }
 }
@@ -229,7 +295,149 @@ impl Runtime {
                 None => break,
             }
         }
+        for source in &self.config.transcripts {
+            if shutdown.is_some_and(Shutdown::is_cancelled) {
+                break;
+            }
+            match self.ingest_transcripts(client, source)? {
+                Some(outcome) => outcomes.push(outcome),
+                None => break,
+            }
+        }
         Ok(outcomes)
+    }
+
+    /// One transcript source pass through the shared ledger (issue #254). The
+    /// deterministic `RegexSignalDetector` and `RetainResolver` defaults keep
+    /// this offline; retain/delete delivery stays with the bank-scoped worker
+    /// supervisor, which serves `source.bank_id` because the runtime config
+    /// includes transcript banks in `bank_ids()`. The discovery walk is
+    /// bounded by the configured root and the per-file read cap; there is no
+    /// intra-source cancellation, which the README records as an accepted
+    /// bound.
+    fn ingest_transcripts(
+        &self,
+        client: &mut Client,
+        source: &TranscriptSource,
+    ) -> Result<Option<SourceOutcome>, RuntimeError> {
+        let root = source.root.to_string_lossy().to_string();
+        let discovery = match discover_transcripts(&source.root, &source.workspace_prefixes) {
+            Ok(discovery) => discovery,
+            Err(TranscriptError::MissingRoot(_)) => {
+                // Python's transcript_main warns and continues on a missing
+                // root; keep the existing manifest untouched.
+                return Ok(Some(SourceOutcome::Skipped {
+                    project: source.project.clone(),
+                    tag: source.tag.clone(),
+                    root,
+                    reason: "transcript root does not exist; leaving the existing manifest \
+                             untouched"
+                        .to_string(),
+                }));
+            }
+            Err(error) => {
+                return Ok(Some(SourceOutcome::Skipped {
+                    project: source.project.clone(),
+                    tag: source.tag.clone(),
+                    root,
+                    reason: format!(
+                        "transcript scan aborted to protect the manifest from a partial \
+                         snapshot: {error}"
+                    ),
+                }));
+            }
+        };
+        // An existing root whose complete discovery matches no files while the
+        // manifest still has active documents is the transcript shape of an
+        // unmounted docs root (usually a workspace_prefixes typo). Guard it
+        // exactly like the docs scanner so the pass cannot mass-tombstone
+        // every retained window. The same discovery snapshot is applied
+        // below, so the guard decision and the plan cannot diverge.
+        let discovery_complete = discovery.complete;
+        if discovery.files.is_empty() && discovery_complete {
+            let source_id = upsert_source(client, &source.record())?;
+            let manifest = load_manifest(client, source_id)?;
+            let active_documents = manifest
+                .documents
+                .values()
+                .filter(|document| document.state == crate::ledger::RecordState::Active)
+                .count();
+            if active_documents > 0 && !self.config.allow_empty_root {
+                return Ok(Some(SourceOutcome::Guarded {
+                    project: source.project.clone(),
+                    tag: source.tag.clone(),
+                    root,
+                    reason: format!(
+                        "discovery matched no transcript files while {active_documents} \
+                         document(s) are active; fix workspace_prefixes or pass \
+                         --allow-empty-root to treat this as a real deletion"
+                    ),
+                }));
+            }
+        }
+        let outcome = match ingest_transcript_source_with_discovery(
+            client,
+            source,
+            discovery,
+            &TranscriptOptions::default(),
+            Utc::now(),
+        ) {
+            Ok(outcome) => outcome,
+            Err(TranscriptIngestError::Store(StoreError::StaleReconciliation)) => {
+                // Another runtime advanced this source's revision between the
+                // manifest load and the apply; the next scan replays the same
+                // stable windows. Same contract as the docs path.
+                return Ok(Some(SourceOutcome::Deferred {
+                    project: source.project.clone(),
+                    tag: source.tag.clone(),
+                    root,
+                    reason: "another apply advanced the source revision; retrying next scan"
+                        .to_string(),
+                }));
+            }
+            Err(TranscriptIngestError::Store(error)) => return Err(error.into()),
+            Err(TranscriptIngestError::Transcript(error)) => {
+                return Ok(Some(SourceOutcome::Skipped {
+                    project: source.project.clone(),
+                    tag: source.tag.clone(),
+                    root,
+                    reason: format!(
+                        "transcript scan aborted to protect the manifest from a partial \
+                         snapshot: {error}"
+                    ),
+                }));
+            }
+        };
+        let windows_retained = outcome.files.iter().map(|file| file.windows_retained).sum();
+        let windows_conflicted = outcome
+            .files
+            .iter()
+            .map(|file| file.windows_conflicted)
+            .sum();
+        let skipped_files: Vec<String> = outcome
+            .files
+            .iter()
+            .filter_map(|file| {
+                file.skipped
+                    .as_ref()
+                    .map(|reason| format!("{}: {reason}", file.relative_path))
+            })
+            .collect();
+        let files_skipped = skipped_files.len();
+        Ok(Some(SourceOutcome::Transcripts {
+            project: source.project.clone(),
+            tag: source.tag.clone(),
+            root,
+            files: outcome.files.len(),
+            windows_retained,
+            windows_conflicted,
+            windows_queued: outcome.windows_queued,
+            windows_auto_resolved: outcome.windows_auto_resolved,
+            files_skipped,
+            skipped_files,
+            discovery_incomplete: !discovery_complete,
+            transcripts_removed: outcome.removed.len(),
+        }))
     }
 
     fn scan_source(
@@ -527,6 +735,62 @@ mod tests {
             reason: "empty".to_string(),
         };
         assert!(guarded.label().contains("guarded: empty"));
+        let transcripts = SourceOutcome::Transcripts {
+            project: "example".to_string(),
+            tag: "transcripts".to_string(),
+            root: "/tmp/transcripts".to_string(),
+            files: 3,
+            windows_retained: 5,
+            windows_conflicted: 1,
+            windows_queued: 1,
+            windows_auto_resolved: 2,
+            files_skipped: 1,
+            skipped_files: vec![
+                "workspace-demo/agent-transcripts/corrupt.jsonl: not UTF-8".to_string()
+            ],
+            discovery_incomplete: false,
+            transcripts_removed: 4,
+        };
+        let label = transcripts.label();
+        assert!(label.contains("example/transcripts"), "{label}");
+        assert!(label.contains("3 transcript file(s)"), "{label}");
+        assert!(label.contains("5 windows retained"), "{label}");
+        assert!(label.contains("1 conflicted"), "{label}");
+        assert!(label.contains("1 queued"), "{label}");
+        assert!(label.contains("2 auto-resolved"), "{label}");
+        assert!(label.contains("1 file(s) skipped"), "{label}");
+        assert!(
+            label.contains("skipped workspace-demo/agent-transcripts/corrupt.jsonl"),
+            "{label}"
+        );
+        assert!(label.contains("4 transcript(s) removed"), "{label}");
+
+        let incomplete = SourceOutcome::Transcripts {
+            project: "example".to_string(),
+            tag: "transcripts".to_string(),
+            root: "/tmp/transcripts".to_string(),
+            files: 3,
+            windows_retained: 5,
+            windows_conflicted: 1,
+            windows_queued: 1,
+            windows_auto_resolved: 2,
+            files_skipped: 7,
+            skipped_files: (0..7)
+                .map(|index| format!("workspace-demo/agent-transcripts/{index}.jsonl: reason"))
+                .collect(),
+            discovery_incomplete: true,
+            transcripts_removed: 4,
+        };
+        let label = incomplete.label();
+        assert!(
+            label.contains("discovery incomplete (some entries were unreadable)"),
+            "{label}"
+        );
+        assert!(
+            label.contains("skipped workspace-demo/agent-transcripts/0.jsonl"),
+            "{label}"
+        );
+        assert!(label.contains("… and 2 more skipped file(s)"), "{label}");
     }
 
     #[test]

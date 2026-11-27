@@ -100,10 +100,10 @@ pub use transcript::{
     TranscriptError, TranscriptFileRef, MAX_TRANSCRIPT_BYTES, WINDOW_CONTEXT,
 };
 pub use transcript_ingest::{
-    ingest_transcript_source, ContradictionMode, ContradictionResolution, ContradictionResolver,
-    MemoryInvalidator, NoopInvalidator, ResolutionAction, RetainResolver, TranscriptFileOutcome,
-    TranscriptIngestError, TranscriptIngestOutcome, TranscriptOptions, TranscriptSource,
-    TRANSCRIPT_SOURCE_METADATA,
+    ingest_transcript_source, ingest_transcript_source_with_discovery, ContradictionMode,
+    ContradictionResolution, ContradictionResolver, MemoryInvalidator, NoopInvalidator,
+    ResolutionAction, RetainResolver, TranscriptFileOutcome, TranscriptIngestError,
+    TranscriptIngestOutcome, TranscriptOptions, TranscriptSource, TRANSCRIPT_SOURCE_METADATA,
 };
 pub use worker::{
     BackoffPolicy, BankConfig, Clock, JobDriver, Shutdown, SlotHealth, SlotState, WorkerConfig,

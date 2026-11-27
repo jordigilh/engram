@@ -1,20 +1,26 @@
-//! Deployment configuration for the native docs ingestion runtime (issue #242).
+//! Deployment configuration for the native docs ingestion runtime (issue #242,
+//! transcript wiring in issue #254).
 //!
 //! The runtime consumes the deployment-local `projects.toml` subset that the
 //! Python CocoIndex flow already uses: `[defaults]` plus
-//! `[projects.<name>]`/`[[projects.<name>.sources]]`. Only docs sources are
-//! loaded; code, issue, and transcript configuration belongs to other slices.
+//! `[projects.<name>]`/`[[projects.<name>.sources]]`. Docs sources and the
+//! per-project transcript settings are loaded; code and issue configuration
+//! belongs to other slices.
 //!
 //! Parsing mirrors `src/engram/project_config.py` where it affects persisted
 //! identity: environment overrides, `~`/environment expansion, roots resolved
 //! against the config file, effective branch-qualified source tags, the
-//! `-docs` bank fallback, and the source-tag/bank identifier shapes.
+//! `-docs` bank fallback, the transcript settings (`transcripts`,
+//! `transcript_bank`/`transcripts_bank`, `paths.transcripts_dir`,
+//! `workspace_prefixes`), and the source-tag/bank identifier shapes.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::Deserialize;
+
+use crate::transcript_ingest::TranscriptSource;
 
 pub const DEFAULT_HINDSIGHT_URL: &str = "http://localhost:8888";
 pub const DEFAULT_PG_DSN: &str = "postgresql://hindsight:hindsight@localhost:5432/hindsight";
@@ -66,6 +72,8 @@ pub struct RuntimeConfig {
     pub concurrency: usize,
     pub allow_empty_root: bool,
     pub sources: Vec<DocsSource>,
+    /// Enabled transcript sources, one per selected project (issue #254).
+    pub transcripts: Vec<TranscriptSource>,
 }
 
 impl RuntimeConfig {
@@ -103,6 +111,7 @@ impl RuntimeConfig {
         let env_hindsight = env("HINDSIGHT_URL").filter(|value| !value.trim().is_empty());
         let env_database = env("COCOINDEX_PG_URL").filter(|value| !value.trim().is_empty());
         let mut sources = Vec::new();
+        let mut transcripts = Vec::new();
         let mut hindsight_url: Option<String> = None;
         let mut database_url: Option<String> = None;
         let mut seen_projects = HashSet::new();
@@ -229,12 +238,32 @@ impl RuntimeConfig {
                     docs_exclude: source.docs_exclude.clone(),
                 });
             }
-            if project_sources.is_empty() {
+            let transcript = transcript_source(project, table, &document.defaults, base, env)?;
+            if let Some(transcript) = &transcript {
+                // The transcript source row is `(project, "transcripts", root)`;
+                // a docs source with the same tag and root would alias it in
+                // `upsert_source` and flip its source_kind.
+                if project_sources
+                    .iter()
+                    .any(|source| source.tag == transcript.tag && source.root == transcript.root)
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "project {project:?} has a docs source with tag {:?} on the same root as \
+                         paths.transcripts_dir; rename the docs source tag",
+                        transcript.tag
+                    )));
+                }
+            }
+            if project_sources.is_empty() && transcript.is_none() {
                 return Err(ConfigError::Invalid(format!(
-                    "project {project:?} has no docs sources with docs_include patterns"
+                    "project {project:?} has no docs sources with docs_include patterns and no \
+                     enabled transcript source"
                 )));
             }
             sources.extend(project_sources);
+            if let Some(transcript) = transcript {
+                transcripts.push(transcript);
+            }
         }
 
         let scan_interval_secs = document
@@ -264,6 +293,7 @@ impl RuntimeConfig {
             concurrency,
             allow_empty_root: document.defaults.allow_empty_root.unwrap_or(false),
             sources,
+            transcripts,
         })
     }
 
@@ -297,9 +327,14 @@ impl RuntimeConfig {
     /// Distinct bank ids in first-seen order for the worker supervisor.
     pub fn bank_ids(&self) -> Vec<String> {
         let mut banks = Vec::new();
-        for source in &self.sources {
-            if !banks.contains(&source.bank_id) {
-                banks.push(source.bank_id.clone());
+        for bank_id in self
+            .sources
+            .iter()
+            .map(|source| &source.bank_id)
+            .chain(self.transcripts.iter().map(|source| &source.bank_id))
+        {
+            if !banks.contains(bank_id) {
+                banks.push(bank_id.clone());
             }
         }
         banks
@@ -387,10 +422,125 @@ fn is_version_branch(branch: &str) -> bool {
             })
 }
 
+/// Parse one project's transcript settings, mirroring
+/// `project_config.py:764-777` on the `[defaults]`-merged settings table:
+/// `transcripts` (legacy `transcript_enabled`) enables the source;
+/// `transcript_bank` (legacy `transcripts_bank`) is shape-checked whenever it
+/// is set, even when transcripts are disabled; the directory comes from
+/// `paths.transcripts_dir` (project paths override `[defaults.paths]`) with
+/// `~`/environment expansion resolved against the config file.
+fn transcript_source(
+    project: &str,
+    table: &ProjectTable,
+    defaults: &DefaultsTable,
+    config_dir: &Path,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<Option<TranscriptSource>, ConfigError> {
+    let enabled = table
+        .transcripts
+        .or(defaults.transcripts)
+        .or(table.transcript_enabled)
+        .or(defaults.transcript_enabled)
+        .unwrap_or(false);
+    let bank = table
+        .transcript_bank
+        .clone()
+        .or(defaults.transcript_bank.clone())
+        .or_else(|| {
+            table
+                .transcripts_bank
+                .clone()
+                .or(defaults.transcripts_bank.clone())
+        })
+        .map(|bank| bank.trim().to_string());
+    let dir = merged_transcripts_dir(table, defaults);
+    if let Some(bank) = &bank {
+        validate_bank(bank, project, "transcript_bank")?;
+    }
+    if let Some(dir) = &dir {
+        // Python's settings.path validates the shape whenever the key exists,
+        // even when transcripts are disabled.
+        if dir.trim().is_empty() {
+            return Err(ConfigError::Invalid(format!(
+                "project {project:?} path 'transcripts_dir' must be a non-empty string"
+            )));
+        }
+    }
+    if !enabled {
+        return Ok(None);
+    }
+    let bank = bank.ok_or_else(|| {
+        ConfigError::Invalid(format!(
+            "project {project:?} transcripts requires transcript_bank and paths.transcripts_dir"
+        ))
+    })?;
+    let raw_dir = dir.map(|dir| dir.trim().to_string()).ok_or_else(|| {
+        ConfigError::Invalid(format!(
+            "project {project:?} transcripts requires transcript_bank and paths.transcripts_dir"
+        ))
+    })?;
+    let workspace_prefixes = table
+        .workspace_prefixes
+        .clone()
+        .or_else(|| defaults.workspace_prefixes.clone())
+        .unwrap_or_default();
+    if workspace_prefixes.is_empty() {
+        return Err(ConfigError::Invalid(format!(
+            "project {project:?} transcripts requires workspace_prefixes"
+        )));
+    }
+    Ok(Some(TranscriptSource {
+        project: project.to_string(),
+        tag: "transcripts".to_string(),
+        root: resolve_root(&raw_dir, config_dir, env)?,
+        bank_id: bank,
+        workspace_prefixes,
+    }))
+}
+
+/// Python's `strings()` on the `[defaults]`-merged table: a scalar is split on
+/// commas with blank parts dropped, and list entries are trimmed.
+fn merged_transcripts_dir(table: &ProjectTable, defaults: &DefaultsTable) -> Option<String> {
+    table
+        .paths
+        .get("transcripts_dir")
+        .or_else(|| defaults.paths.get("transcripts_dir"))
+        .map(|value| value.trim().to_string())
+}
+
+fn comma_one_or_many<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<StringOrVec>::deserialize(deserializer)?;
+    let values = match value {
+        None => return Ok(None),
+        Some(StringOrVec::One(scalar)) => scalar
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(str::to_string)
+            .collect(),
+        Some(StringOrVec::Many(values)) => {
+            let trimmed: Vec<String> = values
+                .into_iter()
+                .map(|value| value.trim().to_string())
+                .collect();
+            if trimmed.iter().any(|value| value.is_empty()) {
+                return Err(serde::de::Error::custom(
+                    "prefix arrays must contain non-empty strings",
+                ));
+            }
+            trimmed
+        }
+    };
+    Ok(Some(values))
+}
+
 fn resolve_docs_bank(project: &str, table: &ProjectTable) -> Result<String, ConfigError> {
     if let Some(explicit) = table.docs_bank.as_deref() {
         let explicit = explicit.trim();
-        validate_bank(explicit, project)?;
+        validate_bank(explicit, project, "docs_bank")?;
         return Ok(explicit.to_string());
     }
     let matches: Vec<&String> = table
@@ -403,7 +553,7 @@ fn resolve_docs_bank(project: &str, table: &ProjectTable) -> Result<String, Conf
             "project {project:?} has docs sources but no docs_bank and no banks entry ending in -docs"
         ))),
         [bank] => {
-            validate_bank(bank, project)?;
+            validate_bank(bank, project, "docs bank")?;
             Ok((*bank).clone())
         }
         _ => Err(ConfigError::Invalid(format!(
@@ -444,7 +594,7 @@ fn validate_source_tag(tag: &str, project: &str, index: usize) -> Result<(), Con
     Ok(())
 }
 
-fn validate_bank(bank: &str, project: &str) -> Result<(), ConfigError> {
+fn validate_bank(bank: &str, project: &str, label: &str) -> Result<(), ConfigError> {
     let mut characters = bank.chars();
     let valid_start = characters
         .next()
@@ -454,7 +604,7 @@ fn validate_bank(bank: &str, project: &str) -> Result<(), ConfigError> {
     let valid = !bank.is_empty() && bank.len() <= 128 && valid_start && valid_rest;
     if !valid {
         return Err(ConfigError::Invalid(format!(
-            "project {project:?} docs bank {bank:?} is not path-segment safe"
+            "project {project:?} {label} {bank:?} is not path-segment safe"
         )));
     }
     Ok(())
@@ -595,6 +745,18 @@ struct DefaultsTable {
     scan_interval_seconds: Option<u64>,
     concurrency: Option<usize>,
     allow_empty_root: Option<bool>,
+    #[serde(default)]
+    transcripts: Option<bool>,
+    #[serde(default)]
+    transcript_enabled: Option<bool>,
+    #[serde(default)]
+    transcript_bank: Option<String>,
+    #[serde(default)]
+    transcripts_bank: Option<String>,
+    #[serde(default, deserialize_with = "comma_one_or_many")]
+    workspace_prefixes: Option<Vec<String>>,
+    #[serde(default)]
+    paths: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -607,6 +769,18 @@ struct ProjectTable {
     pg_dsn: Option<String>,
     #[serde(default)]
     sources: Vec<SourceTable>,
+    #[serde(default)]
+    transcripts: Option<bool>,
+    #[serde(default)]
+    transcript_enabled: Option<bool>,
+    #[serde(default)]
+    transcript_bank: Option<String>,
+    #[serde(default)]
+    transcripts_bank: Option<String>,
+    #[serde(default, deserialize_with = "comma_one_or_many")]
+    workspace_prefixes: Option<Vec<String>>,
+    #[serde(default)]
+    paths: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1320,5 +1494,446 @@ docs_include = ["**/*.md"]
         std::fs::write(&bad, "not = [valid").expect("write");
         let error = RuntimeConfig::load(Some(&bad), &["example".to_string()]).expect_err("parse");
         assert!(matches!(error, ConfigError::Parse { .. }));
+    }
+
+    fn transcript_config(body: &str) -> String {
+        format!(
+            r#"
+[defaults]
+hindsight_url = "http://sink:8888"
+pg_dsn = "postgresql://db/engram"
+{body}"#
+        )
+    }
+
+    #[test]
+    fn loads_enabled_transcript_sources() {
+        let (dir, path) = write_config(&transcript_config(
+            r#"
+[projects.example]
+docs_bank = "example-docs"
+transcripts = true
+transcript_bank = "example-transcripts"
+workspace_prefixes = ["Users-jgil-example-"]
+
+[projects.example.paths]
+transcripts_dir = "transcripts-root"
+
+[[projects.example.sources]]
+tag = "repo"
+root = "checkout"
+docs_include = ["**/*.md"]
+"#,
+        ));
+        let config = load(&path, &["example"], &HashMap::new()).expect("load");
+        assert_eq!(config.sources.len(), 1);
+        assert_eq!(config.transcripts.len(), 1);
+        let transcript = &config.transcripts[0];
+        assert_eq!(transcript.project, "example");
+        assert_eq!(transcript.tag, "transcripts");
+        assert_eq!(transcript.root, dir.join("transcripts-root"));
+        assert_eq!(transcript.bank_id, "example-transcripts");
+        assert_eq!(
+            transcript.workspace_prefixes,
+            vec!["Users-jgil-example-".to_string()]
+        );
+        assert_eq!(
+            config.bank_ids(),
+            vec![
+                "example-docs".to_string(),
+                "example-transcripts".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn accepts_legacy_transcript_keys() {
+        let (_dir, path) = write_config(&transcript_config(
+            r#"
+[projects.example]
+transcript_enabled = true
+transcripts_bank = "example-transcripts"
+workspace_prefixes = "Users-jgil-example-"
+
+[projects.example.paths]
+transcripts_dir = "/tmp/transcripts"
+"#,
+        ));
+        let config = load(&path, &["example"], &HashMap::new()).expect("load");
+        assert_eq!(config.transcripts.len(), 1);
+        assert_eq!(config.transcripts[0].bank_id, "example-transcripts");
+        assert_eq!(
+            config.transcripts[0].workspace_prefixes,
+            vec!["Users-jgil-example-".to_string()]
+        );
+        assert!(config.sources.is_empty());
+        assert_eq!(config.bank_ids(), vec!["example-transcripts".to_string()]);
+    }
+
+    #[test]
+    fn project_paths_override_default_paths() {
+        let (_dir, project_wins) = write_config(&transcript_config(
+            r#"
+[defaults.paths]
+transcripts_dir = "/tmp/defaults-transcripts"
+
+[projects.example]
+transcripts = true
+transcript_bank = "example-transcripts"
+workspace_prefixes = ["Users-jgil-example-"]
+
+[projects.example.paths]
+transcripts_dir = "/tmp/project-transcripts"
+"#,
+        ));
+        let config = load(&project_wins, &["example"], &HashMap::new()).expect("load");
+        assert_eq!(
+            config.transcripts[0].root,
+            PathBuf::from("/tmp/project-transcripts")
+        );
+
+        let (_dir, defaults_used) = write_config(&transcript_config(
+            r#"
+[defaults.paths]
+transcripts_dir = "/tmp/defaults-transcripts"
+
+[projects.example]
+transcripts = true
+transcript_bank = "example-transcripts"
+workspace_prefixes = ["Users-jgil-example-"]
+"#,
+        ));
+        let config = load(&defaults_used, &["example"], &HashMap::new()).expect("load");
+        assert_eq!(
+            config.transcripts[0].root,
+            PathBuf::from("/tmp/defaults-transcripts")
+        );
+    }
+
+    #[test]
+    fn expands_tilde_and_variables_in_transcripts_dir() {
+        let (_dir, path) = write_config(&transcript_config(
+            r#"
+[projects.example]
+transcripts = true
+transcript_bank = "example-transcripts"
+workspace_prefixes = ["Users-jgil-example-"]
+
+[projects.example.paths]
+transcripts_dir = "$WORKSPACE/~/transcripts"
+"#,
+        ));
+        let env = env_map(&[("WORKSPACE", "/workspace")]);
+        let config = load(&path, &["example"], &env).expect("load");
+        assert_eq!(
+            config.transcripts[0].root,
+            PathBuf::from("/workspace/~/transcripts")
+        );
+
+        let (_dir, path) = write_config(&transcript_config(
+            r#"
+[projects.example]
+transcripts = true
+transcript_bank = "example-transcripts"
+workspace_prefixes = ["Users-jgil-example-"]
+
+[projects.example.paths]
+transcripts_dir = "~/transcripts"
+"#,
+        ));
+        let env = env_map(&[("HOME", "/home/operator")]);
+        let config = load(&path, &["example"], &env).expect("load");
+        assert_eq!(
+            config.transcripts[0].root,
+            PathBuf::from("/home/operator/transcripts")
+        );
+    }
+
+    #[test]
+    fn rejects_enabled_transcripts_missing_requirements() {
+        let (_dir, no_bank) = write_config(&transcript_config(
+            r#"
+[projects.example]
+docs_bank = "example-docs"
+transcripts = true
+
+[projects.example.paths]
+transcripts_dir = "/tmp/transcripts"
+
+[[projects.example.sources]]
+tag = "repo"
+root = "/tmp/repo"
+docs_include = ["**/*.md"]
+"#,
+        ));
+        let error = load(&no_bank, &["example"], &HashMap::new()).expect_err("no bank");
+        assert!(error.to_string().contains("requires transcript_bank"));
+
+        let (_dir, no_dir) = write_config(&transcript_config(
+            r#"
+[projects.example]
+docs_bank = "example-docs"
+transcripts = true
+transcript_bank = "example-transcripts"
+workspace_prefixes = ["Users-jgil-example-"]
+
+[[projects.example.sources]]
+tag = "repo"
+root = "/tmp/repo"
+docs_include = ["**/*.md"]
+"#,
+        ));
+        let error = load(&no_dir, &["example"], &HashMap::new()).expect_err("no dir");
+        assert!(error.to_string().contains("paths.transcripts_dir"));
+
+        let (_dir, no_prefixes) = write_config(&transcript_config(
+            r#"
+[projects.example]
+docs_bank = "example-docs"
+transcripts = true
+transcript_bank = "example-transcripts"
+
+[projects.example.paths]
+transcripts_dir = "/tmp/transcripts"
+"#,
+        ));
+        let error = load(&no_prefixes, &["example"], &HashMap::new()).expect_err("no prefixes");
+        assert!(error.to_string().contains("workspace_prefixes"));
+    }
+
+    #[test]
+    fn validates_transcript_bank_even_when_disabled() {
+        let (_dir, path) = write_config(&transcript_config(
+            r#"
+[projects.example]
+docs_bank = "example-docs"
+transcript_bank = "../escape"
+
+[[projects.example.sources]]
+tag = "repo"
+root = "/tmp/repo"
+docs_include = ["**/*.md"]
+"#,
+        ));
+        let error = load(&path, &["example"], &HashMap::new()).expect_err("unsafe bank");
+        assert!(error.to_string().contains("not path-segment safe"));
+    }
+
+    #[test]
+    fn disabled_transcripts_load_no_transcript_sources() {
+        let (_dir, path) = write_config(valid_config());
+        let config = load(&path, &["example"], &HashMap::new()).expect("load");
+        assert!(config.transcripts.is_empty());
+        assert_eq!(config.bank_ids(), vec!["example-docs".to_string()]);
+    }
+
+    #[test]
+    fn transcripts_only_project_is_valid() {
+        let (_dir, path) = write_config(&transcript_config(
+            r#"
+[projects.example]
+transcripts = true
+transcript_bank = "example-transcripts"
+workspace_prefixes = ["Users-jgil-example-"]
+
+[projects.example.paths]
+transcripts_dir = "/tmp/transcripts"
+"#,
+        ));
+        let config = load(&path, &["example"], &HashMap::new()).expect("load");
+        assert!(config.sources.is_empty());
+        assert_eq!(config.transcripts.len(), 1);
+    }
+
+    #[test]
+    fn rejects_docs_source_aliasing_the_transcript_identity() {
+        let (_dir, path) = write_config(&transcript_config(
+            r#"
+[projects.example]
+docs_bank = "example-docs"
+transcripts = true
+transcript_bank = "example-transcripts"
+workspace_prefixes = ["Users-jgil-example-"]
+
+[projects.example.paths]
+transcripts_dir = "shared-root"
+
+[[projects.example.sources]]
+tag = "transcripts"
+root = "shared-root"
+docs_include = ["**/*.md"]
+"#,
+        ));
+        let error = load(&path, &["example"], &HashMap::new()).expect_err("alias");
+        assert!(error.to_string().contains("same root as"));
+    }
+
+    #[test]
+    fn rejects_non_boolean_transcripts_setting() {
+        let (_dir, path) = write_config(&transcript_config(
+            r#"
+[projects.example]
+docs_bank = "example-docs"
+transcripts = "yes"
+
+[[projects.example.sources]]
+tag = "repo"
+root = "/tmp/repo"
+docs_include = ["**/*.md"]
+"#,
+        ));
+        let error = load(&path, &["example"], &HashMap::new()).expect_err("non-bool");
+        assert!(matches!(error, ConfigError::Parse { .. }));
+    }
+
+    #[test]
+    fn two_projects_may_share_a_transcript_bank() {
+        let (_dir, path) = write_config(&transcript_config(
+            r#"
+[projects.a]
+transcripts = true
+transcript_bank = "shared-transcripts"
+workspace_prefixes = ["Users-jgil-a-"]
+
+[projects.a.paths]
+transcripts_dir = "/tmp/transcripts-a"
+
+[projects.b]
+transcripts = true
+transcript_bank = "shared-transcripts"
+workspace_prefixes = ["Users-jgil-b-"]
+
+[projects.b.paths]
+transcripts_dir = "/tmp/transcripts-b"
+"#,
+        ));
+        let config = load(&path, &["a", "b"], &HashMap::new()).expect("load");
+        assert_eq!(config.transcripts.len(), 2);
+        assert_eq!(config.bank_ids(), vec!["shared-transcripts".to_string()]);
+    }
+
+    #[test]
+    fn transcript_settings_fall_back_to_defaults() {
+        let (_dir, path) = write_config(
+            r#"
+[defaults]
+hindsight_url = "http://sink:8888"
+pg_dsn = "postgresql://db/engram"
+transcripts = true
+transcript_bank = "defaults-transcripts"
+workspace_prefixes = ["Users-jgil-defaults-"]
+
+[defaults.paths]
+transcripts_dir = "/tmp/defaults-transcripts"
+
+[projects.example]
+"#,
+        );
+        let config = load(&path, &["example"], &HashMap::new()).expect("load");
+        let transcript = &config.transcripts[0];
+        assert_eq!(transcript.bank_id, "defaults-transcripts");
+        assert_eq!(transcript.root, PathBuf::from("/tmp/defaults-transcripts"));
+        assert_eq!(
+            transcript.workspace_prefixes,
+            vec!["Users-jgil-defaults-".to_string()]
+        );
+
+        // A project value wins over [defaults].
+        let (_dir, path) = write_config(
+            r#"
+[defaults]
+hindsight_url = "http://sink:8888"
+pg_dsn = "postgresql://db/engram"
+transcripts = true
+transcript_bank = "defaults-transcripts"
+workspace_prefixes = ["Users-jgil-defaults-"]
+
+[projects.example]
+transcript_bank = "project-transcripts"
+workspace_prefixes = ["Users-jgil-project-"]
+
+[projects.example.paths]
+transcripts_dir = "/tmp/project-transcripts"
+"#,
+        );
+        let config = load(&path, &["example"], &HashMap::new()).expect("load");
+        let transcript = &config.transcripts[0];
+        assert_eq!(transcript.bank_id, "project-transcripts");
+        assert_eq!(transcript.root, PathBuf::from("/tmp/project-transcripts"));
+        assert_eq!(
+            transcript.workspace_prefixes,
+            vec!["Users-jgil-project-".to_string()]
+        );
+    }
+
+    #[test]
+    fn scalar_workspace_prefixes_comma_split_like_python() {
+        let (_dir, path) = write_config(&transcript_config(
+            r#"
+[projects.example]
+transcripts = true
+transcript_bank = "example-transcripts"
+workspace_prefixes = " Users-jgil-a- , Users-jgil-b- ,"
+
+[projects.example.paths]
+transcripts_dir = "/tmp/transcripts"
+"#,
+        ));
+        let config = load(&path, &["example"], &HashMap::new()).expect("load");
+        assert_eq!(
+            config.transcripts[0].workspace_prefixes,
+            vec!["Users-jgil-a-".to_string(), "Users-jgil-b-".to_string()]
+        );
+
+        let (_dir, path) = write_config(&transcript_config(
+            r#"
+[projects.example]
+transcripts = true
+transcript_bank = "example-transcripts"
+workspace_prefixes = ["Users-jgil-a-", " Users-jgil-b- "]
+
+[projects.example.paths]
+transcripts_dir = "/tmp/transcripts"
+"#,
+        ));
+        let config = load(&path, &["example"], &HashMap::new()).expect("load");
+        assert_eq!(
+            config.transcripts[0].workspace_prefixes,
+            vec!["Users-jgil-a-".to_string(), "Users-jgil-b-".to_string()]
+        );
+
+        let (_dir, path) = write_config(&transcript_config(
+            r#"
+[projects.example]
+transcripts = true
+transcript_bank = "example-transcripts"
+workspace_prefixes = ["Users-jgil-a-", ""]
+
+[projects.example.paths]
+transcripts_dir = "/tmp/transcripts"
+"#,
+        ));
+        let error = load(&path, &["example"], &HashMap::new()).expect_err("empty entry");
+        assert!(matches!(error, ConfigError::Parse { .. }));
+    }
+
+    #[test]
+    fn rejects_blank_transcripts_dir_even_when_disabled() {
+        let (_dir, path) = write_config(&transcript_config(
+            r#"
+[projects.example]
+docs_bank = "example-docs"
+
+[projects.example.paths]
+transcripts_dir = "   "
+
+[[projects.example.sources]]
+tag = "repo"
+root = "/tmp/repo"
+docs_include = ["**/*.md"]
+"#,
+        ));
+        let error = load(&path, &["example"], &HashMap::new()).expect_err("blank dir");
+        assert!(error.to_string().contains("transcripts_dir"));
     }
 }

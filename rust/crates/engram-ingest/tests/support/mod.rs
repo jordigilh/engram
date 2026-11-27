@@ -140,6 +140,13 @@ impl TestServer {
             while !shared_stop.load(std::sync::atomic::Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // The listener is non-blocking; reset the accepted
+                        // stream or a read can race the request bytes and
+                        // return WouldBlock instantly, logging an empty
+                        // request while the client still sees a 200.
+                        stream
+                            .set_nonblocking(false)
+                            .expect("blocking accepted stream");
                         let requests = Arc::clone(&shared_requests);
                         let max = Arc::clone(&shared_max);
                         let in_flight = Arc::clone(&shared_in_flight);

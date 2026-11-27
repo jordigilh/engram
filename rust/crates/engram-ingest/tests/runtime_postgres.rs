@@ -972,15 +972,21 @@ fn incomplete_discovery_fails_once_but_keeps_the_manifest() {
         "session",
         &[transcript_user("No, that's wrong; use the other approach.")],
     );
-    // A locked nested directory makes discovery incomplete: the walk cannot
-    // inspect it, so removals are suppressed and its transcripts are missing
-    // from the pass without a per-file skip record.
+    // A nested transcript that is ingested normally first, then hidden by a
+    // locked directory: the incomplete pass must not tombstone its active
+    // chunk even though discovery can no longer see the file.
     let locked = transcripts
         .join("workspace-demo")
         .join("agent-transcripts")
         .join("locked");
     std::fs::create_dir_all(&locked).expect("locked dir");
-    std::fs::write(locked.join("hidden.jsonl"), "{}\n").expect("hidden transcript");
+    write_transcript(
+        &transcripts,
+        "locked/hidden",
+        &[transcript_user(
+            "Don't do that; always run the tests first.",
+        )],
+    );
     let config_path = write_config_maybe_transcripts(
         None,
         Some(&transcripts),
@@ -988,6 +994,17 @@ fn incomplete_discovery_fails_once_but_keeps_the_manifest() {
         &database_url,
         server.url(),
     );
+    run_and_drain(load_config(&config_path));
+    let posts = transcript_bank_posts(&server);
+    assert_eq!(posts, 2, "both windows must be delivered first");
+    let active: i64 = client
+        .query_one(
+            "SELECT count(*) FROM engram_ingest.chunks WHERE state = 'active'",
+            &[],
+        )
+        .expect("chunks")
+        .get(0);
+    assert_eq!(active, 2);
 
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
@@ -1011,15 +1028,14 @@ fn incomplete_discovery_fails_once_but_keeps_the_manifest() {
     );
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
         .expect("unlock directory");
-    // The readable window is delivered either way.
-    assert_eq!(transcript_bank_posts(&server), 1);
     if restricted {
         assert!(
             !status.success(),
             "an incomplete discovery must fail --once, stderr: {stderr}"
         );
         assert!(stderr.contains("discovery incomplete"), "stderr: {stderr}");
-        // No tombstone may have fired for the unreadable subtree.
+        // No tombstone may have fired for the unreadable subtree: the hidden
+        // transcript's chunk stays active and no delete is delivered.
         let active: i64 = client
             .query_one(
                 "SELECT count(*) FROM engram_ingest.chunks WHERE state = 'active'",
@@ -1027,7 +1043,12 @@ fn incomplete_discovery_fails_once_but_keeps_the_manifest() {
             )
             .expect("chunks")
             .get(0);
-        assert_eq!(active, 1);
+        assert_eq!(active, 2, "the hidden window must survive the pass");
+        assert_eq!(
+            transcript_bank_posts(&server),
+            posts,
+            "no delete may fire for the hidden transcript"
+        );
     }
 }
 

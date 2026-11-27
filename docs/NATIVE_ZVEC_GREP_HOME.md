@@ -57,7 +57,9 @@ a changed render would land behind a running job without `--restart`; the loaded
 job is older than the deployed plist without `--restart`; or the listen port is
 answered by a listener that is not this job. `--template <path>` points at a
 specific template when running from a non-editable install (the default resolves
-the template from the checkout).
+the template from the checkout). After a successful bootstrap, `install` waits
+(bounded) for the daemon to publish a ready default-home instance lock before it
+verifies, because `launchctl bootstrap` returns before zg opens its listener.
 
 `verify` requires the deployed plist to match the manifest **and** the current
 reviewed template, the bootstrapped hash to match the deployed file (catching a

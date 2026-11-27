@@ -162,7 +162,7 @@ jobs:
         run: cargo llvm-cov -p engram-ingest --all-targets --fail-under-lines 90
 
       - name: Business-logic unit coverage gate
-        run: cargo llvm-cov -p engram-ingest --lib --ignore-filename-regex '(http|runtime|signals|store|sink|worker)\.rs' --fail-under-lines 90
+        run: cargo llvm-cov -p engram-ingest --lib --ignore-filename-regex '(http|runtime|signals|store|sink|worker|transcript_ingest)\.rs' --fail-under-lines 90
 
   integration-tests:
     runs-on: ubuntu-latest

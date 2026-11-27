@@ -31,6 +31,8 @@ pub mod sink;
 pub mod stopwords;
 pub mod store;
 pub mod synthesis;
+pub mod transcript;
+pub mod transcript_ingest;
 pub mod worker;
 
 pub use boards::{
@@ -58,10 +60,11 @@ pub use issues::{
 pub use jobs::{Job, JobError, JobState, Lease, MAX_ATTEMPTS};
 pub use ledger::{
     is_valid_bank_id, Manifest, ManifestChunk, ManifestDocument, RecordState, SourceRecord,
-    ISSUE_LAYOUT_VERSION, LAYOUT_VERSION,
+    ISSUE_LAYOUT_VERSION, LAYOUT_VERSION, TRANSCRIPT_LAYOUT_VERSION,
 };
 pub use reconcile::{
     reconcile, reconcile_with_removed_reason, DeleteReason, Reconciliation, ScannedFile,
+    TranscriptWindowMeta,
 };
 pub use runtime::{PrepareReport, Runtime, RuntimeError, RuntimeHandle, SourceOutcome};
 pub use scan::{scan_source, ScanError, ScanReport};
@@ -77,15 +80,29 @@ pub use sink::{
 };
 pub use store::{
     apply_reconciliation, claim_job, complete_job, connect, count_drain_jobs,
-    count_stranded_expired_leases, fail_job, heartbeat_job, lease_is_active, load_issue_cursor,
-    load_manifest, load_source_revision, migrate, recover_expired_leases,
+    count_stranded_expired_leases, delete_transcript_watermark, delete_transcript_windows,
+    fail_job, heartbeat_job, lease_is_active, load_issue_cursor, load_manifest,
+    load_source_revision, load_transcript_watermark, load_transcript_watermark_ids,
+    load_transcript_window_owners, mark_transcript_invalidation, migrate, recover_expired_leases,
     recover_expired_leases_for_banks, recover_expired_leases_in_bank,
-    recover_expired_leases_outside_banks, save_issue_cursor, upsert_source, ApplySummary,
-    ClaimedJob, DrainCounts, FailDisposition, IssueCursor, RecoveryReport, StoreError,
-    RECOVERY_BATCH,
+    recover_expired_leases_outside_banks, refresh_transcript_watermark, save_issue_cursor,
+    upsert_source, ApplySummary, ClaimedJob, DrainCounts, FailDisposition, IssueCursor,
+    PendingInvalidation, RecoveryReport, StoreError, TranscriptWatermark, RECOVERY_BATCH,
 };
 pub use synthesis::{
     analyze, split_sentences, synthesize_document, Analysis, Stats, Synthesis, SynthesisError,
+};
+pub use transcript::{
+    discover_transcripts, is_correction, is_instruction, is_system_boilerplate, learning_windows,
+    learning_windows_with_detector, parse_messages, prefix_sha256, transcript_id_for_path,
+    window_document_id, LearningWindow, RegexSignalDetector, SignalDetector, TranscriptError,
+    TranscriptFileRef, MAX_TRANSCRIPT_BYTES, WINDOW_CONTEXT,
+};
+pub use transcript_ingest::{
+    ingest_transcript_source, ContradictionMode, ContradictionResolution, ContradictionResolver,
+    MemoryInvalidator, NoopInvalidator, ResolutionAction, RetainResolver, TranscriptFileOutcome,
+    TranscriptIngestError, TranscriptIngestOutcome, TranscriptOptions, TranscriptSource,
+    TRANSCRIPT_SOURCE_METADATA,
 };
 pub use worker::{
     BackoffPolicy, BankConfig, Clock, JobDriver, Shutdown, SlotHealth, SlotState, WorkerConfig,

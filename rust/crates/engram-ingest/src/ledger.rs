@@ -12,6 +12,10 @@ pub const LAYOUT_VERSION: i32 = 1;
 /// force every docs source to re-emit its chunks.
 pub const ISSUE_LAYOUT_VERSION: i32 = 1;
 
+/// Transcript windows are keyed by the SHA-1 of their own text; a layout bump
+/// only matters for a future change to the window contract.
+pub const TRANSCRIPT_LAYOUT_VERSION: i32 = 1;
+
 pub const DEFAULT_DOCUMENT_FORMAT: &str = "markdown";
 pub const DEFAULT_SOURCE_KIND: &str = "docs";
 
@@ -48,6 +52,10 @@ pub const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 6,
         sql: include_str!("../migrations/0006_discussion_board_sources.sql"),
+    },
+    Migration {
+        version: 7,
+        sql: include_str!("../migrations/0007_transcripts.sql"),
     },
 ];
 
@@ -106,6 +114,21 @@ impl SourceRecord {
             docs_exclude: Vec::new(),
             document_format: "issue".to_string(),
             source_kind: source_kind.to_string(),
+        }
+    }
+
+    /// One transcript root (a workspace directory containing
+    /// `*/agent-transcripts/**/*.jsonl` files).
+    pub fn transcript(project: &str, tag: &str, root: &str, bank_id: &str) -> Self {
+        Self {
+            project: project.to_string(),
+            tag: tag.to_string(),
+            root: root.to_string(),
+            bank_id: bank_id.to_string(),
+            docs_include: Vec::new(),
+            docs_exclude: Vec::new(),
+            document_format: "transcript".to_string(),
+            source_kind: "transcript".to_string(),
         }
     }
 }

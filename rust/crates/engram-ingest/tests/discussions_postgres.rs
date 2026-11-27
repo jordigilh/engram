@@ -326,11 +326,11 @@ fn migration_v6_is_rerunnable_and_accepts_new_source_kinds() {
     upsert_source(&mut client, &board.source_record()).expect("board source");
     client
         .execute(
-            "DELETE FROM engram_ingest.schema_migrations WHERE version = 6",
+            "DELETE FROM engram_ingest.schema_migrations WHERE version >= 6",
             &[],
         )
         .expect("drop migration marker");
-    migrate(&mut client).expect("reapply v6");
+    migrate(&mut client).expect("reapply v6 and v7");
     let discussion =
         IssueStream::github_discussions("p", "p-issues", "praxis-proxy/praxis", None, 100);
     upsert_source(&mut client, &discussion.source_record()).expect("discussion source after v6");
@@ -375,9 +375,9 @@ fn migration_guard_detects_a_v5_constraint_recorded_as_v6() {
     assert!(matches!(error, StoreError::MigrationMismatch(_)));
     client
         .execute(
-            "DELETE FROM engram_ingest.schema_migrations WHERE version = 6",
+            "DELETE FROM engram_ingest.schema_migrations WHERE version >= 6",
             &[],
         )
         .expect("drop drifted marker");
-    migrate(&mut client).expect("restore v6 after drift test");
+    migrate(&mut client).expect("restore v6/v7 after drift test");
 }

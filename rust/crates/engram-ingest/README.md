@@ -27,6 +27,9 @@ discussions/project boards).
 - GitHub discussions and project boards: GraphQL pagination, stable discussion
   IDs and comment keys, and one-document board grouping with the Python status
   order.
+- Transcript ingestion: JSONL parsing, Python-compatible learning windows and
+  SHA-1 window ids, durable ack watermarks, append replay, truncation/rotation
+  tolerance, and the existing ledger/worker path for retain and tombstones.
 - Runtime entrypoint: project config/source selection, deterministic docs scan,
   startup and periodic scan → reconcile → apply, one shared Hindsight sink, the
   worker supervisor, SIGINT/SIGTERM shutdown, and a `--once` drain mode.
@@ -37,7 +40,10 @@ discussions/project boards).
   scan; event debounce/hints are a later ingestion slice.
 - PDF extraction. A `document_format = "pdf"` source is rejected at startup
   until the Rust extractor lands.
-- Transcripts, git sync, CocoIndex/Python removal.
+- Transcript service wiring into `engram-ingest run`; the transcript source loop
+  is exposed as `transcript_ingest::ingest_transcript_source` for the service
+  switch slice.
+- Git sync and CocoIndex/Python removal.
 - Supervisor-level respawn/restart isolation. The runtime exposes per-slot health
   (`WorkerHandle::health`) and drains on shutdown; restart policy lands with the
   service switch.
@@ -175,6 +181,52 @@ transcripts, service switch, and Python/CocoIndex removal (#232).
 - **GraphQL failures are not empty snapshots.** Non-empty `errors`, a null
   repository/project, or a missing board title returns an error before apply.
 
+### Transcripts
+
+- **Windows match Python in regex mode.** The signal is a user correction
+  (`CORRECTION_PATTERNS`, regex mode) or instruction (`INSTRUCTION_PATTERNS`);
+  context is two parsed messages each way; each line is the Python
+  `"User: ..."`/`"Assistant: ..."` rendering truncated to 300 characters.
+  Window ids are `transcript-{stem}-w{sha1(window)[:16]}`. The Haiku classifier
+  plugs into the `SignalDetector` trait; the default keeps the documented regex
+  fallback so tests are deterministic and offline.
+- **Only new signals are emitted.** The watermark is the parsed-message count.
+  Before-context still comes from the full file.
+- **Rewrites restart from zero and tombstone vanished windows.** A stored
+  SHA-256 of the parsed prefix detects truncation, equal-length rewrites, and
+  rotation in place. The scan then plans from index 0 and deletes active windows
+  that no longer exist in the new content. Normal appends keep historical
+  windows, matching Python's append-only behavior.
+- **The watermark is acknowledged, not enqueued.** A scan refresh advances it
+  only when every transcript retain job is succeeded; a pending/leased/dead job
+  caps it at the last contiguous ack. A failed retain therefore leaves it
+  unadvanced while the job state remains visible.
+- **Replay is idempotent.** A durable `transcript_windows` row prevents replay
+  from re-running contradiction resolution or duplicating a withheld window.
+- **Scope removal tombstones.** A removed transcript file deletes its active
+  windows with reason `transcript_removed` and drops its watermark and window
+  rows.
+- **Contradiction resolution is injected and durable.** `Queued` withholds the
+  window and records status `queued`; `AutoResolved` adds `CORRECTION,
+  supersedes-prior-memory`. Only `Live` mode records a pending invalidation,
+  which runs only after a successful ledger apply and retries until the PATCH is
+  acknowledged. The resolver owns Python's audit log and pending-review queue.
+- **Malformed/partial lines are skipped.** A concurrent write ending in an
+  incomplete JSON line is ignored until the line is valid; it never advances the
+  watermark past unread data. Invalid UTF-8 rejects the file like Python
+  `read_text()`.
+
+A `dead` transcript retain is terminal by design: the watermark stays put and
+the window is not re-enqueued. Redrive is an explicit operator action after the
+sink cause is fixed:
+
+```sql
+UPDATE engram_ingest.jobs
+   SET state = 'pending', attempts = 0, run_after = now(), updated_at = now()
+ WHERE state = 'dead'
+   AND source_id IN (SELECT id FROM engram_ingest.sources WHERE source_kind = 'transcript');
+```
+
 ## Ledger mapping
 
 | Design name (`NATIVE_ENGRAM_DESIGN.md`) | This crate |
@@ -184,7 +236,8 @@ transcripts, service switch, and Python/CocoIndex removal (#232).
 | `source_units` | `engram_ingest.documents` + `engram_ingest.chunks` |
 | `ingest_jobs` | `engram_ingest.jobs` + `engram_ingest.leases` |
 | issue poll state | `engram_ingest.issue_cursors` |
-| `transcript_watermarks`, `gateway_events` | deferred to those slices |
+| `transcript_watermarks` | `engram_ingest.transcript_watermarks` + `transcript_windows` |
+| `gateway_events` | deferred to that slice |
 
 `migrate()` bootstraps `engram_ingest.schema_migrations`, applies every embedded
 migration version once in order under an advisory lock, and then verifies the
@@ -346,10 +399,12 @@ cargo +1.88.0 check --all-targets --locked
 ```
 
 Unit-tier business-logic coverage (excludes the HTTP/Postgres adapters
-`http`, `store`, `sink`, and `worker`):
+`http`, `runtime`, `signals`, `store`, `sink`, `worker`, and the transcript
+source adapter `transcript_ingest`; the transcript serializer/policy itself is
+in `transcript.rs` and `transcripts_postgres` covers the adapter):
 
 ```bash
 cargo llvm-cov -p engram-ingest --lib \
-  --ignore-filename-regex '(http|runtime|signals|store|sink|worker)\.rs' \
+  --ignore-filename-regex '(http|runtime|signals|store|sink|worker|transcript_ingest)\.rs' \
   --fail-under-lines 90
 ```

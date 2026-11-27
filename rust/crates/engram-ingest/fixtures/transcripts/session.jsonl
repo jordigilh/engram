@@ -1,0 +1,12 @@
+{"role":"user","message":{"content":"first message"}}
+{"role":"assistant","message":{"content":"assistant one"}}
+{"role":"user","message":{"content":[{"type":"text","text":"<user_query>Always use tests before proceeding.</user_query>"},{"type":"image","text":"ignored"}]}}
+{"role":"assistant","message":{"content":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}
+{"role":"user","message":{"content":"No, that's wrong; use the other approach."}}
+{"role":"user","message":{"content":[{"type":"text","text":"<external_links>https://example.test</external_links>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"line one"},{"type":"text","text":"line two"}]}}
+{"role":"user","message":{"content":"The beginning of the above subagent result is already visible to the user."}}
+this line is malformed json
+{"role":"user","message":{"content":"we never deploy on Friday"}}
+{"role":"user","message":{"content":"short"}}
+{"role":"assistant","message":{"content":"done"}}

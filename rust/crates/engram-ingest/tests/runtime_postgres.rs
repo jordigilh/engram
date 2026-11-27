@@ -185,6 +185,16 @@ fn transcript_bank_posts(server: &TestServer) -> usize {
         .count()
 }
 
+fn transcript_bank_deletes(server: &TestServer) -> usize {
+    server
+        .requests()
+        .iter()
+        .filter(|request| {
+            request.starts_with("DELETE") && request.contains("banks/example-transcripts/")
+        })
+        .count()
+}
+
 fn load_config(path: &Path) -> RuntimeConfig {
     RuntimeConfig::load_with_env(Some(path), &["example".to_string()], &|_| None)
         .expect("runtime config")
@@ -997,10 +1007,7 @@ fn incomplete_discovery_fails_once_but_keeps_the_manifest() {
     run_and_drain(load_config(&config_path));
     let posts = transcript_bank_posts(&server);
     assert_eq!(posts, 2, "both windows must be delivered first");
-    let deletes_before = methods(&server.requests())
-        .iter()
-        .filter(|method| *method == "DELETE")
-        .count();
+    let deletes_before = transcript_bank_deletes(&server);
     let active: i64 = client
         .query_one(
             "SELECT count(*) FROM engram_ingest.chunks WHERE state = 'active'",
@@ -1048,10 +1055,7 @@ fn incomplete_discovery_fails_once_but_keeps_the_manifest() {
             .expect("chunks")
             .get(0);
         assert_eq!(active, 2, "the hidden window must survive the pass");
-        let deletes_after = methods(&server.requests())
-            .iter()
-            .filter(|method| *method == "DELETE")
-            .count();
+        let deletes_after = transcript_bank_deletes(&server);
         assert_eq!(
             deletes_after, deletes_before,
             "no delete may fire for the hidden transcript"

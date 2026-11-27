@@ -806,6 +806,15 @@ pub fn apply_reconciliation(
         )?;
     }
 
+    for (document_id, signal_index) in &reconciliation.transcript_signal_updates {
+        transaction.execute(
+            "UPDATE engram_ingest.transcript_windows
+                SET signal_index = $3, updated_at = $4
+              WHERE source_id = $1 AND hindsight_document_id = $2",
+            &[&source_id, document_id, signal_index, &now],
+        )?;
+    }
+
     for delete in &reconciliation.deletes {
         // A stale plan (loaded before a concurrent retain changed the chunk)
         // must not tombstone the newer generation or queue a sink delete.
@@ -931,6 +940,7 @@ fn plan_fingerprint(reconciliation: &Reconciliation) -> Result<ContentHash, Stor
         "removed_files": reconciliation.removed_files,
         "transcript_windows": reconciliation.transcript_windows,
         "transcript_window_deletes": reconciliation.transcript_window_deletes,
+        "transcript_signal_updates": reconciliation.transcript_signal_updates,
     });
     Ok(ContentHash::of(&serde_json::to_vec(&value)?))
 }
@@ -1550,9 +1560,14 @@ pub fn load_transcript_window_owners(
     transcript_id: &str,
 ) -> Result<BTreeMap<String, String>, StoreError> {
     let rows = client.query(
-        "SELECT hindsight_document_id, relative_path
-           FROM engram_ingest.transcript_windows
-          WHERE source_id = $1 AND transcript_id = $2",
+        "SELECT w.hindsight_document_id, w.relative_path
+           FROM engram_ingest.transcript_windows w
+           LEFT JOIN engram_ingest.chunks c
+             ON c.source_id = w.source_id
+            AND c.hindsight_document_id = w.hindsight_document_id
+            AND c.state = 'active'
+          WHERE w.source_id = $1 AND w.transcript_id = $2
+            AND (w.status = 'queued' OR c.id IS NOT NULL)",
         &[&source_id, &transcript_id],
     )?;
     Ok(rows
@@ -1570,9 +1585,14 @@ pub fn load_transcript_signal_indices(
     relative_path: &str,
 ) -> Result<BTreeSet<i32>, StoreError> {
     let rows = client.query(
-        "SELECT signal_index
-           FROM engram_ingest.transcript_windows
-          WHERE source_id = $1 AND relative_path = $2",
+        "SELECT w.signal_index
+           FROM engram_ingest.transcript_windows w
+           LEFT JOIN engram_ingest.chunks c
+             ON c.source_id = w.source_id
+            AND c.hindsight_document_id = w.hindsight_document_id
+            AND c.state = 'active'
+          WHERE w.source_id = $1 AND w.relative_path = $2
+            AND (w.status = 'queued' OR c.id IS NOT NULL)",
         &[&source_id, &relative_path],
     )?;
     Ok(rows.into_iter().map(|row| row.get::<_, i32>(0)).collect())
@@ -1784,7 +1804,7 @@ fn advance_transcript_watermark_transaction(
         &[&format!("{source_id}:{relative_path}")],
     )?;
     let current = transaction.query_opt(
-        "SELECT observed_message_count, observed_prefix_sha256
+        "SELECT message_count, observed_message_count, observed_prefix_sha256
            FROM engram_ingest.transcript_watermarks
           WHERE source_id = $1 AND relative_path = $2
           FOR UPDATE",
@@ -1792,8 +1812,8 @@ fn advance_transcript_watermark_transaction(
     )?;
     let stale = match (&current, expected_observed) {
         (Some(row), Some((expected_count, expected_prefix))) => {
-            let current_count: i32 = row.get(0);
-            let current_prefix: Option<Vec<u8>> = row.get(1);
+            let current_count: i32 = row.get(1);
+            let current_prefix: Option<Vec<u8>> = row.get(2);
             current_count != expected_count || current_prefix.as_deref() != Some(expected_prefix)
         }
         (Some(_), None) => true,

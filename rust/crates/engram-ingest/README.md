@@ -211,6 +211,10 @@ transcripts, service switch, and Python/CocoIndex removal (#232).
   supersedes-prior-memory`. Only `Live` mode records a pending invalidation,
   which runs only after a successful ledger apply and retries until the PATCH is
   acknowledged. The resolver owns Python's audit log and pending-review queue.
+- **Correction dispatch intentionally matches Python's substring gate.** Python
+  checks `"[CORRECTION]" in window_text`, including the edge case where a
+  message body contains that literal; the native path keeps the same behavior
+  rather than adding a divergent signal-kind branch.
 - **Malformed/partial lines are skipped.** A concurrent write ending in an
   incomplete JSON line is ignored until the line is valid; it never advances the
   watermark past unread data. Invalid UTF-8 skips that file and leaves its

@@ -537,7 +537,7 @@ fn live_invalidation_retries_until_acknowledged_without_duplicate_patch() {
         }))
         .with_invalidator(Box::new(FlakyInvalidator {
             calls: Arc::clone(&calls),
-            fail_first: 2,
+            fail_first: 3,
         }));
     let path = transcript_path(&root, "flaky.jsonl");
     write_messages(&path, &correction_messages());
@@ -568,10 +568,20 @@ fn live_invalidation_retries_until_acknowledged_without_duplicate_patch() {
         .unwrap()
         .get(0);
     assert_eq!(still_pending, 1);
+    // Restoring the window must be eligible for a new retain even though the
+    // pending invalidation row still exists.
+    write_messages(&path, &correction_messages());
+    let restored = ingest_transcript_source(&mut client, &source, &options, Utc::now())
+        .expect("restore pending window");
+    assert!(
+        restored.summary.jobs_created >= 1,
+        "a restored window must not be suppressed by pending invalidation ownership"
+    );
+    assert_eq!(restored.invalidated, 0);
     let second =
         ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("retry");
     assert_eq!(second.invalidated, 1);
-    assert_eq!(*calls.lock().unwrap(), 3);
+    assert_eq!(*calls.lock().unwrap(), 4);
     let remaining: i64 = client
         .query_one(
             "SELECT count(*) FROM engram_ingest.transcript_windows
@@ -584,7 +594,7 @@ fn live_invalidation_retries_until_acknowledged_without_duplicate_patch() {
     let third =
         ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("acknowledged");
     assert_eq!(third.invalidated, 0);
-    assert_eq!(*calls.lock().unwrap(), 3);
+    assert_eq!(*calls.lock().unwrap(), 4);
     fs::remove_dir_all(&root).ok();
 }
 

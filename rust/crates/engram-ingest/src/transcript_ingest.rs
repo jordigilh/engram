@@ -357,6 +357,14 @@ pub fn ingest_transcript_source(
                     file_outcome.windows_conflicted += 1;
                     continue;
                 }
+                if rewritten {
+                    // The window content (and therefore id) survived a rewrite
+                    // but its signal position may have moved. Update only the
+                    // occurrence metadata; do not retain or resolve again.
+                    reconciliation
+                        .transcript_signal_updates
+                        .insert(document_id.clone(), signal_index);
+                }
                 // Already retained or deliberately withheld. Do not re-run
                 // contradiction resolution: live invalidation is a side effect
                 // that must happen exactly once per window.

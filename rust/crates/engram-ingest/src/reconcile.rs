@@ -103,6 +103,9 @@ pub struct Reconciliation {
     /// Transcript ownership rows to remove because their window vanished from a
     /// rewritten/rotated file (including withheld windows with no chunk row).
     pub transcript_window_deletes: BTreeSet<String>,
+    /// Occurrence metadata refreshes for windows preserved by a rewrite. The
+    /// rendered id is unchanged, so no retain is enqueued.
+    pub transcript_signal_updates: BTreeMap<String, i32>,
 }
 
 impl Reconciliation {
@@ -113,6 +116,7 @@ impl Reconciliation {
             && self.conflicts.is_empty()
             && self.transcript_windows.is_empty()
             && self.transcript_window_deletes.is_empty()
+            && self.transcript_signal_updates.is_empty()
     }
 }
 

@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 use chrono::{Duration, Utc};
 use engram_ingest::{
     claim_job, complete_job, connect, fail_job, ingest_transcript_source,
-    load_transcript_watermark, migrate, ContradictionMode, ContradictionResolution,
-    ContradictionResolver, MemoryInvalidator, ResolutionAction, TranscriptOptions,
-    TranscriptSource,
+    load_transcript_watermark, migrate, redrive_dead_transcript_jobs, ContradictionMode,
+    ContradictionResolution, ContradictionResolver, MemoryInvalidator, ResolutionAction,
+    TranscriptOptions, TranscriptSource,
 };
 use postgres::Client;
 use serde_json::json;
@@ -713,36 +713,8 @@ fn redrive_guard_skips_retains_whose_chunk_was_deleted() {
     // retain/delete must not be requeued over the restored memory.
     write_messages(&path, &correction_messages());
     ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("restore");
-    client
-        .batch_execute(
-            "UPDATE engram_ingest.jobs j
-                SET state = 'pending', attempts = 0, run_after = now(), updated_at = now()
-              WHERE j.state = 'dead'
-                AND j.source_id IN (
-                    SELECT id FROM engram_ingest.sources WHERE source_kind = 'transcript'
-                )
-                AND (
-                    j.kind <> 'retain'
-                    OR EXISTS (
-                        SELECT 1 FROM engram_ingest.chunks c
-                         WHERE c.source_id = j.source_id
-                           AND c.hindsight_document_id = j.hindsight_document_id
-                           AND c.state = 'active'
-                           AND c.generation = j.generation
-                    )
-                )
-                AND (
-                    j.kind <> 'delete'
-                    OR EXISTS (
-                        SELECT 1 FROM engram_ingest.chunks c
-                         WHERE c.source_id = j.source_id
-                           AND c.hindsight_document_id = j.hindsight_document_id
-                           AND c.state = 'tombstoned'
-                           AND c.generation = j.generation
-                    )
-                )",
-        )
-        .expect("guarded redrive");
+    let id = source_id(&mut client);
+    redrive_dead_transcript_jobs(&mut client, id, Utc::now()).expect("guarded redrive");
     let dead: i64 = client
         .query_one(
             "SELECT count(*) FROM engram_ingest.jobs WHERE state = 'dead'",
@@ -795,6 +767,20 @@ fn same_stem_files_are_skipped_not_a_source_failure() {
             .sum::<usize>(),
         2,
         "the later file's distinct instruction is preserved"
+    );
+    // A rewrite of the conflicting file must still clean its distinct window,
+    // even though its first scan held the acknowledged watermark.
+    let b = root
+        .join("workspace-b")
+        .join("agent-transcripts")
+        .join("session")
+        .join("session.jsonl");
+    write_messages(&b, &messages);
+    let rewrite =
+        ingest_transcript_source(&mut client, &source, &options, Utc::now()).expect("rewrite");
+    assert!(
+        rewrite.summary.deleted_chunks >= 1,
+        "the vanished distinct window must be tombstoned"
     );
     fs::remove_dir_all(&root).ok();
 }

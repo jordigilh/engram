@@ -217,6 +217,7 @@ struct WatermarkPlan {
     observed_message_count: i32,
     observed_prefix_sha256: Vec<u8>,
     expected_observed: Option<(i32, Vec<u8>)>,
+    hold_ack: bool,
     reset: bool,
 }
 
@@ -496,28 +497,22 @@ pub fn ingest_transcript_source(
         }
         outcome.windows_queued += file_outcome.windows_queued;
         outcome.windows_auto_resolved += file_outcome.windows_auto_resolved;
-        if file_outcome.windows_conflicted == 0 {
-            // A conflicting window belongs to another path; keep this file's
-            // watermark behind so the occurrence can be planned if the owner
-            // leaves scope.
-            watermarks.push(WatermarkPlan {
-                relative_path: relative_path.clone(),
-                transcript_id,
-                message_count,
-                prefix_sha256: prefix_sha256(&messages, messages.len()).as_bytes().to_vec(),
-                observed_message_count: message_count,
-                observed_prefix_sha256: prefix_sha256(&messages, messages.len())
-                    .as_bytes()
-                    .to_vec(),
-                expected_observed: stored.as_ref().and_then(|watermark| {
-                    watermark
-                        .observed_prefix_sha256
-                        .as_ref()
-                        .map(|prefix| (watermark.observed_message_count, prefix.clone()))
-                }),
-                reset: rewritten,
-            });
-        }
+        watermarks.push(WatermarkPlan {
+            relative_path: relative_path.clone(),
+            transcript_id,
+            message_count,
+            prefix_sha256: prefix_sha256(&messages, messages.len()).as_bytes().to_vec(),
+            observed_message_count: message_count,
+            observed_prefix_sha256: prefix_sha256(&messages, messages.len()).as_bytes().to_vec(),
+            expected_observed: stored.as_ref().and_then(|watermark| {
+                watermark
+                    .observed_prefix_sha256
+                    .as_ref()
+                    .map(|prefix| (watermark.observed_message_count, prefix.clone()))
+            }),
+            hold_ack: file_outcome.windows_conflicted > 0,
+            reset: rewritten,
+        });
         outcome.files.push(file_outcome);
     }
 
@@ -584,6 +579,7 @@ pub fn ingest_transcript_source(
                     .expected_observed
                     .as_ref()
                     .map(|(count, prefix)| (*count, prefix.as_slice())),
+                hold_ack: plan.hold_ack,
                 reset: plan.reset,
             },
             now,

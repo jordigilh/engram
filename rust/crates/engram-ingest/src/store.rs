@@ -1507,6 +1507,7 @@ pub struct TranscriptWatermarkUpdate<'a> {
     pub observed_message_count: i32,
     pub observed_prefix_sha256: &'a [u8],
     pub expected_observed: Option<(i32, &'a [u8])>,
+    pub hold_ack: bool,
     pub reset: bool,
 }
 
@@ -1614,6 +1615,46 @@ pub fn delete_transcript_state(
     )?;
     transaction.commit()?;
     Ok(())
+}
+
+/// Requeue terminal transcript jobs, serialized against reconciliation by
+/// locking the source row. A retain is requeued only while its chunk is active
+/// at the job generation; a delete only while its chunk is still tombstoned at
+/// that generation. A restore therefore cannot be raced by an old delete.
+pub fn redrive_dead_transcript_jobs(
+    client: &mut Client,
+    source_id: i64,
+    now: DateTime<Utc>,
+) -> Result<u64, StoreError> {
+    let mut transaction = client.transaction()?;
+    transaction.query_one(
+        "SELECT id FROM engram_ingest.sources WHERE id = $1 FOR UPDATE",
+        &[&source_id],
+    )?;
+    let updated = transaction.execute(
+        "UPDATE engram_ingest.jobs j
+            SET state = 'pending', attempts = 0, run_after = $2, updated_at = $2
+          WHERE j.source_id = $1 AND j.state = 'dead'
+            AND (
+                (j.kind = 'retain' AND EXISTS (
+                    SELECT 1 FROM engram_ingest.chunks c
+                     WHERE c.source_id = j.source_id
+                       AND c.hindsight_document_id = j.hindsight_document_id
+                       AND c.state = 'active'
+                       AND c.generation = j.generation
+                ))
+                OR (j.kind = 'delete' AND EXISTS (
+                    SELECT 1 FROM engram_ingest.chunks c
+                     WHERE c.source_id = j.source_id
+                       AND c.hindsight_document_id = j.hindsight_document_id
+                       AND c.state = 'tombstoned'
+                       AND c.generation = j.generation
+                ))
+            )",
+        &[&source_id, &now],
+    )?;
+    transaction.commit()?;
+    Ok(updated)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1729,11 +1770,19 @@ fn advance_transcript_watermark_transaction(
         observed_message_count,
         observed_prefix_sha256,
         expected_observed,
+        hold_ack,
         reset,
     } = update;
     // Serialize with any concurrent scan for this path. If the observed
     // snapshot changed since this scan read it, another scan already published
     // a newer view; do not overwrite it with stale state.
+    // Serialize the missing-row insert and every update for this path. Without
+    // a row to lock, two first scans could otherwise both pass the None check
+    // and let the older insert overwrite the newer snapshot.
+    transaction.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 918_274))",
+        &[&format!("{source_id}:{relative_path}")],
+    )?;
     let current = transaction.query_opt(
         "SELECT observed_message_count, observed_prefix_sha256
            FROM engram_ingest.transcript_watermarks
@@ -1784,8 +1833,11 @@ fn advance_transcript_watermark_transaction(
     // While a retain blocks acknowledgement, keep the stored count and hash
     // untouched so they always describe the same prefix. The next unblocked
     // scan advances both together.
-    let effective_reset = reset && blocked.is_none();
-    let candidate = if blocked.is_none() {
+    let current_count: i32 = current.as_ref().map(|row| row.get(0)).unwrap_or(0);
+    let effective_reset = reset && blocked.is_none() && !hold_ack;
+    let candidate = if hold_ack {
+        current_count
+    } else if blocked.is_none() {
         if effective_reset {
             scanned_message_count
         } else {
@@ -1794,12 +1846,14 @@ fn advance_transcript_watermark_transaction(
     } else {
         0
     };
-    let new_prefix: Option<&[u8]> =
-        if blocked.is_none() && (effective_reset || candidate == scanned_message_count) {
-            Some(prefix_sha256)
-        } else {
-            None
-        };
+    let new_prefix: Option<&[u8]> = if blocked.is_none()
+        && !hold_ack
+        && (effective_reset || candidate == scanned_message_count)
+    {
+        Some(prefix_sha256)
+    } else {
+        None
+    };
     transaction.execute(
         "INSERT INTO engram_ingest.transcript_watermarks
              (source_id, relative_path, transcript_id, message_count, prefix_sha256,

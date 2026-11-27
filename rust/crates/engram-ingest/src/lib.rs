@@ -85,10 +85,10 @@ pub use store::{
     load_source_revision, load_transcript_watermark, load_transcript_watermark_paths,
     load_transcript_window_owners, mark_transcript_invalidation_done, migrate,
     recover_expired_leases, recover_expired_leases_for_banks, recover_expired_leases_in_bank,
-    recover_expired_leases_outside_banks, refresh_transcript_watermark, save_issue_cursor,
-    upsert_source, ApplySummary, ClaimedJob, DrainCounts, FailDisposition, IssueCursor,
-    PendingInvalidation, RecoveryReport, StoreError, TranscriptWatermark,
-    TranscriptWatermarkUpdate, RECOVERY_BATCH,
+    recover_expired_leases_outside_banks, redrive_dead_transcript_jobs,
+    refresh_transcript_watermark, save_issue_cursor, upsert_source, ApplySummary, ClaimedJob,
+    DrainCounts, FailDisposition, IssueCursor, PendingInvalidation, RecoveryReport, StoreError,
+    TranscriptWatermark, TranscriptWatermarkUpdate, RECOVERY_BATCH,
 };
 pub use synthesis::{
     analyze, split_sentences, synthesize_document, Analysis, Stats, Synthesis, SynthesisError,

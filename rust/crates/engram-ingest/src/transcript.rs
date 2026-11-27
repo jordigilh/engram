@@ -480,6 +480,16 @@ fn walk(
         };
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
+        let selected = match stage {
+            WalkStage::Root => prefixes
+                .iter()
+                .any(|prefix| name.starts_with(prefix.as_str())),
+            WalkStage::Workspace => name == "agent-transcripts",
+            WalkStage::Transcripts => true,
+        };
+        if !selected {
+            continue;
+        }
         // Follow directory symlinks; a workspace root is commonly a symlink.
         let metadata = match fs::metadata(&path) {
             Ok(metadata) => metadata,
@@ -490,13 +500,8 @@ fn walk(
         };
         if metadata.is_dir() {
             let next = match stage {
-                WalkStage::Root => prefixes
-                    .iter()
-                    .any(|prefix| name.starts_with(prefix.as_str()))
-                    .then_some(WalkStage::Workspace),
-                WalkStage::Workspace => {
-                    (name == "agent-transcripts").then_some(WalkStage::Transcripts)
-                }
+                WalkStage::Root => Some(WalkStage::Workspace),
+                WalkStage::Workspace => Some(WalkStage::Transcripts),
                 WalkStage::Transcripts => Some(WalkStage::Transcripts),
             };
             if let Some(next) = next {
@@ -533,7 +538,7 @@ fn walk(
         files.push(TranscriptFileRef {
             transcript_id: transcript_id_for_path(&relative_path),
             relative_path,
-            path,
+            path: canonical_file,
         });
     }
     ancestors.remove(&canonical);
@@ -706,9 +711,16 @@ mod tests {
                 .join("escape"),
         )
         .unwrap();
-        let files = discover_transcripts(&root, &["workspace-".to_string()]).unwrap();
-        assert!(files.files.is_empty(), "{files:?}");
-        assert!(files.complete);
+        symlink(
+            outside.join("secret.jsonl"),
+            root.join("workspace-demo")
+                .join("agent-transcripts")
+                .join("secret.jsonl"),
+        )
+        .unwrap();
+        let discovery = discover_transcripts(&root, &["workspace-".to_string()]).unwrap();
+        assert!(discovery.files.is_empty(), "{discovery:?}");
+        assert!(discovery.complete);
         fs::remove_dir_all(&root).ok();
         fs::remove_dir_all(&outside).ok();
     }

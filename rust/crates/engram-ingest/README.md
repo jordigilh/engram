@@ -225,13 +225,17 @@ transcripts, service switch, and Python/CocoIndex removal (#232).
 
 A `dead` transcript retain is terminal by design: the watermark stays put and
 the window is not re-enqueued. Redrive is an explicit operator action after the
-sink cause is fixed:
+sink cause is fixed. The store exposes
+`redrive_dead_transcript_jobs(client, source_id)` for the service slice; it
+locks the source row first so a concurrent reconciliation/restore cannot race
+the requeue. The equivalent SQL must do the same:
 
 ```sql
+BEGIN;
+SELECT id FROM engram_ingest.sources WHERE id = <source_id> FOR UPDATE;
 UPDATE engram_ingest.jobs j
    SET state = 'pending', attempts = 0, run_after = now(), updated_at = now()
- WHERE j.state = 'dead'
-   AND j.source_id IN (SELECT id FROM engram_ingest.sources WHERE source_kind = 'transcript')
+ WHERE j.source_id = <source_id> AND j.state = 'dead'
    AND (
        (j.kind = 'retain' AND EXISTS (
            SELECT 1 FROM engram_ingest.chunks c
@@ -248,6 +252,7 @@ UPDATE engram_ingest.jobs j
               AND c.generation = j.generation
        ))
    );
+COMMIT;
 ```
 
 ## Ledger mapping

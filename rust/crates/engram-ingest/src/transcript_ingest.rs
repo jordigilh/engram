@@ -6,14 +6,8 @@
 //! the shared ledger, and leaves retain/delete delivery to the bank-scoped
 //! worker supervisor.
 //!
-//! The watermark advances in two places:
-//! - a successful retain job, through `store::complete_job`, up to the first
-//!   transcript job that has not succeeded;
-//! - a scan with no blocking job, for a signal-free tail or a withheld
-//!   (`queued`) correction.
-//!
-//! A failed retain therefore keeps the watermark unadvanced while the job stays
-//! pending or dead in the ledger, and a replay cannot duplicate a stable window.
+//! The watermark advances on a scan refresh after the worker has acknowledged
+//! the relevant retain jobs:
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -234,7 +228,9 @@ pub fn ingest_transcript_source(
 ) -> Result<TranscriptIngestOutcome, TranscriptIngestError> {
     // Validate the root before creating a source row, matching the Python
     // warning-and-continue behavior instead of leaving an empty source behind.
-    let files = discover_transcripts(&source.root, &source.workspace_prefixes)?;
+    let discovery = discover_transcripts(&source.root, &source.workspace_prefixes)?;
+    let files = discovery.files;
+    let scan_complete = discovery.complete;
     let source_id = upsert_source(client, &source.record())?;
     let manifest = load_manifest(client, source_id)?;
     let mut reconciliation = Reconciliation {
@@ -526,9 +522,10 @@ pub fn ingest_transcript_source(
     }
 
     // Tombstone windows whose transcript file left the configured scope
-    // (deletion, rotation, or prefix removal).
+    // (deletion, rotation, or prefix removal). An incomplete discovery must not
+    // turn an unreadable entry into a delete.
     for (path, document) in &manifest.documents {
-        if document.state != RecordState::Active || seen_paths.contains(path) {
+        if !scan_complete || document.state != RecordState::Active || seen_paths.contains(path) {
             continue;
         }
         for chunk in manifest
@@ -598,15 +595,17 @@ pub fn ingest_transcript_source(
     // A signal-free or queued-only transcript may have no watermark row, but
     // ownership still proves the path was seen. Union both sources so an
     // orphaned ownership row cannot suppress a later replay.
-    let current_paths: BTreeSet<String> = files
-        .iter()
-        .map(|file| file.relative_path.clone())
-        .collect();
-    let mut known_paths = load_transcript_watermark_paths(client, source_id)?;
-    known_paths.extend(load_transcript_ownership_paths(client, source_id)?);
-    for stale in known_paths {
-        if !current_paths.contains(&stale) {
-            delete_transcript_state(client, source_id, &stale)?;
+    if scan_complete {
+        let current_paths: BTreeSet<String> = files
+            .iter()
+            .map(|file| file.relative_path.clone())
+            .collect();
+        let mut known_paths = load_transcript_watermark_paths(client, source_id)?;
+        known_paths.extend(load_transcript_ownership_paths(client, source_id)?);
+        for stale in known_paths {
+            if !current_paths.contains(&stale) {
+                delete_transcript_state(client, source_id, &stale)?;
+            }
         }
     }
 

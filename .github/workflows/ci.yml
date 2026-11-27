@@ -158,6 +158,12 @@ jobs:
         with:
           workspaces: rust
 
+      - name: Transcript golden freshness
+        working-directory: .
+        run: |
+          python3 rust/crates/engram-ingest/fixtures/transcripts/generate_goldens.py
+          git diff --exit-code -- rust/crates/engram-ingest/fixtures/transcripts/goldens.json
+
       - name: Unit-tier coverage gate
         run: cargo llvm-cov -p engram-ingest --all-targets --fail-under-lines 90
 

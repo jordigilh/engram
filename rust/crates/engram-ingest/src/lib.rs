@@ -96,8 +96,8 @@ pub use synthesis::{
 pub use transcript::{
     discover_transcripts, is_correction, is_instruction, is_system_boilerplate, learning_windows,
     learning_windows_with_detector, parse_messages, prefix_sha256, transcript_id_for_path,
-    window_document_id, LearningWindow, RegexSignalDetector, SignalDetector, TranscriptError,
-    TranscriptFileRef, MAX_TRANSCRIPT_BYTES, WINDOW_CONTEXT,
+    window_document_id, LearningWindow, RegexSignalDetector, SignalDetector, TranscriptDiscovery,
+    TranscriptError, TranscriptFileRef, MAX_TRANSCRIPT_BYTES, WINDOW_CONTEXT,
 };
 pub use transcript_ingest::{
     ingest_transcript_source, ContradictionMode, ContradictionResolution, ContradictionResolver,

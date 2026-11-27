@@ -73,6 +73,14 @@ pub struct TranscriptFileRef {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptDiscovery {
+    pub files: Vec<TranscriptFileRef>,
+    /// False when an entry or subtree could not be inspected. The caller must
+    /// not treat absent paths as removed in that case.
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LearningWindow {
     pub text: String,
     /// Index of the signal in the parsed-message list (Python `raw_index`).
@@ -401,12 +409,13 @@ fn take_chars(text: &str, limit: usize) -> String {
 pub fn discover_transcripts(
     root: &Path,
     workspace_prefixes: &[String],
-) -> Result<Vec<TranscriptFileRef>, TranscriptError> {
+) -> Result<TranscriptDiscovery, TranscriptError> {
     if !root.is_dir() {
         return Err(TranscriptError::MissingRoot(root.to_path_buf()));
     }
     let mut files = Vec::new();
     let mut ancestors = std::collections::BTreeSet::new();
+    let mut complete = true;
     let canonical_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     walk(
         root,
@@ -416,9 +425,10 @@ pub fn discover_transcripts(
         &mut ancestors,
         &canonical_root,
         WalkStage::Root,
+        &mut complete,
     )?;
     files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    Ok(files)
+    Ok(TranscriptDiscovery { files, complete })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -431,6 +441,7 @@ enum WalkStage {
     Transcripts,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk(
     root: &Path,
     directory: &Path,
@@ -439,27 +450,44 @@ fn walk(
     ancestors: &mut std::collections::BTreeSet<PathBuf>,
     canonical_root: &Path,
     stage: WalkStage,
+    complete: &mut bool,
 ) -> Result<(), TranscriptError> {
     let canonical = fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
     if !canonical.starts_with(canonical_root) || !ancestors.insert(canonical.clone()) {
         return Ok(());
     }
-    let entries = fs::read_dir(directory).map_err(|source| TranscriptError::ReadDir {
-        path: directory.to_path_buf(),
-        source,
-    })?;
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(source) if stage == WalkStage::Root => {
+            return Err(TranscriptError::ReadDir {
+                path: directory.to_path_buf(),
+                source,
+            })
+        }
+        Err(_) => {
+            *complete = false;
+            ancestors.remove(&canonical);
+            return Ok(());
+        }
+    };
     for entry in entries {
-        let entry = entry.map_err(|source| TranscriptError::ReadDir {
-            path: directory.to_path_buf(),
-            source,
-        })?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                *complete = false;
+                continue;
+            }
+        };
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
         // Follow directory symlinks; a workspace root is commonly a symlink.
-        let metadata = fs::metadata(&path).map_err(|source| TranscriptError::ReadDir {
-            path: path.clone(),
-            source,
-        })?;
+        let metadata = match fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                *complete = false;
+                continue;
+            }
+        };
         if metadata.is_dir() {
             let next = match stage {
                 WalkStage::Root => prefixes
@@ -480,6 +508,7 @@ fn walk(
                     ancestors,
                     canonical_root,
                     next,
+                    complete,
                 )?;
             }
             continue;
@@ -490,11 +519,13 @@ fn walk(
         {
             continue;
         }
-        let canonical_file =
-            fs::canonicalize(&path).map_err(|source| TranscriptError::ReadDir {
-                path: path.clone(),
-                source,
-            })?;
+        let canonical_file = match fs::canonicalize(&path) {
+            Ok(canonical) => canonical,
+            Err(_) => {
+                *complete = false;
+                continue;
+            }
+        };
         if !canonical_file.starts_with(canonical_root) {
             continue;
         }
@@ -676,7 +707,8 @@ mod tests {
         )
         .unwrap();
         let files = discover_transcripts(&root, &["workspace-".to_string()]).unwrap();
-        assert!(files.is_empty(), "{files:?}");
+        assert!(files.files.is_empty(), "{files:?}");
+        assert!(files.complete);
         fs::remove_dir_all(&root).ok();
         fs::remove_dir_all(&outside).ok();
     }
@@ -694,12 +726,34 @@ mod tests {
         fs::create_dir_all(&ignored).unwrap();
         fs::write(ignored.join("session.jsonl"), "{}\n").unwrap();
         let files = discover_transcripts(&root, &["workspace-".to_string()]).unwrap();
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].transcript_id, "session");
+        assert!(files.complete);
+        assert_eq!(files.files.len(), 1);
+        assert_eq!(files.files[0].transcript_id, "session");
         assert_eq!(
-            files[0].relative_path,
+            files.files[0].relative_path,
             "workspace-demo/agent-transcripts/a/session.jsonl"
         );
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_symlink_marks_the_scan_incomplete_without_aborting() {
+        use std::os::unix::fs::symlink;
+
+        let root =
+            std::env::temp_dir().join(format!("engram-transcript-dangling-{}", std::process::id()));
+        let transcripts = root.join("workspace-demo").join("agent-transcripts");
+        fs::create_dir_all(&transcripts).unwrap();
+        symlink(
+            transcripts.join("missing"),
+            transcripts.join("broken.jsonl"),
+        )
+        .unwrap();
+        fs::write(transcripts.join("session.jsonl"), "{}\n").unwrap();
+        let discovery = discover_transcripts(&root, &["workspace-".to_string()]).unwrap();
+        assert!(!discovery.complete);
+        assert_eq!(discovery.files.len(), 1);
+        fs::remove_dir_all(&root).ok();
     }
 }

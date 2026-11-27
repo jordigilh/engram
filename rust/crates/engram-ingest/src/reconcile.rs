@@ -24,6 +24,7 @@ pub enum DeleteReason {
     FileRemoved,
     ChunkRemoved,
     IssueRemoved,
+    TranscriptRemoved,
 }
 
 impl DeleteReason {
@@ -32,6 +33,7 @@ impl DeleteReason {
             Self::FileRemoved => "file_removed",
             Self::ChunkRemoved => "chunk_removed",
             Self::IssueRemoved => "issue_removed",
+            Self::TranscriptRemoved => "transcript_removed",
         }
     }
 }
@@ -70,6 +72,17 @@ pub struct ScanConflict {
     pub paths: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TranscriptWindowMeta {
+    pub transcript_id: String,
+    pub relative_path: String,
+    pub message_count: i32,
+    pub signal_index: i32,
+    pub status: String,
+    pub invalidate_memory_id: Option<String>,
+    pub invalidate_reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Reconciliation {
     pub retain: Vec<RetainFile>,
@@ -84,6 +97,15 @@ pub struct Reconciliation {
     /// plans and treats a matching immediate replay as a no-op.
     pub base_revision: i64,
     pub stats: ReconcileStats,
+    /// Transcript window ownership/watermark index, keyed by Hindsight
+    /// document id. The store writes it in the same transaction as the chunk.
+    pub transcript_windows: BTreeMap<String, TranscriptWindowMeta>,
+    /// Transcript ownership rows to remove because their window vanished from a
+    /// rewritten/rotated file (including withheld windows with no chunk row).
+    pub transcript_window_deletes: BTreeSet<String>,
+    /// Occurrence metadata refreshes for windows preserved by a rewrite. The
+    /// rendered id is unchanged, so no retain is enqueued.
+    pub transcript_signal_updates: BTreeMap<String, i32>,
 }
 
 impl Reconciliation {
@@ -92,6 +114,9 @@ impl Reconciliation {
             && self.deletes.is_empty()
             && self.removed_files.is_empty()
             && self.conflicts.is_empty()
+            && self.transcript_windows.is_empty()
+            && self.transcript_window_deletes.is_empty()
+            && self.transcript_signal_updates.is_empty()
     }
 }
 

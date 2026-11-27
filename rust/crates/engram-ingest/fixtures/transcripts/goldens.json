@@ -1,0 +1,40 @@
+{
+  "fixture": "session.jsonl",
+  "message_count": 11,
+  "cases": [
+    {
+      "start_index": 0,
+      "windows": [
+        {
+          "text": "User: first message\n\nAssistant: assistant one\n\n[INSTRUCTION] User: Always use tests before proceeding.\n\nAssistant: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n\nUser: No, that's wrong; use the other approach.",
+          "document_id": "transcript-session-wceff0f4630977960",
+          "signal_raw_index": 2
+        },
+        {
+          "text": "User: Always use tests before proceeding.\n\nAssistant: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n\n[CORRECTION] User: No, that's wrong; use the other approach.\n\nAssistant: line one\nline two\n\nUser: we never deploy on Friday",
+          "document_id": "transcript-session-w908b760595246015",
+          "signal_raw_index": 4
+        },
+        {
+          "text": "User: No, that's wrong; use the other approach.\n\nAssistant: line one\nline two\n\n[INSTRUCTION] User: we never deploy on Friday\n\nUser: short\n\nAssistant: done",
+          "document_id": "transcript-session-wdeeb47b28e24e4ce",
+          "signal_raw_index": 8
+        }
+      ]
+    },
+    {
+      "start_index": 6,
+      "windows": [
+        {
+          "text": "User: No, that's wrong; use the other approach.\n\nAssistant: line one\nline two\n\n[INSTRUCTION] User: we never deploy on Friday\n\nUser: short\n\nAssistant: done",
+          "document_id": "transcript-session-wdeeb47b28e24e4ce",
+          "signal_raw_index": 8
+        }
+      ]
+    },
+    {
+      "start_index": 9,
+      "windows": []
+    }
+  ]
+}

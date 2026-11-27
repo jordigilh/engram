@@ -4,7 +4,7 @@
 //! call these functions from their worker thread. All multi-row mutations run
 //! in one transaction, and job claims use `FOR UPDATE SKIP LOCKED`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, Utc};
 use postgres::{Client, NoTls};
@@ -171,6 +171,15 @@ pub fn migrate(client: &mut Client) -> Result<(), StoreError> {
         ("issue_cursors", "fingerprint"),
         ("issue_cursors", "status"),
         ("tombstones", "generation"),
+        ("transcript_watermarks", "message_count"),
+        ("transcript_watermarks", "relative_path"),
+        ("transcript_watermarks", "prefix_sha256"),
+        ("transcript_watermarks", "observed_message_count"),
+        ("transcript_watermarks", "observed_prefix_sha256"),
+        ("transcript_windows", "transcript_id"),
+        ("transcript_windows", "relative_path"),
+        ("transcript_windows", "status"),
+        ("transcript_windows", "invalidation_state"),
     ] {
         let exists: bool = client
             .query_one(
@@ -233,9 +242,30 @@ pub fn migrate(client: &mut Client) -> Result<(), StoreError> {
     })?;
     if !source_kind_definition.contains("github_discussion")
         || !source_kind_definition.contains("github_board")
+        || !source_kind_definition.contains("transcript")
     {
         return Err(StoreError::MigrationMismatch(
-            "sources_source_kind_check is missing discussion/board kinds".to_string(),
+            "sources_source_kind_check is missing discussion/board/transcript kinds".to_string(),
+        ));
+    }
+    let tombstone_reason_definition: Option<String> = client
+        .query_opt(
+            "SELECT pg_get_constraintdef(c.oid)
+               FROM pg_constraint c
+               JOIN pg_class t ON t.oid = c.conrelid
+               JOIN pg_namespace n ON n.oid = t.relnamespace
+              WHERE n.nspname = 'engram_ingest'
+                AND t.relname = 'tombstones'
+                AND c.conname = 'tombstones_reason_check'",
+            &[],
+        )?
+        .map(|row| row.get(0));
+    let tombstone_reason_definition = tombstone_reason_definition.ok_or_else(|| {
+        StoreError::MigrationMismatch("tombstones.tombstones_reason_check".to_string())
+    })?;
+    if !tombstone_reason_definition.contains("transcript_removed") {
+        return Err(StoreError::MigrationMismatch(
+            "tombstones_reason_check is missing transcript_removed".to_string(),
         ));
     }
     for table in ["sources", "jobs"] {
@@ -259,6 +289,7 @@ pub fn migrate(client: &mut Client) -> Result<(), StoreError> {
     for index in [
         "jobs_bank_pending_idx",
         "jobs_one_leased_per_bank_document_idx",
+        "transcript_windows_watermark_idx",
     ] {
         let exists: bool = client
             .query_one(
@@ -719,6 +750,79 @@ pub fn apply_reconciliation(
         }
     }
 
+    // Window ownership is recorded even for a withheld (queued) correction, so
+    // a later scan cannot re-run contradiction resolution or duplicate the
+    // pending-review entry while an unrelated job blocks the watermark.
+    for (document_id, meta) in &reconciliation.transcript_windows {
+        transaction.execute(
+            "INSERT INTO engram_ingest.transcript_windows
+                 (source_id, hindsight_document_id, transcript_id, relative_path,
+                  message_count, signal_index, status, invalidate_memory_id,
+                  invalidate_reason, invalidation_state, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                     CASE WHEN $8::text IS NULL THEN 'none' ELSE 'pending' END, $10)
+             ON CONFLICT (source_id, hindsight_document_id) DO UPDATE SET
+                 transcript_id = EXCLUDED.transcript_id,
+                 relative_path = EXCLUDED.relative_path,
+                 message_count = EXCLUDED.message_count,
+                 signal_index = EXCLUDED.signal_index,
+                 status = EXCLUDED.status,
+                 invalidate_memory_id = CASE
+                     WHEN engram_ingest.transcript_windows.invalidation_state = 'pending'
+                     THEN engram_ingest.transcript_windows.invalidate_memory_id
+                     ELSE COALESCE(
+                         EXCLUDED.invalidate_memory_id,
+                         engram_ingest.transcript_windows.invalidate_memory_id
+                     )
+                 END,
+                 invalidate_reason = CASE
+                     WHEN engram_ingest.transcript_windows.invalidation_state = 'pending'
+                     THEN engram_ingest.transcript_windows.invalidate_reason
+                     ELSE COALESCE(
+                         EXCLUDED.invalidate_reason,
+                         engram_ingest.transcript_windows.invalidate_reason
+                     )
+                 END,
+                 invalidation_state = CASE
+                     WHEN engram_ingest.transcript_windows.invalidation_state IN ('done', 'pending')
+                     THEN engram_ingest.transcript_windows.invalidation_state
+                     WHEN EXCLUDED.invalidate_memory_id IS NOT NULL THEN 'pending'
+                     ELSE engram_ingest.transcript_windows.invalidation_state
+                 END,
+                 updated_at = EXCLUDED.updated_at",
+            &[
+                &source_id,
+                document_id,
+                &meta.transcript_id,
+                &meta.relative_path,
+                &meta.message_count,
+                &meta.signal_index,
+                &meta.status,
+                &meta.invalidate_memory_id,
+                &meta.invalidate_reason,
+                &now,
+            ],
+        )?;
+    }
+
+    for document_id in &reconciliation.transcript_window_deletes {
+        transaction.execute(
+            "DELETE FROM engram_ingest.transcript_windows
+              WHERE source_id = $1 AND hindsight_document_id = $2
+                AND invalidation_state <> 'pending'",
+            &[&source_id, document_id],
+        )?;
+    }
+
+    for (document_id, signal_index) in &reconciliation.transcript_signal_updates {
+        transaction.execute(
+            "UPDATE engram_ingest.transcript_windows
+                SET signal_index = $3, updated_at = $4
+              WHERE source_id = $1 AND hindsight_document_id = $2",
+            &[&source_id, document_id, signal_index, &now],
+        )?;
+    }
+
     for delete in &reconciliation.deletes {
         // A stale plan (loaded before a concurrent retain changed the chunk)
         // must not tombstone the newer generation or queue a sink delete.
@@ -737,6 +841,12 @@ pub fn apply_reconciliation(
         if updated == 0 {
             continue;
         }
+        transaction.execute(
+            "DELETE FROM engram_ingest.transcript_windows
+              WHERE source_id = $1 AND hindsight_document_id = $2
+                AND invalidation_state <> 'pending'",
+            &[&source_id, &delete.hindsight_document_id],
+        )?;
         transaction.execute(
             "INSERT INTO engram_ingest.tombstones
                  (source_id, document_id, hindsight_document_id, relative_path, reason, generation)
@@ -836,6 +946,9 @@ fn plan_fingerprint(reconciliation: &Reconciliation) -> Result<ContentHash, Stor
         "retain": retain,
         "deletes": deletes,
         "removed_files": reconciliation.removed_files,
+        "transcript_windows": reconciliation.transcript_windows,
+        "transcript_window_deletes": reconciliation.transcript_window_deletes,
+        "transcript_signal_updates": reconciliation.transcript_signal_updates,
     });
     Ok(ContentHash::of(&serde_json::to_vec(&value)?))
 }
@@ -1373,6 +1486,457 @@ pub fn save_issue_cursor(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TranscriptWatermark {
+    pub message_count: i32,
+    pub prefix_sha256: Option<Vec<u8>>,
+    pub observed_message_count: i32,
+    pub observed_prefix_sha256: Option<Vec<u8>>,
+    pub last_processed: Option<DateTime<Utc>>,
+}
+
+pub fn load_transcript_watermark(
+    client: &mut Client,
+    source_id: i64,
+    relative_path: &str,
+) -> Result<Option<TranscriptWatermark>, StoreError> {
+    let row = client.query_opt(
+        "SELECT message_count, prefix_sha256, observed_message_count,
+                observed_prefix_sha256, last_processed
+           FROM engram_ingest.transcript_watermarks
+          WHERE source_id = $1 AND relative_path = $2",
+        &[&source_id, &relative_path],
+    )?;
+    Ok(row.map(|row| TranscriptWatermark {
+        message_count: row.get(0),
+        prefix_sha256: row.get(1),
+        observed_message_count: row.get(2),
+        observed_prefix_sha256: row.get(3),
+        last_processed: row.get(4),
+    }))
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TranscriptWatermarkUpdate<'a> {
+    pub relative_path: &'a str,
+    pub transcript_id: &'a str,
+    pub message_count: i32,
+    pub prefix_sha256: &'a [u8],
+    pub observed_message_count: i32,
+    pub observed_prefix_sha256: &'a [u8],
+    pub expected_observed: Option<(i32, &'a [u8])>,
+    pub hold_ack: bool,
+    pub reset: bool,
+}
+
+/// Advance the ack watermark after a scan. The scan count and its parsed-prefix
+/// hash only apply when no transcript retain job is pending, leased, or dead;
+/// otherwise the watermark stops at the last contiguously-acknowledged window so
+/// a failed retain can never be skipped.
+pub fn refresh_transcript_watermark(
+    client: &mut Client,
+    source_id: i64,
+    update: TranscriptWatermarkUpdate<'_>,
+    now: DateTime<Utc>,
+) -> Result<(), StoreError> {
+    let mut transaction = client.transaction()?;
+    advance_transcript_watermark_transaction(&mut transaction, source_id, update, now)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+pub fn delete_transcript_watermark(
+    client: &mut Client,
+    source_id: i64,
+    relative_path: &str,
+) -> Result<(), StoreError> {
+    client.execute(
+        "DELETE FROM engram_ingest.transcript_watermarks
+          WHERE source_id = $1 AND relative_path = $2",
+        &[&source_id, &relative_path],
+    )?;
+    Ok(())
+}
+
+/// Window document ids already planned for one transcript, with the owning
+/// relative path. A present row means the window is either retained or
+/// deliberately withheld, so a replay must not re-run contradiction resolution
+/// or enqueue it again.
+pub fn load_transcript_window_owners(
+    client: &mut Client,
+    source_id: i64,
+    transcript_id: &str,
+) -> Result<BTreeMap<String, String>, StoreError> {
+    let rows = client.query(
+        "SELECT w.hindsight_document_id, w.relative_path
+           FROM engram_ingest.transcript_windows w
+           LEFT JOIN engram_ingest.chunks c
+             ON c.source_id = w.source_id
+            AND c.hindsight_document_id = w.hindsight_document_id
+            AND c.state = 'active'
+          WHERE w.source_id = $1 AND w.transcript_id = $2
+            AND (w.status = 'queued' OR c.id IS NOT NULL)",
+        &[&source_id, &transcript_id],
+    )?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.get::<_, String>(0), row.get::<_, String>(1)))
+        .collect())
+}
+
+/// Signal occurrences already planned for one path. The rendered window id can
+/// change when an append grows the tail context, so replay dedupe also needs the
+/// stable signal position.
+pub fn load_transcript_signal_indices(
+    client: &mut Client,
+    source_id: i64,
+    relative_path: &str,
+) -> Result<BTreeSet<i32>, StoreError> {
+    let rows = client.query(
+        "SELECT w.signal_index
+           FROM engram_ingest.transcript_windows w
+           LEFT JOIN engram_ingest.chunks c
+             ON c.source_id = w.source_id
+            AND c.hindsight_document_id = w.hindsight_document_id
+            AND c.state = 'active'
+          WHERE w.source_id = $1 AND w.relative_path = $2
+            AND (w.status = 'queued' OR c.id IS NOT NULL)",
+        &[&source_id, &relative_path],
+    )?;
+    Ok(rows.into_iter().map(|row| row.get::<_, i32>(0)).collect())
+}
+
+pub fn load_transcript_ownership_paths(
+    client: &mut Client,
+    source_id: i64,
+) -> Result<BTreeSet<String>, StoreError> {
+    let rows = client.query(
+        "SELECT DISTINCT relative_path
+           FROM engram_ingest.transcript_windows
+          WHERE source_id = $1",
+        &[&source_id],
+    )?;
+    Ok(rows
+        .into_iter()
+        .map(|row| row.get::<_, String>(0))
+        .collect())
+}
+
+/// Remove a path's watermark and ownership atomically. Pending live
+/// invalidations outlive the window so a failed PATCH can still be retried.
+pub fn delete_transcript_state(
+    client: &mut Client,
+    source_id: i64,
+    relative_path: &str,
+) -> Result<(), StoreError> {
+    let mut transaction = client.transaction()?;
+    transaction.execute(
+        "DELETE FROM engram_ingest.transcript_windows
+          WHERE source_id = $1 AND relative_path = $2
+            AND invalidation_state <> 'pending'",
+        &[&source_id, &relative_path],
+    )?;
+    transaction.execute(
+        "DELETE FROM engram_ingest.transcript_watermarks
+          WHERE source_id = $1 AND relative_path = $2",
+        &[&source_id, &relative_path],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Requeue terminal transcript jobs, serialized against reconciliation by
+/// locking the source row. A retain is requeued only while its chunk is active
+/// at the job generation; a delete only while its chunk is still tombstoned at
+/// that generation. A restore therefore cannot be raced by an old delete.
+pub fn redrive_dead_transcript_jobs(
+    client: &mut Client,
+    source_id: i64,
+    now: DateTime<Utc>,
+) -> Result<u64, StoreError> {
+    let mut transaction = client.transaction()?;
+    transaction.query_one(
+        "SELECT id FROM engram_ingest.sources WHERE id = $1 FOR UPDATE",
+        &[&source_id],
+    )?;
+    let updated = transaction.execute(
+        "UPDATE engram_ingest.jobs j
+            SET state = 'pending', attempts = 0, run_after = $2, updated_at = $2
+          WHERE j.source_id = $1 AND j.state = 'dead'
+            AND (
+                (j.kind = 'retain' AND EXISTS (
+                    SELECT 1 FROM engram_ingest.chunks c
+                     WHERE c.source_id = j.source_id
+                       AND c.hindsight_document_id = j.hindsight_document_id
+                       AND c.state = 'active'
+                       AND c.generation = j.generation
+                ))
+                OR (j.kind = 'delete' AND EXISTS (
+                    SELECT 1 FROM engram_ingest.chunks c
+                     WHERE c.source_id = j.source_id
+                       AND c.hindsight_document_id = j.hindsight_document_id
+                       AND c.state = 'tombstoned'
+                       AND c.generation = j.generation
+                ))
+            )",
+        &[&source_id, &now],
+    )?;
+    transaction.commit()?;
+    Ok(updated)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingInvalidation {
+    pub document_id: String,
+    pub transcript_id: String,
+    pub bank_id: String,
+    pub memory_id: String,
+    pub reason: String,
+}
+
+/// Live-mode invalidations recorded with the retain plan but not acknowledged
+/// yet. The ingest loop retries them after a successful ledger apply, so a crash
+/// between apply and the PATCH cannot lose or repeat a successful invalidation.
+pub fn load_pending_transcript_invalidations(
+    client: &mut Client,
+    source_id: i64,
+) -> Result<Vec<PendingInvalidation>, StoreError> {
+    let rows = client.query(
+        "SELECT w.hindsight_document_id, w.transcript_id, s.bank_id,
+                w.invalidate_memory_id, w.invalidate_reason
+           FROM engram_ingest.transcript_windows w
+           JOIN engram_ingest.sources s ON s.id = w.source_id
+          WHERE w.source_id = $1
+            AND w.invalidation_state = 'pending'
+            AND w.invalidate_memory_id IS NOT NULL",
+        &[&source_id],
+    )?;
+    Ok(rows
+        .into_iter()
+        .map(|row| PendingInvalidation {
+            document_id: row.get(0),
+            transcript_id: row.get(1),
+            bank_id: row.get(2),
+            memory_id: row.get(3),
+            reason: row
+                .get::<_, Option<String>>(4)
+                .unwrap_or_else(|| "superseded".to_string()),
+        })
+        .collect())
+}
+
+pub fn mark_transcript_invalidation_done(
+    client: &mut Client,
+    source_id: i64,
+    document_id: &str,
+    now: DateTime<Utc>,
+) -> Result<(), StoreError> {
+    client.execute(
+        "UPDATE engram_ingest.transcript_windows
+            SET invalidation_state = 'done', updated_at = $3
+          WHERE source_id = $1 AND hindsight_document_id = $2
+            AND invalidation_state = 'pending'",
+        &[&source_id, &document_id, &now],
+    )?;
+    client.execute(
+        "DELETE FROM engram_ingest.transcript_windows w
+          WHERE w.source_id = $1 AND w.hindsight_document_id = $2
+            AND w.invalidation_state = 'done'
+            AND w.status = 'retained'
+            AND NOT EXISTS (
+                SELECT 1 FROM engram_ingest.chunks c
+                 WHERE c.source_id = w.source_id
+                   AND c.hindsight_document_id = w.hindsight_document_id
+                   AND c.state = 'active'
+            )",
+        &[&source_id, &document_id],
+    )?;
+    Ok(())
+}
+
+pub fn load_transcript_watermark_paths(
+    client: &mut Client,
+    source_id: i64,
+) -> Result<BTreeSet<String>, StoreError> {
+    let rows = client.query(
+        "SELECT relative_path
+           FROM engram_ingest.transcript_watermarks
+          WHERE source_id = $1",
+        &[&source_id],
+    )?;
+    Ok(rows
+        .into_iter()
+        .map(|row| row.get::<_, String>(0))
+        .collect())
+}
+
+pub fn delete_transcript_windows(
+    client: &mut Client,
+    source_id: i64,
+    relative_path: &str,
+) -> Result<(), StoreError> {
+    client.execute(
+        "DELETE FROM engram_ingest.transcript_windows
+          WHERE source_id = $1 AND relative_path = $2",
+        &[&source_id, &relative_path],
+    )?;
+    Ok(())
+}
+
+/// Compute the highest watermark that all earlier transcript jobs acknowledge.
+/// A pending/leased/dead job at message count N blocks every watermark >= N.
+fn advance_transcript_watermark_transaction(
+    transaction: &mut postgres::Transaction<'_>,
+    source_id: i64,
+    update: TranscriptWatermarkUpdate<'_>,
+    now: DateTime<Utc>,
+) -> Result<(), StoreError> {
+    let TranscriptWatermarkUpdate {
+        relative_path,
+        transcript_id,
+        message_count: scanned_message_count,
+        prefix_sha256,
+        observed_message_count,
+        observed_prefix_sha256,
+        expected_observed,
+        hold_ack,
+        reset,
+    } = update;
+    // Serialize with any concurrent scan for this path. If the observed
+    // snapshot changed since this scan read it, another scan already published
+    // a newer view; do not overwrite it with stale state.
+    // Serialize the missing-row insert and every update for this path. Without
+    // a row to lock, two first scans could otherwise both pass the None check
+    // and let the older insert overwrite the newer snapshot.
+    transaction.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 918_274))",
+        &[&format!("{source_id}:{relative_path}")],
+    )?;
+    let current = transaction.query_opt(
+        "SELECT message_count, observed_message_count, observed_prefix_sha256
+           FROM engram_ingest.transcript_watermarks
+          WHERE source_id = $1 AND relative_path = $2
+          FOR UPDATE",
+        &[&source_id, &relative_path],
+    )?;
+    let stale = match (&current, expected_observed) {
+        (Some(row), Some((expected_count, expected_prefix))) => {
+            let current_count: i32 = row.get(1);
+            let current_prefix: Option<Vec<u8>> = row.get(2);
+            current_count != expected_count || current_prefix.as_deref() != Some(expected_prefix)
+        }
+        (Some(_), None) => true,
+        (None, Some(_)) => true,
+        (None, None) => false,
+    };
+    if stale {
+        return Ok(());
+    }
+    let row = transaction.query_one(
+        "SELECT MAX(blocked) AS blocked,
+                COALESCE(MAX(count) FILTER (
+                    WHERE state = 'succeeded' AND (blocked IS NULL OR count < blocked)
+                ), 0) AS safe
+           FROM (
+                SELECT w.message_count AS count,
+                       j.state,
+                       MIN(w.message_count) FILTER (
+                           WHERE j.state <> 'succeeded'
+                       ) OVER () AS blocked
+                  FROM engram_ingest.jobs j
+                  JOIN engram_ingest.transcript_windows w
+                    ON w.source_id = j.source_id
+                   AND w.hindsight_document_id = j.hindsight_document_id
+                  JOIN engram_ingest.chunks c
+                    ON c.source_id = j.source_id
+                   AND c.hindsight_document_id = j.hindsight_document_id
+                   AND c.generation = j.generation
+                 WHERE j.source_id = $1
+                   AND j.kind = 'retain'
+                   AND w.relative_path = $2
+           ) jobs",
+        &[&source_id, &relative_path],
+    )?;
+    let blocked: Option<i32> = row.get(0);
+    let acked: i32 = row.get(1);
+    // While a retain blocks acknowledgement, keep the stored count and hash
+    // untouched so they always describe the same prefix. The next unblocked
+    // scan advances both together.
+    let current_count: i32 = current.as_ref().map(|row| row.get(0)).unwrap_or(0);
+    let effective_reset = reset && blocked.is_none() && !hold_ack;
+    let candidate = if hold_ack {
+        current_count
+    } else if blocked.is_none() {
+        if effective_reset {
+            scanned_message_count
+        } else {
+            acked.max(scanned_message_count)
+        }
+    } else {
+        0
+    };
+    let new_prefix: Option<&[u8]> = if blocked.is_none()
+        && !hold_ack
+        && (effective_reset || candidate == scanned_message_count)
+    {
+        Some(prefix_sha256)
+    } else {
+        None
+    };
+    transaction.execute(
+        "INSERT INTO engram_ingest.transcript_watermarks
+             (source_id, relative_path, transcript_id, message_count, prefix_sha256,
+              observed_message_count, observed_prefix_sha256, last_processed, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $7, $8, $6, $6)
+         ON CONFLICT (source_id, relative_path) DO UPDATE SET
+             transcript_id = EXCLUDED.transcript_id,
+             observed_message_count = CASE
+                 WHEN $10 THEN EXCLUDED.observed_message_count
+                 ELSE engram_ingest.transcript_watermarks.observed_message_count
+             END,
+             observed_prefix_sha256 = CASE
+                 WHEN $10 THEN EXCLUDED.observed_prefix_sha256
+                 ELSE engram_ingest.transcript_watermarks.observed_prefix_sha256
+             END,
+             message_count = CASE
+                 WHEN $9 THEN EXCLUDED.message_count
+                 ELSE GREATEST(
+                     engram_ingest.transcript_watermarks.message_count,
+                     EXCLUDED.message_count
+                 )
+             END,
+             prefix_sha256 = CASE
+                 WHEN $9 OR EXCLUDED.message_count
+                      >= engram_ingest.transcript_watermarks.message_count
+                 THEN COALESCE(
+                     EXCLUDED.prefix_sha256,
+                     engram_ingest.transcript_watermarks.prefix_sha256
+                 )
+                 ELSE engram_ingest.transcript_watermarks.prefix_sha256
+             END,
+             last_processed = CASE
+                 WHEN $9 OR EXCLUDED.message_count
+                      > engram_ingest.transcript_watermarks.message_count
+                 THEN EXCLUDED.last_processed
+                 ELSE engram_ingest.transcript_watermarks.last_processed
+             END,
+             updated_at = EXCLUDED.updated_at",
+        &[
+            &source_id,
+            &relative_path,
+            &transcript_id,
+            &candidate,
+            &new_prefix,
+            &now,
+            &observed_message_count,
+            &observed_prefix_sha256,
+            &effective_reset,
+            &blocked.is_none(),
+        ],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1388,6 +1952,8 @@ mod tests {
             "leases",
             "tombstones",
             "issue_cursors",
+            "transcript_watermarks",
+            "transcript_windows",
         ] {
             assert!(
                 MIGRATIONS
@@ -1405,7 +1971,7 @@ mod tests {
             .all(|pair| pair[0].version < pair[1].version));
         assert_eq!(
             MIGRATIONS.last().map(|migration| migration.version),
-            Some(6)
+            Some(7)
         );
     }
 

@@ -161,11 +161,17 @@ jobs:
         with:
           workspaces: rust
 
+      - name: Transcript golden freshness
+        working-directory: .
+        run: |
+          python3 rust/crates/engram-ingest/fixtures/transcripts/generate_goldens.py
+          git diff --exit-code -- rust/crates/engram-ingest/fixtures/transcripts/goldens.json
+
       - name: Unit-tier coverage gate
         run: cargo llvm-cov -p engram-ingest --all-targets --fail-under-lines 90
 
       - name: Business-logic unit coverage gate
-        run: cargo llvm-cov -p engram-ingest --lib --ignore-filename-regex '(http|runtime|signals|store|sink|worker)\.rs' --fail-under-lines 90
+        run: cargo llvm-cov -p engram-ingest --lib --ignore-filename-regex '(http|runtime|signals|store|sink|worker|transcript_ingest)\.rs' --fail-under-lines 90
 
   integration-tests:
     runs-on: ubuntu-latest

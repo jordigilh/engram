@@ -429,6 +429,7 @@ dependencies = [
  "globset",
  "libc",
  "postgres",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

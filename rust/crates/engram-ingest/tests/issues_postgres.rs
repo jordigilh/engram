@@ -552,11 +552,11 @@ fn migration_v5_is_rerunnable_against_populated_rows() {
     .expect("cursor");
     client
         .execute(
-            "DELETE FROM engram_ingest.schema_migrations WHERE version = 5",
+            "DELETE FROM engram_ingest.schema_migrations WHERE version >= 5",
             &[],
         )
         .expect("drop migration marker");
-    migrate(&mut client).expect("reapply v5");
+    migrate(&mut client).expect("reapply v5-v7");
     let kind: String = client
         .query_one(
             "SELECT source_kind FROM engram_ingest.sources WHERE id = $1",

@@ -34,6 +34,7 @@ class FakeLaunchd:
         self.job_loaded_without_pid = False
         self.failed_bootstraps = 0
         self.failed_bootouts = 0
+        self.lock_writes_remaining = 0
         self.next_pid = 4321
         self.spawned: set[int] = set()
         self.calls: list[list[str]] = []
@@ -77,9 +78,17 @@ class FakeLaunchd:
             self.loaded = True
             self.pid = self.next_pid
             self.spawned.add(self.next_pid)
-            self.write_lock(self.pid)
+            if not self.lock_writes_remaining:
+                self.write_lock(self.pid)
             return deploy.CommandResult(0)
         return deploy.CommandResult(1, "", f"unexpected launchctl call: {arguments}")
+
+    def tick(self) -> None:
+        """Advance a pending lock publication by one poll interval."""
+        if self.lock_writes_remaining:
+            self.lock_writes_remaining -= 1
+            if self.lock_writes_remaining == 0 and self.pid is not None:
+                self.write_lock(self.pid)
 
     def write_lock(self, pid: int, *, listen: str = deploy.DEFAULT_LISTEN, ready: bool = True) -> None:
         path = self.paths.default_lock
@@ -129,7 +138,7 @@ class Harness:
             port_open=lambda host, port: self.port_open,
             which=lambda name: self.which_result,
             now=lambda: self.now,
-            sleep=lambda seconds: None,
+            sleep=lambda seconds: self.launchd.tick(),
             uid=os.getuid(),
             platform="darwin",
         )
@@ -962,3 +971,23 @@ def test_uninstall_cleans_a_created_home_when_the_plist_is_already_gone(harness)
 
     assert deploy.uninstall(harness.paths, harness.deps()) == 0
     assert not harness.paths.default_home.exists()
+
+
+def test_install_waits_for_the_daemon_lock_before_verifying(harness):
+    harness.launchd.loaded = False
+    harness.launchd.pid = None
+    harness.launchd.lock_writes_remaining = 3
+
+    assert harness.install() == 0
+
+    assert harness.paths.default_lock.exists()
+    assert harness.launchd.pid is not None
+
+
+def test_install_reports_the_daemon_state_when_no_lock_ever_appears(harness):
+    harness.launchd.loaded = False
+    harness.launchd.pid = None
+    harness.launchd.lock_writes_remaining = 10**6
+
+    with pytest.raises(deploy.DeploymentError, match="loaded-stale-lock"):
+        harness.install()

@@ -47,6 +47,8 @@ DEFAULT_LISTEN = "127.0.0.1:7999"
 BACKUP_LIMIT = 5
 BOOTSTRAP_ATTEMPTS = 3
 BOOTSTRAP_BACKOFF_SECONDS = (1.0, 2.0)
+READY_WAIT_ATTEMPTS = 40
+READY_WAIT_INTERVAL_SECONDS = 0.5
 
 STATE_OURS = "ours"
 STATE_OURS_LEGACY = "ours-legacy"
@@ -600,6 +602,7 @@ def install(
     manifest = replace(manifest, bootstrapped_render_sha=render_hash)
     _write_manifest(paths, manifest)
     out(f"installed: {paths.plist}")
+    _wait_for_default_home_ready(paths, deps)
     return verify(paths, deps, out=out)
 
 
@@ -662,6 +665,26 @@ def _rollback_failed_install(
         paths.plist.unlink()
     _write_manifest(paths, replace(failed, uninstalled_at=deps.now().astimezone(timezone.utc).isoformat()))
     return "Fresh install failed; no plist was left behind and daemon state was not changed."
+
+
+def _wait_for_default_home_ready(paths: DeployPaths, deps: Deps) -> bool:
+    """Wait for the restarted daemon to publish a ready default-home lock.
+
+    ``launchctl bootstrap`` returns before zg has opened its listener and
+    written ``daemon/instance.lock``. Verifying immediately reports
+    ``loaded-stale-lock`` for a successful restart, so poll the lock the same
+    way an operator would, within a bounded window.
+    """
+    for attempt in range(READY_WAIT_ATTEMPTS):
+        try:
+            lock = read_lock(paths.default_lock)
+        except DeploymentError:
+            lock = None  # a lock caught mid-write is not ready yet
+        if lock is not None and lock.ready is True and deps.pid_alive(lock.pid):
+            return True
+        if attempt < READY_WAIT_ATTEMPTS - 1:
+            deps.sleep(READY_WAIT_INTERVAL_SECONDS)
+    return False
 
 
 def _require_install_state(state: Classification, *, restart: bool) -> None:

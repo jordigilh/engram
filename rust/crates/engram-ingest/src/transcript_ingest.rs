@@ -32,7 +32,8 @@ use crate::store::{
 };
 use crate::transcript::{
     discover_transcripts, learning_windows_with_detector, parse_messages, prefix_sha256,
-    window_document_id, RegexSignalDetector, SignalDetector, TranscriptError, MAX_TRANSCRIPT_BYTES,
+    window_document_id, RegexSignalDetector, SignalDetector, TranscriptDiscovery, TranscriptError,
+    MAX_TRANSCRIPT_BYTES,
 };
 
 pub const TRANSCRIPT_SOURCE_METADATA: &str = "cocoindex-transcript";
@@ -230,6 +231,20 @@ pub fn ingest_transcript_source(
     // Validate the root before creating a source row, matching the Python
     // warning-and-continue behavior instead of leaving an empty source behind.
     let discovery = discover_transcripts(&source.root, &source.workspace_prefixes)?;
+    ingest_transcript_source_with_discovery(client, source, discovery, options, now)
+}
+
+/// Like [`ingest_transcript_source`], but applies a discovery the caller
+/// already took. The runtime's empty-snapshot guard and the applied plan then
+/// see the same filesystem snapshot, so a workspace leaving scope between the
+/// guard check and the apply cannot bypass the guard (issue #254).
+pub fn ingest_transcript_source_with_discovery(
+    client: &mut Client,
+    source: &TranscriptSource,
+    discovery: TranscriptDiscovery,
+    options: &TranscriptOptions,
+    now: DateTime<Utc>,
+) -> Result<TranscriptIngestOutcome, TranscriptIngestError> {
     let files = discovery.files;
     let scan_complete = discovery.complete;
     let source_id = upsert_source(client, &source.record())?;

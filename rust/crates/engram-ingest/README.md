@@ -421,22 +421,35 @@ same bank-scoped worker supervisor serves its retains and tombstones, and
 
 Transcript-specific runtime semantics:
 
-- A missing `paths.transcripts_dir` is `skipped` like a missing docs root:
-  resident mode logs and continues (Python's `transcript_main` warns and
-  returns); `--once` exits non-zero.
+- A `paths.transcripts_dir` whose directory does not exist is `skipped` like
+  a missing docs root: resident mode logs and continues (Python's
+  `transcript_main` warns and returns); `--once` exits non-zero. A missing
+  config *key* is a load error, not a skip.
 - A transcript root that exists while discovery matches no files and the
   manifest still has active documents is `guarded` exactly like an empty docs
   root — a `workspace_prefixes` typo must not mass-tombstone retained windows.
-  `--allow-empty-root` opts into treating it as a real deletion.
+  `--allow-empty-root` opts into treating it as a real deletion. The guard and
+  the applied plan evaluate the same discovery snapshot.
 - `--once` also exits non-zero when a transcript file was skipped
   (unreadable, invalid UTF-8, or over the 64 MiB read cap), so withheld data
-  cannot look like a clean backfill. `Deferred` (`StaleReconciliation` from a
-  concurrent runtime) and `Skipped`/`Guarded` follow the docs contract.
+  cannot look like a clean backfill. Windows withheld by a cross-path
+  ownership conflict are reported in the outcome label as `conflicted`; the
+  owning path retains that content, so conflicts are an observability signal
+  that self-heals, not data loss, and do not fail `--once`.
+  `Deferred` (`StaleReconciliation` from a concurrent runtime) and
+  `Skipped`/`Guarded` follow the docs contract.
 - Two projects may share one `transcript_bank`, matching Python: window ids
   are stem- and content-digest scoped, so a same-stem/same-text window in a
   shared bank converges on identical content instead of corrupting state.
-  Same-project docs sources may not use the tag `transcripts` on the same
-  root (that would alias the ledger identity and flip `source_kind`).
+  The delete side is not benign, though: when one project's file leaves
+  scope, its tombstone removes the *shared* Hindsight document while the
+  other project's ledger row stays active, and that project will not
+  re-retain an already-owned window id — prefer one transcript bank per
+  project when deletions matter. Same-project docs sources may not use the
+  tag `transcripts` on the same root (that would alias the ledger identity
+  and flip `source_kind`). Bank ids are additionally capped at 128
+  characters (the ledger/Hindsight bound; Python's `_BANK_RE` has no length
+  cap).
 - The Python JSON watermark file (`transcript_watermarks`, default
   `~/.engram/logs/cocoindex-transcript-watermarks.json`) is not migrated:
   Postgres watermarks start empty and the first scan replays the same stable

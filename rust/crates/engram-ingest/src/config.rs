@@ -455,7 +455,7 @@ fn transcript_source(
         .map(|bank| bank.trim().to_string());
     let dir = merged_transcripts_dir(table, defaults);
     if let Some(bank) = &bank {
-        validate_bank(bank, project)?;
+        validate_bank(bank, project, "transcript_bank")?;
     }
     if let Some(dir) = &dir {
         // Python's settings.path validates the shape whenever the key exists,
@@ -540,7 +540,7 @@ where
 fn resolve_docs_bank(project: &str, table: &ProjectTable) -> Result<String, ConfigError> {
     if let Some(explicit) = table.docs_bank.as_deref() {
         let explicit = explicit.trim();
-        validate_bank(explicit, project)?;
+        validate_bank(explicit, project, "docs_bank")?;
         return Ok(explicit.to_string());
     }
     let matches: Vec<&String> = table
@@ -553,7 +553,7 @@ fn resolve_docs_bank(project: &str, table: &ProjectTable) -> Result<String, Conf
             "project {project:?} has docs sources but no docs_bank and no banks entry ending in -docs"
         ))),
         [bank] => {
-            validate_bank(bank, project)?;
+            validate_bank(bank, project, "docs bank")?;
             Ok((*bank).clone())
         }
         _ => Err(ConfigError::Invalid(format!(
@@ -594,7 +594,7 @@ fn validate_source_tag(tag: &str, project: &str, index: usize) -> Result<(), Con
     Ok(())
 }
 
-fn validate_bank(bank: &str, project: &str) -> Result<(), ConfigError> {
+fn validate_bank(bank: &str, project: &str, label: &str) -> Result<(), ConfigError> {
     let mut characters = bank.chars();
     let valid_start = characters
         .next()
@@ -604,7 +604,7 @@ fn validate_bank(bank: &str, project: &str) -> Result<(), ConfigError> {
     let valid = !bank.is_empty() && bank.len() <= 128 && valid_start && valid_rest;
     if !valid {
         return Err(ConfigError::Invalid(format!(
-            "project {project:?} docs bank {bank:?} is not path-segment safe"
+            "project {project:?} {label} {bank:?} is not path-segment safe"
         )));
     }
     Ok(())

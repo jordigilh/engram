@@ -899,6 +899,64 @@ fn cli_once_fails_when_the_transcript_root_is_missing() {
 }
 
 #[cfg(unix)]
+#[test]
+fn cli_once_fails_when_a_transcript_file_is_skipped() {
+    let Some((database_url, _client)) = setup() else {
+        return;
+    };
+    let server = TestServer::start(200, Duration::ZERO);
+    let transcripts = temp_dir("cli-skipped-transcripts");
+    let disorder = temp_dir("cli-skipped-config");
+    write_transcript(
+        &transcripts,
+        "session",
+        &[transcript_user("No, that's wrong; use the other approach.")],
+    );
+    // A second, unreadable transcript file: invalid UTF-8 is skipped per file,
+    // which must fail --once instead of looking like a clean backfill.
+    std::fs::write(
+        transcripts
+            .join("workspace-demo")
+            .join("agent-transcripts")
+            .join("corrupt.jsonl"),
+        b"\xff\xfe not utf-8\n",
+    )
+    .expect("corrupt transcript");
+    let config_path = write_config_maybe_transcripts(
+        None,
+        Some(&transcripts),
+        &disorder,
+        &database_url,
+        server.url(),
+    );
+
+    let config = config_path.to_str().expect("config utf8");
+    let (status, _stdout, stderr) = run_cli(
+        &[
+            "run",
+            "--config",
+            config,
+            "--project",
+            "example",
+            "--once",
+            "--drain-timeout",
+            "30",
+        ],
+        Duration::from_secs(30),
+    );
+    assert!(
+        !status.success(),
+        "a skipped transcript file must fail --once, stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("transcript file(s) skipped"),
+        "stderr: {stderr}"
+    );
+    // The readable file's window was still delivered.
+    assert_eq!(transcript_bank_posts(&server), 1);
+}
+
+#[cfg(unix)]
 fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_engram-ingest")
 }

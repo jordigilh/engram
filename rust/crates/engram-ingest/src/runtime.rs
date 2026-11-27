@@ -20,7 +20,8 @@ use crate::store::{
 };
 use crate::transcript::{discover_transcripts, TranscriptError};
 use crate::transcript_ingest::{
-    ingest_transcript_source, TranscriptIngestError, TranscriptOptions, TranscriptSource,
+    ingest_transcript_source_with_discovery, TranscriptIngestError, TranscriptOptions,
+    TranscriptSource,
 };
 use crate::worker::{
     BankConfig, Shutdown, SlotHealth, WorkerConfig, WorkerError, WorkerHandle,
@@ -92,6 +93,10 @@ pub enum SourceOutcome {
         root: String,
         files: usize,
         windows_retained: usize,
+        /// Windows withheld this scan because another path already owns their
+        /// document id. The owning path retains the content, so this is an
+        /// observability signal, not data loss.
+        windows_conflicted: usize,
         windows_queued: usize,
         windows_auto_resolved: usize,
         files_skipped: usize,
@@ -138,6 +143,7 @@ impl SourceOutcome {
                 tag,
                 files,
                 windows_retained,
+                windows_conflicted,
                 windows_queued,
                 windows_auto_resolved,
                 files_skipped,
@@ -145,8 +151,9 @@ impl SourceOutcome {
                 ..
             } => format!(
                 "{project}/{tag}: {files} transcript file(s), {windows_retained} windows retained \
-                 ({windows_queued} queued, {windows_auto_resolved} auto-resolved), \
-                 {files_skipped} file(s) skipped, {transcripts_removed} transcript(s) removed"
+                 ({windows_conflicted} conflicted, {windows_queued} queued, \
+                 {windows_auto_resolved} auto-resolved), {files_skipped} file(s) skipped, \
+                 {transcripts_removed} transcript(s) removed"
             ),
         }
     }
@@ -265,7 +272,7 @@ impl Runtime {
             if shutdown.is_some_and(Shutdown::is_cancelled) {
                 break;
             }
-            match self.ingest_transcripts(client, source, shutdown)? {
+            match self.ingest_transcripts(client, source)? {
                 Some(outcome) => outcomes.push(outcome),
                 None => break,
             }
@@ -277,26 +284,16 @@ impl Runtime {
     /// deterministic `RegexSignalDetector` and `RetainResolver` defaults keep
     /// this offline; retain/delete delivery stays with the bank-scoped worker
     /// supervisor, which serves `source.bank_id` because the runtime config
-    /// includes transcript banks in `bank_ids()`.
+    /// includes transcript banks in `bank_ids()`. The discovery walk is
+    /// bounded by the configured root and the per-file read cap; there is no
+    /// intra-source cancellation, which the README records as an accepted
+    /// bound.
     fn ingest_transcripts(
         &self,
         client: &mut Client,
         source: &TranscriptSource,
-        shutdown: Option<&Shutdown>,
     ) -> Result<Option<SourceOutcome>, RuntimeError> {
         let root = source.root.to_string_lossy().to_string();
-        // The discovery walk can be long; honor cancellation up front like the
-        // docs scanner does before its walk. The walk is bounded by the
-        // configured root and per-file read cap; there is no intra-source
-        // cancellation, which the README records as an accepted bound.
-        if shutdown.is_some_and(Shutdown::is_cancelled) {
-            return Ok(None);
-        }
-        // Pre-flight discovery: an existing root whose complete discovery
-        // matches no files while the manifest still has active documents is
-        // the transcript shape of an unmounted docs root (usually a
-        // workspace_prefixes typo). Guard it exactly like the docs scanner so
-        // the pass cannot mass-tombstone every retained window.
         let discovery = match discover_transcripts(&source.root, &source.workspace_prefixes) {
             Ok(discovery) => discovery,
             Err(TranscriptError::MissingRoot(_)) => {
@@ -323,6 +320,12 @@ impl Runtime {
                 }));
             }
         };
+        // An existing root whose complete discovery matches no files while the
+        // manifest still has active documents is the transcript shape of an
+        // unmounted docs root (usually a workspace_prefixes typo). Guard it
+        // exactly like the docs scanner so the pass cannot mass-tombstone
+        // every retained window. The same discovery snapshot is applied
+        // below, so the guard decision and the plan cannot diverge.
         if discovery.files.is_empty() && discovery.complete {
             let source_id = upsert_source(client, &source.record())?;
             let manifest = load_manifest(client, source_id)?;
@@ -344,9 +347,10 @@ impl Runtime {
                 }));
             }
         }
-        let outcome = match ingest_transcript_source(
+        let outcome = match ingest_transcript_source_with_discovery(
             client,
             source,
+            discovery,
             &TranscriptOptions::default(),
             Utc::now(),
         ) {
@@ -377,6 +381,11 @@ impl Runtime {
             }
         };
         let windows_retained = outcome.files.iter().map(|file| file.windows_retained).sum();
+        let windows_conflicted = outcome
+            .files
+            .iter()
+            .map(|file| file.windows_conflicted)
+            .sum();
         let files_skipped = outcome
             .files
             .iter()
@@ -388,6 +397,7 @@ impl Runtime {
             root,
             files: outcome.files.len(),
             windows_retained,
+            windows_conflicted,
             windows_queued: outcome.windows_queued,
             windows_auto_resolved: outcome.windows_auto_resolved,
             files_skipped,
@@ -696,6 +706,7 @@ mod tests {
             root: "/tmp/transcripts".to_string(),
             files: 3,
             windows_retained: 5,
+            windows_conflicted: 1,
             windows_queued: 1,
             windows_auto_resolved: 2,
             files_skipped: 1,
@@ -705,6 +716,7 @@ mod tests {
         assert!(label.contains("example/transcripts"), "{label}");
         assert!(label.contains("3 transcript file(s)"), "{label}");
         assert!(label.contains("5 windows retained"), "{label}");
+        assert!(label.contains("1 conflicted"), "{label}");
         assert!(label.contains("1 queued"), "{label}");
         assert!(label.contains("2 auto-resolved"), "{label}");
         assert!(label.contains("1 file(s) skipped"), "{label}");

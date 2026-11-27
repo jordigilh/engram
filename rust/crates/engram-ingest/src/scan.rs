@@ -26,7 +26,7 @@ use std::os::unix::ffi::OsStrExt;
 
 use globset::{GlobBuilder, GlobMatcher};
 
-use crate::config::DocsSource;
+use crate::config::{DocsSource, DocumentFormat};
 #[cfg(not(unix))]
 use crate::document::file_timestamp;
 use crate::document::{file_timestamp_from_metadata, plan_document};
@@ -72,6 +72,12 @@ pub enum ScanError {
         path: PathBuf,
         #[source]
         source: SynthesisError,
+    },
+    #[error("cannot extract PDF document {path}: {source}")]
+    Extract {
+        path: PathBuf,
+        #[source]
+        source: crate::pdf::PdfError,
     },
 }
 
@@ -274,27 +280,51 @@ impl UnixWalker<'_> {
                     path: self.root.join(&child),
                     source,
                 })?;
-            let content = decode(&bytes);
-            let calls = plan_document(
-                &self.source.tag,
+            let scanned = plan_scanned_file(
+                self.source,
                 &child,
-                &content,
+                &bytes,
                 file_timestamp_from_metadata(&metadata),
-            )
-            .map_err(|source| ScanError::Plan {
-                path: self.root.join(&child),
-                source,
-            })?;
+                &self.root.join(&child),
+            )?;
             self.report.matched_files += 1;
-            self.files.push(ScannedFile {
-                relative_path: child,
-                content_sha256: ContentHash::of(content.as_bytes()),
-                size_bytes: bytes.len() as i64,
-                calls,
-            });
+            self.files.push(scanned);
         }
         Ok(())
     }
+}
+
+/// Turn one read file into reconciliation input using the source's configured
+/// format. Markdown keeps the CocoIndex decode; PDF renders page-marked text.
+/// Both feed the same base ID, chunking, synthesis, tags, and timestamp path.
+fn plan_scanned_file(
+    source: &DocsSource,
+    relative: &str,
+    bytes: &[u8],
+    timestamp: Option<String>,
+    path: &Path,
+) -> Result<ScannedFile, ScanError> {
+    let content = match source.document_format {
+        DocumentFormat::Markdown => decode(bytes),
+        DocumentFormat::Pdf => crate::pdf::render_pdf(bytes)
+            .map_err(|source| ScanError::Extract {
+                path: path.to_path_buf(),
+                source,
+            })?
+            .unwrap_or_default(),
+    };
+    let calls = plan_document(&source.tag, relative, &content, timestamp).map_err(|source| {
+        ScanError::Plan {
+            path: path.to_path_buf(),
+            source,
+        }
+    })?;
+    Ok(ScannedFile {
+        relative_path: relative.to_string(),
+        content_sha256: ContentHash::of(content.as_bytes()),
+        size_bytes: bytes.len() as i64,
+        calls,
+    })
 }
 
 #[cfg(unix)]
@@ -445,19 +475,10 @@ impl Walker<'_> {
                 path: path.clone(),
                 source,
             })?;
-            let content = decode(&bytes);
-            let calls = plan_document(&self.source.tag, &relative, &content, file_timestamp(&path))
-                .map_err(|source| ScanError::Plan {
-                    path: path.clone(),
-                    source,
-                })?;
+            let scanned =
+                plan_scanned_file(self.source, &relative, &bytes, file_timestamp(&path), &path)?;
             self.report.matched_files += 1;
-            self.files.push(ScannedFile {
-                relative_path: relative,
-                content_sha256: ContentHash::of(content.as_bytes()),
-                size_bytes: bytes.len() as i64,
-                calls,
-            });
+            self.files.push(scanned);
         }
         Ok(())
     }
@@ -701,6 +722,15 @@ mod tests {
     }
 
     fn source(root: &Path, include: &[&str], exclude: &[&str]) -> DocsSource {
+        source_with_format(root, include, exclude, DocumentFormat::Markdown)
+    }
+
+    fn source_with_format(
+        root: &Path,
+        include: &[&str],
+        exclude: &[&str],
+        document_format: DocumentFormat,
+    ) -> DocsSource {
         DocsSource {
             project: "example".to_string(),
             tag: "repo".to_string(),
@@ -708,6 +738,7 @@ mod tests {
             bank_id: "example-docs".to_string(),
             docs_include: include.iter().map(|value| value.to_string()).collect(),
             docs_exclude: exclude.iter().map(|value| value.to_string()).collect(),
+            document_format,
         }
     }
 
@@ -783,6 +814,93 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert!(files[0].calls.is_empty());
         assert_eq!(files[0].size_bytes, 4);
+    }
+
+    #[test]
+    fn scans_pdf_with_page_markers_and_original_file_size() {
+        let root = fixture();
+        let bytes = include_bytes!("../fixtures/pdf/guide.pdf");
+        write(&root, "guide.pdf", bytes);
+        let (files, report) = scan_source(&source_with_format(
+            &root,
+            &["**/*.pdf"],
+            &[],
+            DocumentFormat::Pdf,
+        ))
+        .expect("scan");
+
+        assert_eq!(report.matched_files, 1);
+        let file = &files[0];
+        assert_eq!(file.relative_path, "guide.pdf");
+        assert_eq!(file.size_bytes, bytes.len() as i64);
+        assert!(!file.calls.is_empty());
+        assert!(file.calls[0].content.contains("--- Page 1 ---"));
+        assert!(file.calls[0].content.contains("--- Page 3 ---"));
+        assert!(!file.calls[0].content.contains("--- Page 2 ---"));
+        assert_eq!(file.calls[0].document_id, "repo--guide");
+        assert_eq!(file.calls[0].tags, vec!["root", "repo"]);
+
+        // The manifest hash is over rendered text, not PDF bytes, so a
+        // re-render that produces the same text is not a change.
+        let rendered = crate::pdf::render_pdf(bytes)
+            .expect("render")
+            .expect("text");
+        assert_eq!(file.content_sha256, ContentHash::of(rendered.as_bytes()));
+    }
+
+    #[test]
+    fn pdf_without_text_stays_in_snapshot_without_calls() {
+        let root = fixture();
+        write(
+            &root,
+            "scan.pdf",
+            include_bytes!("../fixtures/pdf/blank.pdf"),
+        );
+        let (files, report) = scan_source(&source_with_format(
+            &root,
+            &["**/*.pdf"],
+            &[],
+            DocumentFormat::Pdf,
+        ))
+        .expect("scan");
+        assert_eq!(report.matched_files, 1);
+        assert_eq!(files.len(), 1);
+        assert!(files[0].calls.is_empty());
+        assert_eq!(
+            files[0].content_sha256,
+            ContentHash::of(b""),
+            "a text-less PDF hashes its empty rendered content"
+        );
+    }
+
+    #[test]
+    fn malformed_pdf_aborts_the_snapshot() {
+        let root = fixture();
+        write(&root, "broken.pdf", b"not a pdf");
+        let error = scan_source(&source_with_format(
+            &root,
+            &["**/*.pdf"],
+            &[],
+            DocumentFormat::Pdf,
+        ))
+        .expect_err("malformed PDF must fail the snapshot");
+        assert!(matches!(error, ScanError::Extract { .. }), "{error}");
+    }
+
+    #[test]
+    fn pdf_sources_ignore_markdown_decode_semantics() {
+        // A PDF include pattern that also matches a Markdown-looking file must
+        // parse it as PDF (Python chooses the processor by source format).
+        let root = fixture();
+        write(&root, "notes.pdf", b"# not really a pdf\n");
+        let error = scan_source(&source_with_format(
+            &root,
+            &["**/*.pdf"],
+            &[],
+            DocumentFormat::Pdf,
+        ))
+        .expect_err("non-PDF bytes");
+        assert!(matches!(error, ScanError::Extract { .. }));
     }
 
     #[test]

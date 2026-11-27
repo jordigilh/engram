@@ -27,6 +27,11 @@ sklearn/networkx versions, source commit, and SHA-256 of the three Python source
 files. CI does not run the generator, so review any `goldens.json` diff together
 with the corresponding Python source change.
 
+## PDF fixtures
+
+`pdf/` holds the issue #258 PDF parity fixture, its dependency-free generator,
+and a pdfplumber oracle. See `pdf/README.md`.
+
 ## Docs shadow gate
 
 `docs_shadow_oracle.py` and `docs_shadow_run.py` are the issue #214 slice 3

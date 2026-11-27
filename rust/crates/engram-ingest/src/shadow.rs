@@ -1038,6 +1038,7 @@ mod tests {
             bank_id: "engram-docs".to_string(),
             docs_include: vec!["**/*.md".to_string()],
             docs_exclude: Vec::new(),
+            document_format: crate::config::DocumentFormat::Markdown,
         }
     }
 

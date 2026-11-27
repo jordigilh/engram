@@ -1,0 +1,44 @@
+{
+  "provenance": {
+    "python": "3.14.6",
+    "pdfplumber": "0.11.10",
+    "source_commit": "60761771cd709035185d4c6a7aef3d147d7cf7e4",
+    "sources": {
+      "src/engram/chunking.py": "e920fcd9c339dc4399b24abb1b44d9cc96db29413fd4dc00710b37a1a6ba1ec5",
+      "src/engram/flows/configured.py": "1fff283c1ef49d6880e97561c6179fccdbb67910ce5f2e3bcfede3f2199caa1d",
+      "src/engram/synthesis.py": "9d322a88e66bc9517033b68fca09b94c3e97e86c4b0b60e1a41d40c8a6d38309"
+    },
+    "fixture": {
+      "file": "guide.pdf",
+      "sha256": "8b8f938431878f472772baecad60fba6813992eb9bddd2d85c65d6c545c4dd03",
+      "size_bytes": 1656
+    }
+  },
+  "source_tag": "manual",
+  "relative": "guide.pdf",
+  "timestamp": "2026-11-27T09:30:00.123456",
+  "pages": [
+    "Quarterly Report\nRevenue grew 12% in Café operations across every region this quarter.\nR&D (draft) review: naïve façade.",
+    "",
+    "Summary\nCafé résumé – naïve façade\nIndented detail stays indented.",
+    ""
+  ],
+  "rendered": "--- Page 1 ---\n\nQuarterly Report\nRevenue grew 12% in Café operations across every region this quarter.\nR&D (draft) review: naïve façade.\n\n--- Page 3 ---\n\nSummary\nCafé résumé – naïve façade\nIndented detail stays indented.",
+  "expected": [
+    {
+      "document_id": "manual--guide",
+      "content": "--- Page 1 ---\n\nQuarterly Report\nRevenue grew 12% in Café operations across every region this quarter.\nR&D (draft) review: naïve façade.\n\n--- Page 3 ---\n\nSummary\nCafé résumé – naïve façade\nIndented detail stays indented.",
+      "metadata": {
+        "source": "cocoindex",
+        "repo": "manual",
+        "key_sentences": "Revenue grew 12% in Café operations across every region this quarter.",
+        "keywords": "caf, grew, operations, quarter., region, revenue"
+      },
+      "tags": [
+        "root",
+        "manual"
+      ],
+      "timestamp": "2026-11-27T09:30:00.123456"
+    }
+  ]
+}

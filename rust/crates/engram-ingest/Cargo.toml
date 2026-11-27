@@ -20,6 +20,7 @@ clap = { workspace = true }
 getrandom = { workspace = true }
 globset = { workspace = true }
 libc = { workspace = true }
+pdf-extract = { workspace = true }
 postgres = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }

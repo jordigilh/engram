@@ -21,6 +21,7 @@ pub mod issue_poll;
 pub mod issues;
 pub mod jobs;
 pub mod ledger;
+pub mod pdf;
 pub mod python_text;
 pub mod reconcile;
 pub mod runtime;
@@ -40,9 +41,12 @@ pub use boards::{
     BOARD_STATUS_ORDER,
 };
 pub use chunking::{split_fixed_window, split_markdown_sections};
-pub use config::{DocsSource, RuntimeConfig, DEFAULT_SCAN_INTERVAL_SECS};
+pub use config::{DocsSource, DocumentFormat, RuntimeConfig, DEFAULT_SCAN_INTERVAL_SECS};
 pub use discussions::{discussion_header, plan_discussion, Discussion, DiscussionComment};
-pub use document::{format_local_timestamp, plan_document, relative_path, RetainCall};
+pub use document::{
+    file_timestamp_from_metadata_with_offset, format_local_timestamp, plan_document, relative_path,
+    RetainCall,
+};
 pub use hashing::{sha256_hex, ContentHash, HashError};
 pub use http::{HttpResponse, HttpTransport, ReqwestTransport};
 pub use ids::{chunk_document_id, document_base_id, pathlib_suffix, stable_section_key};
@@ -62,6 +66,7 @@ pub use ledger::{
     is_valid_bank_id, Manifest, ManifestChunk, ManifestDocument, RecordState, SourceRecord,
     ISSUE_LAYOUT_VERSION, LAYOUT_VERSION, TRANSCRIPT_LAYOUT_VERSION,
 };
+pub use pdf::{render_pages, render_pdf, PdfError};
 pub use reconcile::{
     reconcile, reconcile_with_removed_reason, DeleteReason, Reconciliation, ScannedFile,
     TranscriptWindowMeta,

@@ -30,6 +30,9 @@ discussions/project boards).
 - Transcript ingestion: JSONL parsing, Python-compatible learning windows and
   SHA-1 window ids, durable ack watermarks, append replay, truncation/rotation
   tolerance, and the existing ledger/worker path for retain and tombstones.
+- PDF docs sources: pure-Rust text extraction with Python-compatible page
+  markers, blank-page omission, line shaping, and the shared document planner
+  (ids, chunking, synthesis, tags, timestamp). See `fixtures/pdf/README.md`.
 - Runtime entrypoint: project config/source selection, deterministic docs scan,
   startup and periodic scan → reconcile → apply for docs **and transcript
   sources**, one shared Hindsight sink, the worker supervisor (docs and
@@ -39,8 +42,9 @@ discussions/project boards).
 
 - Filesystem watcher hints. The runtime uses a bounded periodic reconciliation
   scan; event debounce/hints are a later ingestion slice.
-- PDF extraction. A `document_format = "pdf"` source is rejected at startup
-  until the Rust extractor lands.
+- OCR for scanned PDFs (the Python path has none today) and pdfplumber's full
+  layout algorithm for multi-column/table PDFs. Text-only extraction and the
+  fixture-pinned page contract are in this slice.
 - LLM-backed contradiction resolution. The transcript path runs the
   deterministic `RegexSignalDetector` and `RetainResolver` (retain/no-op) in
   Shadow mode; the `ContradictionResolver`/`MemoryInvalidator` traits stay
@@ -374,7 +378,15 @@ tag = "example"
 root = "~/src/example"                           # ~ and $VARS expand; relative to this file
 docs_include = ["**/*.md"]
 docs_exclude = ["**/vendor/**"]
-document_format = "markdown"                     # "pdf" is rejected in this slice
+document_format = "markdown"
+
+# A PDF source needs PDF include patterns; the processor follows the source
+# format, so a Markdown glob here would send Markdown files to the PDF parser.
+[[projects.example.sources]]
+tag = "example-pdfs"
+root = "~/src/example/docs"
+docs_include = ["**/*.pdf"]
+document_format = "pdf"
 ```
 
 Start the resident loop (SIGINT/SIGTERM cancel it, then the worker drains and

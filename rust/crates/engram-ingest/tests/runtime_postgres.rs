@@ -156,6 +156,39 @@ docs_bank = "example-docs"
     path
 }
 
+fn write_pdf_config(
+    root: &Path,
+    disorder: &Path,
+    database_url: &str,
+    hindsight_url: &str,
+) -> PathBuf {
+    let path = disorder.join("projects.toml");
+    let body = format!(
+        r#"
+[defaults]
+hindsight_url = "{}"
+pg_dsn = "{}"
+scan_interval_seconds = 1
+concurrency = 1
+allow_empty_root = true
+
+[projects.example]
+docs_bank = "example-docs"
+
+[[projects.example.sources]]
+tag = "repo"
+root = "{}"
+docs_include = ["**/*.pdf"]
+document_format = "pdf"
+"#,
+        toml_escape(hindsight_url),
+        toml_escape(database_url),
+        toml_escape(&root.to_string_lossy())
+    );
+    std::fs::write(&path, body).expect("config");
+    path
+}
+
 fn write_transcript(root: &Path, name: &str, messages: &[serde_json::Value]) {
     let dir = root.join("workspace-demo").join("agent-transcripts");
     std::fs::create_dir_all(&dir).expect("transcript dir");
@@ -217,6 +250,13 @@ fn active_documents(client: &mut Client) -> i64 {
             &[],
         )
         .expect("document count")
+        .get(0)
+}
+
+fn active_chunks(client: &mut Client) -> i64 {
+    client
+        .query_one("SELECT count(*) FROM engram_ingest.chunks", &[])
+        .expect("chunk count")
         .get(0)
 }
 
@@ -293,6 +333,146 @@ fn ingests_retains_deletes_and_exposes_metrics() {
         "requests: {requests:?}"
     );
     assert_eq!(active_documents(&mut client), 1);
+}
+
+#[test]
+fn ingests_pdf_with_python_page_contract_and_deletes_it() {
+    let Some((database_url, mut client)) = setup() else {
+        return;
+    };
+    let server = TestServer::start(200, Duration::ZERO);
+    let root = temp_dir("pdf-docs");
+    let disorder = temp_dir("pdf-config");
+    std::fs::create_dir_all(root.join("manual")).expect("pdf dir");
+    std::fs::write(
+        root.join("manual/guide.pdf"),
+        include_bytes!("../fixtures/pdf/guide.pdf"),
+    )
+    .expect("pdf fixture");
+    let config_path = write_pdf_config(&root, &disorder, &database_url, server.url());
+
+    let runtime = Runtime::new(load_config(&config_path)).expect("runtime");
+    let handle = runtime.start(Shutdown::default()).expect("start");
+    assert!(matches!(
+        handle.prepared().outcomes.as_slice(),
+        [SourceOutcome::Applied {
+            scanned_files: 1,
+            ..
+        }]
+    ));
+    handle.drain(Duration::from_secs(30)).expect("drain");
+
+    let format: String = client
+        .query_one(
+            "SELECT document_format FROM engram_ingest.sources WHERE tag = 'repo'",
+            &[],
+        )
+        .expect("source row")
+        .get(0);
+    assert_eq!(
+        format, "pdf",
+        "the ledger must record the source's real format"
+    );
+
+    let requests = server.requests();
+    let posts: Vec<&String> = requests
+        .iter()
+        .filter(|request| request.starts_with("POST"))
+        .collect();
+    assert_eq!(posts.len(), 1, "requests: {requests:?}");
+    let body = posts[0];
+    assert!(
+        body.contains("\"document_id\":\"repo--manual--guide\""),
+        "{body}"
+    );
+    assert!(body.contains("--- Page 1 ---"), "{body}");
+    assert!(body.contains("--- Page 3 ---"), "{body}");
+    assert!(!body.contains("--- Page 2 ---"), "{body}");
+    assert!(body.contains("Café"), "non-ASCII text survives: {body}");
+    assert!(body.contains("\"timestamp\""), "{body}");
+
+    // Replay of unchanged bytes must not duplicate retains (stable ids/hash).
+    let before = server.requests().len();
+    run_and_drain(load_config(&config_path));
+    assert_eq!(server.requests().len(), before, "no duplicate retain");
+
+    // Source deletion reconciles into a Hindsight DELETE and no active doc.
+    std::fs::remove_file(root.join("manual/guide.pdf")).expect("remove pdf");
+    run_and_drain(load_config(&config_path));
+    assert!(
+        methods(&server.requests())
+            .iter()
+            .any(|method| method == "DELETE"),
+        "requests: {:?}",
+        server.requests()
+    );
+    assert_eq!(active_documents(&mut client), 0);
+}
+
+#[test]
+fn corrupt_pdf_skips_the_source_and_leaves_the_manifest_untouched() {
+    let Some((database_url, mut client)) = setup() else {
+        return;
+    };
+    let server = TestServer::start(200, Duration::ZERO);
+    let root = temp_dir("broken-pdf-docs");
+    let disorder = temp_dir("broken-pdf-config");
+    std::fs::create_dir_all(root.join("manual")).expect("pdf dir");
+    let pdf_path = root.join("manual/guide.pdf");
+    std::fs::write(&pdf_path, include_bytes!("../fixtures/pdf/guide.pdf")).expect("pdf fixture");
+    let config_path = write_pdf_config(&root, &disorder, &database_url, server.url());
+
+    // First pass retains the valid document and creates the manifest rows.
+    let runtime = Runtime::new(load_config(&config_path)).expect("runtime");
+    let handle = runtime.start(Shutdown::default()).expect("start");
+    assert!(matches!(
+        handle.prepared().outcomes.as_slice(),
+        [SourceOutcome::Applied {
+            scanned_files: 1,
+            ..
+        }]
+    ));
+    handle.drain(Duration::from_secs(30)).expect("drain");
+    assert_eq!(active_documents(&mut client), 1);
+    let chunks_before = active_chunks(&mut client);
+    assert!(chunks_before > 0);
+    let requests_before = server.requests().len();
+
+    // A corrupt replacement must skip the snapshot, not reconcile to empty.
+    std::fs::write(&pdf_path, include_bytes!("../fixtures/pdf/broken.pdf"))
+        .expect("broken fixture");
+    let runtime = Runtime::new(load_config(&config_path)).expect("runtime");
+    let handle = runtime.start(Shutdown::default()).expect("start");
+    let outcomes = &handle.prepared().outcomes;
+    assert!(
+        matches!(
+            outcomes.as_slice(),
+            [SourceOutcome::Skipped { reason, .. }]
+                if reason.contains("scan aborted") && reason.contains("corrupt page content")
+        ),
+        "outcomes: {outcomes:?}"
+    );
+    handle.drain(Duration::from_secs(30)).expect("drain");
+
+    assert_eq!(
+        active_documents(&mut client),
+        1,
+        "the previous document must stay active"
+    );
+    assert_eq!(
+        active_chunks(&mut client),
+        chunks_before,
+        "previous chunks must stay in the manifest"
+    );
+    let requests_after = server.requests();
+    assert_eq!(
+        requests_after.len(),
+        requests_before,
+        "a rejected snapshot must not retain or delete"
+    );
+    assert!(!methods(&requests_after)
+        .iter()
+        .any(|method| method == "DELETE"));
 }
 
 #[test]

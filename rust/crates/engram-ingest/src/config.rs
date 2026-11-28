@@ -61,6 +61,25 @@ pub struct DocsSource {
     pub bank_id: String,
     pub docs_include: Vec<String>,
     pub docs_exclude: Vec<String>,
+    /// How files under `root` become text before the shared document planner.
+    pub document_format: DocumentFormat,
+}
+
+/// Python's `document_format` after validation/normalization
+/// (`project_config.py`: `"pdf"` or `"markdown"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentFormat {
+    Markdown,
+    Pdf,
+}
+
+impl DocumentFormat {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Markdown => "markdown",
+            Self::Pdf => "pdf",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,21 +196,16 @@ impl RuntimeConfig {
                     .unwrap_or("markdown")
                     .trim()
                     .to_ascii_lowercase();
-                match format.as_str() {
-                    "markdown" | "md" => {}
-                    "pdf" => {
-                        return Err(ConfigError::Invalid(format!(
-                            "project {project:?} source {tag:?} uses document_format = \"pdf\"; \
-                             PDF extraction is not implemented in the Rust runtime yet"
-                        )))
-                    }
+                let document_format = match format.as_str() {
+                    "markdown" | "md" => DocumentFormat::Markdown,
+                    "pdf" => DocumentFormat::Pdf,
                     other => {
                         return Err(ConfigError::Invalid(format!(
                             "project {project:?} source {tag:?} document_format must be \
                              'markdown' or 'pdf', got {other:?}"
                         )))
                     }
-                }
+                };
                 let root = source
                     .root
                     .as_deref()
@@ -236,6 +250,7 @@ impl RuntimeConfig {
                     bank_id,
                     docs_include: source.docs_include.clone(),
                     docs_exclude: source.docs_exclude.clone(),
+                    document_format,
                 });
             }
             let transcript = transcript_source(project, table, &document.defaults, base, env)?;
@@ -1115,21 +1130,47 @@ docs_include = ["**/*.md"]
     }
 
     #[test]
-    fn rejects_pdf_and_unknown_formats() {
+    fn accepts_pdf_format_and_defaults_to_markdown() {
         let (_dir, pdf) = write_config(
+            r#"
+[projects.example]
+docs_bank = "example-docs"
+[[projects.example.sources]]
+tag = "manual"
+root = "/tmp/manual"
+docs_include = ["**/*.pdf"]
+document_format = "PDF"
+"#,
+        );
+        let config = load(&pdf, &["example"], &HashMap::new()).expect("pdf is supported");
+        assert_eq!(config.sources[0].document_format, DocumentFormat::Pdf);
+        assert_eq!(config.sources[0].document_format.as_str(), "pdf");
+
+        let (_dir, implicit) = write_config(valid_config());
+        let config = load(&implicit, &["example"], &HashMap::new()).expect("load");
+        assert_eq!(
+            config.sources[0].document_format,
+            DocumentFormat::Markdown,
+            "an omitted document_format keeps the Python default"
+        );
+
+        let (_dir, alias) = write_config(
             r#"
 [projects.example]
 docs_bank = "example-docs"
 [[projects.example.sources]]
 tag = "repo"
 root = "/tmp/repo"
-docs_include = ["**/*.pdf"]
-document_format = "pdf"
+docs_include = ["**/*.md"]
+docs_format = "md"
 "#,
         );
-        let error = load(&pdf, &["example"], &HashMap::new()).expect_err("pdf");
-        assert!(error.to_string().contains("PDF extraction"));
+        let config = load(&alias, &["example"], &HashMap::new()).expect("alias");
+        assert_eq!(config.sources[0].document_format, DocumentFormat::Markdown);
+    }
 
+    #[test]
+    fn rejects_unknown_formats() {
         let (_dir, other) = write_config(
             r#"
 [projects.example]
@@ -1143,6 +1184,7 @@ document_format = "html"
         );
         let error = load(&other, &["example"], &HashMap::new()).expect_err("format");
         assert!(error.to_string().contains("document_format"));
+        assert!(error.to_string().contains("'markdown' or 'pdf'"));
     }
 
     #[test]

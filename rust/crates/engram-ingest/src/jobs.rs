@@ -263,6 +263,19 @@ mod tests {
     }
 
     #[test]
+    fn job_state_strings_round_trip_for_persistence() {
+        for state in [
+            JobState::Pending,
+            JobState::Leased,
+            JobState::Succeeded,
+            JobState::Dead,
+        ] {
+            assert_eq!(JobState::parse(state.as_str()), Some(state));
+        }
+        assert_eq!(JobState::parse("unknown"), None);
+    }
+
+    #[test]
     fn stale_token_cannot_complete_or_heartbeat() {
         let mut job = Job::pending(1);
         let lease = job.claim("worker-a", 0, 10_000).unwrap();

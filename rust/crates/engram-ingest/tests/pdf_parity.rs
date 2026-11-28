@@ -1,0 +1,225 @@
+//! PDF parity against the frozen Python oracle (issue #258).
+//!
+//! `fixtures/pdf/goldens.json` is produced by the real Python
+//! `process_pdf_file` path (pdfplumber) plus `_retain_document`; see
+//! `fixtures/pdf/README.md`. These tests pin the business contract:
+//!
+//! - rendered page markers, spacing, and blank-page omission match byte-for-byte;
+//! - the shared planner gives the same document id, chunks, synthesis metadata,
+//!   tags, and timestamp as Markdown does in Python.
+
+use std::collections::BTreeMap;
+
+use engram_ingest::{
+    file_timestamp_from_metadata_with_offset, format_local_timestamp, plan_document, render_pdf,
+    ContentHash,
+};
+use serde::Deserialize;
+
+const GOLDENS: &str = include_str!("../fixtures/pdf/goldens.json");
+const FIXTURE: &[u8] = include_bytes!("../fixtures/pdf/guide.pdf");
+const ENCRYPTED_EMPTY: &[u8] = include_bytes!("../fixtures/pdf/encrypted_empty.pdf");
+const ENCRYPTED_SECRET: &[u8] = include_bytes!("../fixtures/pdf/encrypted_secret.pdf");
+
+#[derive(Debug, Deserialize)]
+struct Goldens {
+    provenance: Provenance,
+    source_tag: String,
+    relative: String,
+    timestamp: Option<String>,
+    pages: Vec<String>,
+    rendered: String,
+    encrypted_empty_rendered: String,
+    timestamp_cases: Vec<TimestampCase>,
+    mtime_cases: Vec<MtimeCase>,
+    expected: Vec<ExpectedCall>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MtimeCase {
+    seconds: i64,
+    nanos: u32,
+    expected: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TimestampCase {
+    seconds: i64,
+    micros: u32,
+    offset_seconds: i32,
+    expected: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct Provenance {
+    fixture: FixtureIdentity,
+    sources: BTreeMap<String, String>,
+    pdfplumber: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct FixtureIdentity {
+    file: String,
+    sha256: String,
+    size_bytes: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExpectedCall {
+    document_id: String,
+    content: String,
+    metadata: BTreeMap<String, String>,
+    tags: Vec<String>,
+    timestamp: Option<String>,
+}
+
+#[test]
+fn fixture_bytes_match_the_golden_provenance() {
+    assert!(!GOLDENS.is_empty());
+    let goldens: Goldens = serde_json::from_str(GOLDENS).expect("goldens");
+    assert_eq!(goldens.provenance.fixture.file, "guide.pdf");
+    assert_eq!(
+        goldens.provenance.pdfplumber, "0.11.10",
+        "pyproject.toml pins pdfplumber; regenerate the oracle with that version"
+    );
+    assert_eq!(goldens.provenance.fixture.size_bytes, FIXTURE.len());
+    assert_eq!(
+        goldens.provenance.fixture.sha256,
+        ContentHash::of(FIXTURE).to_hex(),
+        "guide.pdf and goldens.json drifted; regenerate both"
+    );
+}
+
+#[test]
+fn oracle_is_pinned_to_the_python_sources_it_came_from() {
+    let goldens: Goldens = serde_json::from_str(GOLDENS).expect("goldens");
+    assert_eq!(
+        goldens.provenance.sources.len(),
+        3,
+        "configured.py, chunking.py, and synthesis.py must be pinned"
+    );
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    for (relative, expected) in &goldens.provenance.sources {
+        let bytes = std::fs::read(root.join(relative))
+            .unwrap_or_else(|error| panic!("read {relative}: {error}"));
+        assert_eq!(
+            ContentHash::of(&bytes).to_hex(),
+            *expected,
+            "{relative} changed; regenerate the PDF oracle"
+        );
+    }
+}
+
+#[test]
+fn timestamp_formatting_matches_python_isoformat() {
+    let goldens: Goldens = serde_json::from_str(GOLDENS).expect("goldens");
+    for case in &goldens.timestamp_cases {
+        assert_eq!(
+            format_local_timestamp(case.seconds, case.micros, case.offset_seconds)
+                .expect("timestamp"),
+            case.expected
+        );
+    }
+}
+
+#[test]
+fn file_mtime_conversion_matches_python_fromtimestamp() {
+    let goldens: Goldens = serde_json::from_str(GOLDENS).expect("goldens");
+    assert_eq!(goldens.mtime_cases.len(), 4);
+    for (index, case) in goldens.mtime_cases.iter().enumerate() {
+        let path =
+            std::env::temp_dir().join(format!("engram-pdf-mtime-{}-{index}", std::process::id()));
+        std::fs::write(&path, b"mtime").expect("write");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("open");
+        let times = std::fs::FileTimes::new().set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::new(case.seconds as u64, case.nanos),
+        );
+        file.set_times(times).expect("set mtime");
+        let metadata = std::fs::metadata(&path).expect("metadata");
+        let actual = file_timestamp_from_metadata_with_offset(&metadata, 0).expect("timestamp");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(actual, case.expected, "case {index}");
+    }
+}
+
+#[test]
+fn rendered_pdf_matches_python_byte_for_byte() {
+    let goldens: Goldens = serde_json::from_str(GOLDENS).expect("goldens");
+    let rendered = render_pdf(FIXTURE).expect("render").expect("text");
+    assert_eq!(rendered, goldens.rendered);
+}
+
+#[test]
+fn empty_user_password_pdf_matches_python() {
+    let goldens: Goldens = serde_json::from_str(GOLDENS).expect("goldens");
+    let rendered = render_pdf(ENCRYPTED_EMPTY).expect("decrypt").expect("text");
+    assert_eq!(rendered, goldens.encrypted_empty_rendered);
+    assert!(rendered.contains("Café secret is readable."));
+}
+
+#[test]
+fn password_protected_pdf_is_rejected() {
+    let error = render_pdf(ENCRYPTED_SECRET).expect_err("password required");
+    assert!(
+        error.to_string().contains("cannot extract PDF text"),
+        "{error}"
+    );
+}
+
+#[test]
+fn python_oracle_keeps_blank_pages_before_omission() {
+    let goldens: Goldens = serde_json::from_str(GOLDENS).expect("goldens");
+    assert_eq!(goldens.pages.len(), 4);
+    assert!(!goldens.pages[0].trim().is_empty());
+    assert!(goldens.pages[1].trim().is_empty(), "page 2 is blank");
+    assert!(!goldens.pages[2].trim().is_empty());
+    assert!(goldens.pages[3].trim().is_empty(), "page 4 is spaces only");
+}
+
+#[test]
+fn page_markers_keep_python_spacing_and_omit_blank_pages() {
+    let rendered = render_pdf(FIXTURE).expect("render").expect("text");
+    assert!(rendered.starts_with("--- Page 1 ---\n\nQuarterly Report\n"));
+    assert!(rendered.contains("\n\n--- Page 3 ---\n\nSummary\n"));
+    assert!(!rendered.contains("--- Page 2 ---"));
+    assert!(!rendered.contains("--- Page 4 ---"));
+    // pdfplumber trims line edges and collapses the paragraph gap.
+    assert!(rendered.contains("Indented detail stays indented."));
+    assert!(!rendered.contains("\n\n\n"));
+}
+
+#[test]
+fn shared_planner_matches_python_document_ids_metadata_and_timestamp() {
+    let goldens: Goldens = serde_json::from_str(GOLDENS).expect("goldens");
+    let calls = plan_document(
+        &goldens.source_tag,
+        &goldens.relative,
+        &goldens.rendered,
+        goldens.timestamp.clone(),
+    )
+    .expect("plan");
+
+    assert_eq!(calls.len(), goldens.expected.len());
+    for (call, expected) in calls.iter().zip(&goldens.expected) {
+        assert_eq!(call.document_id, expected.document_id);
+        assert_eq!(call.content, expected.content);
+        assert_eq!(call.metadata, expected.metadata);
+        assert_eq!(call.tags, expected.tags);
+        assert_eq!(call.timestamp, expected.timestamp);
+        assert!(!call.content.is_empty());
+    }
+}
+
+#[test]
+fn pdf_metadata_uses_the_markdown_synthesis_path() {
+    let goldens: Goldens = serde_json::from_str(GOLDENS).expect("goldens");
+    let call = &goldens.expected[0];
+    assert_eq!(call.metadata["source"], "cocoindex");
+    assert_eq!(call.metadata["repo"], "manual");
+    assert!(!call.metadata["keywords"].is_empty());
+    assert_eq!(call.tags, vec!["root", "manual"]);
+    assert_eq!(call.document_id, "manual--guide");
+}

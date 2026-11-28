@@ -194,6 +194,7 @@ impl SourceOptions {
             bank_id: self.bank.clone(),
             docs_include: self.include.clone(),
             docs_exclude: self.exclude.clone(),
+            document_format: engram_ingest::DocumentFormat::Markdown,
         }
     }
 }

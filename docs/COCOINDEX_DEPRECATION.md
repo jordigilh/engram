@@ -264,8 +264,12 @@ backout before dropping anything.
 - GitHub discussions and project boards are implemented natively in
   `engram-ingest` (#244), including the literal board slug, `Total items`
   count over all nodes, and the fixed status order.
-- PDF text extraction is native (#258); pdfplumber's layout algorithm for
-  multi-column/table PDFs and the transcript contradiction pipeline remain
-  parity surface.
+- PDF text extraction is native (#258, PR #260): page markers, blank-page
+  omission, whitespace-only no-retain, shared IDs/chunking/synthesis/timestamp,
+  plus a pdfplumber oracle, encrypted/mtime parity, and a 9-case differential
+  corpus. pdfplumber's full layout algorithm for multi-column/table/rotated
+  PDFs and the transcript contradiction pipeline remain parity surfaces.
+  Residual parser hardening is #261, operational evidence is #263, and dropping
+  the Python/pdfplumber path is #262.
 - Hindsight retain is not idempotent by itself; stable IDs must be validated
   against duplicate consolidation.

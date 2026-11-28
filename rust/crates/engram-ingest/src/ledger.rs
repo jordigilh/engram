@@ -195,3 +195,75 @@ impl Manifest {
             .filter(move |chunk| chunk.document_path == relative_path)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bank_ids_keep_the_path_segment_shape() {
+        for valid in ["example-docs", "a.b_c-d", &"a".repeat(128)] {
+            assert!(is_valid_bank_id(valid), "{valid}");
+        }
+        for invalid in ["", ".", "..", "../escape", "a/b", "a b", &"a".repeat(129)] {
+            assert!(!is_valid_bank_id(invalid), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn source_records_use_the_persisted_format_and_kind() {
+        let docs = SourceRecord::markdown("p", "repo", "/root", "bank-docs", &["**/*.md"]);
+        assert_eq!(docs.document_format, "markdown");
+        assert_eq!(docs.source_kind, "docs");
+        assert_eq!(docs.docs_include, vec!["**/*.md"]);
+
+        let issue = SourceRecord::issue("p", "gh", "github/repo/issues", "bank-issues", "github");
+        assert_eq!(issue.document_format, "issue");
+        assert_eq!(issue.source_kind, "github");
+        assert!(issue.docs_include.is_empty());
+
+        let transcript = SourceRecord::transcript("p", "transcripts", "/root", "bank-transcripts");
+        assert_eq!(transcript.document_format, "transcript");
+        assert_eq!(transcript.source_kind, "transcript");
+    }
+
+    #[test]
+    fn record_state_strings_round_trip_for_persistence() {
+        for state in [RecordState::Active, RecordState::Tombstoned] {
+            assert_eq!(RecordState::parse(state.as_str()), Some(state));
+        }
+        assert_eq!(RecordState::parse("deleted"), None);
+    }
+
+    #[test]
+    fn manifest_chunks_are_scoped_to_a_document() {
+        let hash = ContentHash::of(b"x");
+        let chunk = |path: &str, id: &str| ManifestChunk {
+            document_path: path.to_string(),
+            hindsight_document_id: id.to_string(),
+            chunk_key: String::new(),
+            content_sha256: hash,
+            ordinal: 0,
+            generation: 0,
+            state: RecordState::Active,
+        };
+        let mut manifest = Manifest::default();
+        manifest.chunks.insert("a".into(), chunk("a.md", "a"));
+        manifest.chunks.insert("b".into(), chunk("b.md", "b"));
+        let ids: Vec<&str> = manifest
+            .chunks_for("a.md")
+            .map(|chunk| chunk.hindsight_document_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["a"]);
+    }
+
+    #[test]
+    fn migrations_are_ordered_unique_and_non_empty() {
+        let versions: Vec<i64> = MIGRATIONS
+            .iter()
+            .map(|migration| migration.version)
+            .collect();
+        assert_eq!(versions, (1..=versions.len() as i64).collect::<Vec<_>>());
+        assert!(MIGRATIONS.iter().all(|migration| !migration.sql.is_empty()));
+    }
+}

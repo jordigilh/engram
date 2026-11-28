@@ -105,7 +105,23 @@ mod tests {
 
     #[test]
     fn byte_length_is_enforced() {
-        assert!(ContentHash::from_bytes(&[0u8; 31]).is_err());
+        assert_eq!(
+            ContentHash::from_bytes(&[0u8; 31]).unwrap_err(),
+            HashError::WrongLength { actual: 31 }
+        );
         assert!(ContentHash::from_bytes(&[0u8; 32]).is_ok());
+    }
+
+    #[test]
+    fn hex_parsing_accepts_uppercase_and_rejects_non_hex() {
+        let hash = ContentHash::of(b"engram");
+        assert_eq!(
+            ContentHash::from_hex(&hash.to_hex().to_uppercase()).unwrap(),
+            hash
+        );
+        assert_eq!(
+            ContentHash::from_hex(&"g".repeat(64)).unwrap_err(),
+            HashError::NotHex
+        );
     }
 }

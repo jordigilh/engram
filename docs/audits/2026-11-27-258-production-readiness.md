@@ -54,7 +54,7 @@ tested against real Postgres and a mock Hindsight sink.
 
 | Tier | Count | Notes |
 |---|---:|---|
-| Unit (lib) | 256 | Includes 24+ PDF-path unit tests |
+| Unit (lib) | 265 | Includes 24+ PDF-path unit tests |
 | Integration | 93+ | PDF parity 11, corpus 3, Postgres 21 (2 PDF), other crate suites |
 | Deployment smoke | 0 | **Gap E5**: no packaged-binary PDF smoke |
 
@@ -62,18 +62,20 @@ Coverage (real Postgres DSN, 2026-11-27):
 
 | Gate | Result |
 |---|---|
-| Unit business gate (`--lib`, CI exclusion regex) | **92.37% lines** |
-| All-targets gate | **93.04% lines** |
+| Unit business gate (`--lib`, CI exclusion regex) | **93.41% lines** |
+| All-targets gate | **93.25% lines** |
 | `pdf.rs` | **93.61%** |
 | `document.rs` | **95.38%** |
 | `config.rs` | **95.90%** |
 | `scan.rs` | **90.96%** |
 
-Every module owning #258 business logic is above 90% lines. Legacy/adapter
-modules below 90% at all-targets remain disclosed: `http` 78.48%, `jobs`
-84.78%, `sink` 85.24%, `runtime` 86.65%, `shadow` 88.95%, `store` 89.78%;
-their behavior is covered by the HTTP/Postgres/runtime integration tiers, not
-claimed as unit coverage. CI gates are aggregate-only (E2).
+Every module owning #258 business logic is above 90% lines. Shared business
+support was raised in this branch: `ledger.rs` 100%, `synthesis.rs` 95.25%,
+`hashing.rs` 95.65%, `jobs.rs` 93.30% (all-targets). Remaining all-targets
+modules below 90% are adapters or developer tooling: `http` 78.48%, `sink`
+85.24%, `runtime` 86.65%, `shadow` 88.95% (developer shadow harness), `store`
+89.78%; their behavior is covered by the HTTP/Postgres/runtime integration
+tiers, not claimed as unit coverage. CI gates are aggregate-only (E2).
 
 ## 3. Differential evidence
 
@@ -103,7 +105,7 @@ claimed as unit coverage. CI gates are aggregate-only (E2).
 | C8 | Low | PDF sources may include non-PDF globs and amplify C4 | **Open**: startup warning/rejection for mixed patterns |
 | C9 | Low | `sources.document_format` has no DB CHECK | **Open**: forward migration to constrain values |
 | E1 | High evidence | No cargo audit/deny/SBOM gate or cargo Dependabot | **Open**: add RustSec audit + CycloneDX SBOM + cargo ecosystem |
-| E2 | Medium evidence | CI gates are aggregate-only; legacy modules below 90% | **Disclosed**: #258 modules are >90%; per-module gate/remediation follow-up |
+| E2 | Medium evidence | CI gates are aggregate-only; legacy modules below 90% | **Addressed for shared business support** (ledger 100%, synthesis 95.25%, hashing 95.65%, jobs 93.30%); adapter-only exceptions disclosed; per-module gate follow-up |
 | E3 | Medium evidence | Oracle provenance not regenerated in CI; pdfplumber pin asserted only in Rust | **Partially fixed**: goldens regenerated at branch HEAD and pin asserted; CI freshness job deferred |
 | E4 | Medium evidence | Encryption path untested and doc claim false | **Fixed**: fixtures + positive/negative tests; audit corrected |
 | E5 | Low evidence | No deployment smoke for packaged binary | **Open** |
@@ -130,5 +132,5 @@ cargo llvm-cov -p engram-ingest --lib --ignore-filename-regex ... --fail-under-l
 cargo llvm-cov -p engram-ingest --all-targets --fail-under-lines 90
 ```
 
-Results: all pass; 93.04% all-targets, 92.37% unit business gate; `cargo audit`
+Results: all pass; 93.25% all-targets, 93.41% unit business gate; `cargo audit`
 0 vulnerabilities, 2 unmaintained warnings (E1).

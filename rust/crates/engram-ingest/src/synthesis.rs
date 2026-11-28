@@ -428,6 +428,31 @@ mod tests {
     }
 
     #[test]
+    fn empty_vocabulary_falls_back_to_source_sentences() {
+        let analysis = analyze("").unwrap();
+        assert!(analysis.empty_vocabulary);
+        assert!(analysis.sentences.is_empty());
+        assert!(analysis.key_indices.is_empty());
+        assert!(analysis.keyword_indices.is_empty());
+    }
+
+    #[test]
+    fn pagerank_selects_keys_from_connected_sentences() {
+        let text = "The ingestion ledger records document hashes for every file.\n\
+                    A document hash lets the worker detect changed documents.\n\
+                    The worker reconciles changed documents with the ledger.\n\
+                    Every retained chunk carries a stable document identifier.\n\
+                    Stable identifiers let replay avoid duplicate retained chunks.";
+        let synthesis = synthesize_document("doc", text).unwrap();
+        assert!(!synthesis.key_sentences.is_empty());
+        assert!(!synthesis.keywords.is_empty());
+        assert!(synthesis
+            .key_sentences
+            .iter()
+            .all(|sentence| text.contains(sentence)));
+    }
+
+    #[test]
     fn tokenizer_matches_sklearn_pattern() {
         let counts = token_counts("the quick brown fox jumps over the lazy dog");
         assert!(!counts.contains_key("the"));

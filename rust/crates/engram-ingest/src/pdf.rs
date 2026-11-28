@@ -31,10 +31,13 @@
 //! implementations; OCR is out of scope (issue #258).
 
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::io::Read;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use pdf_extract::{Dictionary, Document, Object, Stream};
+use pdf_extract::{
+    Dictionary, Document, MediaBox, Object, OutputDev, OutputError, Stream, Transform,
+};
 
 const MAX_STREAM_BYTES: usize = 64 * 1024 * 1024;
 const MAX_DOCUMENT_BYTES: usize = 256 * 1024 * 1024;
@@ -64,8 +67,243 @@ pub fn render_pdf(bytes: &[u8]) -> Result<Option<String>, PdfError> {
     Ok(render_pages(&pages))
 }
 
+/// Per-page plain-text sink for `output_doc`, matching pdf-extract's
+/// `PlainTextOutput` spacing/line rules but recording page boundaries in one
+/// traversal. A blank page remains an empty entry so page numbering is stable.
+struct PageTextOutput {
+    pages: Vec<String>,
+    current: String,
+    flip_ctm: Transform,
+    last_end: f64,
+    last_y: f64,
+    first_char: bool,
+}
+
+impl Default for PageTextOutput {
+    fn default() -> Self {
+        Self {
+            pages: Vec::new(),
+            current: String::new(),
+            flip_ctm: Transform::identity(),
+            last_end: 100_000.0,
+            last_y: 0.0,
+            first_char: false,
+        }
+    }
+}
+
+impl OutputDev for PageTextOutput {
+    fn begin_page(
+        &mut self,
+        _page_num: u32,
+        media_box: &MediaBox,
+        _art_box: Option<(f64, f64, f64, f64)>,
+    ) -> Result<(), OutputError> {
+        self.current.clear();
+        self.flip_ctm =
+            Transform::row_major(1.0, 0.0, 0.0, -1.0, 0.0, media_box.ury - media_box.lly);
+        self.last_end = 100_000.0;
+        self.last_y = 0.0;
+        self.first_char = false;
+        Ok(())
+    }
+
+    fn end_page(&mut self) -> Result<(), OutputError> {
+        self.pages.push(std::mem::take(&mut self.current));
+        Ok(())
+    }
+
+    fn output_character(
+        &mut self,
+        trm: &Transform,
+        width: f64,
+        _spacing: f64,
+        font_size: f64,
+        character: &str,
+    ) -> Result<(), OutputError> {
+        let position = trm.post_transform(&self.flip_ctm);
+        let size = trm.transform_vector(euclid::vec2(font_size, font_size));
+        let size = (size.x * size.y).sqrt();
+        let (x, y) = (position.m31, position.m32);
+        if self.first_char {
+            if (y - self.last_y).abs() > size * 1.5 {
+                writeln!(self.current)?;
+            }
+            if x < self.last_end && (y - self.last_y).abs() > size * 0.5 {
+                writeln!(self.current)?;
+            }
+            if x > self.last_end + size * 0.1 {
+                write!(self.current, " ")?;
+            }
+        }
+        write!(self.current, "{character}")?;
+        self.first_char = false;
+        self.last_y = y;
+        self.last_end = x + width * size;
+        Ok(())
+    }
+
+    fn begin_word(&mut self) -> Result<(), OutputError> {
+        self.first_char = true;
+        Ok(())
+    }
+
+    fn end_word(&mut self) -> Result<(), OutputError> {
+        Ok(())
+    }
+
+    fn end_line(&mut self) -> Result<(), OutputError> {
+        Ok(())
+    }
+}
+
+/// Best-effort bound on Flate expansion before `Document::load_mem` inflates
+/// object/xref streams. lopdf has no load-time budget hook; scanning the raw
+/// stream segments with a direct `/Length` catches the classic bomb before the
+/// parser allocates it. Failures to decode (encrypted/unsupported streams) are
+/// left to the post-load validation.
+fn preflight_load_streams(bytes: &[u8]) -> Result<(), PdfError> {
+    preflight_load_streams_with_limits(bytes, MAX_STREAM_BYTES, MAX_DOCUMENT_BYTES)
+}
+
+fn preflight_load_streams_with_limits(
+    bytes: &[u8],
+    stream_limit: usize,
+    document_limit: usize,
+) -> Result<(), PdfError> {
+    let mut total = 0usize;
+    let mut cursor = 0usize;
+    while let Some(offset) = find_bytes(&bytes[cursor..], b"stream") {
+        let keyword = cursor + offset;
+        cursor = keyword + b"stream".len();
+        if !stream_keyword_boundary(bytes, keyword) {
+            continue;
+        }
+        let Some(data_start) = stream_data_start(bytes, cursor) else {
+            continue;
+        };
+        let dict_start = bytes[..keyword]
+            .windows(3)
+            .rposition(|window| window == b"obj")
+            .map(|position| position + 3)
+            .unwrap_or(0);
+        let dictionary = &bytes[dict_start..keyword];
+        if !contains_flate_filter(dictionary) {
+            continue;
+        }
+        let Some(data_end) = stream_data_end(bytes, dictionary, data_start) else {
+            continue;
+        };
+        let Some(decoded) = decode_flate_optional(&bytes[data_start..data_end], stream_limit)?
+        else {
+            continue;
+        };
+        total = total.saturating_add(decoded.len());
+        if total > document_limit {
+            return Err(PdfError::Extract(
+                "decompressed document exceeds the ingest limit during load".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn stream_keyword_boundary(bytes: &[u8], position: usize) -> bool {
+    let before = position
+        .checked_sub(1)
+        .and_then(|index| bytes.get(index))
+        .is_none_or(|byte| byte.is_ascii_whitespace() || *byte == b'>');
+    let after = bytes.get(position + b"stream".len()).copied();
+    before && matches!(after, Some(b'\r' | b'\n'))
+}
+
+fn stream_data_start(bytes: &[u8], keyword_end: usize) -> Option<usize> {
+    match bytes.get(keyword_end..keyword_end + 2) {
+        Some(b"\r\n") => Some(keyword_end + 2),
+        _ => match bytes.get(keyword_end) {
+            Some(b'\n' | b'\r') => Some(keyword_end + 1),
+            _ => None,
+        },
+    }
+}
+
+fn contains_flate_filter(dictionary: &[u8]) -> bool {
+    find_bytes(dictionary, b"/FlateDecode").is_some()
+}
+
+fn stream_data_end(bytes: &[u8], dictionary: &[u8], data_start: usize) -> Option<usize> {
+    if let Some(length) = direct_stream_length(dictionary) {
+        let end = data_start.checked_add(length)?;
+        if end <= bytes.len() {
+            return Some(end);
+        }
+    }
+    let end = find_bytes(&bytes[data_start..], b"endstream")?;
+    let mut end = data_start + end;
+    while end > data_start && matches!(bytes[end - 1], b'\r' | b'\n') {
+        end -= 1;
+    }
+    Some(end)
+}
+
+fn direct_stream_length(dictionary: &[u8]) -> Option<usize> {
+    let position = dictionary
+        .windows(7)
+        .rposition(|window| window == b"/Length")?;
+    let mut index = position + 7;
+    while matches!(dictionary.get(index), Some(byte) if byte.is_ascii_whitespace()) {
+        index += 1;
+    }
+    let start = index;
+    while matches!(dictionary.get(index), Some(byte) if byte.is_ascii_digit()) {
+        index += 1;
+    }
+    if start == index {
+        return None;
+    }
+    let value = std::str::from_utf8(&dictionary[start..index])
+        .ok()?
+        .parse()
+        .ok()?;
+    while matches!(dictionary.get(index), Some(byte) if byte.is_ascii_whitespace()) {
+        index += 1;
+    }
+    // `/Length 12 0 R` is indirect; fall back to the `endstream` boundary.
+    if matches!(dictionary.get(index), Some(byte) if byte.is_ascii_digit()) {
+        return None;
+    }
+    Some(value)
+}
+
+/// Decode Flate for the load preflight. `None` means the bytes are not a
+/// decodable Flate stream (encrypted or another filter); leave them to the
+/// post-load validation. A limit hit is always an error.
+fn decode_flate_optional(compressed: &[u8], limit: usize) -> Result<Option<Vec<u8>>, PdfError> {
+    if compressed.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+    match inflate_with(flate2::read::ZlibDecoder::new(compressed), limit) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(InflateFailure::Limit) => Err(size_limit_error()),
+        Err(InflateFailure::Decode(_)) => {
+            match inflate_with(flate2::read::DeflateDecoder::new(compressed), limit) {
+                Ok(bytes) => Ok(Some(bytes)),
+                Err(InflateFailure::Limit) => Err(size_limit_error()),
+                Err(InflateFailure::Decode(_)) => Ok(None),
+            }
+        }
+    }
+}
+
 /// Parse once for integrity checks, then let the extractor produce text.
 fn extract_checked(bytes: &[u8]) -> Result<Vec<String>, PdfError> {
+    preflight_load_streams(bytes)?;
     let mut document =
         Document::load_mem(bytes).map_err(|error| PdfError::Extract(error.to_string()))?;
     validate_loaded_objects(&document)?;
@@ -95,10 +333,13 @@ fn extract_checked(bytes: &[u8]) -> Result<Vec<String>, PdfError> {
     for page_id in pages.values() {
         validate_page(&document, *page_id, &mut seen_forms)?;
     }
-    // Do not hold two parsed documents at once.
-    drop(document);
-    pdf_extract::extract_text_from_mem_by_pages(bytes)
-        .map_err(|error| PdfError::Extract(error.to_string()))
+    // Extract from the document that was just validated and decrypted: one
+    // page-tree walk, no second parse, and no divergence between the bytes
+    // checked and the bytes rendered.
+    let mut output = PageTextOutput::default();
+    pdf_extract::output_doc(&document, &mut output)
+        .map_err(|error| PdfError::Extract(error.to_string()))?;
+    Ok(output.pages)
 }
 
 /// Validate the page tree before `get_pages()` so an invalid `/Kids` branch
@@ -796,6 +1037,33 @@ mod tests {
         let error = decode_flate(&compressed, 10).expect_err("bomb");
         assert!(error.to_string().contains("size limit"), "{error}");
         assert_eq!(decode_flate(&compressed, 20).expect("fits").len(), 20);
+    }
+
+    #[test]
+    fn load_preflight_rejects_flate_bomb_before_parser() {
+        use std::io::Write;
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        encoder.write_all(&[0u8; 100]).expect("encode");
+        let compressed = encoder.finish().expect("finish");
+        let mut pdf = format!(
+            "<< /Length {} /Filter /FlateDecode >>\nstream\n",
+            compressed.len()
+        )
+        .into_bytes();
+        pdf.extend_from_slice(&compressed);
+        pdf.extend_from_slice(b"\nendstream");
+        let error = preflight_load_streams_with_limits(&pdf, 10, 100).expect_err("bomb");
+        assert!(error.to_string().contains("size limit"), "{error}");
+        assert!(preflight_load_streams_with_limits(&pdf, 100, 100).is_ok());
+    }
+
+    #[test]
+    fn load_preflight_ignores_non_flate_and_undecodable_streams() {
+        let plain = b"<< /Length 5 >>\nstream\nhello\nendstream";
+        assert!(preflight_load_streams_with_limits(plain, 1, 1).is_ok());
+        let encrypted =
+            b"<< /Length 4 /Filter /FlateDecode >>\nstream\n\xFF\xFE\xFD\xFC\nendstream";
+        assert!(preflight_load_streams_with_limits(encrypted, 1, 1).is_ok());
     }
 
     #[test]

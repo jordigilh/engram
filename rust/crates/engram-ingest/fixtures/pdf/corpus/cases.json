@@ -32,6 +32,10 @@
     "file": "ascii85_chain.pdf"
   },
   {
+    "name": "many_pages",
+    "file": "many_pages.pdf"
+  },
+  {
     "name": "multi_page_blank_middle",
     "file": "multi_page_blank_middle.pdf"
   }

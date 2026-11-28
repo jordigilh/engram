@@ -99,6 +99,12 @@ CASES = {
             text_at(72, 700, "Decoded through the shared bound."),
         )
     ],
+    "many_pages": [
+        page(text_at(72, 720, f"Report page {index} of the long manual."))
+        if index % 7
+        else page()
+        for index in range(1, 61)
+    ],
     "multi_page_blank_middle": [
         page(text_at(72, 720, "First page body.")),
         page(),

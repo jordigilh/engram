@@ -48,6 +48,9 @@ rendering normalizes line edges, collapses whitespace runs, and removes empty
 lines to match pdfplumber's `extract_text` shape, but it does not reproduce
 pdfplumber's full layout algorithm.
 
-The Rust preflight also rejects corrupt page content (strict lopdf content
-decode) and caps FlateDecode expansion at 64 MiB per stream / 256 MiB per
-document before extraction.
+The Rust preflight rejects corrupt page and Form XObject content (strict lopdf
+content decode), requires xref objects and stream lengths to resolve, and caps
+FlateDecode expansion at 64 MiB per stream / 256 MiB per document before
+extraction. Only unencoded and single-`FlateDecode` streams are accepted; other
+filter chains are rejected explicitly instead of being inflated without a
+bound. DCT/JPX image streams are exempt from expansion caps.

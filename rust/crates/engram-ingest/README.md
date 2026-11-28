@@ -378,7 +378,7 @@ tag = "example"
 root = "~/src/example"                           # ~ and $VARS expand; relative to this file
 docs_include = ["**/*.md"]
 docs_exclude = ["**/vendor/**"]
-document_format = "markdown"                     # "pdf" is rejected in this slice
+document_format = "markdown"                     # or "pdf"
 ```
 
 Start the resident loop (SIGINT/SIGTERM cancel it, then the worker drains and

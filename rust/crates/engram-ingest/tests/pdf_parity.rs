@@ -40,6 +40,7 @@ struct TimestampCase {
 struct Provenance {
     fixture: FixtureIdentity,
     sources: BTreeMap<String, String>,
+    pdfplumber: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,6 +64,10 @@ fn fixture_bytes_match_the_golden_provenance() {
     assert!(!GOLDENS.is_empty());
     let goldens: Goldens = serde_json::from_str(GOLDENS).expect("goldens");
     assert_eq!(goldens.provenance.fixture.file, "guide.pdf");
+    assert_eq!(
+        goldens.provenance.pdfplumber, "0.11.10",
+        "pyproject.toml pins pdfplumber; regenerate the oracle with that version"
+    );
     assert_eq!(goldens.provenance.fixture.size_bytes, FIXTURE.len());
     assert_eq!(
         goldens.provenance.fixture.sha256,

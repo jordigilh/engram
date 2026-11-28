@@ -10,17 +10,31 @@
 //! - a document whose rendered text is whitespace-only yields `None`, which the
 //!   caller turns into "no retain calls" (the Python early return).
 //!
-//! pdfplumber's `extract_text` emits one entry per visual line, strips line
-//! edges, and never emits empty lines. `pdf-extract` keeps line indentation and
-//! paragraph gaps, so [`normalize_page`] applies the same line shape before the
-//! page is rendered. The parity fixture in `fixtures/pdf` pins the resulting
-//! content byte-for-byte against the Python oracle.
+//! pdfplumber's `extract_text` emits one entry per visual line, collapses
+//! whitespace runs, strips line edges, and never emits empty lines.
+//! `pdf-extract` keeps literal space runs and paragraph gaps, so
+//! [`normalize_page`] applies the same line shape before the page is rendered.
+//! The parity fixture in `fixtures/pdf` pins the resulting content
+//! byte-for-byte against the Python oracle.
 //!
-//! Only text-bearing PDFs are supported. Scanned/image-only PDFs produce no
-//! text in both implementations; OCR is explicitly out of scope (issue #258).
+//! The extractor's own content decoding is lenient: lopdf silently truncates a
+//! corrupt content stream and drops unreadable indirect objects. Ingesting that
+//! partial text would let reconciliation delete the chunks the partial text no
+//! longer contains. [`extract_checked`] therefore parses the document first,
+//! requires every referenced object and stream length to resolve, strict-decodes
+//! page and Form XObject content, and bounds stream decompression. Only then
+//! does `pdf-extract` produce text.
+//!
+//! Supported stream filters are unencoded and `FlateDecode` (the common case).
+//! Other filter chains are rejected explicitly instead of being decompressed
+//! without a memory bound. Scanned/image-only PDFs produce no text in both
+//! implementations; OCR is out of scope (issue #258).
 
+use std::collections::HashSet;
 use std::io::Read;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+
+use pdf_extract::{Dictionary, Document, Object, Stream};
 
 const MAX_STREAM_BYTES: usize = 64 * 1024 * 1024;
 const MAX_DOCUMENT_BYTES: usize = 256 * 1024 * 1024;
@@ -44,78 +58,84 @@ pub fn render_pdf(bytes: &[u8]) -> Result<Option<String>, PdfError> {
     Ok(render_pages(&pages))
 }
 
-/// Parse the document once for integrity checks, then extract text.
-///
-/// `pdf-extract` uses lopdf's lenient content parser, which silently drops
-/// bytes after a corrupt operation. That would ingest a partial page and let
-/// reconciliation delete the chunks the partial text no longer contains. This
-/// preflight rejects such documents instead, and bounds stream decompression so
-/// a small malicious PDF cannot exhaust worker memory.
+/// Parse once for integrity checks, then let the extractor produce text.
 fn extract_checked(bytes: &[u8]) -> Result<Vec<String>, PdfError> {
-    let mut document = pdf_extract::Document::load_mem(bytes)
-        .map_err(|error| PdfError::Extract(error.to_string()))?;
+    let mut document =
+        Document::load_mem(bytes).map_err(|error| PdfError::Extract(error.to_string()))?;
     if document.is_encrypted() {
         // Match pdf-extract: only the empty user password is attempted.
         document
             .decrypt("")
             .map_err(|error| PdfError::Extract(error.to_string()))?;
     }
-    validate_streams(&document)?;
-    for page_id in document.get_pages().values() {
-        let content = document
-            .get_page_content(*page_id)
-            .map_err(|error| PdfError::Extract(error.to_string()))?;
-        pdf_extract::content::Content::decode_strict(&content)
-            .map_err(|error| PdfError::Extract(format!("corrupt page content: {error}")))?;
+    validate_object_table(&document)?;
+    let pages = document.get_pages();
+    let mut seen_forms = HashSet::new();
+    for page_id in pages.values() {
+        validate_page(&document, *page_id, &mut seen_forms)?;
     }
+    // Do not hold two parsed documents at once.
+    drop(document);
     pdf_extract::extract_text_from_mem_by_pages(bytes)
         .map_err(|error| PdfError::Extract(error.to_string()))
 }
 
-fn validate_streams(document: &pdf_extract::Document) -> Result<(), PdfError> {
-    validate_streams_with_limits(document, MAX_STREAM_BYTES, MAX_DOCUMENT_BYTES)
+/// Require every non-free xref entry to have a loaded object. lopdf logs and
+/// skips an unreadable object; a missing page/content object would otherwise
+/// become silent empty content.
+fn validate_object_table(document: &Document) -> Result<(), PdfError> {
+    for (id, entry) in &document.reference_table.entries {
+        if !(entry.is_normal() || entry.is_compressed()) {
+            continue;
+        }
+        if !document.objects.keys().any(|(number, _)| number == id) {
+            return Err(PdfError::Extract(format!(
+                "PDF object {id} is referenced but could not be loaded"
+            )));
+        }
+    }
+    for object in document.objects.values() {
+        if let Object::Stream(stream) = object {
+            validate_stream_length(document, stream)?;
+        }
+    }
+    validate_all_streams(document)
 }
 
-fn validate_streams_with_limits(
-    document: &pdf_extract::Document,
+/// Bound every stream the extractor may inflate, including image/font streams
+/// it walks through XObjects. DCT/JPX image data is already compressed and is
+/// not inflated by the extractor, so it is exempt from the expansion cap.
+fn validate_all_streams(document: &Document) -> Result<(), PdfError> {
+    validate_all_streams_with_limits(document, MAX_STREAM_BYTES, MAX_DOCUMENT_BYTES)
+}
+
+fn validate_all_streams_with_limits(
+    document: &Document,
     stream_limit: usize,
     document_limit: usize,
 ) -> Result<(), PdfError> {
     let mut total = 0usize;
     for object in document.objects.values() {
-        let pdf_extract::Object::Stream(stream) = object else {
+        let Object::Stream(stream) = object else {
             continue;
         };
-        let expanded = match stream.dict.get(b"Filter") {
-            // No /Filter key means the stream is stored uncompressed.
-            Err(_) => stream.content.len(),
-            Ok(_) => {
-                let filters = stream.filters().map_err(|error| {
-                    PdfError::Extract(format!("invalid stream filter: {error}"))
-                })?;
-                if filters.is_empty() {
-                    stream.content.len()
-                } else if filters == [b"FlateDecode".as_slice()] {
-                    bounded_inflate_with_limit(&stream.content, stream_limit)?
-                } else {
-                    // Uncommon filters (LZW/ASCII85/RunLength) can expand, but
-                    // their output is bounded in practice; reject absurd
-                    // compressed input.
-                    if stream.content.len() > stream_limit {
-                        return Err(PdfError::Extract(
-                            "compressed stream exceeds the ingest size limit".to_string(),
-                        ));
-                    }
-                    stream.content.len()
-                }
-            }
-        };
-        if expanded > stream_limit {
+        let filters = stream_filters(document, stream)?;
+        let is_image_codec = stream_subtype(document, stream).as_deref()
+            == Some(b"Image".as_slice())
+            && matches!(
+                filters.as_deref(),
+                Some([name]) if matches!(name.as_slice(), b"DCTDecode" | b"JPXDecode")
+            );
+        if is_image_codec {
+            continue;
+        }
+        let decoded = decode_stream(document, stream, stream_limit)?;
+        if decoded.len() > stream_limit {
             return Err(PdfError::Extract(
                 "decompressed stream exceeds the ingest size limit".to_string(),
             ));
         }
-        total = total.saturating_add(expanded);
+        total = total.saturating_add(decoded.len());
         if total > document_limit {
             return Err(PdfError::Extract(
                 "decompressed document exceeds the ingest size limit".to_string(),
@@ -125,24 +145,234 @@ fn validate_streams_with_limits(
     Ok(())
 }
 
-/// Inflate a zlib stream while refusing to allocate past the cap.
-fn bounded_inflate_with_limit(compressed: &[u8], limit: usize) -> Result<usize, PdfError> {
-    let mut decoder = flate2::read::ZlibDecoder::new(compressed);
+fn validate_stream_length(document: &Document, stream: &Stream) -> Result<(), PdfError> {
+    let raw = stream
+        .dict
+        .get(b"Length")
+        .map_err(|_| PdfError::Extract("stream has no /Length".to_string()))?;
+    let (_, length) = document
+        .dereference(raw)
+        .map_err(|error| PdfError::Extract(error.to_string()))?;
+    let length = length
+        .as_i64()
+        .map_err(|_| PdfError::Extract("stream /Length is not an integer".to_string()))?;
+    if length < 0 || length as usize != stream.content.len() {
+        return Err(PdfError::Extract(
+            "stream /Length does not match the loaded content".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_page(
+    document: &Document,
+    page_id: pdf_extract::ObjectId,
+    seen_forms: &mut HashSet<pdf_extract::ObjectId>,
+) -> Result<(), PdfError> {
+    let mut content = Vec::new();
+    for content_id in document.get_page_contents(page_id) {
+        let stream = document
+            .get_object(content_id)
+            .and_then(Object::as_stream)
+            .map_err(|error| {
+                PdfError::Extract(format!(
+                    "page content {content_id:?} is unreadable: {error}"
+                ))
+            })?;
+        content.extend_from_slice(&decompress_stream(document, stream)?);
+        content.push(b'\n');
+    }
+    // PDF whitespace includes NUL and form feed, which lopdf's strict content
+    // parser does not accept. Normalize only the validation copy.
+    let sanitized: Vec<u8> = content
+        .iter()
+        .map(|byte| {
+            if matches!(byte, 0 | 0x0C) {
+                b' '
+            } else {
+                *byte
+            }
+        })
+        .collect();
+    pdf_extract::content::Content::decode_strict(&sanitized)
+        .map_err(|error| PdfError::Extract(format!("corrupt page content: {error}")))?;
+
+    let page = document
+        .get_object(page_id)
+        .and_then(Object::as_dict)
+        .map_err(|error| PdfError::Extract(error.to_string()))?;
+    if let Ok(resources) = page.get(b"Resources") {
+        let (_, resources) = document
+            .dereference(resources)
+            .map_err(|error| PdfError::Extract(error.to_string()))?;
+        if let Ok(resources) = resources.as_dict() {
+            validate_resources(document, resources, seen_forms)?;
+        }
+    }
+    Ok(())
+}
+
+/// Strict-decode every Form XObject reachable from a resource dictionary.
+/// Image XObjects are skipped: the extractor does not turn them into text.
+fn validate_resources(
+    document: &Document,
+    resources: &Dictionary,
+    seen_forms: &mut HashSet<pdf_extract::ObjectId>,
+) -> Result<(), PdfError> {
+    let Ok(raw) = resources.get(b"XObject") else {
+        return Ok(());
+    };
+    let (_, xobjects) = document
+        .dereference(raw)
+        .map_err(|error| PdfError::Extract(error.to_string()))?;
+    let Ok(xobjects) = xobjects.as_dict() else {
+        return Ok(());
+    };
+    for (_, object) in xobjects.iter() {
+        let (id, object) = document
+            .dereference(object)
+            .map_err(|error| PdfError::Extract(error.to_string()))?;
+        let Object::Stream(stream) = object else {
+            continue;
+        };
+        if stream_subtype(document, stream).as_deref() != Some(b"Form".as_slice()) {
+            continue;
+        }
+        if let Some(id) = id {
+            if !seen_forms.insert(id) {
+                continue;
+            }
+        }
+        let content = decompress_stream(document, stream)?;
+        let sanitized: Vec<u8> = content
+            .iter()
+            .map(|byte| {
+                if matches!(byte, 0 | 0x0C) {
+                    b' '
+                } else {
+                    *byte
+                }
+            })
+            .collect();
+        pdf_extract::content::Content::decode_strict(&sanitized)
+            .map_err(|error| PdfError::Extract(format!("corrupt Form XObject content: {error}")))?;
+        let nested = stream
+            .dict
+            .get(b"Resources")
+            .ok()
+            .and_then(|value| document.dereference(value).ok())
+            .and_then(|(_, value)| value.as_dict().ok())
+            .unwrap_or(resources);
+        validate_resources(document, nested, seen_forms)?;
+    }
+    Ok(())
+}
+
+fn stream_subtype(document: &Document, stream: &Stream) -> Option<Vec<u8>> {
+    stream
+        .dict
+        .get(b"Subtype")
+        .ok()
+        .and_then(|value| document.dereference(value).ok())
+        .and_then(|(_, value)| value.as_name().ok())
+        .map(<[u8]>::to_vec)
+}
+
+/// Return the decoded bytes of a supported stream, with a hard expansion cap.
+fn decompress_stream(document: &Document, stream: &Stream) -> Result<Vec<u8>, PdfError> {
+    decode_stream(document, stream, MAX_STREAM_BYTES)
+}
+
+fn decode_stream(document: &Document, stream: &Stream, limit: usize) -> Result<Vec<u8>, PdfError> {
+    let filters = stream_filters(document, stream)?;
+    match filters.as_deref() {
+        None => Ok(stream.content.clone()),
+        Some([name]) if name == b"FlateDecode" => decode_flate(&stream.content, limit),
+        Some([name]) if matches!(name.as_slice(), b"DCTDecode" | b"JPXDecode") => Err(
+            PdfError::Extract("image stream used as page or Form content".to_string()),
+        ),
+        Some([]) => Err(PdfError::Extract(
+            "empty /Filter array is not a supported stream encoding".to_string(),
+        )),
+        Some(_) => Err(PdfError::Extract(
+            "unsupported stream filter chain; only FlateDecode is decoded".to_string(),
+        )),
+    }
+}
+
+fn stream_filters(document: &Document, stream: &Stream) -> Result<Option<Vec<Vec<u8>>>, PdfError> {
+    let Ok(raw) = stream.dict.get(b"Filter") else {
+        return Ok(None);
+    };
+    let (_, value) = document
+        .dereference(raw)
+        .map_err(|error| PdfError::Extract(format!("invalid stream filter: {error}")))?;
+    let mut filters = Vec::new();
+    match value {
+        Object::Name(name) => filters.push(name.clone()),
+        Object::Array(items) => {
+            for item in items {
+                let (_, item) = document.dereference(item).map_err(|error| {
+                    PdfError::Extract(format!("invalid stream filter: {error}"))
+                })?;
+                let name = item.as_name().map_err(|_| {
+                    PdfError::Extract("stream filter array contains a non-name".to_string())
+                })?;
+                filters.push(name.to_vec());
+            }
+        }
+        other => {
+            return Err(PdfError::Extract(format!(
+                "invalid stream filter type: {other:?}"
+            )))
+        }
+    }
+    Ok(Some(filters))
+}
+
+/// Decode FlateDecode with a bounded output buffer. Falls back to raw deflate
+/// like lopdf does for streams with a damaged zlib checksum; an empty stream is
+/// valid and decodes to nothing.
+fn decode_flate(compressed: &[u8], limit: usize) -> Result<Vec<u8>, PdfError> {
+    if compressed.is_empty() {
+        return Ok(Vec::new());
+    }
+    match inflate_with(flate2::read::ZlibDecoder::new(compressed), limit) {
+        Ok(bytes) => Ok(bytes),
+        Err(InflateFailure::Limit) => Err(size_limit_error()),
+        Err(InflateFailure::Decode(_)) => {
+            match inflate_with(flate2::read::DeflateDecoder::new(compressed), limit) {
+                Ok(bytes) => Ok(bytes),
+                Err(InflateFailure::Limit) => Err(size_limit_error()),
+                Err(InflateFailure::Decode(error)) => {
+                    Err(PdfError::Extract(format!("cannot inflate stream: {error}")))
+                }
+            }
+        }
+    }
+}
+
+fn size_limit_error() -> PdfError {
+    PdfError::Extract("decompressed stream exceeds the ingest size limit".to_string())
+}
+
+enum InflateFailure {
+    Limit,
+    Decode(std::io::Error),
+}
+
+fn inflate_with(mut decoder: impl Read, limit: usize) -> Result<Vec<u8>, InflateFailure> {
+    let mut output = Vec::new();
     let mut buffer = [0u8; 16 * 1024];
-    let mut total = 0usize;
     loop {
-        let read = decoder
-            .read(&mut buffer)
-            .map_err(|error| PdfError::Extract(format!("cannot inflate stream: {error}")))?;
+        let read = decoder.read(&mut buffer).map_err(InflateFailure::Decode)?;
         if read == 0 {
-            return Ok(total);
+            return Ok(output);
         }
-        total = total.saturating_add(read);
-        if total > limit {
-            return Err(PdfError::Extract(
-                "decompressed stream exceeds the ingest size limit".to_string(),
-            ));
+        if output.len().saturating_add(read) > limit {
+            return Err(InflateFailure::Limit);
         }
+        output.extend_from_slice(&buffer[..read]);
     }
 }
 
@@ -183,6 +413,8 @@ mod tests {
     use super::*;
 
     const FIXTURE: &[u8] = include_bytes!("../fixtures/pdf/guide.pdf");
+    const BLANK: &[u8] = include_bytes!("../fixtures/pdf/blank.pdf");
+    const BROKEN: &[u8] = include_bytes!("../fixtures/pdf/broken.pdf");
 
     #[test]
     fn renders_page_markers_and_omits_blank_pages_without_renumbering() {
@@ -199,6 +431,12 @@ mod tests {
         assert!(rendered.contains("Café"));
         assert!(rendered.contains("résumé – naïve façade"));
         assert!(rendered.contains("R&D (draft) review"));
+        assert!(rendered.contains("Multiple spaces stay single."));
+    }
+
+    #[test]
+    fn blank_pdf_has_no_rendered_content() {
+        assert_eq!(render_pdf(BLANK).expect("blank"), None);
     }
 
     #[test]
@@ -236,10 +474,10 @@ mod tests {
 
     #[test]
     fn corrupt_page_content_is_rejected_instead_of_partially_ingested() {
-        let error = render_pdf(include_bytes!("../fixtures/pdf/broken.pdf"))
-            .expect_err("strict page content");
+        let error = render_pdf(BROKEN).expect_err("strict page content");
         assert!(
-            error.to_string().contains("corrupt page content"),
+            error.to_string().contains("corrupt page content")
+                || error.to_string().contains("Length"),
             "{error}"
         );
     }
@@ -250,83 +488,297 @@ mod tests {
         let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
         encoder.write_all(&[0u8; 20]).expect("encode");
         let compressed = encoder.finish().expect("finish");
-        let error = bounded_inflate_with_limit(&compressed, 10).expect_err("bomb");
+        let error = decode_flate(&compressed, 10).expect_err("bomb");
         assert!(error.to_string().contains("size limit"), "{error}");
+        assert_eq!(decode_flate(&compressed, 20).expect("fits").len(), 20);
+    }
+
+    #[test]
+    fn flate_checksum_damage_falls_back_to_raw_deflate() {
+        use std::io::Write;
+        let mut encoder =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+        encoder.write_all(b"content stream").expect("encode");
+        let raw = encoder.finish().expect("finish");
         assert_eq!(
-            bounded_inflate_with_limit(&compressed, 20).expect("fits"),
-            20
+            decode_flate(&raw, 100).expect("fallback"),
+            b"content stream"
         );
-    }
-
-    fn document_with_streams(
-        streams: Vec<(pdf_extract::Dictionary, Vec<u8>)>,
-    ) -> pdf_extract::Document {
-        let mut document = pdf_extract::Document::with_version("1.4");
-        for (index, (dictionary, content)) in streams.into_iter().enumerate() {
-            document.objects.insert(
-                (index as u32 + 1, 0),
-                pdf_extract::Object::Stream(pdf_extract::Stream::new(dictionary, content)),
-            );
-        }
-        document
-    }
-
-    fn stream_with_filter(
-        filter: Option<pdf_extract::Object>,
-        content: Vec<u8>,
-    ) -> (pdf_extract::Dictionary, Vec<u8>) {
-        let mut dictionary = pdf_extract::Dictionary::new();
-        if let Some(filter) = filter {
-            dictionary.set("Filter", filter);
-        }
-        (dictionary, content)
-    }
-
-    #[test]
-    fn invalid_stream_filter_is_rejected() {
-        let document = document_with_streams(vec![stream_with_filter(
-            Some(pdf_extract::Object::Integer(1)),
-            b"data".to_vec(),
-        )]);
-        let error = validate_streams_with_limits(&document, 100, 100).expect_err("filter");
-        assert!(
-            error.to_string().contains("invalid stream filter"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn stream_limits_bound_uncompressed_and_other_filters() {
-        let plain = document_with_streams(vec![stream_with_filter(None, b"12345".to_vec())]);
-        assert!(validate_streams_with_limits(&plain, 5, 5).is_ok());
-        let error = validate_streams_with_limits(&plain, 4, 100).expect_err("stream cap");
-        assert!(error.to_string().contains("decompressed stream"), "{error}");
-        let error = validate_streams_with_limits(&plain, 100, 4).expect_err("document cap");
-        assert!(
-            error.to_string().contains("decompressed document"),
-            "{error}"
-        );
-
-        // Filters other than FlateDecode are bounded by their compressed size.
-        let other = document_with_streams(vec![stream_with_filter(
-            Some(pdf_extract::Object::Name(b"LZWDecode".to_vec())),
-            b"12345".to_vec(),
-        )]);
-        assert!(validate_streams_with_limits(&other, 5, 5).is_ok());
-        let error = validate_streams_with_limits(&other, 4, 100).expect_err("compressed cap");
-        assert!(error.to_string().contains("compressed stream"), "{error}");
-
-        // An explicitly empty filter array is stored uncompressed.
-        let empty = document_with_streams(vec![stream_with_filter(
-            Some(pdf_extract::Object::Array(Vec::new())),
-            b"12345".to_vec(),
-        )]);
-        assert!(validate_streams_with_limits(&empty, 5, 5).is_ok());
     }
 
     #[test]
     fn panic_boundary_reports_panic() {
         let error = guarded(|| panic!("boom")).expect_err("panic");
         assert!(matches!(error, PdfError::Panic));
+    }
+
+    fn stream_object(content: &[u8], filter: Option<Object>) -> Object {
+        let mut dictionary = Dictionary::new();
+        dictionary.set("Length", Object::Integer(content.len() as i64));
+        if let Some(filter) = filter {
+            dictionary.set("Filter", filter);
+        }
+        Object::Stream(Stream::new(dictionary, content.to_vec()))
+    }
+
+    fn document_with(objects: Vec<((u32, u16), Object)>) -> Document {
+        let mut document = Document::new();
+        for (id, object) in objects {
+            document.objects.insert(id, object);
+        }
+        document
+    }
+
+    fn page_document(contents: Object, resources: Option<Object>) -> Document {
+        let mut page = Dictionary::new();
+        page.set("Type", Object::Name(b"Page".to_vec()));
+        page.set("Contents", contents);
+        if let Some(resources) = resources {
+            page.set("Resources", resources);
+        }
+        document_with(vec![((1, 0), Object::Dictionary(page))])
+    }
+
+    #[test]
+    fn stream_length_must_be_present_integral_and_matching() {
+        let missing = document_with(vec![(
+            (1, 0),
+            Object::Stream({
+                let mut dictionary = Dictionary::new();
+                dictionary.set("Length", Object::Integer(3));
+                let mut stream = Stream::new(dictionary, b"abc".to_vec());
+                stream.dict.remove(b"Length");
+                stream
+            }),
+        )]);
+        assert!(validate_object_table(&missing)
+            .unwrap_err()
+            .to_string()
+            .contains("no /Length"));
+
+        let mismatch = document_with(vec![(
+            (1, 0),
+            Object::Stream({
+                let mut stream = Stream::new(Dictionary::new(), b"abc".to_vec());
+                stream.dict.set("Length", Object::Integer(9));
+                stream
+            }),
+        )]);
+        assert!(validate_object_table(&mismatch)
+            .unwrap_err()
+            .to_string()
+            .contains("does not match"));
+
+        let non_integer = document_with(vec![(
+            (1, 0),
+            Object::Stream({
+                let mut stream = Stream::new(Dictionary::new(), b"abc".to_vec());
+                stream.dict.set("Length", Object::Name(b"three".to_vec()));
+                stream
+            }),
+        )]);
+        assert!(validate_object_table(&non_integer)
+            .unwrap_err()
+            .to_string()
+            .contains("not an integer"));
+
+        let indirect = document_with(vec![
+            (
+                (1, 0),
+                Object::Stream({
+                    let mut stream = Stream::new(Dictionary::new(), b"abc".to_vec());
+                    stream.dict.set("Length", Object::Reference((2, 0)));
+                    stream
+                }),
+            ),
+            ((2, 0), Object::Integer(3)),
+        ]);
+        assert!(validate_object_table(&indirect).is_ok());
+    }
+
+    #[test]
+    fn object_table_rejects_unloaded_xref_entries() {
+        let mut document = Document::new();
+        document.reference_table.insert(
+            7,
+            pdf_extract::xref::XrefEntry::Normal {
+                offset: 0,
+                generation: 0,
+            },
+        );
+        assert!(validate_object_table(&document)
+            .unwrap_err()
+            .to_string()
+            .contains("could not be loaded"));
+
+        let mut free = Document::new();
+        free.reference_table
+            .insert(7, pdf_extract::xref::XrefEntry::Free);
+        assert!(validate_object_table(&free).is_ok());
+    }
+
+    #[test]
+    fn unsupported_filter_chains_are_rejected_and_image_codecs_are_exempt() {
+        let chain = document_with(vec![(
+            (1, 0),
+            stream_object(
+                b"",
+                Some(Object::Array(vec![
+                    Object::Name(b"FlateDecode".to_vec()),
+                    Object::Name(b"FlateDecode".to_vec()),
+                ])),
+            ),
+        )]);
+        assert!(validate_all_streams_with_limits(&chain, 100, 100)
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported stream filter chain"));
+
+        let empty = document_with(vec![(
+            (1, 0),
+            stream_object(b"", Some(Object::Array(Vec::new()))),
+        )]);
+        assert!(validate_all_streams_with_limits(&empty, 100, 100)
+            .unwrap_err()
+            .to_string()
+            .contains("empty /Filter array"));
+
+        let invalid = document_with(vec![((1, 0), stream_object(b"", Some(Object::Integer(1))))]);
+        assert!(validate_all_streams_with_limits(&invalid, 100, 100)
+            .unwrap_err()
+            .to_string()
+            .contains("invalid stream filter type"));
+
+        let mut image = Dictionary::new();
+        image.set("Length", Object::Integer(100));
+        image.set("Subtype", Object::Name(b"Image".to_vec()));
+        image.set("Filter", Object::Name(b"DCTDecode".to_vec()));
+        let image = document_with(vec![(
+            (1, 0),
+            Object::Stream(Stream::new(image, vec![0u8; 100])),
+        )]);
+        assert!(validate_all_streams_with_limits(&image, 4, 4).is_ok());
+        let page_image = document_with(vec![(
+            (1, 0),
+            stream_object(b"", Some(Object::Name(b"DCTDecode".to_vec()))),
+        )]);
+        assert!(validate_all_streams_with_limits(&page_image, 100, 100)
+            .unwrap_err()
+            .to_string()
+            .contains("image stream"));
+
+        let mut indirect_filter = Dictionary::new();
+        indirect_filter.set("Length", Object::Integer(0));
+        indirect_filter.set("Filter", Object::Reference((2, 0)));
+        let indirect_filter = document_with(vec![
+            (
+                (1, 0),
+                Object::Stream(Stream::new(indirect_filter, Vec::new())),
+            ),
+            ((2, 0), Object::Name(b"FlateDecode".to_vec())),
+        ]);
+        assert!(validate_all_streams_with_limits(&indirect_filter, 100, 100).is_ok());
+    }
+
+    #[test]
+    fn stream_and_document_expansion_caps_are_enforced() {
+        let one = document_with(vec![((1, 0), stream_object(b"12345", None))]);
+        assert!(validate_all_streams_with_limits(&one, 5, 5).is_ok());
+        assert!(validate_all_streams_with_limits(&one, 4, 100)
+            .unwrap_err()
+            .to_string()
+            .contains("decompressed stream"));
+        assert!(validate_all_streams_with_limits(&one, 100, 4)
+            .unwrap_err()
+            .to_string()
+            .contains("decompressed document"));
+
+        let two = document_with(vec![
+            ((1, 0), stream_object(b"123", None)),
+            ((2, 0), stream_object(b"456", None)),
+        ]);
+        assert!(validate_all_streams_with_limits(&two, 10, 5)
+            .unwrap_err()
+            .to_string()
+            .contains("decompressed document"));
+    }
+
+    #[test]
+    fn page_content_references_must_resolve() {
+        let document = page_document(Object::Reference((9, 0)), None);
+        let mut seen = HashSet::new();
+        assert!(validate_page(&document, (1, 0), &mut seen)
+            .unwrap_err()
+            .to_string()
+            .contains("unreadable"));
+    }
+
+    #[test]
+    fn form_xobject_content_is_strictly_validated() {
+        let mut xobjects = Dictionary::new();
+        xobjects.set("Fm1", Object::Reference((3, 0)));
+        let mut resources = Dictionary::new();
+        resources.set("XObject", Object::Dictionary(xobjects));
+
+        let mut form = Dictionary::new();
+        form.set("Length", Object::Integer(5));
+        form.set("Subtype", Object::Name(b"Form".to_vec()));
+        let document = document_with(vec![
+            (
+                (1, 0),
+                Object::Dictionary({
+                    let mut page = Dictionary::new();
+                    page.set("Contents", Object::Reference((2, 0)));
+                    page.set("Resources", Object::Dictionary(resources));
+                    page
+                }),
+            ),
+            ((2, 0), stream_object(b"/Fm1 Do", None)),
+            ((3, 0), Object::Stream(Stream::new(form, b"BT ET".to_vec()))),
+        ]);
+        let mut seen = HashSet::new();
+        assert!(validate_page(&document, (1, 0), &mut seen).is_ok());
+
+        let mut corrupt_form = Dictionary::new();
+        corrupt_form.set("Length", Object::Integer(5));
+        corrupt_form.set("Subtype", Object::Name(b"Form".to_vec()));
+        let mut xobjects = Dictionary::new();
+        xobjects.set("Fm1", Object::Reference((3, 0)));
+        let mut resources = Dictionary::new();
+        resources.set("XObject", Object::Dictionary(xobjects));
+        let corrupt = document_with(vec![
+            (
+                (1, 0),
+                Object::Dictionary({
+                    let mut page = Dictionary::new();
+                    page.set("Contents", Object::Reference((2, 0)));
+                    page.set("Resources", Object::Dictionary(resources));
+                    page
+                }),
+            ),
+            ((2, 0), stream_object(b"/Fm1 Do", None)),
+            (
+                (3, 0),
+                Object::Stream(Stream::new(corrupt_form, b"BT (x".to_vec())),
+            ),
+        ]);
+        let mut seen = HashSet::new();
+        assert!(validate_page(&corrupt, (1, 0), &mut seen)
+            .unwrap_err()
+            .to_string()
+            .contains("Form XObject"));
+    }
+
+    #[test]
+    fn pdf_nul_and_form_feed_whitespace_is_accepted() {
+        let document = page_document(Object::Reference((2, 0)), None);
+        // Rebuild with a content stream containing PDF whitespace outside the
+        // strict parser's set.
+        let mut document = document;
+        document
+            .objects
+            .insert((2, 0), stream_object(b"BT\0/F1 12 Tf (x) Tj ET\x0c", None));
+        let mut seen = HashSet::new();
+        validate_page(&document, (1, 0), &mut seen).expect("PDF whitespace is valid");
     }
 }

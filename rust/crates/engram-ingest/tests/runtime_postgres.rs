@@ -253,6 +253,13 @@ fn active_documents(client: &mut Client) -> i64 {
         .get(0)
 }
 
+fn active_chunks(client: &mut Client) -> i64 {
+    client
+        .query_one("SELECT count(*) FROM engram_ingest.chunks", &[])
+        .expect("chunk count")
+        .get(0)
+}
+
 fn methods(requests: &[String]) -> Vec<String> {
     requests
         .iter()
@@ -411,13 +418,29 @@ fn corrupt_pdf_skips_the_source_and_leaves_the_manifest_untouched() {
     let root = temp_dir("broken-pdf-docs");
     let disorder = temp_dir("broken-pdf-config");
     std::fs::create_dir_all(root.join("manual")).expect("pdf dir");
-    std::fs::write(
-        root.join("manual/broken.pdf"),
-        include_bytes!("../fixtures/pdf/broken.pdf"),
-    )
-    .expect("broken fixture");
+    let pdf_path = root.join("manual/guide.pdf");
+    std::fs::write(&pdf_path, include_bytes!("../fixtures/pdf/guide.pdf")).expect("pdf fixture");
     let config_path = write_pdf_config(&root, &disorder, &database_url, server.url());
 
+    // First pass retains the valid document and creates the manifest rows.
+    let runtime = Runtime::new(load_config(&config_path)).expect("runtime");
+    let handle = runtime.start(Shutdown::default()).expect("start");
+    assert!(matches!(
+        handle.prepared().outcomes.as_slice(),
+        [SourceOutcome::Applied {
+            scanned_files: 1,
+            ..
+        }]
+    ));
+    handle.drain(Duration::from_secs(30)).expect("drain");
+    assert_eq!(active_documents(&mut client), 1);
+    let chunks_before = active_chunks(&mut client);
+    assert!(chunks_before > 0);
+    let requests_before = server.requests().len();
+
+    // A corrupt replacement must skip the snapshot, not reconcile to empty.
+    std::fs::write(&pdf_path, include_bytes!("../fixtures/pdf/broken.pdf"))
+        .expect("broken fixture");
     let runtime = Runtime::new(load_config(&config_path)).expect("runtime");
     let handle = runtime.start(Shutdown::default()).expect("start");
     let outcomes = &handle.prepared().outcomes;
@@ -431,13 +454,25 @@ fn corrupt_pdf_skips_the_source_and_leaves_the_manifest_untouched() {
     );
     handle.drain(Duration::from_secs(30)).expect("drain");
 
-    assert!(
-        server.requests().is_empty(),
-        "no retain for a rejected snapshot: {:?}",
-        server.requests()
+    assert_eq!(
+        active_documents(&mut client),
+        1,
+        "the previous document must stay active"
     );
-    assert_eq!(count_jobs(&mut client, "succeeded"), 0);
-    assert_eq!(active_documents(&mut client), 0);
+    assert_eq!(
+        active_chunks(&mut client),
+        chunks_before,
+        "previous chunks must stay in the manifest"
+    );
+    let requests_after = server.requests();
+    assert_eq!(
+        requests_after.len(),
+        requests_before,
+        "a rejected snapshot must not retain or delete"
+    );
+    assert!(!methods(&requests_after)
+        .iter()
+        .any(|method| method == "DELETE"));
 }
 
 #[test]

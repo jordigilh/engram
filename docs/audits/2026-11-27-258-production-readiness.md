@@ -54,17 +54,17 @@ tested against real Postgres and a mock Hindsight sink.
 
 | Tier | Count | Notes |
 |---|---:|---|
-| Unit (lib) | 265 | Includes 24+ PDF-path unit tests |
-| Integration | 93+ | PDF parity 11, corpus 3, Postgres 21 (2 PDF), other crate suites |
+| Unit (lib) | 270 | Includes 24+ PDF-path unit tests |
+| Integration | 93+ | PDF parity 11, corpus 3 (9 cases), Postgres 21 (2 PDF), other crate suites |
 | Deployment smoke | 0 | **Gap E5**: no packaged-binary PDF smoke |
 
 Coverage (real Postgres DSN, 2026-11-27):
 
 | Gate | Result |
 |---|---|
-| Unit business gate (`--lib`, CI exclusion regex) | **93.41% lines** |
-| All-targets gate | **93.25% lines** |
-| `pdf.rs` | **93.61%** |
+| Unit business gate (`--lib`, CI exclusion regex) | **93.10% lines** |
+| All-targets gate | **93.03% lines** |
+| `pdf.rs` | **90.49%** |
 | `document.rs` | **95.38%** |
 | `config.rs` | **95.90%** |
 | `scan.rs` | **90.96%** |
@@ -132,5 +132,5 @@ cargo llvm-cov -p engram-ingest --lib --ignore-filename-regex ... --fail-under-l
 cargo llvm-cov -p engram-ingest --all-targets --fail-under-lines 90
 ```
 
-Results: all pass; 93.25% all-targets, 93.41% unit business gate; `cargo audit`
+Results: all pass; 93.03% all-targets, 93.10% unit business gate; `cargo audit`
 0 vulnerabilities, 2 unmaintained warnings (E1).

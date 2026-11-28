@@ -76,7 +76,15 @@ fn extract_checked(bytes: &[u8]) -> Result<Vec<String>, PdfError> {
             .map_err(|error| PdfError::Extract(error.to_string()))?;
     }
     validate_stream_integrity(&document)?;
+    let tree_pages = validate_page_tree(&document)?;
     let pages = document.get_pages();
+    if pages.len() != tree_pages {
+        return Err(PdfError::Extract(format!(
+            "PDF page tree exposes {} pages but only {} are valid",
+            tree_pages,
+            pages.len()
+        )));
+    }
     if pages.len() > MAX_PAGES {
         return Err(PdfError::Extract(format!(
             "PDF has {} pages, above the ingest limit of {MAX_PAGES}",
@@ -91,6 +99,86 @@ fn extract_checked(bytes: &[u8]) -> Result<Vec<String>, PdfError> {
     drop(document);
     pdf_extract::extract_text_from_mem_by_pages(bytes)
         .map_err(|error| PdfError::Extract(error.to_string()))
+}
+
+/// Validate the page tree before `get_pages()` so an invalid `/Kids` branch
+/// cannot be dropped silently while extraction returns the surviving pages.
+fn validate_page_tree(document: &Document) -> Result<usize, PdfError> {
+    let root = document
+        .trailer
+        .get(b"Root")
+        .map_err(|_| PdfError::Extract("PDF has no /Root".to_string()))?;
+    let (_, root) = document
+        .dereference(root)
+        .map_err(|error| PdfError::Extract(error.to_string()))?;
+    let root = root
+        .as_dict()
+        .map_err(|_| PdfError::Extract("PDF /Root is not a dictionary".to_string()))?;
+    let pages = root
+        .get(b"Pages")
+        .map_err(|_| PdfError::Extract("PDF catalog has no /Pages".to_string()))?;
+    let (_, pages) = document
+        .dereference(pages)
+        .map_err(|error| PdfError::Extract(error.to_string()))?;
+    let mut visited = HashSet::new();
+    count_page_tree(document, pages, &mut visited, 0)
+}
+
+fn count_page_tree(
+    document: &Document,
+    node: &Object,
+    visited: &mut HashSet<pdf_extract::ObjectId>,
+    depth: usize,
+) -> Result<usize, PdfError> {
+    if depth > MAX_FORM_DEPTH {
+        return Err(PdfError::Extract(
+            "PDF page tree nesting exceeds the ingest limit".to_string(),
+        ));
+    }
+    let node = node
+        .as_dict()
+        .map_err(|_| PdfError::Extract("PDF page tree node is not a dictionary".to_string()))?;
+    match node.get(b"Kids") {
+        Ok(kids) => {
+            let (_, kids) = document
+                .dereference(kids)
+                .map_err(|error| PdfError::Extract(error.to_string()))?;
+            let kids = kids.as_array().map_err(|_| {
+                PdfError::Extract("PDF page tree /Kids is not an array".to_string())
+            })?;
+            let mut total = 0usize;
+            for kid in kids {
+                let (id, kid) = document
+                    .dereference(kid)
+                    .map_err(|error| PdfError::Extract(error.to_string()))?;
+                if let Some(id) = id {
+                    if !visited.insert(id) {
+                        return Err(PdfError::Extract(
+                            "PDF page tree contains a cycle".to_string(),
+                        ));
+                    }
+                }
+                total += count_page_tree(document, kid, visited, depth + 1)?;
+            }
+            Ok(total)
+        }
+        Err(_) => {
+            // A leaf without /Kids is a page. A /Pages node without /Kids is
+            // invalid and must not be counted as a page.
+            let is_pages = node
+                .get(b"Type")
+                .ok()
+                .and_then(|value| document.dereference(value).ok())
+                .and_then(|(_, value)| value.as_name().ok())
+                == Some(b"Pages".as_slice());
+            if is_pages {
+                return Err(PdfError::Extract(
+                    "PDF /Pages node has no /Kids".to_string(),
+                ));
+            }
+            Ok(1)
+        }
+    }
 }
 
 /// Require every non-free xref entry to have a loaded object. lopdf logs and
@@ -252,27 +340,53 @@ fn validate_page_with_limit(
         .get_object(page_id)
         .and_then(Object::as_dict)
         .map_err(|error| PdfError::Extract(error.to_string()))?;
-    if let Some(resources) = inherited_resources(document, page) {
-        validate_resources(document, resources, seen_forms, 0)?;
+    if let Some(resources) = inherited_resources(document, page, page_id)? {
+        validate_resources(document, resources, seen_forms, &mut HashSet::new(), 0)?;
     }
     Ok(())
 }
 
 /// Resolve `/Resources` through the page tree like pdf-extract does
-/// (`get_inherited`), so a Form XObject inherited from the `/Pages` node is
-/// still strict-validated.
-fn inherited_resources<'a>(document: &'a Document, page: &'a Dictionary) -> Option<&'a Dictionary> {
+/// (`get_inherited`), rejecting a cyclic or over-deep `/Parent` chain so the
+/// extractor cannot follow it recursively without a bound.
+fn inherited_resources<'a>(
+    document: &'a Document,
+    page: &'a Dictionary,
+    page_id: pdf_extract::ObjectId,
+) -> Result<Option<&'a Dictionary>, PdfError> {
     let mut current = page;
-    for _ in 0..64 {
+    let mut visited = HashSet::from([page_id]);
+    for _ in 0..MAX_FORM_DEPTH {
         if let Ok(resources) = current.get(b"Resources") {
-            let (_, resources) = document.dereference(resources).ok()?;
-            return resources.as_dict().ok();
+            let (_, resources) = document
+                .dereference(resources)
+                .map_err(|error| PdfError::Extract(error.to_string()))?;
+            return resources
+                .as_dict()
+                .map(Some)
+                .map_err(|_| PdfError::Extract("PDF /Resources is not a dictionary".to_string()));
         }
-        let parent = current.get(b"Parent").ok()?;
-        let (_, parent) = document.dereference(parent).ok()?;
-        current = parent.as_dict().ok()?;
+        let parent = match current.get(b"Parent") {
+            Ok(parent) => parent,
+            Err(_) => return Ok(None),
+        };
+        let (id, parent) = document
+            .dereference(parent)
+            .map_err(|error| PdfError::Extract(error.to_string()))?;
+        if let Some(id) = id {
+            if !visited.insert(id) {
+                return Err(PdfError::Extract(
+                    "PDF page /Parent chain contains a cycle".to_string(),
+                ));
+            }
+        }
+        current = parent
+            .as_dict()
+            .map_err(|_| PdfError::Extract("PDF /Parent is not a dictionary".to_string()))?;
     }
-    None
+    Err(PdfError::Extract(
+        "PDF page /Parent chain exceeds the ingest limit".to_string(),
+    ))
 }
 
 /// Strict-decode every Form XObject reachable from a resource dictionary.
@@ -281,6 +395,7 @@ fn validate_resources(
     document: &Document,
     resources: &Dictionary,
     seen_forms: &mut HashSet<pdf_extract::ObjectId>,
+    active_forms: &mut HashSet<pdf_extract::ObjectId>,
     depth: usize,
 ) -> Result<(), PdfError> {
     if depth > MAX_FORM_DEPTH {
@@ -308,9 +423,15 @@ fn validate_resources(
             continue;
         }
         if let Some(id) = id {
-            if !seen_forms.insert(id) {
+            if active_forms.contains(&id) {
+                return Err(PdfError::Extract(
+                    "PDF Form XObject invocation contains a cycle".to_string(),
+                ));
+            }
+            if seen_forms.contains(&id) {
                 continue;
             }
+            active_forms.insert(id);
         }
         if seen_forms.len() > MAX_FORMS {
             return Err(PdfError::Extract(
@@ -332,9 +453,14 @@ fn validate_resources(
             .get(b"Resources")
             .ok()
             .and_then(|value| document.dereference(value).ok())
-            .and_then(|(_, value)| value.as_dict().ok())
-            .unwrap_or(resources);
-        validate_resources(document, nested, seen_forms, depth + 1)?;
+            .and_then(|(_, value)| value.as_dict().ok());
+        if let Some(nested) = nested {
+            validate_resources(document, nested, seen_forms, active_forms, depth + 1)?;
+        }
+        if let Some(id) = id {
+            active_forms.remove(&id);
+            seen_forms.insert(id);
+        }
     }
     Ok(())
 }
@@ -366,6 +492,11 @@ fn decode_stream(document: &Document, stream: &Stream, limit: usize) -> Result<V
             Ok(stream.content.clone())
         }
         Some([name]) if name == b"FlateDecode" => decode_flate(&stream.content, limit),
+        Some([name]) if name == b"ASCII85Decode" => decode_ascii85(&stream.content, limit),
+        Some([first, second]) if first == b"ASCII85Decode" && second == b"FlateDecode" => {
+            let intermediate = decode_ascii85(&stream.content, limit)?;
+            decode_flate(&intermediate, limit)
+        }
         Some([name]) if matches!(name.as_slice(), b"DCTDecode" | b"JPXDecode") => Err(
             PdfError::Extract("image stream used as page or Form content".to_string()),
         ),
@@ -382,6 +513,13 @@ fn stream_filters(document: &Document, stream: &Stream) -> Result<Option<Vec<Vec
     let Ok(raw) = stream.dict.get(b"Filter") else {
         return Ok(None);
     };
+    // pdf-extract does not dereference an indirect /Filter, so validation and
+    // extraction would disagree about the stream bytes. Reject it explicitly.
+    if matches!(raw, Object::Reference(_)) {
+        return Err(PdfError::Extract(
+            "indirect /Filter is not supported".to_string(),
+        ));
+    }
     let (_, value) = document
         .dereference(raw)
         .map_err(|error| PdfError::Extract(format!("invalid stream filter: {error}")))?;
@@ -434,6 +572,70 @@ fn size_limit_error() -> PdfError {
     PdfError::Extract("decompressed stream exceeds the ingest size limit".to_string())
 }
 
+/// Decode PDF ASCII85 (`/ASCII85Decode`), including `z` zero groups and a
+/// partial final group. Output is bounded even though ASCII85 alone cannot
+/// expand beyond its input.
+fn decode_ascii85(input: &[u8], limit: usize) -> Result<Vec<u8>, PdfError> {
+    let mut output = Vec::new();
+    let mut group = [0u8; 5];
+    let mut count = 0usize;
+    for &byte in input {
+        if byte.is_ascii_whitespace() {
+            continue;
+        }
+        if byte == b'~' {
+            break;
+        }
+        if byte == b'z' {
+            if count != 0 {
+                return Err(PdfError::Extract(
+                    "invalid ASCII85 'z' inside a group".to_string(),
+                ));
+            }
+            if output.len().saturating_add(4) > limit {
+                return Err(size_limit_error());
+            }
+            output.extend_from_slice(&[0, 0, 0, 0]);
+            continue;
+        }
+        if !(b'!'..=b'u').contains(&byte) {
+            return Err(PdfError::Extract("invalid ASCII85 character".to_string()));
+        }
+        group[count] = byte - b'!';
+        count += 1;
+        if count == 5 {
+            if output.len().saturating_add(4) > limit {
+                return Err(size_limit_error());
+            }
+            let mut value = 0u64;
+            for &digit in &group {
+                value = value * 85 + digit as u64;
+            }
+            output.extend_from_slice(&(value as u32).to_be_bytes());
+            count = 0;
+        }
+    }
+    if count > 0 {
+        if count == 1 {
+            return Err(PdfError::Extract("invalid ASCII85 final group".to_string()));
+        }
+        for digit in group.iter_mut().skip(count) {
+            *digit = 84;
+        }
+        let mut value = 0u64;
+        for &digit in &group {
+            value = value * 85 + digit as u64;
+        }
+        let bytes = (value as u32).to_be_bytes();
+        let take = count - 1;
+        if output.len().saturating_add(take) > limit {
+            return Err(size_limit_error());
+        }
+        output.extend_from_slice(&bytes[..take]);
+    }
+    Ok(output)
+}
+
 enum InflateFailure {
     Limit,
     Decode(std::io::Error),
@@ -473,10 +675,35 @@ pub fn render_pages(pages: &[String]) -> Option<String> {
 /// a single space, so literal runs of spaces and tabs must collapse too.
 fn normalize_page(page: &str) -> String {
     page.lines()
-        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .map(|line| {
+            line.split_whitespace()
+                .map(expand_ligatures)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// pdfplumber expands common Latin ligatures; pdf-extract preserves the
+/// compatibility codepoint. Apply the same targeted mapping so the rendered
+/// hash and retained text match.
+fn expand_ligatures(word: &str) -> String {
+    let mut expanded = String::with_capacity(word.len());
+    for character in word.chars() {
+        match character {
+            '\u{FB00}' => expanded.push_str("ff"),
+            '\u{FB01}' => expanded.push_str("fi"),
+            '\u{FB02}' => expanded.push_str("fl"),
+            '\u{FB03}' => expanded.push_str("ffi"),
+            '\u{FB04}' => expanded.push_str("ffl"),
+            '\u{FB05}' => expanded.push_str("ft"),
+            '\u{FB06}' => expanded.push_str("st"),
+            other => expanded.push(other),
+        }
+    }
+    expanded
 }
 
 /// Keep a malformed PDF from panicking the ingest process. The extractor is
@@ -755,7 +982,107 @@ mod tests {
             ),
             ((2, 0), Object::Name(b"FlateDecode".to_vec())),
         ]);
-        assert!(validate_all_streams_with_limits(&indirect_filter, 100, 100).is_ok());
+        assert!(validate_all_streams_with_limits(&indirect_filter, 100, 100)
+            .unwrap_err()
+            .to_string()
+            .contains("indirect /Filter"));
+    }
+
+    #[test]
+    fn ascii85_and_ascii85_flate_chains_decode_in_order() {
+        let document = Document::new();
+        let mut single = Dictionary::new();
+        single.set("Filter", Object::Name(b"ASCII85Decode".to_vec()));
+        let single = Stream::new(single, b"87cURDZ~>".to_vec());
+        assert_eq!(decode_stream(&document, &single, 100).unwrap(), b"Hello");
+
+        let mut chain = Dictionary::new();
+        chain.set(
+            "Filter",
+            Object::Array(vec![
+                Object::Name(b"ASCII85Decode".to_vec()),
+                Object::Name(b"FlateDecode".to_vec()),
+            ]),
+        );
+        let chain = Stream::new(chain, b"Garg^;:'MC<%p.,#Y@tAnAs*Y#g#t`%06Gm5Qu3~>".to_vec());
+        assert_eq!(
+            decode_stream(&document, &chain, 100).unwrap(),
+            b"BT /F1 12 Tf (Hi) Tj ET"
+        );
+    }
+
+    #[test]
+    fn ligatures_expand_like_pdfplumber() {
+        assert_eq!(
+            normalize_page("A \u{FB01}le and a \u{FB02}ow"),
+            "A file and a flow"
+        );
+        assert_eq!(normalize_page("\u{FB03} \u{FB04} \u{FB00}"), "ffi ffl ff");
+    }
+
+    #[test]
+    fn cyclic_parent_chain_is_rejected() {
+        let mut first = Dictionary::new();
+        first.set("Parent", Object::Reference((2, 0)));
+        let mut second = Dictionary::new();
+        second.set("Parent", Object::Reference((1, 0)));
+        let document = document_with(vec![
+            ((1, 0), Object::Dictionary(first)),
+            ((2, 0), Object::Dictionary(second)),
+        ]);
+        let mut seen = HashSet::new();
+        let error = validate_page(&document, (1, 0), &mut seen).expect_err("cycle");
+        assert!(error.to_string().contains("cycle"), "{error}");
+    }
+
+    #[test]
+    fn cyclic_form_invocation_is_rejected() {
+        let mut resources = Dictionary::new();
+        let mut xobjects = Dictionary::new();
+        xobjects.set("Fm", Object::Reference((3, 0)));
+        resources.set("XObject", Object::Dictionary(xobjects));
+        let mut page = Dictionary::new();
+        page.set("Contents", Object::Reference((2, 0)));
+        page.set("Resources", Object::Dictionary(resources));
+        let mut form = Dictionary::new();
+        form.set("Length", Object::Integer(5));
+        form.set("Subtype", Object::Name(b"Form".to_vec()));
+        let mut form_resources = Dictionary::new();
+        let mut form_xobjects = Dictionary::new();
+        form_xobjects.set("Fm", Object::Reference((3, 0)));
+        form_resources.set("XObject", Object::Dictionary(form_xobjects));
+        form.set("Resources", Object::Dictionary(form_resources));
+        let document = document_with(vec![
+            ((1, 0), Object::Dictionary(page)),
+            ((2, 0), stream_object(b"/Fm Do", None)),
+            (
+                (3, 0),
+                Object::Stream(Stream::new(form, b"/Fm Do".to_vec())),
+            ),
+        ]);
+        let mut seen = HashSet::new();
+        let error = validate_page(&document, (1, 0), &mut seen).expect_err("form cycle");
+        assert!(error.to_string().contains("cycle"), "{error}");
+    }
+
+    #[test]
+    fn page_tree_with_non_array_kids_is_rejected() {
+        let mut catalog = Dictionary::new();
+        catalog.set("Pages", Object::Reference((2, 0)));
+        let mut pages = Dictionary::new();
+        pages.set("Type", Object::Name(b"Pages".to_vec()));
+        pages.set("Kids", Object::Integer(1));
+        let document = document_with(vec![
+            ((1, 0), Object::Dictionary(catalog)),
+            ((2, 0), Object::Dictionary(pages)),
+        ]);
+        let mut document = document;
+        document.trailer.set("Root", Object::Reference((1, 0)));
+        let error = validate_page_tree(&document).expect_err("kids");
+        assert!(
+            error.to_string().contains("/Kids is not an array"),
+            "{error}"
+        );
     }
 
     #[test]

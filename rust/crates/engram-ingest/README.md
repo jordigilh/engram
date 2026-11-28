@@ -378,7 +378,15 @@ tag = "example"
 root = "~/src/example"                           # ~ and $VARS expand; relative to this file
 docs_include = ["**/*.md"]
 docs_exclude = ["**/vendor/**"]
-document_format = "markdown"                     # or "pdf"
+document_format = "markdown"
+
+# A PDF source needs PDF include patterns; the processor follows the source
+# format, so a Markdown glob here would send Markdown files to the PDF parser.
+[[projects.example.sources]]
+tag = "example-pdfs"
+root = "~/src/example/docs"
+docs_include = ["**/*.pdf"]
+document_format = "pdf"
 ```
 
 Start the resident loop (SIGINT/SIGTERM cancel it, then the worker drains and

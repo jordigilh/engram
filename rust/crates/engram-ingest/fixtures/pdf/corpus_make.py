@@ -93,6 +93,12 @@ CASES = {
             text_at(72, 700, "A & B (C) [D] {E}"),
         )
     ],
+    "ascii85_chain": [
+        page(
+            text_at(72, 720, "ASCII85 encoded page content."),
+            text_at(72, 700, "Decoded through the shared bound."),
+        )
+    ],
     "multi_page_blank_middle": [
         page(text_at(72, 720, "First page body.")),
         page(),
@@ -106,7 +112,7 @@ def main() -> None:
     manifest = []
     for name, streams in CASES.items():
         path = CORPUS / f"{name}.pdf"
-        build_streams(streams, path)
+        build_streams(streams, path, ascii85=name == "ascii85_chain")
         manifest.append({"name": name, "file": path.name})
     (CORPUS / "cases.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"

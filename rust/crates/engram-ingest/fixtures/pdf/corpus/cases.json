@@ -28,6 +28,10 @@
     "file": "delimiters.pdf"
   },
   {
+    "name": "ascii85_chain",
+    "file": "ascii85_chain.pdf"
+  },
+  {
     "name": "multi_page_blank_middle",
     "file": "multi_page_blank_middle.pdf"
   }

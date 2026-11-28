@@ -2,7 +2,7 @@
   "provenance": {
     "python": "3.14.6",
     "pdfplumber": "0.11.10",
-    "source_commit": "43111aba8cb887f1275d64be820cf2c005722c92"
+    "source_commit": "62a567b216729e921cfaede0a7fe7acf6cfcc543"
   },
   "cases": [
     {
@@ -60,6 +60,14 @@
         "R&D (draft) \\ review\nA & B (C) [D] {E}"
       ],
       "rendered": "--- Page 1 ---\n\nR&D (draft) \\ review\nA & B (C) [D] {E}"
+    },
+    {
+      "name": "ascii85_chain",
+      "file": "ascii85_chain.pdf",
+      "pages": [
+        "ASCII85 encoded page content.\nDecoded through the shared bound."
+      ],
+      "rendered": "--- Page 1 ---\n\nASCII85 encoded page content.\nDecoded through the shared bound."
     },
     {
       "name": "multi_page_blank_middle",

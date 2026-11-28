@@ -14,6 +14,7 @@ Run from anywhere:
 
     python3 rust/crates/engram-ingest/fixtures/pdf/make_fixture.py
 """
+import base64
 import hashlib
 import pathlib
 import zlib
@@ -92,7 +93,7 @@ def content(lines: list[str]) -> bytes:
 
 
 def build_streams(
-    streams: list[bytes], path: pathlib.Path, *, compress: bool = True
+    streams: list[bytes], path: pathlib.Path, *, compress: bool = True, ascii85: bool = False
 ) -> None:
     objects: list[bytes] = []
 
@@ -118,6 +119,14 @@ def build_streams(
         else:
             body = stream
             head = b"<< /Length %d >>" % len(body)
+        if ascii85:
+            body = base64.a85encode(body) + b"~>"
+            head = (
+                b"<< /Length %d /Filter [/ASCII85Decode /FlateDecode] >>"
+                % len(body)
+                if compress and stream
+                else b"<< /Length %d /Filter /ASCII85Decode >>" % len(body)
+            )
         contents = add(head + b"\nstream\n" + body + b"\nendstream")
         page_ids.append(
             add(

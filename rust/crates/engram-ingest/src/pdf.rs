@@ -41,6 +41,7 @@ use pdf_extract::{
 
 const MAX_STREAM_BYTES: usize = 64 * 1024 * 1024;
 const MAX_DOCUMENT_BYTES: usize = 256 * 1024 * 1024;
+const MAX_LOAD_STREAM_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const MAX_INPUT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PAGES: usize = 10_000;
 const MAX_PAGE_CONTENT_STREAMS: usize = 1_024;
@@ -63,7 +64,7 @@ pub enum PdfError {
 /// is an error so the caller aborts the whole source snapshot instead of
 /// tombstoning documents from a partial view.
 pub fn render_pdf(bytes: &[u8]) -> Result<Option<String>, PdfError> {
-    let pages = guarded(|| extract_checked(bytes, MAX_DOCUMENT_BYTES))??;
+    let pages = guarded(|| extract_checked(bytes, MAX_LOAD_STREAM_BYTES))??;
     Ok(render_pages(&pages))
 }
 
@@ -172,7 +173,31 @@ fn preflight_load(bytes: &[u8], load_limit: usize) -> Result<(), PdfError> {
         ..Default::default()
     };
     match lopdf_047::Document::load_mem_with_options(bytes, options) {
-        Ok(_) => Ok(()),
+        Ok(document) => {
+            if document.is_encrypted() {
+                return Err(PdfError::Extract(
+                    "encrypted PDF could not be authenticated by the bounded loader".to_string(),
+                ));
+            }
+            let mut object_stream_bytes = 0usize;
+            for object in document.objects.values() {
+                if let lopdf_047::Object::Stream(stream) = object {
+                    if stream.dict.has_type(b"ObjStm") {
+                        if let Ok(decoded) =
+                            stream.decompressed_content_with_limit(MAX_LOAD_STREAM_BYTES)
+                        {
+                            object_stream_bytes = object_stream_bytes.saturating_add(decoded.len());
+                        }
+                    }
+                }
+            }
+            if object_stream_bytes > MAX_DOCUMENT_BYTES {
+                return Err(PdfError::Extract(
+                    "decompressed document exceeds the ingest limit during load".to_string(),
+                ));
+            }
+            Ok(())
+        }
         Err(lopdf_047::Error::Decompress(lopdf_047::DecompressError::MemoryLimitExceeded {
             ..
         })) => Err(PdfError::Extract(
@@ -359,13 +384,24 @@ fn validate_all_streams_with_limits(
             continue;
         };
         let filters = stream_filters(document, stream)?;
-        let is_image_codec = stream_subtype(document, stream).as_deref()
-            == Some(b"Image".as_slice())
+        let is_image = stream_subtype(document, stream).as_deref() == Some(b"Image".as_slice());
+        let is_image_codec = is_image
             && matches!(
                 filters.as_deref(),
                 Some([name]) if matches!(name.as_slice(), b"DCTDecode" | b"JPXDecode")
             );
         if is_image_codec {
+            continue;
+        }
+        // CCITT/JBIG2 image codecs are not inflated by lopdf/pdf-extract; they
+        // are scanned pages, so skip them instead of rejecting the document.
+        if is_image
+            && filters.as_deref().is_some_and(|names| {
+                names
+                    .iter()
+                    .any(|name| matches!(name.as_slice(), b"CCITTFaxDecode" | b"JBIG2Decode"))
+            })
+        {
             continue;
         }
         let decoded = decode_stream(document, stream, stream_limit)?;
@@ -599,47 +635,118 @@ fn validate_resources(
         if stream_subtype(document, stream).as_deref() != Some(b"Form".as_slice()) {
             continue;
         }
-        if let Some(id) = id {
-            if active_forms.contains(&id) {
-                return Err(PdfError::Extract(
-                    "PDF Form XObject invocation contains a cycle".to_string(),
-                ));
-            }
-            if seen_forms.contains(&id) {
-                continue;
-            }
-            active_forms.insert(id);
-        }
-        if seen_forms.len() > MAX_FORMS {
-            return Err(PdfError::Extract(
-                "PDF has too many Form XObjects".to_string(),
-            ));
-        }
-        let content = decompress_stream(document, stream)?;
-        if content.iter().any(|byte| matches!(byte, 0 | 0x0C)) {
-            return Err(PdfError::Extract(
-                "Form XObject content uses NUL/form-feed whitespace, which the extractor cannot \
-                 parse safely"
-                    .to_string(),
-            ));
-        }
-        pdf_extract::content::Content::decode_strict(&content)
-            .map_err(|error| PdfError::Extract(format!("corrupt Form XObject content: {error}")))?;
-        let nested = stream
-            .dict
-            .get(b"Resources")
-            .ok()
-            .and_then(|value| document.dereference(value).ok())
-            .and_then(|(_, value)| value.as_dict().ok());
-        if let Some(nested) = nested {
-            validate_resources(document, nested, seen_forms, active_forms, depth + 1)?;
-        }
-        if let Some(id) = id {
-            active_forms.remove(&id);
-            seen_forms.insert(id);
-        }
+        validate_form(
+            document,
+            id,
+            stream,
+            resources,
+            seen_forms,
+            active_forms,
+            depth,
+        )?;
     }
     Ok(())
+}
+
+/// Validate one Form XObject and only the forms its content actually invokes.
+/// The effective resources are the form's own dictionary or the caller's,
+/// matching pdf-extract's `Do` fallback; this catches inherited-resource cycles
+/// without treating an unused shared form as a cycle.
+fn validate_form(
+    document: &Document,
+    id: Option<pdf_extract::ObjectId>,
+    stream: &Stream,
+    parent_resources: &Dictionary,
+    seen_forms: &mut HashSet<pdf_extract::ObjectId>,
+    active_forms: &mut HashSet<pdf_extract::ObjectId>,
+    depth: usize,
+) -> Result<(), PdfError> {
+    if depth > MAX_FORM_DEPTH {
+        return Err(PdfError::Extract(
+            "Form XObject nesting exceeds the ingest limit".to_string(),
+        ));
+    }
+    if let Some(id) = id {
+        if active_forms.contains(&id) {
+            return Err(PdfError::Extract(
+                "PDF Form XObject invocation contains a cycle".to_string(),
+            ));
+        }
+        if seen_forms.contains(&id) {
+            return Ok(());
+        }
+        active_forms.insert(id);
+    }
+    if seen_forms.len() > MAX_FORMS {
+        return Err(PdfError::Extract(
+            "PDF has too many Form XObjects".to_string(),
+        ));
+    }
+    let content = decompress_stream(document, stream)?;
+    if content.iter().any(|byte| matches!(byte, 0 | 0x0C)) {
+        return Err(PdfError::Extract(
+            "Form XObject content uses NUL/form-feed whitespace, which the extractor cannot \
+             parse safely"
+                .to_string(),
+        ));
+    }
+    let parsed = pdf_extract::content::Content::decode_strict(&content)
+        .map_err(|error| PdfError::Extract(format!("corrupt Form XObject content: {error}")))?;
+    let effective = stream
+        .dict
+        .get(b"Resources")
+        .ok()
+        .and_then(|value| document.dereference(value).ok())
+        .and_then(|(_, value)| value.as_dict().ok())
+        .unwrap_or(parent_resources);
+    for name in invoked_xobjects(&parsed) {
+        let Ok(raw) = effective.get(b"XObject") else {
+            continue;
+        };
+        let (_, xobjects) = document
+            .dereference(raw)
+            .map_err(|error| PdfError::Extract(error.to_string()))?;
+        let Ok(xobjects) = xobjects.as_dict() else {
+            continue;
+        };
+        let Ok(object) = xobjects.get(&name) else {
+            continue;
+        };
+        let (child_id, child) = document
+            .dereference(object)
+            .map_err(|error| PdfError::Extract(error.to_string()))?;
+        let Object::Stream(child_stream) = child else {
+            continue;
+        };
+        if stream_subtype(document, child_stream).as_deref() != Some(b"Form".as_slice()) {
+            continue;
+        }
+        validate_form(
+            document,
+            child_id,
+            child_stream,
+            effective,
+            seen_forms,
+            active_forms,
+            depth + 1,
+        )?;
+    }
+    if let Some(id) = id {
+        active_forms.remove(&id);
+        seen_forms.insert(id);
+    }
+    Ok(())
+}
+
+fn invoked_xobjects(content: &pdf_extract::content::Content) -> Vec<Vec<u8>> {
+    content
+        .operations
+        .iter()
+        .filter(|operation| operation.operator == "Do")
+        .filter_map(|operation| operation.operands.first())
+        .filter_map(|operand| operand.as_name().ok())
+        .map(<[u8]>::to_vec)
+        .collect()
 }
 
 fn stream_subtype(document: &Document, stream: &Stream) -> Option<Vec<u8>> {
@@ -897,6 +1004,7 @@ mod tests {
     const FIXTURE: &[u8] = include_bytes!("../fixtures/pdf/guide.pdf");
     const BLANK: &[u8] = include_bytes!("../fixtures/pdf/blank.pdf");
     const BROKEN: &[u8] = include_bytes!("../fixtures/pdf/broken.pdf");
+    const ENCRYPTED_SECRET: &[u8] = include_bytes!("../fixtures/pdf/encrypted_secret.pdf");
 
     #[test]
     fn renders_page_markers_and_omits_blank_pages_without_renumbering() {
@@ -1010,8 +1118,30 @@ mod tests {
 
     #[test]
     fn load_preflight_leaves_ordinary_pdfs_to_the_extractor() {
-        assert!(preflight_load(FIXTURE, MAX_DOCUMENT_BYTES).is_ok());
-        assert!(preflight_load(BLANK, MAX_DOCUMENT_BYTES).is_ok());
+        assert!(preflight_load(FIXTURE, MAX_LOAD_STREAM_BYTES).is_ok());
+        assert!(preflight_load(BLANK, MAX_LOAD_STREAM_BYTES).is_ok());
+    }
+
+    #[test]
+    fn load_preflight_rejects_still_encrypted_documents() {
+        assert!(preflight_load(ENCRYPTED_SECRET, MAX_LOAD_STREAM_BYTES).is_err());
+    }
+
+    #[test]
+    fn media_box_can_be_inherited_from_the_page_tree() {
+        let mut pages = Dictionary::new();
+        pages.set("Type", Object::Name(b"Pages".to_vec()));
+        pages.set("MediaBox", media_box());
+        let mut page = Dictionary::new();
+        page.set("Contents", Object::Reference((3, 0)));
+        page.set("Parent", Object::Reference((2, 0)));
+        let document = document_with(vec![
+            ((1, 0), Object::Dictionary(page)),
+            ((2, 0), Object::Dictionary(pages)),
+            ((3, 0), stream_object(b"BT ET", None)),
+        ]);
+        let mut seen = HashSet::new();
+        assert!(validate_page(&document, (1, 0), &mut seen).is_ok());
     }
 
     #[test]
@@ -1313,6 +1443,19 @@ mod tests {
     }
 
     #[test]
+    fn scanned_image_codec_streams_are_skipped() {
+        let mut image = Dictionary::new();
+        image.set("Length", Object::Integer(100));
+        image.set("Subtype", Object::Name(b"Image".to_vec()));
+        image.set("Filter", Object::Name(b"CCITTFaxDecode".to_vec()));
+        let document = document_with(vec![(
+            (1, 0),
+            Object::Stream(Stream::new(image, vec![0u8; 100])),
+        )]);
+        assert!(validate_all_streams_with_limits(&document, 4, 4).is_ok());
+    }
+
+    #[test]
     fn stream_and_document_expansion_caps_are_enforced() {
         let one = document_with(vec![((1, 0), stream_object(b"12345", None))]);
         assert!(validate_all_streams_with_limits(&one, 5, 5).is_ok());
@@ -1333,6 +1476,34 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("decompressed document"));
+    }
+
+    #[test]
+    fn inherited_resource_form_cycle_is_rejected() {
+        let mut resources = Dictionary::new();
+        let mut xobjects = Dictionary::new();
+        xobjects.set("Fm", Object::Reference((3, 0)));
+        resources.set("XObject", Object::Dictionary(xobjects));
+        let mut page = Dictionary::new();
+        page.set("Contents", Object::Reference((2, 0)));
+        page.set("MediaBox", media_box());
+        page.set("Resources", Object::Dictionary(resources));
+        let mut form = Dictionary::new();
+        form.set("Length", Object::Integer(5));
+        form.set("Subtype", Object::Name(b"Form".to_vec()));
+        // No /Resources on the form: pdf-extract falls back to the page's
+        // resources, which resolve /Fm back to this same form.
+        let document = document_with(vec![
+            ((1, 0), Object::Dictionary(page)),
+            ((2, 0), stream_object(b"/Fm Do", None)),
+            (
+                (3, 0),
+                Object::Stream(Stream::new(form, b"/Fm Do".to_vec())),
+            ),
+        ]);
+        let mut seen = HashSet::new();
+        let error = validate_page(&document, (1, 0), &mut seen).expect_err("inherited cycle");
+        assert!(error.to_string().contains("cycle"), "{error}");
     }
 
     #[test]

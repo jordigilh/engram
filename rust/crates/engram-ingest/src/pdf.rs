@@ -31,10 +31,13 @@
 //! implementations; OCR is out of scope (issue #258).
 
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::io::Read;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use pdf_extract::{Dictionary, Document, Object, Stream};
+use pdf_extract::{
+    Dictionary, Document, MediaBox, Object, OutputDev, OutputError, Stream, Transform,
+};
 
 const MAX_STREAM_BYTES: usize = 64 * 1024 * 1024;
 const MAX_DOCUMENT_BYTES: usize = 256 * 1024 * 1024;
@@ -60,12 +63,130 @@ pub enum PdfError {
 /// is an error so the caller aborts the whole source snapshot instead of
 /// tombstoning documents from a partial view.
 pub fn render_pdf(bytes: &[u8]) -> Result<Option<String>, PdfError> {
-    let pages = guarded(|| extract_checked(bytes))??;
+    let pages = guarded(|| extract_checked(bytes, MAX_DOCUMENT_BYTES))??;
     Ok(render_pages(&pages))
 }
 
+/// Per-page plain-text sink for `output_doc`, matching pdf-extract's
+/// `PlainTextOutput` spacing/line rules but recording page boundaries in one
+/// traversal. A blank page remains an empty entry so page numbering is stable.
+struct PageTextOutput {
+    pages: Vec<String>,
+    current: String,
+    flip_ctm: Transform,
+    last_end: f64,
+    last_y: f64,
+    first_char: bool,
+}
+
+impl Default for PageTextOutput {
+    fn default() -> Self {
+        Self {
+            pages: Vec::new(),
+            current: String::new(),
+            flip_ctm: Transform::identity(),
+            last_end: 100_000.0,
+            last_y: 0.0,
+            first_char: false,
+        }
+    }
+}
+
+impl OutputDev for PageTextOutput {
+    fn begin_page(
+        &mut self,
+        _page_num: u32,
+        media_box: &MediaBox,
+        _art_box: Option<(f64, f64, f64, f64)>,
+    ) -> Result<(), OutputError> {
+        self.current.clear();
+        self.flip_ctm =
+            Transform::row_major(1.0, 0.0, 0.0, -1.0, 0.0, media_box.ury - media_box.lly);
+        self.last_end = 100_000.0;
+        self.last_y = 0.0;
+        self.first_char = false;
+        Ok(())
+    }
+
+    fn end_page(&mut self) -> Result<(), OutputError> {
+        self.pages.push(std::mem::take(&mut self.current));
+        Ok(())
+    }
+
+    fn output_character(
+        &mut self,
+        trm: &Transform,
+        width: f64,
+        _spacing: f64,
+        font_size: f64,
+        character: &str,
+    ) -> Result<(), OutputError> {
+        let position = trm.post_transform(&self.flip_ctm);
+        let size = trm.transform_vector(euclid::vec2(font_size, font_size));
+        let size = (size.x * size.y).sqrt();
+        let (x, y) = (position.m31, position.m32);
+        if self.first_char {
+            if (y - self.last_y).abs() > size * 1.5 {
+                writeln!(self.current)?;
+            }
+            if x < self.last_end && (y - self.last_y).abs() > size * 0.5 {
+                writeln!(self.current)?;
+            }
+            if x > self.last_end + size * 0.1 {
+                write!(self.current, " ")?;
+            }
+        }
+        write!(self.current, "{character}")?;
+        self.first_char = false;
+        self.last_y = y;
+        self.last_end = x + width * size;
+        Ok(())
+    }
+
+    fn begin_word(&mut self) -> Result<(), OutputError> {
+        self.first_char = true;
+        Ok(())
+    }
+
+    fn end_word(&mut self) -> Result<(), OutputError> {
+        Ok(())
+    }
+
+    fn end_line(&mut self) -> Result<(), OutputError> {
+        Ok(())
+    }
+}
+
+/// Bound object/xref stream expansion before the extractor's own parser runs.
+///
+/// pdf-extract 0.12 pins lopdf 0.42, whose load path inflates object and
+/// cross-reference streams without a limit. The newer lopdf 0.47 exposes
+/// `max_decompressed_size`; loading the same bytes with that bound is a
+/// preflight oracle: if the hardened loader accepts the document, the streams
+/// the 0.42 parser is about to inflate are within the same budget. Any other
+/// load failure is also rejected: a document must not reach the unbounded 0.42
+/// loader, even when the newer parser dislikes it for a non-budget reason.
+fn preflight_load(bytes: &[u8], load_limit: usize) -> Result<(), PdfError> {
+    let options = lopdf_047::LoadOptions {
+        max_decompressed_size: Some(load_limit),
+        ..Default::default()
+    };
+    match lopdf_047::Document::load_mem_with_options(bytes, options) {
+        Ok(_) => Ok(()),
+        Err(lopdf_047::Error::Decompress(lopdf_047::DecompressError::MemoryLimitExceeded {
+            ..
+        })) => Err(PdfError::Extract(
+            "decompressed stream exceeds the ingest limit during load".to_string(),
+        )),
+        Err(error) => Err(PdfError::Extract(format!(
+            "PDF failed the bounded load preflight: {error}"
+        ))),
+    }
+}
+
 /// Parse once for integrity checks, then let the extractor produce text.
-fn extract_checked(bytes: &[u8]) -> Result<Vec<String>, PdfError> {
+fn extract_checked(bytes: &[u8], load_limit: usize) -> Result<Vec<String>, PdfError> {
+    preflight_load(bytes, load_limit)?;
     let mut document =
         Document::load_mem(bytes).map_err(|error| PdfError::Extract(error.to_string()))?;
     validate_loaded_objects(&document)?;
@@ -95,10 +216,13 @@ fn extract_checked(bytes: &[u8]) -> Result<Vec<String>, PdfError> {
     for page_id in pages.values() {
         validate_page(&document, *page_id, &mut seen_forms)?;
     }
-    // Do not hold two parsed documents at once.
-    drop(document);
-    pdf_extract::extract_text_from_mem_by_pages(bytes)
-        .map_err(|error| PdfError::Extract(error.to_string()))
+    // Extract from the document that was just validated and decrypted: one
+    // page-tree walk, no second parse, and no divergence between the bytes
+    // checked and the bytes rendered.
+    let mut output = PageTextOutput::default();
+    pdf_extract::output_doc(&document, &mut output)
+        .map_err(|error| PdfError::Extract(error.to_string()))?;
+    Ok(output.pages)
 }
 
 /// Validate the page tree before `get_pages()` so an invalid `/Kids` branch
@@ -340,10 +464,63 @@ fn validate_page_with_limit(
         .get_object(page_id)
         .and_then(Object::as_dict)
         .map_err(|error| PdfError::Extract(error.to_string()))?;
+    validate_media_box(document, page, page_id)?;
     if let Some(resources) = inherited_resources(document, page, page_id)? {
         validate_resources(document, resources, seen_forms, &mut HashSet::new(), 0)?;
     }
     Ok(())
+}
+
+/// Require a page to inherit a four-number `/MediaBox`; pdf-extract indexes it
+/// without a fallback, so a missing/short box would panic.
+fn validate_media_box(
+    document: &Document,
+    page: &Dictionary,
+    page_id: pdf_extract::ObjectId,
+) -> Result<(), PdfError> {
+    let mut current = page;
+    let mut visited = HashSet::from([page_id]);
+    for _ in 0..MAX_FORM_DEPTH {
+        if let Ok(media_box) = current.get(b"MediaBox") {
+            let (_, media_box) = document
+                .dereference(media_box)
+                .map_err(|error| PdfError::Extract(error.to_string()))?;
+            let media_box = media_box
+                .as_array()
+                .map_err(|_| PdfError::Extract("PDF /MediaBox is not an array".to_string()))?;
+            if media_box.len() < 4
+                || media_box
+                    .iter()
+                    .take(4)
+                    .any(|value| value.as_float().is_err())
+            {
+                return Err(PdfError::Extract(
+                    "PDF /MediaBox must contain four numbers".to_string(),
+                ));
+            }
+            return Ok(());
+        }
+        let parent = match current.get(b"Parent") {
+            Ok(parent) => parent,
+            Err(_) => return Err(PdfError::Extract("PDF page has no /MediaBox".to_string())),
+        };
+        let (id, parent) = document
+            .dereference(parent)
+            .map_err(|error| PdfError::Extract(error.to_string()))?;
+        if let Some(id) = id {
+            if !visited.insert(id) {
+                return Err(PdfError::Extract(
+                    "PDF page /Parent chain contains a cycle".to_string(),
+                ));
+            }
+        }
+        current = parent
+            .as_dict()
+            .map_err(|_| PdfError::Extract("PDF /Parent is not a dictionary".to_string()))?;
+    }
+    Err(PdfError::Extract(
+        "PDF page /Parent chain exceeds the ingest limit".to_string(),
+    ))
 }
 
 /// Resolve `/Resources` through the page tree like pdf-extract does
@@ -798,6 +975,45 @@ mod tests {
         assert_eq!(decode_flate(&compressed, 20).expect("fits").len(), 20);
     }
 
+    fn bomb_xref_pdf(expanded_bytes: usize) -> Vec<u8> {
+        use std::io::Write;
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        encoder
+            .write_all(&vec![0u8; expanded_bytes])
+            .expect("encode");
+        let compressed = encoder.finish().expect("finish");
+        let mut pdf = b"%PDF-1.5\n".to_vec();
+        let catalog = b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+        pdf.extend_from_slice(catalog);
+        let xref_offset = pdf.len();
+        let body = format!(
+            "2 0 obj\n<< /Type /XRef /Size 3 /W [1 2 1] /Root 1 0 R \
+             /Length {} /Filter /FlateDecode >>\nstream\n",
+            compressed.len()
+        );
+        pdf.extend_from_slice(body.as_bytes());
+        pdf.extend_from_slice(&compressed);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+        pdf.extend_from_slice(format!("startxref\n{xref_offset}\n%%EOF\n").as_bytes());
+        pdf
+    }
+
+    #[test]
+    fn load_preflight_rejects_bomb_before_extractor() {
+        let pdf = bomb_xref_pdf(100);
+        let error = preflight_load(&pdf, 10).expect_err("bomb");
+        assert!(error.to_string().contains("during load"), "{error}");
+        // The full path consults the same preflight before pdf-extract's load.
+        let error = extract_checked(&pdf, 10).expect_err("bomb through render path");
+        assert!(error.to_string().contains("during load"), "{error}");
+    }
+
+    #[test]
+    fn load_preflight_leaves_ordinary_pdfs_to_the_extractor() {
+        assert!(preflight_load(FIXTURE, MAX_DOCUMENT_BYTES).is_ok());
+        assert!(preflight_load(BLANK, MAX_DOCUMENT_BYTES).is_ok());
+    }
+
     #[test]
     fn flate_checksum_damage_falls_back_to_raw_deflate() {
         use std::io::Write;
@@ -834,10 +1050,20 @@ mod tests {
         document
     }
 
+    fn media_box() -> Object {
+        Object::Array(vec![
+            Object::Integer(0),
+            Object::Integer(0),
+            Object::Integer(612),
+            Object::Integer(792),
+        ])
+    }
+
     fn page_document(contents: Object, resources: Option<Object>) -> Document {
         let mut page = Dictionary::new();
         page.set("Type", Object::Name(b"Page".to_vec()));
         page.set("Contents", contents);
+        page.set("MediaBox", media_box());
         if let Some(resources) = resources {
             page.set("Resources", resources);
         }
@@ -1043,6 +1269,7 @@ mod tests {
         resources.set("XObject", Object::Dictionary(xobjects));
         let mut page = Dictionary::new();
         page.set("Contents", Object::Reference((2, 0)));
+        page.set("MediaBox", media_box());
         page.set("Resources", Object::Dictionary(resources));
         let mut form = Dictionary::new();
         form.set("Length", Object::Integer(5));
@@ -1109,6 +1336,19 @@ mod tests {
     }
 
     #[test]
+    fn page_without_media_box_is_rejected_before_extraction_panic() {
+        let mut page = Dictionary::new();
+        page.set("Contents", Object::Reference((2, 0)));
+        let document = document_with(vec![
+            ((1, 0), Object::Dictionary(page)),
+            ((2, 0), stream_object(b"BT ET", None)),
+        ]);
+        let mut seen = HashSet::new();
+        let error = validate_page(&document, (1, 0), &mut seen).expect_err("media box");
+        assert!(error.to_string().contains("/MediaBox"), "{error}");
+    }
+
+    #[test]
     fn page_content_references_must_resolve() {
         let document = page_document(Object::Reference((9, 0)), None);
         let mut seen = HashSet::new();
@@ -1134,6 +1374,7 @@ mod tests {
                 Object::Dictionary({
                     let mut page = Dictionary::new();
                     page.set("Contents", Object::Reference((2, 0)));
+                    page.set("MediaBox", media_box());
                     page.set("Resources", Object::Dictionary(resources));
                     page
                 }),
@@ -1157,6 +1398,7 @@ mod tests {
                 Object::Dictionary({
                     let mut page = Dictionary::new();
                     page.set("Contents", Object::Reference((2, 0)));
+                    page.set("MediaBox", media_box());
                     page.set("Resources", Object::Dictionary(resources));
                     page
                 }),
@@ -1209,6 +1451,7 @@ mod tests {
         resources.set("XObject", Object::Dictionary(xobjects));
         let mut page = Dictionary::new();
         page.set("Contents", Object::Reference((2, 0)));
+        page.set("MediaBox", media_box());
         page.set("Resources", Object::Dictionary(resources));
         let mut objects = vec![
             ((1, 0), Object::Dictionary(page)),
@@ -1250,6 +1493,7 @@ mod tests {
         let mut page = Dictionary::new();
         page.set("Type", Object::Name(b"Page".to_vec()));
         page.set("Contents", Object::Reference((2, 0)));
+        page.set("MediaBox", media_box());
         page.set("Parent", Object::Reference((3, 0)));
 
         let mut form = Dictionary::new();

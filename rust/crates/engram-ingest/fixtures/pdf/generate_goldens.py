@@ -18,9 +18,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import pathlib
 import platform
 import subprocess
+import tempfile
 from datetime import datetime, timedelta, timezone
 
 import pdfplumber
@@ -77,11 +79,43 @@ def timestamp_cases() -> list[dict]:
     return cases
 
 
+def mtime_cases() -> list[dict]:
+    """Python's actual stat/float/isoformat result for fixed nanosecond mtimes.
+
+    The Rust test sets the same mtime and converts with a zero offset (UTC), so
+    this pins the stat and rounding path, not just formatter input.
+    """
+    cases = []
+    for nanos in (0, 1_700_000_000_123_456_789, 1_700_000_000_500_000_000,
+                  1_700_000_000_999_999_999):
+        with tempfile.NamedTemporaryFile(delete=False) as handle:
+            path = pathlib.Path(handle.name)
+        try:
+            os.utime(path, ns=(nanos, nanos))
+            stat = path.stat()
+            moment = datetime.fromtimestamp(
+                stat.st_mtime, timezone.utc
+            ).replace(tzinfo=None)
+            cases.append(
+                {
+                    "seconds": nanos // 1_000_000_000,
+                    "nanos": nanos % 1_000_000_000,
+                    "expected": moment.isoformat(),
+                }
+            )
+        finally:
+            path.unlink(missing_ok=True)
+    return cases
+
+
 def main() -> None:
     fixture = FIXTURES / "guide.pdf"
     with pdfplumber.open(str(fixture)) as pdf:
         pages = [page.extract_text() or "" for page in pdf.pages]
     diagnostic_render = rendered_from_pages(pages)
+    with pdfplumber.open(str(FIXTURES / "encrypted_empty.pdf")) as pdf:
+        encrypted_pages = [page.extract_text() or "" for page in pdf.pages]
+    encrypted_empty_rendered = rendered_from_pages(encrypted_pages)
 
     captured_calls: list[dict] = []
     captured_document: dict = {}
@@ -137,7 +171,9 @@ def main() -> None:
         "timestamp": timestamp,
         "pages": pages,
         "rendered": rendered,
+        "encrypted_empty_rendered": encrypted_empty_rendered,
         "timestamp_cases": timestamp_cases(),
+        "mtime_cases": mtime_cases(),
         "expected": [
             {
                 "document_id": call["document_id"],

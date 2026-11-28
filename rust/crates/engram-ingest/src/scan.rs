@@ -79,6 +79,12 @@ pub enum ScanError {
         #[source]
         source: crate::pdf::PdfError,
     },
+    #[error("PDF document {path} is {size} bytes, above the {limit}-byte ingest limit")]
+    TooLarge {
+        path: PathBuf,
+        size: u64,
+        limit: u64,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -272,6 +278,15 @@ impl UnixWalker<'_> {
                         std::io::ErrorKind::InvalidInput,
                         "not a regular file",
                     ),
+                });
+            }
+            if self.source.document_format == DocumentFormat::Pdf
+                && metadata.len() > crate::pdf::MAX_INPUT_BYTES
+            {
+                return Err(ScanError::TooLarge {
+                    path: self.root.join(&child),
+                    size: metadata.len(),
+                    limit: crate::pdf::MAX_INPUT_BYTES,
                 });
             }
             let mut bytes = Vec::new();
@@ -871,6 +886,48 @@ mod tests {
             ContentHash::of(b""),
             "a text-less PDF hashes its empty rendered content"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_file_aborts_the_snapshot() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = fixture();
+        let path = root.join("secret.pdf");
+        std::fs::write(&path, include_bytes!("../fixtures/pdf/guide.pdf")).expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+        let result = scan_source(&source_with_format(
+            &root,
+            &["**/*.pdf"],
+            &[],
+            DocumentFormat::Pdf,
+        ));
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        // A root user bypasses file permissions; skip the assertion there.
+        if result.is_ok() {
+            return;
+        }
+        assert!(
+            matches!(result, Err(ScanError::Read { .. })),
+            "unreadable file must abort the snapshot: {result:?}"
+        );
+    }
+
+    #[test]
+    fn oversized_pdf_is_rejected_before_reading() {
+        let root = fixture();
+        let path = root.join("huge.pdf");
+        let file = std::fs::File::create(&path).expect("create");
+        file.set_len(crate::pdf::MAX_INPUT_BYTES + 1)
+            .expect("sparse");
+        let error = scan_source(&source_with_format(
+            &root,
+            &["**/*.pdf"],
+            &[],
+            DocumentFormat::Pdf,
+        ))
+        .expect_err("size limit");
+        assert!(matches!(error, ScanError::TooLarge { .. }), "{error}");
     }
 
     #[test]

@@ -1,0 +1,75 @@
+{
+  "provenance": {
+    "python": "3.14.6",
+    "pdfplumber": "0.11.10",
+    "source_commit": "43111aba8cb887f1275d64be820cf2c005722c92"
+  },
+  "cases": [
+    {
+      "name": "two_column",
+      "file": "two_column.pdf",
+      "pages": [
+        "Left column row 1 Right column row 1\nLeft column row 2 Right column row 2\nLeft column row 3 Right column row 3"
+      ],
+      "rendered": "--- Page 1 ---\n\nLeft column row 1 Right column row 1\nLeft column row 2 Right column row 2\nLeft column row 3 Right column row 3"
+    },
+    {
+      "name": "table",
+      "file": "table.pdf",
+      "pages": [
+        "Region Revenue Growth\nNorth 12,400 12%\nSouth 9,800 8%\nWest 15,100 21%"
+      ],
+      "rendered": "--- Page 1 ---\n\nRegion Revenue Growth\nNorth 12,400 12%\nSouth 9,800 8%\nWest 15,100 21%"
+    },
+    {
+      "name": "two_fonts",
+      "file": "two_fonts.pdf",
+      "pages": [
+        "Helvetica heading\nTimes body line one.\nTimes body line two.\nHelvetica footer."
+      ],
+      "rendered": "--- Page 1 ---\n\nHelvetica heading\nTimes body line one.\nTimes body line two.\nHelvetica footer."
+    },
+    {
+      "name": "long_page",
+      "file": "long_page.pdf",
+      "pages": [
+        "Line 1 of the long report.\nLine 2 of the long report.\nLine 3 of the long report.\nLine 4 of the long report.\nLine 5 of the long report.\nLine 6 of the long report.\nLine 7 of the long report.\nLine 8 of the long report.\nLine 9 of the long report.\nLine 10 of the long report.\nLine 11 of the long report.\nLine 12 of the long report.\nLine 13 of the long report.\nLine 14 of the long report.\nLine 15 of the long report.\nLine 16 of the long report.\nLine 17 of the long report.\nLine 18 of the long report.\nLine 19 of the long report.\nLine 20 of the long report.\nLine 21 of the long report.\nLine 22 of the long report.\nLine 23 of the long report.\nLine 24 of the long report.\nLine 25 of the long report.\nLine 26 of the long report.\nLine 27 of the long report.\nLine 28 of the long report.\nLine 29 of the long report.\nLine 30 of the long report.\nLine 31 of the long report.\nLine 32 of the long report.\nLine 33 of the long report.\nLine 34 of the long report.\nLine 35 of the long report.\nLine 36 of the long report.\nLine 37 of the long report.\nLine 38 of the long report.\nLine 39 of the long report.\nLine 40 of the long report.\nLine 41 of the long report.\nLine 42 of the long report.\nLine 43 of the long report.\nLine 44 of the long report.\nLine 45 of the long report.\nLine 46 of the long report.\nLine 47 of the long report.\nLine 48 of the long report."
+      ],
+      "rendered": "--- Page 1 ---\n\nLine 1 of the long report.\nLine 2 of the long report.\nLine 3 of the long report.\nLine 4 of the long report.\nLine 5 of the long report.\nLine 6 of the long report.\nLine 7 of the long report.\nLine 8 of the long report.\nLine 9 of the long report.\nLine 10 of the long report.\nLine 11 of the long report.\nLine 12 of the long report.\nLine 13 of the long report.\nLine 14 of the long report.\nLine 15 of the long report.\nLine 16 of the long report.\nLine 17 of the long report.\nLine 18 of the long report.\nLine 19 of the long report.\nLine 20 of the long report.\nLine 21 of the long report.\nLine 22 of the long report.\nLine 23 of the long report.\nLine 24 of the long report.\nLine 25 of the long report.\nLine 26 of the long report.\nLine 27 of the long report.\nLine 28 of the long report.\nLine 29 of the long report.\nLine 30 of the long report.\nLine 31 of the long report.\nLine 32 of the long report.\nLine 33 of the long report.\nLine 34 of the long report.\nLine 35 of the long report.\nLine 36 of the long report.\nLine 37 of the long report.\nLine 38 of the long report.\nLine 39 of the long report.\nLine 40 of the long report.\nLine 41 of the long report.\nLine 42 of the long report.\nLine 43 of the long report.\nLine 44 of the long report.\nLine 45 of the long report.\nLine 46 of the long report.\nLine 47 of the long report.\nLine 48 of the long report."
+    },
+    {
+      "name": "paragraph_gaps",
+      "file": "paragraph_gaps.pdf",
+      "pages": [
+        "First paragraph starts here.\nIt has two lines.\nSecond paragraph starts here.\nIt also has two lines."
+      ],
+      "rendered": "--- Page 1 ---\n\nFirst paragraph starts here.\nIt has two lines.\nSecond paragraph starts here.\nIt also has two lines."
+    },
+    {
+      "name": "unicode_winansi",
+      "file": "unicode_winansi.pdf",
+      "pages": [
+        "Café résumé – naïve façade\n“Quoted text” and € 12.50"
+      ],
+      "rendered": "--- Page 1 ---\n\nCafé résumé – naïve façade\n“Quoted text” and € 12.50"
+    },
+    {
+      "name": "delimiters",
+      "file": "delimiters.pdf",
+      "pages": [
+        "R&D (draft) \\ review\nA & B (C) [D] {E}"
+      ],
+      "rendered": "--- Page 1 ---\n\nR&D (draft) \\ review\nA & B (C) [D] {E}"
+    },
+    {
+      "name": "multi_page_blank_middle",
+      "file": "multi_page_blank_middle.pdf",
+      "pages": [
+        "First page body.",
+        "",
+        "Third page body."
+      ],
+      "rendered": "--- Page 1 ---\n\nFirst page body.\n\n--- Page 3 ---\n\nThird page body."
+    }
+  ]
+}

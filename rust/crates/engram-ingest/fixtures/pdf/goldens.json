@@ -2,7 +2,7 @@
   "provenance": {
     "python": "3.14.6",
     "pdfplumber": "0.11.10",
-    "source_commit": "f3adae0d2a82365124aacf10e0ec60785d360e02",
+    "source_commit": "43111aba8cb887f1275d64be820cf2c005722c92",
     "sources": {
       "src/engram/chunking.py": "e920fcd9c339dc4399b24abb1b44d9cc96db29413fd4dc00710b37a1a6ba1ec5",
       "src/engram/flows/configured.py": "1fff283c1ef49d6880e97561c6179fccdbb67910ce5f2e3bcfede3f2199caa1d",
@@ -10,8 +10,8 @@
     },
     "fixture": {
       "file": "guide.pdf",
-      "sha256": "939e30c0c4a9173ad0f46ca308f5ee38dad9eb1df456b0fceb7be6d711beaaac",
-      "size_bytes": 1655
+      "sha256": "e6f100d75bc53e02e67dee5ee307d88f661e38ec63fd0affd8e8fcbd695466d9",
+      "size_bytes": 1816
     }
   },
   "source_tag": "manual",
@@ -24,6 +24,7 @@
     ""
   ],
   "rendered": "--- Page 1 ---\n\nQuarterly Report\nRevenue grew 12% in Café operations across every region this quarter.\nR&D (draft) review: naïve façade.\nMultiple spaces stay single.\n\n--- Page 3 ---\n\nSummary\nCafé résumé – naïve façade\nIndented detail stays indented.",
+  "encrypted_empty_rendered": "--- Page 1 ---\n\nEncrypted report\nCafé secret is readable.",
   "timestamp_cases": [
     {
       "seconds": 1700000000,
@@ -48,6 +49,28 @@
       "micros": 999999,
       "offset_seconds": -18000,
       "expected": "1969-12-31T19:00:00.999999"
+    }
+  ],
+  "mtime_cases": [
+    {
+      "seconds": 0,
+      "nanos": 0,
+      "expected": "1970-01-01T00:00:00"
+    },
+    {
+      "seconds": 1700000000,
+      "nanos": 123456789,
+      "expected": "2023-11-14T22:13:20.123457"
+    },
+    {
+      "seconds": 1700000000,
+      "nanos": 500000000,
+      "expected": "2023-11-14T22:13:20.500000"
+    },
+    {
+      "seconds": 1700000000,
+      "nanos": 999999999,
+      "expected": "2023-11-14T22:13:21"
     }
   ],
   "expected": [

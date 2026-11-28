@@ -10,11 +10,16 @@
 
 use std::collections::BTreeMap;
 
-use engram_ingest::{format_local_timestamp, plan_document, render_pdf, ContentHash};
+use engram_ingest::{
+    file_timestamp_from_metadata_with_offset, format_local_timestamp, plan_document, render_pdf,
+    ContentHash,
+};
 use serde::Deserialize;
 
 const GOLDENS: &str = include_str!("../fixtures/pdf/goldens.json");
 const FIXTURE: &[u8] = include_bytes!("../fixtures/pdf/guide.pdf");
+const ENCRYPTED_EMPTY: &[u8] = include_bytes!("../fixtures/pdf/encrypted_empty.pdf");
+const ENCRYPTED_SECRET: &[u8] = include_bytes!("../fixtures/pdf/encrypted_secret.pdf");
 
 #[derive(Debug, Deserialize)]
 struct Goldens {
@@ -24,8 +29,17 @@ struct Goldens {
     timestamp: Option<String>,
     pages: Vec<String>,
     rendered: String,
+    encrypted_empty_rendered: String,
     timestamp_cases: Vec<TimestampCase>,
+    mtime_cases: Vec<MtimeCase>,
     expected: Vec<ExpectedCall>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MtimeCase {
+    seconds: i64,
+    nanos: u32,
+    expected: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,10 +123,50 @@ fn timestamp_formatting_matches_python_isoformat() {
 }
 
 #[test]
+fn file_mtime_conversion_matches_python_fromtimestamp() {
+    let goldens: Goldens = serde_json::from_str(GOLDENS).expect("goldens");
+    assert_eq!(goldens.mtime_cases.len(), 4);
+    for (index, case) in goldens.mtime_cases.iter().enumerate() {
+        let path =
+            std::env::temp_dir().join(format!("engram-pdf-mtime-{}-{index}", std::process::id()));
+        std::fs::write(&path, b"mtime").expect("write");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("open");
+        let times = std::fs::FileTimes::new().set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::new(case.seconds as u64, case.nanos),
+        );
+        file.set_times(times).expect("set mtime");
+        let metadata = std::fs::metadata(&path).expect("metadata");
+        let actual = file_timestamp_from_metadata_with_offset(&metadata, 0).expect("timestamp");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(actual, case.expected, "case {index}");
+    }
+}
+
+#[test]
 fn rendered_pdf_matches_python_byte_for_byte() {
     let goldens: Goldens = serde_json::from_str(GOLDENS).expect("goldens");
     let rendered = render_pdf(FIXTURE).expect("render").expect("text");
     assert_eq!(rendered, goldens.rendered);
+}
+
+#[test]
+fn empty_user_password_pdf_matches_python() {
+    let goldens: Goldens = serde_json::from_str(GOLDENS).expect("goldens");
+    let rendered = render_pdf(ENCRYPTED_EMPTY).expect("decrypt").expect("text");
+    assert_eq!(rendered, goldens.encrypted_empty_rendered);
+    assert!(rendered.contains("Café secret is readable."));
+}
+
+#[test]
+fn password_protected_pdf_is_rejected() {
+    let error = render_pdf(ENCRYPTED_SECRET).expect_err("password required");
+    assert!(
+        error.to_string().contains("cannot extract PDF text"),
+        "{error}"
+    );
 }
 
 #[test]

@@ -124,6 +124,29 @@ pub fn file_timestamp(path: &Path) -> Option<String> {
 /// Timestamp from an already-open file handle, so a scan never re-stats a path
 /// that could have been swapped after the handle was opened.
 pub fn file_timestamp_from_metadata(metadata: &std::fs::Metadata) -> Option<String> {
+    let (seconds, micros) = metadata_parts(metadata)?;
+    let offset = chrono::Local
+        .timestamp_opt(seconds, 0)
+        .single()?
+        .offset()
+        .local_minus_utc();
+    format_local_timestamp(seconds, micros, offset)
+}
+
+/// Same conversion with an injected local offset, so the stat/rounding path can
+/// be compared byte-for-byte with Python `datetime.fromtimestamp` without
+/// depending on the test machine's time zone.
+pub fn file_timestamp_from_metadata_with_offset(
+    metadata: &std::fs::Metadata,
+    offset_seconds: i32,
+) -> Option<String> {
+    let (seconds, micros) = metadata_parts(metadata)?;
+    format_local_timestamp(seconds, micros, offset_seconds)
+}
+
+/// CPython rounds `datetime.fromtimestamp` to the nearest microsecond with
+/// ties-to-even; `Duration::subsec_micros` truncates.
+fn metadata_parts(metadata: &std::fs::Metadata) -> Option<(i64, u32)> {
     let modified = metadata.modified().ok()?;
     let since_epoch = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
     let mut seconds = since_epoch.as_secs() as i64;
@@ -132,12 +155,7 @@ pub fn file_timestamp_from_metadata(metadata: &std::fs::Metadata) -> Option<Stri
         seconds += 1;
         micros = 0;
     }
-    let offset = chrono::Local
-        .timestamp_opt(seconds, 0)
-        .single()?
-        .offset()
-        .local_minus_utc();
-    format_local_timestamp(seconds, micros, offset)
+    Some((seconds, micros))
 }
 
 /// CPython rounds `datetime.fromtimestamp` to the nearest microsecond with
@@ -225,6 +243,28 @@ mod tests {
             format_local_timestamp(1_700_000_000, 0, 3600).unwrap(),
             "2023-11-14T23:13:20"
         );
+    }
+
+    #[test]
+    fn metadata_timestamp_with_injected_offset_matches_python() {
+        let path =
+            std::env::temp_dir().join(format!("engram-document-mtime-{}", std::process::id()));
+        std::fs::write(&path, b"mtime").unwrap();
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        let times = std::fs::FileTimes::new().set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::new(1_700_000_000, 123_456_789),
+        );
+        file.set_times(times).unwrap();
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert_eq!(
+            file_timestamp_from_metadata_with_offset(&metadata, 0).unwrap(),
+            "2023-11-14T22:13:20.123457"
+        );
+        assert_eq!(
+            file_timestamp_from_metadata_with_offset(&metadata, 3600).unwrap(),
+            "2023-11-14T23:13:20.123457"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

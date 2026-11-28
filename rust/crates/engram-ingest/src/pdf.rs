@@ -38,6 +38,12 @@ use pdf_extract::{Dictionary, Document, Object, Stream};
 
 const MAX_STREAM_BYTES: usize = 64 * 1024 * 1024;
 const MAX_DOCUMENT_BYTES: usize = 256 * 1024 * 1024;
+pub(crate) const MAX_INPUT_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_PAGES: usize = 10_000;
+const MAX_PAGE_CONTENT_STREAMS: usize = 1_024;
+const MAX_PAGE_CONTENT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_FORM_DEPTH: usize = 64;
+const MAX_FORMS: usize = 10_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PdfError {
@@ -62,14 +68,21 @@ pub fn render_pdf(bytes: &[u8]) -> Result<Option<String>, PdfError> {
 fn extract_checked(bytes: &[u8]) -> Result<Vec<String>, PdfError> {
     let mut document =
         Document::load_mem(bytes).map_err(|error| PdfError::Extract(error.to_string()))?;
+    validate_loaded_objects(&document)?;
     if document.is_encrypted() {
         // Match pdf-extract: only the empty user password is attempted.
         document
             .decrypt("")
             .map_err(|error| PdfError::Extract(error.to_string()))?;
     }
-    validate_object_table(&document)?;
+    validate_stream_integrity(&document)?;
     let pages = document.get_pages();
+    if pages.len() > MAX_PAGES {
+        return Err(PdfError::Extract(format!(
+            "PDF has {} pages, above the ingest limit of {MAX_PAGES}",
+            pages.len()
+        )));
+    }
     let mut seen_forms = HashSet::new();
     for page_id in pages.values() {
         validate_page(&document, *page_id, &mut seen_forms)?;
@@ -82,18 +95,32 @@ fn extract_checked(bytes: &[u8]) -> Result<Vec<String>, PdfError> {
 
 /// Require every non-free xref entry to have a loaded object. lopdf logs and
 /// skips an unreadable object; a missing page/content object would otherwise
-/// become silent empty content.
-fn validate_object_table(document: &Document) -> Result<(), PdfError> {
+/// become silent empty content. Run before decryption because lopdf removes the
+/// encryption dictionary and its xref entry after `decrypt`.
+fn validate_loaded_objects(document: &Document) -> Result<(), PdfError> {
+    let loaded: HashSet<u32> = document.objects.keys().map(|(number, _)| *number).collect();
+    let mut missing = Vec::new();
     for (id, entry) in &document.reference_table.entries {
         if !(entry.is_normal() || entry.is_compressed()) {
             continue;
         }
-        if !document.objects.keys().any(|(number, _)| number == id) {
-            return Err(PdfError::Extract(format!(
-                "PDF object {id} is referenced but could not be loaded"
-            )));
+        if !loaded.contains(id) {
+            missing.push(*id);
         }
     }
+    // lopdf removes the encryption dictionary after decoding it with the empty
+    // user password, so exactly that xref entry is expected to be absent.
+    if !missing.is_empty() && !(missing.len() == 1 && document.encryption_state.is_some()) {
+        return Err(PdfError::Extract(format!(
+            "PDF object(s) {missing:?} are referenced but could not be loaded"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate stream lengths and bound every stream the extractor may inflate.
+/// Run after decryption so the bytes are plaintext.
+fn validate_stream_integrity(document: &Document) -> Result<(), PdfError> {
     for object in document.objects.values() {
         if let Object::Stream(stream) = object {
             validate_stream_length(document, stream)?;
@@ -169,8 +196,24 @@ fn validate_page(
     page_id: pdf_extract::ObjectId,
     seen_forms: &mut HashSet<pdf_extract::ObjectId>,
 ) -> Result<(), PdfError> {
+    validate_page_with_limit(document, page_id, seen_forms, MAX_PAGE_CONTENT_BYTES)
+}
+
+fn validate_page_with_limit(
+    document: &Document,
+    page_id: pdf_extract::ObjectId,
+    seen_forms: &mut HashSet<pdf_extract::ObjectId>,
+    page_limit: usize,
+) -> Result<(), PdfError> {
     let mut content = Vec::new();
+    let mut streams = 0usize;
     for content_id in document.get_page_contents(page_id) {
+        streams += 1;
+        if streams > MAX_PAGE_CONTENT_STREAMS {
+            return Err(PdfError::Extract(
+                "page has too many content streams".to_string(),
+            ));
+        }
         let stream = document
             .get_object(content_id)
             .and_then(Object::as_stream)
@@ -179,7 +222,18 @@ fn validate_page(
                     "page content {content_id:?} is unreadable: {error}"
                 ))
             })?;
-        content.extend_from_slice(&decompress_stream(document, stream)?);
+        let decoded = decompress_stream(document, stream)?;
+        if content
+            .len()
+            .saturating_add(decoded.len())
+            .saturating_add(1)
+            > page_limit
+        {
+            return Err(PdfError::Extract(
+                "page content exceeds the ingest size limit".to_string(),
+            ));
+        }
+        content.extend_from_slice(&decoded);
         content.push(b'\n');
     }
     // NUL and form feed are PDF whitespace, but lopdf's extraction parser
@@ -199,7 +253,7 @@ fn validate_page(
         .and_then(Object::as_dict)
         .map_err(|error| PdfError::Extract(error.to_string()))?;
     if let Some(resources) = inherited_resources(document, page) {
-        validate_resources(document, resources, seen_forms)?;
+        validate_resources(document, resources, seen_forms, 0)?;
     }
     Ok(())
 }
@@ -227,7 +281,13 @@ fn validate_resources(
     document: &Document,
     resources: &Dictionary,
     seen_forms: &mut HashSet<pdf_extract::ObjectId>,
+    depth: usize,
 ) -> Result<(), PdfError> {
+    if depth > MAX_FORM_DEPTH {
+        return Err(PdfError::Extract(
+            "Form XObject nesting exceeds the ingest limit".to_string(),
+        ));
+    }
     let Ok(raw) = resources.get(b"XObject") else {
         return Ok(());
     };
@@ -252,6 +312,11 @@ fn validate_resources(
                 continue;
             }
         }
+        if seen_forms.len() > MAX_FORMS {
+            return Err(PdfError::Extract(
+                "PDF has too many Form XObjects".to_string(),
+            ));
+        }
         let content = decompress_stream(document, stream)?;
         if content.iter().any(|byte| matches!(byte, 0 | 0x0C)) {
             return Err(PdfError::Extract(
@@ -269,7 +334,7 @@ fn validate_resources(
             .and_then(|value| document.dereference(value).ok())
             .and_then(|(_, value)| value.as_dict().ok())
             .unwrap_or(resources);
-        validate_resources(document, nested, seen_forms)?;
+        validate_resources(document, nested, seen_forms, depth + 1)?;
     }
     Ok(())
 }
@@ -292,7 +357,14 @@ fn decompress_stream(document: &Document, stream: &Stream) -> Result<Vec<u8>, Pd
 fn decode_stream(document: &Document, stream: &Stream, limit: usize) -> Result<Vec<u8>, PdfError> {
     let filters = stream_filters(document, stream)?;
     match filters.as_deref() {
-        None => Ok(stream.content.clone()),
+        None => {
+            if stream.content.len() > limit {
+                return Err(PdfError::Extract(
+                    "decompressed stream exceeds the ingest size limit".to_string(),
+                ));
+            }
+            Ok(stream.content.clone())
+        }
         Some([name]) if name == b"FlateDecode" => decode_flate(&stream.content, limit),
         Some([name]) if matches!(name.as_slice(), b"DCTDecode" | b"JPXDecode") => Err(
             PdfError::Extract("image stream used as page or Form content".to_string()),
@@ -557,7 +629,7 @@ mod tests {
                 stream
             }),
         )]);
-        assert!(validate_object_table(&missing)
+        assert!(validate_stream_integrity(&missing)
             .unwrap_err()
             .to_string()
             .contains("no /Length"));
@@ -570,7 +642,7 @@ mod tests {
                 stream
             }),
         )]);
-        assert!(validate_object_table(&mismatch)
+        assert!(validate_stream_integrity(&mismatch)
             .unwrap_err()
             .to_string()
             .contains("does not match"));
@@ -583,7 +655,7 @@ mod tests {
                 stream
             }),
         )]);
-        assert!(validate_object_table(&non_integer)
+        assert!(validate_stream_integrity(&non_integer)
             .unwrap_err()
             .to_string()
             .contains("not an integer"));
@@ -599,7 +671,7 @@ mod tests {
             ),
             ((2, 0), Object::Integer(3)),
         ]);
-        assert!(validate_object_table(&indirect).is_ok());
+        assert!(validate_stream_integrity(&indirect).is_ok());
     }
 
     #[test]
@@ -612,7 +684,7 @@ mod tests {
                 generation: 0,
             },
         );
-        assert!(validate_object_table(&document)
+        assert!(validate_loaded_objects(&document)
             .unwrap_err()
             .to_string()
             .contains("could not be loaded"));
@@ -620,7 +692,7 @@ mod tests {
         let mut free = Document::new();
         free.reference_table
             .insert(7, pdf_extract::xref::XrefEntry::Free);
-        assert!(validate_object_table(&free).is_ok());
+        assert!(validate_loaded_objects(&free).is_ok());
     }
 
     #[test]
@@ -784,6 +856,57 @@ mod tests {
         let mut seen = HashSet::new();
         let error = validate_page(&document, (1, 0), &mut seen).expect_err("unsafe whitespace");
         assert!(error.to_string().contains("NUL/form-feed"), "{error}");
+    }
+
+    #[test]
+    fn page_content_budget_is_enforced() {
+        let document = page_document(Object::Reference((2, 0)), None);
+        let mut document = document;
+        document
+            .objects
+            .insert((2, 0), stream_object(b"12345", None));
+        let mut seen = HashSet::new();
+        let error =
+            validate_page_with_limit(&document, (1, 0), &mut seen, 4).expect_err("page budget");
+        assert!(
+            error.to_string().contains("page content exceeds"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn deeply_nested_form_xobjects_are_rejected_without_stack_overflow() {
+        let mut resources = Dictionary::new();
+        let mut xobjects = Dictionary::new();
+        xobjects.set("Fm", Object::Reference((10, 0)));
+        resources.set("XObject", Object::Dictionary(xobjects));
+        let mut page = Dictionary::new();
+        page.set("Contents", Object::Reference((2, 0)));
+        page.set("Resources", Object::Dictionary(resources));
+        let mut objects = vec![
+            ((1, 0), Object::Dictionary(page)),
+            ((2, 0), stream_object(b"/Fm Do", None)),
+        ];
+        for index in 0..(MAX_FORM_DEPTH + 2) {
+            let mut form = Dictionary::new();
+            form.set("Length", Object::Integer(5));
+            form.set("Subtype", Object::Name(b"Form".to_vec()));
+            if index + 1 < MAX_FORM_DEPTH + 2 {
+                let mut resources = Dictionary::new();
+                let mut xobjects = Dictionary::new();
+                xobjects.set("Fm", Object::Reference((10 + index as u32 + 1, 0)));
+                resources.set("XObject", Object::Dictionary(xobjects));
+                form.set("Resources", Object::Dictionary(resources));
+            }
+            objects.push((
+                (10 + index as u32, 0),
+                Object::Stream(Stream::new(form, b"/Fm Do".to_vec())),
+            ));
+        }
+        let document = document_with(objects);
+        let mut seen = HashSet::new();
+        let error = validate_page(&document, (1, 0), &mut seen).expect_err("nesting");
+        assert!(error.to_string().contains("nesting"), "{error}");
     }
 
     #[test]

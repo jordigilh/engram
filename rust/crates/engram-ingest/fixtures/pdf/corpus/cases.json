@@ -1,0 +1,34 @@
+[
+  {
+    "name": "two_column",
+    "file": "two_column.pdf"
+  },
+  {
+    "name": "table",
+    "file": "table.pdf"
+  },
+  {
+    "name": "two_fonts",
+    "file": "two_fonts.pdf"
+  },
+  {
+    "name": "long_page",
+    "file": "long_page.pdf"
+  },
+  {
+    "name": "paragraph_gaps",
+    "file": "paragraph_gaps.pdf"
+  },
+  {
+    "name": "unicode_winansi",
+    "file": "unicode_winansi.pdf"
+  },
+  {
+    "name": "delimiters",
+    "file": "delimiters.pdf"
+  },
+  {
+    "name": "multi_page_blank_middle",
+    "file": "multi_page_blank_middle.pdf"
+  }
+]

@@ -43,7 +43,10 @@ pub use boards::{
 pub use chunking::{split_fixed_window, split_markdown_sections};
 pub use config::{DocsSource, DocumentFormat, RuntimeConfig, DEFAULT_SCAN_INTERVAL_SECS};
 pub use discussions::{discussion_header, plan_discussion, Discussion, DiscussionComment};
-pub use document::{format_local_timestamp, plan_document, relative_path, RetainCall};
+pub use document::{
+    file_timestamp_from_metadata_with_offset, format_local_timestamp, plan_document, relative_path,
+    RetainCall,
+};
 pub use hashing::{sha256_hex, ContentHash, HashError};
 pub use http::{HttpResponse, HttpTransport, ReqwestTransport};
 pub use ids::{chunk_document_id, document_base_id, pathlib_suffix, stable_section_key};

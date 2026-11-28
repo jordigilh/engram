@@ -182,34 +182,43 @@ fn validate_page(
         content.extend_from_slice(&decompress_stream(document, stream)?);
         content.push(b'\n');
     }
-    // PDF whitespace includes NUL and form feed, which lopdf's strict content
-    // parser does not accept. Normalize only the validation copy.
-    let sanitized: Vec<u8> = content
-        .iter()
-        .map(|byte| {
-            if matches!(byte, 0 | 0x0C) {
-                b' '
-            } else {
-                *byte
-            }
-        })
-        .collect();
-    pdf_extract::content::Content::decode_strict(&sanitized)
+    // NUL and form feed are PDF whitespace, but lopdf's extraction parser
+    // stops at them. Reject explicitly: accepting them here would let
+    // extraction truncate the page and reconciliation delete its chunks.
+    if content.iter().any(|byte| matches!(byte, 0 | 0x0C)) {
+        return Err(PdfError::Extract(
+            "page content uses NUL/form-feed whitespace, which the extractor cannot parse safely"
+                .to_string(),
+        ));
+    }
+    pdf_extract::content::Content::decode_strict(&content)
         .map_err(|error| PdfError::Extract(format!("corrupt page content: {error}")))?;
 
     let page = document
         .get_object(page_id)
         .and_then(Object::as_dict)
         .map_err(|error| PdfError::Extract(error.to_string()))?;
-    if let Ok(resources) = page.get(b"Resources") {
-        let (_, resources) = document
-            .dereference(resources)
-            .map_err(|error| PdfError::Extract(error.to_string()))?;
-        if let Ok(resources) = resources.as_dict() {
-            validate_resources(document, resources, seen_forms)?;
-        }
+    if let Some(resources) = inherited_resources(document, page) {
+        validate_resources(document, resources, seen_forms)?;
     }
     Ok(())
+}
+
+/// Resolve `/Resources` through the page tree like pdf-extract does
+/// (`get_inherited`), so a Form XObject inherited from the `/Pages` node is
+/// still strict-validated.
+fn inherited_resources<'a>(document: &'a Document, page: &'a Dictionary) -> Option<&'a Dictionary> {
+    let mut current = page;
+    for _ in 0..64 {
+        if let Ok(resources) = current.get(b"Resources") {
+            let (_, resources) = document.dereference(resources).ok()?;
+            return resources.as_dict().ok();
+        }
+        let parent = current.get(b"Parent").ok()?;
+        let (_, parent) = document.dereference(parent).ok()?;
+        current = parent.as_dict().ok()?;
+    }
+    None
 }
 
 /// Strict-decode every Form XObject reachable from a resource dictionary.
@@ -244,17 +253,14 @@ fn validate_resources(
             }
         }
         let content = decompress_stream(document, stream)?;
-        let sanitized: Vec<u8> = content
-            .iter()
-            .map(|byte| {
-                if matches!(byte, 0 | 0x0C) {
-                    b' '
-                } else {
-                    *byte
-                }
-            })
-            .collect();
-        pdf_extract::content::Content::decode_strict(&sanitized)
+        if content.iter().any(|byte| matches!(byte, 0 | 0x0C)) {
+            return Err(PdfError::Extract(
+                "Form XObject content uses NUL/form-feed whitespace, which the extractor cannot \
+                 parse safely"
+                    .to_string(),
+            ));
+        }
+        pdf_extract::content::Content::decode_strict(&content)
             .map_err(|error| PdfError::Extract(format!("corrupt Form XObject content: {error}")))?;
         let nested = stream
             .dict
@@ -770,15 +776,46 @@ mod tests {
     }
 
     #[test]
-    fn pdf_nul_and_form_feed_whitespace_is_accepted() {
-        let document = page_document(Object::Reference((2, 0)), None);
-        // Rebuild with a content stream containing PDF whitespace outside the
-        // strict parser's set.
-        let mut document = document;
+    fn pdf_nul_and_form_feed_whitespace_is_rejected_not_truncated() {
+        let mut document = page_document(Object::Reference((2, 0)), None);
         document
             .objects
             .insert((2, 0), stream_object(b"BT\0/F1 12 Tf (x) Tj ET\x0c", None));
         let mut seen = HashSet::new();
-        validate_page(&document, (1, 0), &mut seen).expect("PDF whitespace is valid");
+        let error = validate_page(&document, (1, 0), &mut seen).expect_err("unsafe whitespace");
+        assert!(error.to_string().contains("NUL/form-feed"), "{error}");
+    }
+
+    #[test]
+    fn inherited_page_resources_are_strict_validated() {
+        let mut xobjects = Dictionary::new();
+        xobjects.set("Fm1", Object::Reference((4, 0)));
+        let mut resources = Dictionary::new();
+        resources.set("XObject", Object::Dictionary(xobjects));
+
+        let mut pages = Dictionary::new();
+        pages.set("Type", Object::Name(b"Pages".to_vec()));
+        pages.set("Resources", Object::Dictionary(resources));
+
+        let mut page = Dictionary::new();
+        page.set("Type", Object::Name(b"Page".to_vec()));
+        page.set("Contents", Object::Reference((2, 0)));
+        page.set("Parent", Object::Reference((3, 0)));
+
+        let mut form = Dictionary::new();
+        form.set("Length", Object::Integer(5));
+        form.set("Subtype", Object::Name(b"Form".to_vec()));
+
+        let document = document_with(vec![
+            ((1, 0), Object::Dictionary(page)),
+            ((2, 0), stream_object(b"/Fm1 Do", None)),
+            ((3, 0), Object::Dictionary(pages)),
+            ((4, 0), Object::Stream(Stream::new(form, b"BT (x".to_vec()))),
+        ]);
+        let mut seen = HashSet::new();
+        assert!(validate_page(&document, (1, 0), &mut seen)
+            .unwrap_err()
+            .to_string()
+            .contains("Form XObject"));
     }
 }

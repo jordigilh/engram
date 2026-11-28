@@ -188,6 +188,11 @@ fn preflight_load_streams_with_limits(
             .map(|position| position + 3)
             .unwrap_or(0);
         let dictionary = &bytes[dict_start..keyword];
+        if contains_unsupported_load_filter(dictionary) {
+            return Err(PdfError::Extract(
+                "LZW/RunLength streams are not supported in the load path".to_string(),
+            ));
+        }
         if !contains_flate_filter(dictionary) {
             continue;
         }
@@ -235,6 +240,11 @@ fn stream_data_start(bytes: &[u8], keyword_end: usize) -> Option<usize> {
 
 fn contains_flate_filter(dictionary: &[u8]) -> bool {
     find_bytes(dictionary, b"/FlateDecode").is_some()
+}
+
+fn contains_unsupported_load_filter(dictionary: &[u8]) -> bool {
+    find_bytes(dictionary, b"/LZWDecode").is_some()
+        || find_bytes(dictionary, b"/RunLengthDecode").is_some()
 }
 
 fn stream_data_end(bytes: &[u8], dictionary: &[u8], data_start: usize) -> Option<usize> {
@@ -1064,6 +1074,15 @@ mod tests {
         let encrypted =
             b"<< /Length 4 /Filter /FlateDecode >>\nstream\n\xFF\xFE\xFD\xFC\nendstream";
         assert!(preflight_load_streams_with_limits(encrypted, 1, 1).is_ok());
+    }
+
+    #[test]
+    fn load_preflight_rejects_unbounded_filter_chains() {
+        let lzw = b"<< /Length 5 /Filter /LZWDecode >>\nstream\nhello\nendstream";
+        let error = preflight_load_streams_with_limits(lzw, 100, 100).expect_err("lzw");
+        assert!(error.to_string().contains("LZW/RunLength"), "{error}");
+        let run_length = b"<< /Length 5 /Filter /RunLengthDecode >>\nstream\nhello\nendstream";
+        assert!(preflight_load_streams_with_limits(run_length, 100, 100).is_err());
     }
 
     #[test]

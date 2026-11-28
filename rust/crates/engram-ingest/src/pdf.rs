@@ -63,7 +63,7 @@ pub enum PdfError {
 /// is an error so the caller aborts the whole source snapshot instead of
 /// tombstoning documents from a partial view.
 pub fn render_pdf(bytes: &[u8]) -> Result<Option<String>, PdfError> {
-    let pages = guarded(|| extract_checked(bytes))??;
+    let pages = guarded(|| extract_checked(bytes, MAX_DOCUMENT_BYTES))??;
     Ok(render_pages(&pages))
 }
 
@@ -157,163 +157,33 @@ impl OutputDev for PageTextOutput {
     }
 }
 
-/// Best-effort bound on Flate expansion before `Document::load_mem` inflates
-/// object/xref streams. lopdf has no load-time budget hook; scanning the raw
-/// stream segments with a direct `/Length` catches the classic bomb before the
-/// parser allocates it. Failures to decode (encrypted/unsupported streams) are
-/// left to the post-load validation.
-fn preflight_load_streams(bytes: &[u8]) -> Result<(), PdfError> {
-    preflight_load_streams_with_limits(bytes, MAX_STREAM_BYTES, MAX_DOCUMENT_BYTES)
-}
-
-fn preflight_load_streams_with_limits(
-    bytes: &[u8],
-    stream_limit: usize,
-    document_limit: usize,
-) -> Result<(), PdfError> {
-    let mut total = 0usize;
-    let mut cursor = 0usize;
-    while let Some(offset) = find_bytes(&bytes[cursor..], b"stream") {
-        let keyword = cursor + offset;
-        cursor = keyword + b"stream".len();
-        if !stream_keyword_boundary(bytes, keyword) {
-            continue;
-        }
-        let Some(data_start) = stream_data_start(bytes, cursor) else {
-            continue;
-        };
-        let dict_start = bytes[..keyword]
-            .windows(3)
-            .rposition(|window| window == b"obj")
-            .map(|position| position + 3)
-            .unwrap_or(0);
-        let dictionary = &bytes[dict_start..keyword];
-        if contains_unsupported_load_filter(dictionary) {
-            return Err(PdfError::Extract(
-                "LZW/RunLength streams are not supported in the load path".to_string(),
-            ));
-        }
-        if !contains_flate_filter(dictionary) {
-            continue;
-        }
-        let Some(data_end) = stream_data_end(bytes, dictionary, data_start) else {
-            continue;
-        };
-        let Some(decoded) = decode_flate_optional(&bytes[data_start..data_end], stream_limit)?
-        else {
-            continue;
-        };
-        total = total.saturating_add(decoded.len());
-        if total > document_limit {
-            return Err(PdfError::Extract(
-                "decompressed document exceeds the ingest limit during load".to_string(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-
-fn stream_keyword_boundary(bytes: &[u8], position: usize) -> bool {
-    let before = position
-        .checked_sub(1)
-        .and_then(|index| bytes.get(index))
-        .is_none_or(|byte| byte.is_ascii_whitespace() || *byte == b'>');
-    let after = bytes.get(position + b"stream".len()).copied();
-    before && matches!(after, Some(b'\r' | b'\n'))
-}
-
-fn stream_data_start(bytes: &[u8], keyword_end: usize) -> Option<usize> {
-    match bytes.get(keyword_end..keyword_end + 2) {
-        Some(b"\r\n") => Some(keyword_end + 2),
-        _ => match bytes.get(keyword_end) {
-            Some(b'\n' | b'\r') => Some(keyword_end + 1),
-            _ => None,
-        },
-    }
-}
-
-fn contains_flate_filter(dictionary: &[u8]) -> bool {
-    find_bytes(dictionary, b"/FlateDecode").is_some()
-}
-
-fn contains_unsupported_load_filter(dictionary: &[u8]) -> bool {
-    find_bytes(dictionary, b"/LZWDecode").is_some()
-        || find_bytes(dictionary, b"/RunLengthDecode").is_some()
-}
-
-fn stream_data_end(bytes: &[u8], dictionary: &[u8], data_start: usize) -> Option<usize> {
-    if let Some(length) = direct_stream_length(dictionary) {
-        let end = data_start.checked_add(length)?;
-        if end <= bytes.len() {
-            return Some(end);
-        }
-    }
-    let end = find_bytes(&bytes[data_start..], b"endstream")?;
-    let mut end = data_start + end;
-    while end > data_start && matches!(bytes[end - 1], b'\r' | b'\n') {
-        end -= 1;
-    }
-    Some(end)
-}
-
-fn direct_stream_length(dictionary: &[u8]) -> Option<usize> {
-    let position = dictionary
-        .windows(7)
-        .rposition(|window| window == b"/Length")?;
-    let mut index = position + 7;
-    while matches!(dictionary.get(index), Some(byte) if byte.is_ascii_whitespace()) {
-        index += 1;
-    }
-    let start = index;
-    while matches!(dictionary.get(index), Some(byte) if byte.is_ascii_digit()) {
-        index += 1;
-    }
-    if start == index {
-        return None;
-    }
-    let value = std::str::from_utf8(&dictionary[start..index])
-        .ok()?
-        .parse()
-        .ok()?;
-    while matches!(dictionary.get(index), Some(byte) if byte.is_ascii_whitespace()) {
-        index += 1;
-    }
-    // `/Length 12 0 R` is indirect; fall back to the `endstream` boundary.
-    if matches!(dictionary.get(index), Some(byte) if byte.is_ascii_digit()) {
-        return None;
-    }
-    Some(value)
-}
-
-/// Decode Flate for the load preflight. `None` means the bytes are not a
-/// decodable Flate stream (encrypted or another filter); leave them to the
-/// post-load validation. A limit hit is always an error.
-fn decode_flate_optional(compressed: &[u8], limit: usize) -> Result<Option<Vec<u8>>, PdfError> {
-    if compressed.is_empty() {
-        return Ok(Some(Vec::new()));
-    }
-    match inflate_with(flate2::read::ZlibDecoder::new(compressed), limit) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(InflateFailure::Limit) => Err(size_limit_error()),
-        Err(InflateFailure::Decode(_)) => {
-            match inflate_with(flate2::read::DeflateDecoder::new(compressed), limit) {
-                Ok(bytes) => Ok(Some(bytes)),
-                Err(InflateFailure::Limit) => Err(size_limit_error()),
-                Err(InflateFailure::Decode(_)) => Ok(None),
-            }
-        }
+/// Bound object/xref stream expansion before the extractor's own parser runs.
+///
+/// pdf-extract 0.12 pins lopdf 0.42, whose load path inflates object and
+/// cross-reference streams without a limit. The newer lopdf 0.47 exposes
+/// `max_decompressed_size`; loading the same bytes with that bound is a
+/// preflight oracle: if the hardened loader accepts the document, the streams
+/// the 0.42 parser is about to inflate are within the same budget. Non-limit
+/// parse errors are left to pdf-extract so its broader compatibility is kept.
+fn preflight_load(bytes: &[u8], load_limit: usize) -> Result<(), PdfError> {
+    let options = lopdf_047::LoadOptions {
+        max_decompressed_size: Some(load_limit),
+        ..Default::default()
+    };
+    match lopdf_047::Document::load_mem_with_options(bytes, options) {
+        Ok(_) => Ok(()),
+        Err(lopdf_047::Error::Decompress(lopdf_047::DecompressError::MemoryLimitExceeded {
+            ..
+        })) => Err(PdfError::Extract(
+            "decompressed stream exceeds the ingest limit during load".to_string(),
+        )),
+        Err(_) => Ok(()),
     }
 }
 
 /// Parse once for integrity checks, then let the extractor produce text.
-fn extract_checked(bytes: &[u8]) -> Result<Vec<String>, PdfError> {
-    preflight_load_streams(bytes)?;
+fn extract_checked(bytes: &[u8], load_limit: usize) -> Result<Vec<String>, PdfError> {
+    preflight_load(bytes, load_limit)?;
     let mut document =
         Document::load_mem(bytes).map_err(|error| PdfError::Extract(error.to_string()))?;
     validate_loaded_objects(&document)?;
@@ -591,10 +461,63 @@ fn validate_page_with_limit(
         .get_object(page_id)
         .and_then(Object::as_dict)
         .map_err(|error| PdfError::Extract(error.to_string()))?;
+    validate_media_box(document, page, page_id)?;
     if let Some(resources) = inherited_resources(document, page, page_id)? {
         validate_resources(document, resources, seen_forms, &mut HashSet::new(), 0)?;
     }
     Ok(())
+}
+
+/// Require a page to inherit a four-number `/MediaBox`; pdf-extract indexes it
+/// without a fallback, so a missing/short box would panic.
+fn validate_media_box(
+    document: &Document,
+    page: &Dictionary,
+    page_id: pdf_extract::ObjectId,
+) -> Result<(), PdfError> {
+    let mut current = page;
+    let mut visited = HashSet::from([page_id]);
+    for _ in 0..MAX_FORM_DEPTH {
+        if let Ok(media_box) = current.get(b"MediaBox") {
+            let (_, media_box) = document
+                .dereference(media_box)
+                .map_err(|error| PdfError::Extract(error.to_string()))?;
+            let media_box = media_box
+                .as_array()
+                .map_err(|_| PdfError::Extract("PDF /MediaBox is not an array".to_string()))?;
+            if media_box.len() < 4
+                || media_box
+                    .iter()
+                    .take(4)
+                    .any(|value| value.as_float().is_err())
+            {
+                return Err(PdfError::Extract(
+                    "PDF /MediaBox must contain four numbers".to_string(),
+                ));
+            }
+            return Ok(());
+        }
+        let parent = match current.get(b"Parent") {
+            Ok(parent) => parent,
+            Err(_) => return Err(PdfError::Extract("PDF page has no /MediaBox".to_string())),
+        };
+        let (id, parent) = document
+            .dereference(parent)
+            .map_err(|error| PdfError::Extract(error.to_string()))?;
+        if let Some(id) = id {
+            if !visited.insert(id) {
+                return Err(PdfError::Extract(
+                    "PDF page /Parent chain contains a cycle".to_string(),
+                ));
+            }
+        }
+        current = parent
+            .as_dict()
+            .map_err(|_| PdfError::Extract("PDF /Parent is not a dictionary".to_string()))?;
+    }
+    Err(PdfError::Extract(
+        "PDF page /Parent chain exceeds the ingest limit".to_string(),
+    ))
 }
 
 /// Resolve `/Resources` through the page tree like pdf-extract does
@@ -1049,40 +972,43 @@ mod tests {
         assert_eq!(decode_flate(&compressed, 20).expect("fits").len(), 20);
     }
 
-    #[test]
-    fn load_preflight_rejects_flate_bomb_before_parser() {
+    fn bomb_xref_pdf(expanded_bytes: usize) -> Vec<u8> {
         use std::io::Write;
         let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
-        encoder.write_all(&[0u8; 100]).expect("encode");
+        encoder
+            .write_all(&vec![0u8; expanded_bytes])
+            .expect("encode");
         let compressed = encoder.finish().expect("finish");
-        let mut pdf = format!(
-            "<< /Length {} /Filter /FlateDecode >>\nstream\n",
+        let mut pdf = b"%PDF-1.5\n".to_vec();
+        let catalog = b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+        pdf.extend_from_slice(catalog);
+        let xref_offset = pdf.len();
+        let body = format!(
+            "2 0 obj\n<< /Type /XRef /Size 3 /W [1 2 1] /Root 1 0 R \
+             /Length {} /Filter /FlateDecode >>\nstream\n",
             compressed.len()
-        )
-        .into_bytes();
+        );
+        pdf.extend_from_slice(body.as_bytes());
         pdf.extend_from_slice(&compressed);
-        pdf.extend_from_slice(b"\nendstream");
-        let error = preflight_load_streams_with_limits(&pdf, 10, 100).expect_err("bomb");
-        assert!(error.to_string().contains("size limit"), "{error}");
-        assert!(preflight_load_streams_with_limits(&pdf, 100, 100).is_ok());
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+        pdf.extend_from_slice(format!("startxref\n{xref_offset}\n%%EOF\n").as_bytes());
+        pdf
     }
 
     #[test]
-    fn load_preflight_ignores_non_flate_and_undecodable_streams() {
-        let plain = b"<< /Length 5 >>\nstream\nhello\nendstream";
-        assert!(preflight_load_streams_with_limits(plain, 1, 1).is_ok());
-        let encrypted =
-            b"<< /Length 4 /Filter /FlateDecode >>\nstream\n\xFF\xFE\xFD\xFC\nendstream";
-        assert!(preflight_load_streams_with_limits(encrypted, 1, 1).is_ok());
+    fn load_preflight_rejects_bomb_before_extractor() {
+        let pdf = bomb_xref_pdf(100);
+        let error = preflight_load(&pdf, 10).expect_err("bomb");
+        assert!(error.to_string().contains("during load"), "{error}");
+        // The full path consults the same preflight before pdf-extract's load.
+        let error = extract_checked(&pdf, 10).expect_err("bomb through render path");
+        assert!(error.to_string().contains("during load"), "{error}");
     }
 
     #[test]
-    fn load_preflight_rejects_unbounded_filter_chains() {
-        let lzw = b"<< /Length 5 /Filter /LZWDecode >>\nstream\nhello\nendstream";
-        let error = preflight_load_streams_with_limits(lzw, 100, 100).expect_err("lzw");
-        assert!(error.to_string().contains("LZW/RunLength"), "{error}");
-        let run_length = b"<< /Length 5 /Filter /RunLengthDecode >>\nstream\nhello\nendstream";
-        assert!(preflight_load_streams_with_limits(run_length, 100, 100).is_err());
+    fn load_preflight_leaves_ordinary_pdfs_to_the_extractor() {
+        assert!(preflight_load(FIXTURE, MAX_DOCUMENT_BYTES).is_ok());
+        assert!(preflight_load(BLANK, MAX_DOCUMENT_BYTES).is_ok());
     }
 
     #[test]
@@ -1121,10 +1047,20 @@ mod tests {
         document
     }
 
+    fn media_box() -> Object {
+        Object::Array(vec![
+            Object::Integer(0),
+            Object::Integer(0),
+            Object::Integer(612),
+            Object::Integer(792),
+        ])
+    }
+
     fn page_document(contents: Object, resources: Option<Object>) -> Document {
         let mut page = Dictionary::new();
         page.set("Type", Object::Name(b"Page".to_vec()));
         page.set("Contents", contents);
+        page.set("MediaBox", media_box());
         if let Some(resources) = resources {
             page.set("Resources", resources);
         }
@@ -1330,6 +1266,7 @@ mod tests {
         resources.set("XObject", Object::Dictionary(xobjects));
         let mut page = Dictionary::new();
         page.set("Contents", Object::Reference((2, 0)));
+        page.set("MediaBox", media_box());
         page.set("Resources", Object::Dictionary(resources));
         let mut form = Dictionary::new();
         form.set("Length", Object::Integer(5));
@@ -1396,6 +1333,19 @@ mod tests {
     }
 
     #[test]
+    fn page_without_media_box_is_rejected_before_extraction_panic() {
+        let mut page = Dictionary::new();
+        page.set("Contents", Object::Reference((2, 0)));
+        let document = document_with(vec![
+            ((1, 0), Object::Dictionary(page)),
+            ((2, 0), stream_object(b"BT ET", None)),
+        ]);
+        let mut seen = HashSet::new();
+        let error = validate_page(&document, (1, 0), &mut seen).expect_err("media box");
+        assert!(error.to_string().contains("/MediaBox"), "{error}");
+    }
+
+    #[test]
     fn page_content_references_must_resolve() {
         let document = page_document(Object::Reference((9, 0)), None);
         let mut seen = HashSet::new();
@@ -1421,6 +1371,7 @@ mod tests {
                 Object::Dictionary({
                     let mut page = Dictionary::new();
                     page.set("Contents", Object::Reference((2, 0)));
+                    page.set("MediaBox", media_box());
                     page.set("Resources", Object::Dictionary(resources));
                     page
                 }),
@@ -1444,6 +1395,7 @@ mod tests {
                 Object::Dictionary({
                     let mut page = Dictionary::new();
                     page.set("Contents", Object::Reference((2, 0)));
+                    page.set("MediaBox", media_box());
                     page.set("Resources", Object::Dictionary(resources));
                     page
                 }),
@@ -1496,6 +1448,7 @@ mod tests {
         resources.set("XObject", Object::Dictionary(xobjects));
         let mut page = Dictionary::new();
         page.set("Contents", Object::Reference((2, 0)));
+        page.set("MediaBox", media_box());
         page.set("Resources", Object::Dictionary(resources));
         let mut objects = vec![
             ((1, 0), Object::Dictionary(page)),
@@ -1537,6 +1490,7 @@ mod tests {
         let mut page = Dictionary::new();
         page.set("Type", Object::Name(b"Page".to_vec()));
         page.set("Contents", Object::Reference((2, 0)));
+        page.set("MediaBox", media_box());
         page.set("Parent", Object::Reference((3, 0)));
 
         let mut form = Dictionary::new();

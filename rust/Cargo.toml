@@ -19,6 +19,7 @@ flate2 = "1"
 getrandom = "0.2"
 globset = "0.4"
 libc = "0.2"
+lopdf_047 = { package = "lopdf", version = "0.47" }
 pdf-extract = "0.12"
 postgres = { version = "0.19", features = ["with-chrono-0_4", "with-serde_json-1"] }
 regex = "1"

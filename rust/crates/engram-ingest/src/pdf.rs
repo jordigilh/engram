@@ -163,8 +163,9 @@ impl OutputDev for PageTextOutput {
 /// cross-reference streams without a limit. The newer lopdf 0.47 exposes
 /// `max_decompressed_size`; loading the same bytes with that bound is a
 /// preflight oracle: if the hardened loader accepts the document, the streams
-/// the 0.42 parser is about to inflate are within the same budget. Non-limit
-/// parse errors are left to pdf-extract so its broader compatibility is kept.
+/// the 0.42 parser is about to inflate are within the same budget. Any other
+/// load failure is also rejected: a document must not reach the unbounded 0.42
+/// loader, even when the newer parser dislikes it for a non-budget reason.
 fn preflight_load(bytes: &[u8], load_limit: usize) -> Result<(), PdfError> {
     let options = lopdf_047::LoadOptions {
         max_decompressed_size: Some(load_limit),
@@ -177,7 +178,9 @@ fn preflight_load(bytes: &[u8], load_limit: usize) -> Result<(), PdfError> {
         })) => Err(PdfError::Extract(
             "decompressed stream exceeds the ingest limit during load".to_string(),
         )),
-        Err(_) => Ok(()),
+        Err(error) => Err(PdfError::Extract(format!(
+            "PDF failed the bounded load preflight: {error}"
+        ))),
     }
 }
 
